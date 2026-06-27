@@ -1,19 +1,39 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode } from "react";
+import {
+  User,
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  updateProfile,
+} from "firebase/auth";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { auth, db } from "@/config/firebase";
 
-// Firebase User type (from @react-native-firebase/auth)
-interface FirebaseUser {
+type AppUser = {
   uid: string;
   email: string | null;
   displayName: string | null;
   phoneNumber?: string | null;
   photoURL?: string | null;
-}
+};
+
+type SignUpProfile = {
+  firstName?: string;
+  lastName?: string;
+  zipCode?: string;
+  sports?: string[];
+  phoneNumber?: string | null;
+};
 
 interface AuthContextType {
-  user: FirebaseUser | null;
+  user: AppUser | null;
+  firebaseUser: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<FirebaseUser>;
+  signUp: (email: string, password: string, profile?: SignUpProfile) => Promise<AppUser>;
+  resetPassword: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signInWithApple: () => Promise<void>;
@@ -21,96 +41,99 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
+  firebaseUser: null,
   loading: true,
   signIn: async () => {},
-  signUp: async () => ({ uid: '', email: null, displayName: null }),
+  signUp: async () => ({ uid: "", email: null, displayName: null }),
+  resetPassword: async () => {},
   signOut: async () => {},
   signInWithGoogle: async () => {},
   signInWithApple: async () => {},
 });
 
+function mapUser(firebaseUser: User | null): AppUser | null {
+  if (!firebaseUser) return null;
+  return {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email,
+    displayName: firebaseUser.displayName,
+    phoneNumber: firebaseUser.phoneNumber,
+    photoURL: firebaseUser.photoURL,
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-
-    const setupAuthListener = async () => {
-      try {
-        // Dynamically import to gracefully handle missing native config
-        const auth = (await import('@react-native-firebase/auth')).default;
-        unsubscribe = auth().onAuthStateChanged((firebaseUser) => {
-          if (firebaseUser) {
-            setUser({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              displayName: firebaseUser.displayName,
-              phoneNumber: firebaseUser.phoneNumber,
-              photoURL: firebaseUser.photoURL,
-            });
-          } else {
-            setUser(null);
-          }
-          setLoading(false);
-        });
-      } catch (error) {
-        // Firebase not configured yet (missing native files) — fall through gracefully
-        console.warn('[AuthContext] Firebase not configured:', error);
-        setLoading(false);
-      }
-    };
-
-    setupAuthListener();
-
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
+    const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+      setFirebaseUser(nextUser);
+      setLoading(false);
+    });
+    return unsubscribe;
   }, []);
 
-  const signIn = async (email: string, password: string): Promise<void> => {
-    const auth = (await import('@react-native-firebase/auth')).default;
-    await auth().signInWithEmailAndPassword(email, password);
-  };
+  const value = useMemo<AuthContextType>(() => ({
+    user: mapUser(firebaseUser),
+    firebaseUser,
+    loading,
+    signIn: async (email, password) => {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+    },
+    signUp: async (email, password, profile = {}) => {
+      const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const displayName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim();
 
-  const signUp = async (email: string, password: string): Promise<FirebaseUser> => {
-    const auth = (await import('@react-native-firebase/auth')).default;
-    const credential = await auth().createUserWithEmailAndPassword(email, password);
-    const fbUser = credential.user;
-    return {
-      uid: fbUser.uid,
-      email: fbUser.email,
-      displayName: fbUser.displayName,
-      phoneNumber: fbUser.phoneNumber,
-      photoURL: fbUser.photoURL,
-    };
-  };
+      if (displayName) {
+        await updateProfile(credential.user, { displayName });
+      }
 
-  const signOut = async (): Promise<void> => {
-    try {
-      const auth = (await import('@react-native-firebase/auth')).default;
-      await auth().signOut();
-    } catch (error) {
-      console.warn('[AuthContext] signOut error:', error);
-    }
-    setUser(null);
-  };
+      await setDoc(doc(db, "users", credential.user.uid), {
+        userId: credential.user.uid,
+        firstName: profile.firstName ?? "",
+        lastName: profile.lastName ?? "",
+        displayName: displayName || null,
+        email: email.trim(),
+        zipCode: profile.zipCode ?? "",
+        sports: profile.sports ?? [],
+        phoneNumber: profile.phoneNumber ?? null,
+        createdAt: serverTimestamp(),
+        tier: "member",
+        totalStars: 0,
+        sidelineStars: 0,
+        squadIds: [],
+        friendIds: [],
+        preferredLanguage: "en",
+        profileVisibility: "squad_only",
+      }, { merge: true });
 
-  const signInWithGoogle = async (): Promise<void> => {
-    // TODO: Wire up Google Sign-In with expo-auth-session when GoogleService credentials are available
-    console.warn('[AuthContext] Google sign-in not configured yet.');
-  };
+      const userDoc = await getDoc(doc(db, "users", credential.user.uid));
+      const data = userDoc.data();
 
-  const signInWithApple = async (): Promise<void> => {
-    // TODO: Wire up Apple Sign-In with expo-apple-authentication when Apple credentials are available
-    console.warn('[AuthContext] Apple sign-in not configured yet.');
-  };
+      return {
+        uid: credential.user.uid,
+        email: credential.user.email,
+        displayName: (data?.displayName as string | null) ?? displayName ?? null,
+        phoneNumber: credential.user.phoneNumber,
+        photoURL: credential.user.photoURL,
+      };
+    },
+    resetPassword: async (email) => {
+      await sendPasswordResetEmail(auth, email.trim());
+    },
+    signOut: async () => {
+      await firebaseSignOut(auth);
+    },
+    signInWithGoogle: async () => {
+      console.warn("Google sign-in is not configured yet.");
+    },
+    signInWithApple: async () => {
+      console.warn("Apple sign-in is not configured yet.");
+    },
+  }), [firebaseUser, loading]);
 
-  return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut, signInWithGoogle, signInWithApple }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

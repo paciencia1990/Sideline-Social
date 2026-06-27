@@ -1,20 +1,17 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
-import { useAuth } from '@/context/AuthContext';
+import React, { createContext, useCallback, useContext, useState, ReactNode } from "react";
+import { useAuth } from "@/context/AuthContext";
 import {
-  Squad,
-  CreateSquadInput,
   AppConfig,
+  CreateSquadInput,
+  Squad,
+  createSquad as createSquadRecord,
   fetchAppConfig,
   fetchNearbySquads,
-  joinSquad as serviceJoinSquad,
-  createSquad as serviceCreateSquad,
-  leaveSquad as serviceLeaveSquad,
+  fetchUserSquadIds,
+  joinSquad as joinSquadRecord,
+  leaveSquad as leaveSquadRecord,
   updateMemberLastActive,
-} from '@/services/squadService';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+} from "@/services/squadService";
 
 interface SquadContextType {
   nearbySquads: Squad[];
@@ -42,128 +39,81 @@ const SquadContext = createContext<SquadContextType>({
   appConfig: DEFAULT_CONFIG,
   fetchSquads: async () => {},
   joinSquad: async () => {},
-  createSquad: async () => '',
+  createSquad: async () => "",
   leaveSquad: async () => {},
   setCurrentSquad: () => {},
   refreshLastActive: async () => {},
 });
 
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
-
 export function SquadProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-
   const [nearbySquads, setNearbySquads] = useState<Squad[]>([]);
   const [mySquadIds, setMySquadIds] = useState<string[]>([]);
   const [currentSquad, setCurrentSquad] = useState<Squad | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_CONFIG);
-  const [configLoaded, setConfigLoaded] = useState(false);
 
-  // Load appConfig once on first fetch
-  const ensureConfig = useCallback(async (): Promise<AppConfig> => {
-    if (configLoaded) return appConfig;
-    const config = await fetchAppConfig();
-    setAppConfig(config);
-    setConfigLoaded(true);
-    return config;
-  }, [configLoaded, appConfig]);
-
-  // Load user's existing squad IDs from Firestore
-  const loadMySquadIds = useCallback(async () => {
-    if (!user?.uid) return;
+  const fetchSquads = useCallback(async (lat: number, lng: number) => {
+    setLoading(true);
+    setError(null);
     try {
-      const firestore = (await import('@react-native-firebase/firestore')).default;
-      const doc = await firestore().collection('users').doc(user.uid).get();
-      if (doc.exists) {
-        const data = doc.data();
-        setMySquadIds(data?.squadIds ?? []);
+      const config = await fetchAppConfig();
+      setAppConfig(config);
+      if (user?.uid) {
+        setMySquadIds(await fetchUserSquadIds(user.uid));
       }
-    } catch (err) {
-      console.warn('[SquadContext] loadMySquadIds error:', err);
+      setNearbySquads(await fetchNearbySquads(lat, lng, config.squadRadiusMiles));
+    } catch (nextError) {
+      console.warn("[SquadContext] fetchSquads error:", nextError);
+      setError("Could not load nearby squads.");
+    } finally {
+      setLoading(false);
     }
   }, [user?.uid]);
 
-  const fetchSquads = useCallback(
-    async (lat: number, lng: number) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const config = await ensureConfig();
-        await loadMySquadIds();
-        const squads = await fetchNearbySquads(lat, lng, config.squadRadiusMiles);
-        setNearbySquads(squads);
-      } catch (err) {
-        console.warn('[SquadContext] fetchSquads error:', err);
-        setError('Could not load nearby squads.');
-      } finally {
-        setLoading(false);
-      }
-    },
-    [ensureConfig, loadMySquadIds]
-  );
+  const joinSquad = useCallback(async (squadId: string) => {
+    if (!user?.uid) return;
+    await joinSquadRecord(user.uid, squadId, mySquadIds.length === 0);
+    setMySquadIds((current) => current.includes(squadId) ? current : [...current, squadId]);
+  }, [mySquadIds.length, user?.uid]);
 
-  const joinSquad = useCallback(
-    async (squadId: string) => {
-      if (!user?.uid) return;
-      const isFirstSquadEver = mySquadIds.length === 0;
-      await serviceJoinSquad(user.uid, squadId, isFirstSquadEver);
-      setMySquadIds((prev) => (prev.includes(squadId) ? prev : [...prev, squadId]));
-    },
-    [user?.uid, mySquadIds]
-  );
+  const createSquad = useCallback(async (data: CreateSquadInput) => {
+    if (!user?.uid) throw new Error("Sign in to create a squad.");
+    const squadId = await createSquadRecord(data, user.uid);
+    setMySquadIds((current) => current.includes(squadId) ? current : [...current, squadId]);
+    return squadId;
+  }, [user?.uid]);
 
-  const createSquad = useCallback(
-    async (data: CreateSquadInput): Promise<string> => {
-      if (!user?.uid) throw new Error('Not authenticated');
-      const squadId = await serviceCreateSquad(data, user.uid);
-      setMySquadIds((prev) => [...prev, squadId]);
-      return squadId;
-    },
-    [user?.uid]
-  );
-
-  const leaveSquad = useCallback(
-    async (squadId: string) => {
-      if (!user?.uid) return;
-      await serviceLeaveSquad(user.uid, squadId);
-      setMySquadIds((prev) => prev.filter((id) => id !== squadId));
-      setNearbySquads((prev) =>
-        prev.map((s) =>
-          s.squadId === squadId
-            ? { ...s, memberIds: s.memberIds.filter((id) => id !== user.uid) }
-            : s
-        )
-      );
-    },
-    [user?.uid]
-  );
+  const leaveSquad = useCallback(async (squadId: string) => {
+    if (!user?.uid) return;
+    await leaveSquadRecord(user.uid, squadId);
+    setMySquadIds((current) => current.filter((id) => id !== squadId));
+    setNearbySquads((current) => current.map((squad) => squad.squadId === squadId
+      ? { ...squad, memberIds: squad.memberIds.filter((id) => id !== user.uid) }
+      : squad
+    ));
+  }, [user?.uid]);
 
   const refreshLastActive = useCallback(async () => {
-    if (!user?.uid) return;
-    await updateMemberLastActive(user.uid);
+    if (user?.uid) await updateMemberLastActive(user.uid);
   }, [user?.uid]);
 
   return (
-    <SquadContext.Provider
-      value={{
-        nearbySquads,
-        mySquadIds,
-        currentSquad,
-        loading,
-        error,
-        appConfig,
-        fetchSquads,
-        joinSquad,
-        createSquad,
-        leaveSquad,
-        setCurrentSquad,
-        refreshLastActive,
-      }}
-    >
+    <SquadContext.Provider value={{
+      nearbySquads,
+      mySquadIds,
+      currentSquad,
+      loading,
+      error,
+      appConfig,
+      fetchSquads,
+      joinSquad,
+      createSquad,
+      leaveSquad,
+      setCurrentSquad,
+      refreshLastActive,
+    }}>
       {children}
     </SquadContext.Provider>
   );

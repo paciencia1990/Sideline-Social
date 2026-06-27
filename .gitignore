@@ -25,6 +25,11 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+.npm-cache/
+.npm-install-cache/
+package.json.*-*
+tree.txt
+codex-write-test.tmp
 
 # macOS
 .DS_Store
@@ -32,11 +37,9 @@ yarn-error.*
 
 # local env files
 .env
+.env.*
 
 # typescript
 *.tsbuildinfo
-
-# CatDoes metadata (managed automatically)
-.catdoes/
 
 app-example

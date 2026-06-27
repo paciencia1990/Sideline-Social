@@ -1,5 +1,5 @@
-import { useColorScheme as useColorSchemeNative } from "nativewind";
+import { useColorScheme as useNativeColorScheme } from "react-native";
 
 export default function useColorScheme() {
-  return useColorSchemeNative().colorScheme;
+  return useNativeColorScheme() ?? "light";
 }

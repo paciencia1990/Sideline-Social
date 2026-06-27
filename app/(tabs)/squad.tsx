@@ -1,356 +1,113 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  StyleSheet,
-  Text,
-  View,
-  FlatList,
-  AppState,
-  AppStateStatus,
-  Dimensions,
-  ActivityIndicator,
-  TouchableOpacity,
-  Platform,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Location from 'expo-location';
-import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
-import { router } from 'expo-router';
-import { useTranslation } from 'react-i18next';
-import { Plus, RefreshCw } from 'lucide-react-native';
-
-import { Colors, Typography, Spacing, Radius } from '@/constants/theme';
-import { SIDELINE_MAP_STYLE } from '@/constants/mapStyle';
-import { useSquad } from '@/context/SquadContext';
-import { useAuth } from '@/context/AuthContext';
-import { Squad } from '@/services/squadService';
-import { SquadCard } from '@/components/SquadCard';
-import { SquadMarker } from '@/components/SquadMarker';
-import { SquadPermissionCard } from '@/components/SquadPermissionCard';
-import { CreateSquadSheet } from '@/components/CreateSquadSheet';
-
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-const MAP_HEIGHT = SCREEN_HEIGHT * 0.45;
+import React, { useCallback, useState } from "react";
+import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import * as Location from "expo-location";
+import { router } from "expo-router";
+import { Plus, RefreshCw } from "lucide-react-native";
+import { CreateSquadSheet } from "@/components/CreateSquadSheet";
+import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { SquadCard } from "@/components/SquadCard";
+import { SquadPermissionCard } from "@/components/SquadPermissionCard";
+import { useAuth } from "@/context/AuthContext";
+import { useSquad } from "@/context/SquadContext";
+import { Squad } from "@/services/squadService";
+import { Colors, Spacing, Typography } from "@/constants/theme";
 
 export default function SquadScreen() {
-  const { t } = useTranslation();
-  const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { nearbySquads, mySquadIds, loading, fetchSquads, joinSquad, refreshLastActive } =
-    useSquad();
-
-  const [permissionStatus, setPermissionStatus] = useState<'unknown' | 'granted' | 'denied'>(
-    'unknown'
-  );
-  const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(
-    null
-  );
-  const [selectedSquadId, setSelectedSquadId] = useState<string | null>(null);
-  const [showCreateSheet, setShowCreateSheet] = useState(false);
+  const { nearbySquads, mySquadIds, loading, fetchSquads, joinSquad } = useSquad();
+  const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [permissionDenied, setPermissionDenied] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
   const [joiningId, setJoiningId] = useState<string | null>(null);
 
-  const mapRef = useRef<MapView>(null);
-  const listRef = useRef<FlatList<Squad>>(null);
-  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
-
-  // Request location and load squads
-  const initLocation = useCallback(async () => {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      setPermissionStatus('denied');
+  const loadSquads = useCallback(async () => {
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (permission.status !== "granted") {
+      setPermissionDenied(true);
       return;
     }
-    setPermissionStatus('granted');
-    try {
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
-      setUserCoords(coords);
-      await fetchSquads(coords.latitude, coords.longitude);
-    } catch (err) {
-      console.warn('[SquadScreen] location error:', err);
-    }
+
+    setPermissionDenied(false);
+    const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    const nextCoords = { latitude: location.coords.latitude, longitude: location.coords.longitude };
+    setCoords(nextCoords);
+    await fetchSquads(nextCoords.latitude, nextCoords.longitude);
   }, [fetchSquads]);
 
-  useEffect(() => {
-    initLocation();
-  }, [initLocation]);
+  const handleJoin = async (squadId: string) => {
+    if (!user?.uid) {
+      router.push("/(auth)/sign-in");
+      return;
+    }
+    setJoiningId(squadId);
+    try {
+      await joinSquad(squadId);
+    } finally {
+      setJoiningId(null);
+    }
+  };
 
-  // Update lastActiveAt when app comes to foreground
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (nextState) => {
-      if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
-        refreshLastActive();
-      }
-      appStateRef.current = nextState;
-    });
-    return () => sub.remove();
-  }, [refreshLastActive]);
-
-  // Tap a marker → scroll list to that squad
-  const handleMarkerPress = useCallback(
-    (squad: Squad) => {
-      setSelectedSquadId(squad.squadId);
-      const idx = nearbySquads.findIndex((s) => s.squadId === squad.squadId);
-      if (idx !== -1 && listRef.current) {
-        listRef.current.scrollToIndex({ index: idx, animated: true, viewPosition: 0 });
-      }
-    },
-    [nearbySquads]
+  const renderItem = ({ item }: { item: Squad }) => (
+    <SquadCard
+      squad={item}
+      isMember={mySquadIds.includes(item.squadId)}
+      onJoin={() => handleJoin(item.squadId)}
+      onPress={() => router.push(`/(social)/squad-detail?squadId=${item.squadId}`)}
+      joining={joiningId === item.squadId}
+    />
   );
 
-  // Tap a squad card → navigate to detail
-  const handleSquadPress = useCallback((squad: Squad) => {
-    router.push(`/(social)/squad-detail?squadId=${squad.squadId}`);
-  }, []);
-
-  // Join a squad
-  const handleJoin = useCallback(
-    async (squadId: string) => {
-      if (!user?.uid) return;
-      setJoiningId(squadId);
-      try {
-        await joinSquad(squadId);
-      } catch {
-        // error already logged in service
-      } finally {
-        setJoiningId(null);
-      }
-    },
-    [user, joinSquad]
-  );
-
-  // After squad created → navigate to detail
-  const handleSquadCreated = useCallback((squadId: string) => {
-    router.push(`/(social)/squad-detail?squadId=${squadId}`);
-  }, []);
-
-  // Permission denied state
-  if (permissionStatus === 'denied') {
-    return <SquadPermissionCard onRetry={initLocation} />;
+  if (permissionDenied) {
+    return <SquadPermissionCard onRetry={loadSquads} />;
   }
-
-  // Still checking permission
-  if (permissionStatus === 'unknown') {
-    return (
-      <View style={[styles.centered, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-      </View>
-    );
-  }
-
-  const mapRegion = userCoords
-    ? {
-        latitude: userCoords.latitude,
-        longitude: userCoords.longitude,
-        latitudeDelta: 0.04,
-        longitudeDelta: 0.04,
-      }
-    : undefined;
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* ── MAP (top 45%) ── */}
-      <View style={styles.mapContainer}>
-        <MapView
-          ref={mapRef}
-          style={styles.map}
-          provider={PROVIDER_GOOGLE}
-          customMapStyle={SIDELINE_MAP_STYLE}
-          region={mapRegion}
-          showsUserLocation={false}
-          showsMyLocationButton={false}
-          showsCompass={false}
-          toolbarEnabled={false}
-          moveOnMarkerPress={false}
-        >
-          {/* "You Are Here" dot */}
-          {userCoords && (
-            <Circle
-              center={userCoords}
-              radius={12}
-              fillColor={Colors.textHeading}
-              strokeColor={Colors.surface}
-              strokeWidth={2}
-              zIndex={10}
-            />
-          )}
-
-          {/* Squad markers */}
-          {nearbySquads.map((squad) => (
-            <Marker
-              key={squad.squadId}
-              coordinate={squad.venueLocation}
-              onPress={() => handleMarkerPress(squad)}
-              tracksViewChanges={false}
-              anchor={{ x: 0.5, y: 1 }}
-            >
-              <SquadMarker
-                squad={squad}
-                isSelected={selectedSquadId === squad.squadId}
-              />
-            </Marker>
-          ))}
-        </MapView>
-
-        {/* Recenter button */}
-        {userCoords && (
-          <TouchableOpacity
-            style={styles.recenterBtn}
-            onPress={() => {
-              mapRef.current?.animateToRegion(
-                { ...userCoords, latitudeDelta: 0.04, longitudeDelta: 0.04 },
-                400
-              );
-            }}
-            activeOpacity={0.8}
-          >
-            <RefreshCw size={16} color={Colors.textHeading} />
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* ── SQUAD LIST (bottom 55%) ── */}
-      <View style={styles.listContainer}>
-        {/* Section header */}
-        <View style={styles.listHeader}>
-          <Text style={styles.listHeaderText}>
-            {loading
-              ? t('squad.loadingSquads')
-              : t('squad.nearbyCount', { count: nearbySquads.length })}
-          </Text>
-          {loading && <ActivityIndicator size="small" color={Colors.primary} style={{ marginLeft: 8 }} />}
+    <ScreenWrapper>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.title}>Squad</Text>
+          <Text style={styles.subtitle}>{nearbySquads.length} squads near you</Text>
         </View>
-
-        {/* Squad cards */}
-        <FlatList
-          ref={listRef}
-          data={nearbySquads}
-          keyExtractor={(item) => item.squadId}
-          renderItem={({ item }) => (
-            <SquadCard
-              squad={item}
-              isMember={mySquadIds.includes(item.squadId)}
-              isHighlighted={selectedSquadId === item.squadId}
-              onJoin={() => handleJoin(item.squadId)}
-              onPress={() => handleSquadPress(item)}
-              joining={joiningId === item.squadId}
-            />
-          )}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          onScrollToIndexFailed={() => {}}
-          ListEmptyComponent={
-            !loading ? (
-              <View style={styles.empty}>
-                <Text style={styles.emptyText}>{t('squad.noSquads')}</Text>
-              </View>
-            ) : null
-          }
-        />
+        <TouchableOpacity style={styles.iconButton} onPress={loadSquads}>
+          {loading ? <ActivityIndicator color={Colors.primary} /> : <RefreshCw size={20} color={Colors.textHeading} />}
+        </TouchableOpacity>
       </View>
 
-      {/* ── FAB ── */}
-      <TouchableOpacity
-        style={[styles.fab, { bottom: insets.bottom + Spacing.lg }]}
-        onPress={() => setShowCreateSheet(true)}
-        activeOpacity={0.85}
-      >
+      <FlatList
+        data={nearbySquads}
+        keyExtractor={(item) => item.squadId}
+        renderItem={renderItem}
+        contentContainerStyle={styles.list}
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>No squads loaded yet</Text>
+            <Text style={styles.emptyText}>Refresh to find parents near your current field.</Text>
+          </View>
+        }
+      />
+
+      <TouchableOpacity style={styles.fab} onPress={() => setShowCreate(true)}>
         <Plus size={26} color="#FFFFFF" />
       </TouchableOpacity>
 
-      {/* ── Create Squad Sheet ── */}
       <CreateSquadSheet
-        isOpen={showCreateSheet}
-        onClose={() => setShowCreateSheet(false)}
-        userCoords={userCoords}
-        onSquadCreated={handleSquadCreated}
+        isOpen={showCreate}
+        onClose={() => setShowCreate(false)}
+        userCoords={coords}
+        onSquadCreated={(squadId) => router.push(`/(social)/squad-detail?squadId=${squadId}`)}
       />
-    </View>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.background,
-  },
-  mapContainer: {
-    height: MAP_HEIGHT,
-    width: '100%',
-    overflow: 'hidden',
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  recenterBtn: {
-    position: 'absolute',
-    top: Spacing.md,
-    right: Spacing.md,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  listContainer: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  listHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.secondary,
-    backgroundColor: Colors.background,
-  },
-  listHeaderText: {
-    fontFamily: Typography.bodySemiBold,
-    fontSize: 14,
-    color: Colors.textHeading,
-  },
-  listContent: {
-    paddingVertical: Spacing.sm,
-    paddingBottom: Spacing.xl + 60, // space for FAB
-  },
-  empty: {
-    paddingTop: Spacing.xl,
-    paddingHorizontal: Spacing.lg,
-    alignItems: 'center',
-  },
-  emptyText: {
-    fontFamily: Typography.bodyRegular,
-    fontSize: 14,
-    color: Colors.textPrimary,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  fab: {
-    position: 'absolute',
-    right: Spacing.lg,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 8,
-    zIndex: 20,
-  },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: Spacing.lg, paddingBottom: Spacing.sm },
+  title: { fontFamily: Typography.heading, fontSize: 30, color: Colors.textHeading },
+  subtitle: { fontFamily: Typography.bodyRegular, color: Colors.textPrimary, marginTop: 2 },
+  iconButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderRadius: 22, backgroundColor: Colors.surface },
+  list: { padding: Spacing.md, gap: Spacing.md, paddingBottom: 100 },
+  empty: { alignItems: "center", padding: Spacing.xl, gap: Spacing.sm },
+  emptyTitle: { fontFamily: Typography.bodySemiBold, fontSize: 16, color: Colors.textHeading },
+  emptyText: { fontFamily: Typography.bodyRegular, textAlign: "center", color: Colors.textPrimary },
+  fab: { position: "absolute", right: Spacing.lg, bottom: Spacing.xl, width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },
 });

@@ -1,55 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import {
-  StyleSheet,
-  Text,
-  View,
-  TextInput,
-  ScrollView,
-  TouchableOpacity,
-  Switch,
-  Alert,
-} from 'react-native';
-import { useTranslation } from 'react-i18next';
-import {
-  Actionsheet,
-  ActionsheetContent,
-  ActionsheetDragIndicator,
-  ActionsheetDragIndicatorWrapper,
-  ActionsheetBackdrop,
-} from '@/components/ui/actionsheet';
-import { Colors, Typography, Spacing, Radius } from '@/constants/theme';
-import { PrimaryButton } from '@/components/PrimaryButton';
-import { useSquad } from '@/context/SquadContext';
-
-const SPORTS = [
-  'Soccer',
-  'Baseball',
-  'Basketball',
-  'Football',
-  'Lacrosse',
-  'Swimming',
-  'Dance',
-  'Gymnastics',
-  'Tennis',
-  'TrackAndField',
-  'Volleyball',
-  'Other',
-];
-
-const SPORT_LABELS: Record<string, string> = {
-  Soccer: 'Soccer',
-  Baseball: 'Baseball',
-  Basketball: 'Basketball',
-  Football: 'Football',
-  Lacrosse: 'Lacrosse',
-  Swimming: 'Swimming',
-  Dance: 'Dance',
-  Gymnastics: 'Gymnastics',
-  Tennis: 'Tennis',
-  TrackAndField: 'Track & Field',
-  Volleyball: 'Volleyball',
-  Other: 'Other',
-};
+import React, { useState } from "react";
+import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { X } from "lucide-react-native";
+import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { PrimaryButton } from "@/components/PrimaryButton";
+import { useSquad } from "@/context/SquadContext";
 
 interface CreateSquadSheetProps {
   isOpen: boolean;
@@ -58,224 +12,123 @@ interface CreateSquadSheetProps {
   onSquadCreated: (squadId: string) => void;
 }
 
-export function CreateSquadSheet({
-  isOpen,
-  onClose,
-  userCoords,
-  onSquadCreated,
-}: CreateSquadSheetProps) {
-  const { t } = useTranslation();
+export function CreateSquadSheet({ isOpen, onClose, userCoords, onSquadCreated }: CreateSquadSheetProps) {
   const { createSquad } = useSquad();
-
-  const [selectedSport, setSelectedSport] = useState('Soccer');
-  const [venueName, setVenueName] = useState('');
-  const [squadName, setSquadName] = useState('');
-  const [useMyLocation, setUseMyLocation] = useState(true);
+  const [name, setName] = useState("");
+  const [sport, setSport] = useState("Soccer");
+  const [venueName, setVenueName] = useState("");
   const [loading, setLoading] = useState(false);
-
-  // Auto-populate name when sport/venue changes
-  useEffect(() => {
-    const sportLabel = SPORT_LABELS[selectedSport] ?? selectedSport;
-    setSquadName(venueName ? `${sportLabel} Squad — ${venueName}` : `${sportLabel} Squad`);
-  }, [selectedSport, venueName]);
+  const [error, setError] = useState("");
 
   const handleCreate = async () => {
-    if (!squadName.trim() || !venueName.trim()) {
-      Alert.alert('', 'Please fill in the squad name and venue.');
+    setError("");
+    if (!userCoords) {
+      setError("Location is required to create a squad.");
       return;
     }
-    const coords = useMyLocation && userCoords ? userCoords : userCoords;
-    if (!coords) {
-      Alert.alert('', 'Location not available. Please enable location access.');
+    if (!name.trim() || !venueName.trim()) {
+      setError("Add a squad name and venue.");
       return;
     }
 
     setLoading(true);
     try {
       const squadId = await createSquad({
-        name: squadName.trim(),
-        sport: selectedSport,
+        name: name.trim(),
+        sport: sport.trim() || "Soccer",
         venueName: venueName.trim(),
-        venueLocation: coords,
+        venueLocation: userCoords,
       });
+      setName("");
+      setVenueName("");
+      setSport("Soccer");
       onClose();
       onSquadCreated(squadId);
-    } catch {
-      Alert.alert('', t('squad.errorCreating'));
+    } catch (nextError) {
+      console.warn("[CreateSquadSheet] create error:", nextError);
+      setError("Could not create this squad yet.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Actionsheet isOpen={isOpen} onClose={onClose}>
-      <ActionsheetBackdrop />
-      <ActionsheetContent style={styles.sheet}>
-        <ActionsheetDragIndicatorWrapper>
-          <ActionsheetDragIndicator />
-        </ActionsheetDragIndicatorWrapper>
-
-        <Text style={styles.title}>{t('squad.createTitle')}</Text>
-
-        <ScrollView
-          style={styles.scroll}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {/* Sport Picker */}
-          <Text style={styles.label}>{t('squad.sportLabel')}</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.sportRow}
-          >
-            {SPORTS.map((sport) => (
-              <TouchableOpacity
-                key={sport}
-                style={[styles.sportPill, selectedSport === sport && styles.sportPillActive]}
-                onPress={() => setSelectedSport(sport)}
-                activeOpacity={0.8}
-              >
-                <Text
-                  style={[
-                    styles.sportPillText,
-                    selectedSport === sport && styles.sportPillTextActive,
-                  ]}
-                >
-                  {SPORT_LABELS[sport]}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-
-          {/* Venue Name */}
-          <Text style={styles.label}>{t('squad.venueLabel')}</Text>
-          <TextInput
-            style={styles.input}
-            value={venueName}
-            onChangeText={setVenueName}
-            placeholder={t('squad.venuePlaceholder')}
-            placeholderTextColor={Colors.secondary}
-            returnKeyType="next"
-          />
-
-          {/* Squad Name */}
-          <Text style={styles.label}>{t('squad.squadNameLabel')}</Text>
-          <TextInput
-            style={styles.input}
-            value={squadName}
-            onChangeText={setSquadName}
-            placeholderTextColor={Colors.secondary}
-            returnKeyType="done"
-          />
-
-          {/* Use My Location Toggle */}
-          <View style={styles.toggleRow}>
-            <Text style={styles.toggleLabel}>{t('squad.useMyLocation')}</Text>
-            <Switch
-              value={useMyLocation}
-              onValueChange={setUseMyLocation}
-              trackColor={{ false: Colors.secondary, true: Colors.primary }}
-              thumbColor="#FFFFFF"
-              disabled={!userCoords}
-            />
+    <Modal visible={isOpen} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.backdrop}>
+        <View style={styles.sheet}>
+          <View style={styles.header}>
+            <Text style={styles.title}>Create Squad</Text>
+            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+              <X size={20} color={Colors.textHeading} />
+            </TouchableOpacity>
           </View>
 
-          {/* Create Button */}
-          <PrimaryButton
-            title={t('squad.createButton')}
-            onPress={handleCreate}
-            loading={loading}
-            disabled={loading || !squadName.trim() || !venueName.trim()}
-            style={styles.createBtn}
-          />
-        </ScrollView>
-      </ActionsheetContent>
-    </Actionsheet>
+          <Text style={styles.label}>Squad name</Text>
+          <TextInput value={name} onChangeText={setName} placeholder="Saturday sideline crew" style={styles.input} />
+
+          <Text style={styles.label}>Sport</Text>
+          <TextInput value={sport} onChangeText={setSport} placeholder="Soccer" style={styles.input} />
+
+          <Text style={styles.label}>Venue</Text>
+          <TextInput value={venueName} onChangeText={setVenueName} placeholder="Field 3" style={styles.input} />
+
+          {!!error && <Text style={styles.error}>{error}</Text>}
+          <PrimaryButton title="Create Squad" onPress={handleCreate} loading={loading} />
+        </View>
+      </View>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(47, 65, 86, 0.35)",
+  },
   sheet: {
     backgroundColor: Colors.surface,
-    paddingHorizontal: Spacing.md,
-    paddingBottom: Spacing.xl,
-    maxHeight: '85%',
+    borderTopLeftRadius: Radius.card,
+    borderTopRightRadius: Radius.card,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    ...Shadow.card,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: Spacing.sm,
   },
   title: {
     fontFamily: Typography.heading,
     fontSize: 22,
     color: Colors.textHeading,
-    marginTop: Spacing.md,
-    marginBottom: Spacing.lg,
-    textAlign: 'center',
   },
-  scroll: {
-    width: '100%',
+  closeButton: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
   },
   label: {
     fontFamily: Typography.bodySemiBold,
-    fontSize: 13,
     color: Colors.textHeading,
-    marginBottom: Spacing.xs,
-    marginTop: Spacing.sm,
+    fontSize: 13,
   },
   input: {
+    height: 48,
     borderWidth: 1,
     borderColor: Colors.secondary,
-    borderRadius: Radius.sm,
+    borderRadius: Radius.button,
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 2,
+    backgroundColor: Colors.background,
+    color: Colors.textPrimary,
     fontFamily: Typography.bodyRegular,
-    fontSize: 14,
-    color: Colors.textPrimary,
-    backgroundColor: Colors.background,
-    marginBottom: Spacing.xs,
   },
-  sportRow: {
-    flexDirection: 'row',
-    gap: Spacing.xs,
-    paddingBottom: Spacing.xs,
-    marginBottom: Spacing.xs,
-  },
-  sportPill: {
-    borderWidth: 1,
-    borderColor: Colors.secondary,
-    borderRadius: 20,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    backgroundColor: Colors.background,
-  },
-  sportPillActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-  },
-  sportPillText: {
-    fontFamily: Typography.bodyMedium,
-    fontSize: 13,
-    color: Colors.textPrimary,
-  },
-  sportPillTextActive: {
-    color: '#FFFFFF',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginVertical: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: Colors.secondary,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.secondary,
-  },
-  toggleLabel: {
-    fontFamily: Typography.bodyMedium,
-    fontSize: 14,
-    color: Colors.textPrimary,
-  },
-  createBtn: {
-    marginTop: Spacing.md,
-    marginBottom: Spacing.sm,
+  error: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyRegular,
+    textAlign: "center",
   },
 });

@@ -1,61 +1,75 @@
-/**
- * ErrorBoundary Component
- *
- * Wraps the app to catch React errors and report them to CatDoes Watch.
- * Displays a fallback UI when an error occurs.
- */
-
 import React from "react";
-import { WatchErrorBoundary } from "@catdoes/watch";
-import { Box } from "./ui/box";
-import { VStack } from "./ui/vstack";
-import { Text } from "./ui/text";
+import { StyleSheet, Text, View } from "react-native";
 import { AlertTriangle } from "lucide-react-native";
 
-interface ErrorFallbackProps {
-  error: Error;
-  errorInfo: React.ErrorInfo;
-  resetError: () => void;
-}
-
-/**
- * Fallback UI displayed when an error is caught
- */
-function ErrorFallback({ error }: ErrorFallbackProps) {
-  return (
-    <Box className="flex-1 bg-background-50 items-center justify-center p-6">
-      <VStack space="lg" className="items-center max-w-md">
-        <AlertTriangle size={48} className="text-red-500" />
-        <Text className="text-xl font-semibold text-center">
-          Something went wrong
-        </Text>
-        <Text className="text-sm text-typography-500 text-center">
-          {error?.message || "An unexpected error occurred"}
-        </Text>
-      </VStack>
-    </Box>
-  );
-}
+import { Button } from "@/components/Button";
+import { Colors, Spacing, Typography } from "@/constants/theme";
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
   onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
 }
 
-/**
- * Error boundary component that integrates with CatDoes Watch
- *
- * Wraps children in a WatchErrorBoundary that automatically reports
- * errors to CatDoes Watch and displays a fallback UI.
- */
-export function ErrorBoundary({ children, onError }: ErrorBoundaryProps) {
-  return (
-    <WatchErrorBoundary
-      fallback={ErrorFallback}
-      onError={onError}
-      captureErrors={true}
-    >
-      {children}
-    </WatchErrorBoundary>
-  );
+interface ErrorBoundaryState {
+  error: Error | null;
 }
+
+export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    this.props.onError?.(error, errorInfo);
+    console.error("[ErrorBoundary]", error, errorInfo);
+  }
+
+  private reset = () => {
+    this.setState({ error: null });
+  };
+
+  render() {
+    if (!this.state.error) {
+      return this.props.children;
+    }
+
+    return (
+      <View style={styles.container}>
+        <AlertTriangle size={44} color={Colors.primary} />
+        <Text style={styles.title}>Something went wrong</Text>
+        <Text style={styles.message}>{this.state.error.message || "Please try again."}</Text>
+        <Button title="Try again" onPress={this.reset} style={styles.button} />
+      </View>
+    );
+  }
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    padding: Spacing.xl,
+    backgroundColor: Colors.background,
+  },
+  title: {
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 18,
+    color: Colors.textHeading,
+    textAlign: "center",
+  },
+  message: {
+    fontFamily: Typography.bodyRegular,
+    fontSize: 14,
+    color: Colors.textPrimary,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  button: {
+    marginTop: Spacing.md,
+    maxWidth: 220,
+  },
+});

@@ -5,13 +5,13 @@ import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 
-export default function ForgotPasswordSuccessScreen() {
+export function GamePlaceholder({ title, body }: { title: string; body: string }) {
   return (
     <ScreenWrapper>
       <View style={styles.content}>
-        <Text style={styles.title}>Check your email</Text>
-        <Text style={styles.body}>If an account exists, Firebase sent a password reset link.</Text>
-        <PrimaryButton title="Back to sign in" onPress={() => router.replace("/(auth)/sign-in")} />
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.body}>{body}</Text>
+        <PrimaryButton title="Back to Games" onPress={() => router.replace("/(tabs)/games")} />
       </View>
     </ScreenWrapper>
   );
@@ -20,5 +20,5 @@ export default function ForgotPasswordSuccessScreen() {
 const styles = StyleSheet.create({
   content: { flex: 1, justifyContent: "center", padding: Spacing.lg, gap: Spacing.md },
   title: { fontFamily: Typography.heading, fontSize: 32, color: Colors.textHeading, textAlign: "center" },
-  body: { fontFamily: Typography.bodyRegular, color: Colors.textPrimary, textAlign: "center", lineHeight: 22 },
+  body: { fontFamily: Typography.bodyRegular, fontSize: 16, color: Colors.textPrimary, textAlign: "center", lineHeight: 24, marginBottom: Spacing.md },
 });
