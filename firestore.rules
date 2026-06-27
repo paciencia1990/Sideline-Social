@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -----------------------------------------------------------------------
+    // Helper functions
+    // -----------------------------------------------------------------------
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    function isSquadMember(squadId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/squads/$(squadId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/squads/$(squadId)).data.memberIds;
+    }
+
+    // -----------------------------------------------------------------------
+    // users collection
+    // Each user can only read/write their own document.
+    // -----------------------------------------------------------------------
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId);
+    }
+
+    // -----------------------------------------------------------------------
+    // squads collection
+    // Anyone authenticated can read. Members can update (join activity etc.).
+    // Only creator can delete. Authenticated users can create.
+    // -----------------------------------------------------------------------
+    match /squads/{squadId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (
+        isSquadMember(squadId) ||
+        request.auth.uid == resource.data.createdBy
+      );
+      allow delete: if isAuthenticated() &&
+        request.auth.uid == resource.data.createdBy;
+    }
+
+    // -----------------------------------------------------------------------
+    // squadMemberships collection
+    // Users can read/write only their own memberships.
+    // Cloud Functions use the Admin SDK and bypass these rules.
+    // -----------------------------------------------------------------------
+    match /squadMemberships/{membershipId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isSquadMember(resource.data.squadId)
+      );
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() &&
+        resource.data.userId == request.auth.uid;
+      allow delete: if false; // Never delete memberships — only deactivate
+    }
+
+    // -----------------------------------------------------------------------
+    // appConfig collection
+    // Anyone authenticated can read. Only admin (server-side) can write.
+    // -----------------------------------------------------------------------
+    match /appConfig/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Managed via Firebase Console / Admin SDK only
+    }
+
+    // -----------------------------------------------------------------------
+    // activity collection
+    // Authenticated users can read all activity.
+    // Users can only write their own activity entries.
+    // -----------------------------------------------------------------------
+    match /activity/{activityId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}

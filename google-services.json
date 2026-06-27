@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "903830626771",
+    "project_id": "sideline-squad",
+    "storage_bucket": "sideline-squad.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:903830626771:android:01ec28e1c555059bdfcf26",
+        "android_client_info": {
+          "package_name": "com.sidelinesquad.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCG4ym5jJQPG724Pp_Da7yBj3wBdPEOdOs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

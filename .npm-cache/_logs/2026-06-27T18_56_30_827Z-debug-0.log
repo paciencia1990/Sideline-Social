@@ -1,0 +1,60 @@
+0 verbose cli C:\Program Files\nodejs\node.exe C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js
+1 info using npm@11.16.0
+2 info using node@v24.18.0
+3 silly config load:file:C:\Program Files\nodejs\node_modules\npm\npmrc
+4 silly config load:file:C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npmrc
+5 silly config load:file:C:\Users\joann\.npmrc
+6 silly config load:file:C:\Users\joann\AppData\Roaming\npm\etc\npmrc
+7 verbose title npm view lucide-react-native version
+8 verbose argv "view" "lucide-react-native" "version" "--cache" ".\\.npm-cache"
+9 verbose logfile logs-max:10 dir:C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_logs\2026-06-27T18_56_30_827Z-
+10 verbose logfile C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_logs\2026-06-27T18_56_30_827Z-debug-0.log
+11 silly logfile done cleaning log files
+12 http fetch GET 200 https://registry.npmjs.org/npm 213ms
+13 http fetch GET 200 https://registry.npmjs.org/lucide-react-native 211ms (cache miss)
+14 verbose type system
+15 verbose stack FetchError: Invalid response body while trying to fetch https://registry.npmjs.org/lucide-react-native: EPERM: operation not permitted, unlink 'C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_cacache\tmp\***'
+15 verbose stack     at C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\body.js:174:15
+15 verbose stack     at async Response.json (C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\body.js:75:17)
+15 verbose stack     at async RegistryFetcher.packument (C:\Program Files\nodejs\node_modules\npm\node_modules\pacote\lib\registry.js:98:25)
+15 verbose stack     at async #getData (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:133:20)
+15 verbose stack     at async #viewPackage (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:110:28)
+15 verbose stack     at async View.exec (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:69:5)
+15 verbose stack     at async Npm.exec (C:\Program Files\nodejs\node_modules\npm\lib\npm.js:193:9)
+15 verbose stack     at async module.exports (C:\Program Files\nodejs\node_modules\npm\lib\cli\entry.js:67:5)
+16 error code EPERM
+17 error syscall unlink
+18 error path C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_cacache\tmp\***
+19 error errno EPERM
+20 error FetchError: Invalid response body while trying to fetch https://registry.npmjs.org/lucide-react-native: EPERM: operation not permitted, unlink 'C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_cacache\tmp\***'
+20 error     at C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\body.js:174:15
+20 error     at async Response.json (C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\body.js:75:17)
+20 error     at async RegistryFetcher.packument (C:\Program Files\nodejs\node_modules\npm\node_modules\pacote\lib\registry.js:98:25)
+20 error     at async #getData (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:133:20)
+20 error     at async #viewPackage (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:110:28)
+20 error     at async View.exec (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:69:5)
+20 error     at async Npm.exec (C:\Program Files\nodejs\node_modules\npm\lib\npm.js:193:9)
+20 error     at async module.exports (C:\Program Files\nodejs\node_modules\npm\lib\cli\entry.js:67:5) {
+20 error   code: 'EPERM',
+20 error   errno: 'EPERM',
+20 error   syscall: 'unlink',
+20 error   path: 'C:\\Sideline Social\\Sideline Social Code\\SidelineSquad\\Sideline_Squad_v1_0_v0\\.npm-cache\\_cacache\\tmp\\***',
+20 error   type: 'system'
+20 error }
+21 error
+21 error The operation was rejected by your operating system.
+21 error It's possible that the file was already in use (by a text editor or antivirus), or that you lack permissions to access it.
+21 error
+21 error If you believe this might be a permissions issue, please double-check the permissions of the file and its containing directories, or try running the command again as root/Administrator.
+22 verbose cwd C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0
+23 verbose os Windows_NT 10.0.26200
+24 verbose node v24.18.0
+25 verbose npm  v11.16.0
+26 notice
+26 notice New minor version of npm available! 11.16.0 -> 11.17.0
+26 notice Changelog: https://github.com/npm/cli/releases/tag/v11.17.0
+26 notice To update run: npm install -g npm@11.17.0
+26 notice  { force: true, Symbol(proc-log.meta): true }
+27 verbose exit 1
+28 verbose code 1
+29 error A complete log of this run can be found in: C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_logs\2026-06-27T18_56_30_827Z-debug-0.log

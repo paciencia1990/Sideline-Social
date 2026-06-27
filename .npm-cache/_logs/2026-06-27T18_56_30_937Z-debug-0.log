@@ -1,0 +1,54 @@
+0 verbose cli C:\Program Files\nodejs\node.exe C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js
+1 info using npm@11.16.0
+2 info using node@v24.18.0
+3 silly config load:file:C:\Program Files\nodejs\node_modules\npm\npmrc
+4 silly config load:file:C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npmrc
+5 silly config load:file:C:\Users\joann\.npmrc
+6 silly config load:file:C:\Users\joann\AppData\Roaming\npm\etc\npmrc
+7 verbose title npm view @catdoes/watch version
+8 verbose argv "view" "@catdoes/watch" "version" "--cache" ".\\.npm-cache"
+9 verbose logfile logs-max:10 dir:C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_logs\2026-06-27T18_56_30_937Z-
+10 verbose logfile C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_logs\2026-06-27T18_56_30_937Z-debug-0.log
+11 silly logfile done cleaning log files
+12 http fetch GET 200 https://registry.npmjs.org/@catdoes%2fwatch 149ms (cache miss)
+13 verbose type system
+14 verbose stack FetchError: Invalid response body while trying to fetch https://registry.npmjs.org/@catdoes%2fwatch: EPERM: operation not permitted, unlink 'C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_cacache\tmp\***'
+14 verbose stack     at C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\body.js:174:15
+14 verbose stack     at async Response.json (C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\body.js:75:17)
+14 verbose stack     at async RegistryFetcher.packument (C:\Program Files\nodejs\node_modules\npm\node_modules\pacote\lib\registry.js:98:25)
+14 verbose stack     at async #getData (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:133:20)
+14 verbose stack     at async #viewPackage (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:110:28)
+14 verbose stack     at async View.exec (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:69:5)
+14 verbose stack     at async Npm.exec (C:\Program Files\nodejs\node_modules\npm\lib\npm.js:193:9)
+14 verbose stack     at async module.exports (C:\Program Files\nodejs\node_modules\npm\lib\cli\entry.js:67:5)
+15 error code EPERM
+16 error syscall unlink
+17 error path C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_cacache\tmp\***
+18 error errno EPERM
+19 error FetchError: Invalid response body while trying to fetch https://registry.npmjs.org/@catdoes%2fwatch: EPERM: operation not permitted, unlink 'C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_cacache\tmp\***'
+19 error     at C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\body.js:174:15
+19 error     at async Response.json (C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\body.js:75:17)
+19 error     at async RegistryFetcher.packument (C:\Program Files\nodejs\node_modules\npm\node_modules\pacote\lib\registry.js:98:25)
+19 error     at async #getData (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:133:20)
+19 error     at async #viewPackage (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:110:28)
+19 error     at async View.exec (C:\Program Files\nodejs\node_modules\npm\lib\commands\view.js:69:5)
+19 error     at async Npm.exec (C:\Program Files\nodejs\node_modules\npm\lib\npm.js:193:9)
+19 error     at async module.exports (C:\Program Files\nodejs\node_modules\npm\lib\cli\entry.js:67:5) {
+19 error   code: 'EPERM',
+19 error   errno: 'EPERM',
+19 error   syscall: 'unlink',
+19 error   path: 'C:\\Sideline Social\\Sideline Social Code\\SidelineSquad\\Sideline_Squad_v1_0_v0\\.npm-cache\\_cacache\\tmp\\***',
+19 error   type: 'system'
+19 error }
+20 error
+20 error The operation was rejected by your operating system.
+20 error It's possible that the file was already in use (by a text editor or antivirus), or that you lack permissions to access it.
+20 error
+20 error If you believe this might be a permissions issue, please double-check the permissions of the file and its containing directories, or try running the command again as root/Administrator.
+21 verbose cwd C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0
+22 verbose os Windows_NT 10.0.26200
+23 verbose node v24.18.0
+24 verbose npm  v11.16.0
+25 verbose exit 1
+26 verbose code 1
+27 error A complete log of this run can be found in: C:\Sideline Social\Sideline Social Code\SidelineSquad\Sideline_Squad_v1_0_v0\.npm-cache\_logs\2026-06-27T18_56_30_937Z-debug-0.log
