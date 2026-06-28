@@ -1,36 +1,40 @@
 {
-  "extends": "expo/tsconfig.base",
-  "compilerOptions": {
-    "strict": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./*"]
-    }
-  },
-  "include": [
-    "app/**/*.ts",
-    "app/**/*.tsx",
-    "components/**/*.ts",
-    "components/**/*.tsx",
-    "config/**/*.ts",
-    "constants/**/*.ts",
-    "context/**/*.ts",
-    "context/**/*.tsx",
-    "hooks/**/*.ts",
-    "i18n/**/*.ts",
-    "services/squadService.ts",
-    "utils/**/*.ts",
-    ".expo/types/**/*.ts",
-    "expo-env.d.ts"
-  ],
-  "exclude": [
-    "components/GluestackInitializer.tsx",
-    "components/ui/**/*",
-    "components/colors/**/*",
-    "functions/**/*",
-    "node_modules/**/*",
-    ".npm-cache/**/*",
-    ".npm-install-cache/**/*",
-    "sideline-social/**/*"
-  ]
+    "extends":  "expo/tsconfig.base",
+    "compilerOptions":  {
+                            "strict":  true,
+                            "baseUrl":  ".",
+                            "paths":  {
+                                          "@/*":  [
+                                                      "./*"
+                                                  ]
+                                      }
+                        },
+    "include":  [
+                    "app/**/*.ts",
+                    "app/**/*.tsx",
+                    "components/**/*.ts",
+                    "components/**/*.tsx",
+                    "config/**/*.ts",
+                    "constants/**/*.ts",
+                    "context/**/*.ts",
+                    "context/**/*.tsx",
+                    "hooks/**/*.ts",
+                    "i18n/**/*.ts",
+                    "services/squadService.ts",
+                    "utils/**/*.ts",
+                    ".expo/types/**/*.ts",
+                    "expo-env.d.ts",
+                    "src/**/*.ts",
+                    "src/**/*.tsx"
+                ],
+    "exclude":  [
+                    "components/GluestackInitializer.tsx",
+                    "components/ui/**/*",
+                    "components/colors/**/*",
+                    "functions/**/*",
+                    "node_modules/**/*",
+                    ".npm-cache/**/*",
+                    ".npm-install-cache/**/*",
+                    "sideline-social/**/*"
+                ]
 }

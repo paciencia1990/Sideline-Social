@@ -1,11 +1,13 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import React, { useEffect } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, LogBox, StyleSheet, View } from "react-native";
 
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { useAuth } from "@/context/AuthContext";
 import { Colors } from "@/constants/theme";
+import { useAuth } from "@/context/AuthContext";
+
+LogBox.ignoreAllLogs(false);
 
 export default function Index() {
   const { user, loading } = useAuth();
