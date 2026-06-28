@@ -1,6 +1,7 @@
 import React from "react";
 import { ScrollView, StyleSheet, Text } from "react-native";
 import { router } from "expo-router";
+import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { PrimaryButton } from "@/components/PrimaryButton";
@@ -26,6 +27,8 @@ const games = [
 ] as const;
 
 export default function GamesScreen() {
+  const { t } = useTranslation();
+
   return (
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.content}>
@@ -38,6 +41,12 @@ export default function GamesScreen() {
             <PrimaryButton title="Open Lobby" onPress={() => router.push(game.route as never)} />
           </Card>
         ))}
+
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>{t("leaderboard.title")}</Text>
+          <Text style={styles.cardText}>{t("games.viewLeaderboard")}</Text>
+          <PrimaryButton title={t("leaderboard.title")} onPress={() => router.push("/leaderboard" as never)} />
+        </Card>
       </ScrollView>
     </ScreenWrapper>
   );
