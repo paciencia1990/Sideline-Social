@@ -26,7 +26,7 @@ export default function SplashScreen() {
   return (
     <View style={styles.container}>
       <Animated.View style={{ opacity }}>
-        <Text style={styles.wordmark}>Sideline Squad</Text>
+        <Text style={styles.wordmark}>Sideline Social</Text>
         <Text style={styles.tagline}>turn wait time into game time</Text>
       </Animated.View>
     </View>

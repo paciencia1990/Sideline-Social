@@ -5,6 +5,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const resources = {
   en: {
     translation: {
+      app: {
+        name: 'Sideline Social',
+      },
       tabs: {
         home: 'Home',
         squad: 'Squad',
@@ -13,15 +16,16 @@ const resources = {
         profile: 'Profile',
       },
       common: {
-        welcome: 'Welcome to Sideline Squad',
+        welcome: 'Welcome to Sideline Social',
         tagline: 'turn wait time into game time',
         comingSoon: 'Coming Soon',
         loading: 'Loading...',
       },
       home: {
         title: 'Home',
-        subtitle: 'Your squad is waiting',
-        headerTitle: 'Sideline Squad',
+        subtitle: 'Your sideline circle is waiting',
+        welcome: 'Welcome, {{name}}',
+        headerTitle: 'Sideline Social',
         sidelineThisWeek: 'Your Sideline This Week',
         noSquadsYet: 'No squads yet',
         findSquadsNearby: 'Find squads near you →',
@@ -41,6 +45,22 @@ const resources = {
         hoursAgo: '{{count}} hours ago',
         daysAgo: '{{count}} days ago',
         moreMembers: '+{{count}} more',
+        quickActions: 'Quick Actions',
+        playNow: 'Play Now',
+        joinCode: 'Join Code',
+        friends: 'Friends',
+        chat: 'Chat',
+        leaderboard: 'Leaderboard',
+        activity: 'Community Activity',
+        activeGame: 'Active Game',
+        liveSquad: 'Live Squad',
+        noSquadsBody: 'Join or create a squad to see nearby parents, live chats, and game sessions.',
+        squadSummary: 'You are connected to {{count}} squad.',
+        squadSummary_other: 'You are connected to {{count}} squads.',
+        viewSquads: 'View Squads',
+        communityPromptFallback: 'Find a friendly face before the next whistle. Your sideline circle starts with one hello.',
+        errorTitle: 'Could not load Home',
+        errorBody: 'Home updates are unavailable right now. Pull to refresh and try again.',
       },
       squad: {
         title: 'My Squad',
@@ -75,6 +95,7 @@ const resources = {
         membersHere: '{{count}} parent here',
         membersHere_other: '{{count}} parents here',
         moreMembers: '+{{count}} more',
+
         sport: 'Sport',
         venue: 'Venue',
         members: 'Members',
@@ -90,7 +111,7 @@ const resources = {
       },
       games: {
         title: 'Games',
-        subtitle: 'Play with your squad',
+        subtitle: 'Quick games for sideline downtime',
         playNow: 'Play Now',
         joinGame: 'Join Game',
         joinActiveGame: 'Join Active Game',
@@ -100,6 +121,10 @@ const resources = {
         enterCode: 'Enter Join Code',
         join: 'Join',
         viewLeaderboard: 'See your Sideline Stars ranking',
+        leaderboard: 'Leaderboard',
+        activeNow: 'Active Now',
+        joinCodeBody: 'Enter a four-character code from a host to jump into a lobby.',
+        hideCode: 'Hide',
         signInRequired: 'Sign In Required',
         signInToPlay: 'Please sign in to create or join a game.',
         noSquadTitle: 'Join a Squad First',
@@ -205,7 +230,8 @@ const resources = {
         noAccess: 'You do not have access to this chat.',
         missingSquad: 'This squad chat could not be opened without a squad.',
         openingSquadChat: 'Opening squad chat...',
-      },      leaderboard: {
+      },
+      leaderboard: {
         title: 'Leaderboard',
         subtitle: 'Top Sideline Stars in your community',
         loading: 'Loading Sideline Stars...',
@@ -230,7 +256,7 @@ const resources = {
         subtitle: 'Your stats and badges',
         settingsTitle: 'Settings',
         language: 'Language',
-        languageDescription: 'Choose the language used across Sideline Squad.',
+        languageDescription: 'Choose the language used across Sideline Social.',
         english: 'English',
         spanish: 'Spanish',
         signOut: 'Sign out',
@@ -305,7 +331,7 @@ const resources = {
       onboarding: {
         screen1: {
           headline: 'Find Your Squad',
-          body: 'Other parents are waiting on the sideline too. Sideline Squad uses your location to find your people — right where you are.',
+          body: 'Other parents are waiting on the sideline too. Sideline Social uses your location to find your people — right where you are.',
         },
         screen2: {
           headline: 'Play Together',
@@ -320,6 +346,9 @@ const resources = {
   },
   es: {
     translation: {
+      app: {
+        name: 'Sideline Social',
+      },
       tabs: {
         home: 'Inicio',
         squad: 'Equipo',
@@ -328,15 +357,16 @@ const resources = {
         profile: 'Perfil',
       },
       common: {
-        welcome: 'Bienvenido a Sideline Squad',
+        welcome: 'Bienvenido a Sideline Social',
         tagline: 'convierte el tiempo de espera en tiempo de juego',
         comingSoon: 'Próximamente',
         loading: 'Cargando...',
       },
       home: {
         title: 'Inicio',
-        subtitle: 'Tu equipo te espera',
-        headerTitle: 'Sideline Squad',
+        subtitle: 'Tu circulo en la cancha te espera',
+        welcome: 'Bienvenido, {{name}}',
+        headerTitle: 'Sideline Social',
         sidelineThisWeek: 'Tu Sideline Esta Semana',
         noSquadsYet: 'Aún sin equipos',
         findSquadsNearby: 'Encuentra equipos cercanos →',
@@ -405,7 +435,7 @@ const resources = {
       },
       games: {
         title: 'Juegos',
-        subtitle: 'Juega con tu equipo',
+        subtitle: 'Juegos rapidos para la espera',
         playNow: 'Jugar Ahora',
         joinGame: 'Unirse al Juego',
         joinActiveGame: 'Unirse al Juego Activo',
@@ -415,6 +445,10 @@ const resources = {
         enterCode: 'Ingresa el Código',
         join: 'Unirse',
         viewLeaderboard: 'Ver tu ranking de Sideline Stars',
+        leaderboard: 'Clasificacion',
+        activeNow: 'Activo Ahora',
+        joinCodeBody: 'Ingresa un codigo de cuatro caracteres para entrar a una sala.',
+        hideCode: 'Ocultar',
         signInRequired: 'Inicia Sesión',
         signInToPlay: 'Por favor inicia sesión para crear o unirte a un juego.',
         noSquadTitle: 'Únete a un Equipo Primero',
@@ -520,7 +554,8 @@ const resources = {
         noAccess: 'No tienes acceso a este chat.',
         missingSquad: 'No se pudo abrir este chat sin un equipo.',
         openingSquadChat: 'Abriendo chat de equipo...',
-      },      leaderboard: {
+      },
+      leaderboard: {
         title: 'Clasificación',
         subtitle: 'Los mejores Sideline Stars de tu comunidad',
         loading: 'Cargando Sideline Stars...',
@@ -545,7 +580,7 @@ const resources = {
         subtitle: 'Tus estadísticas y logros',
         settingsTitle: 'Configuración',
         language: 'Idioma',
-        languageDescription: 'Elige el idioma usado en Sideline Squad.',
+        languageDescription: 'Elige el idioma usado en Sideline Social.',
         english: 'Inglés',
         spanish: 'Español',
         signOut: 'Cerrar sesión',
@@ -621,7 +656,7 @@ const resources = {
       onboarding: {
         screen1: {
           headline: 'Encuentra Tu Equipo',
-          body: 'Hay otros padres esperando en la orilla también. Sideline Squad usa tu ubicación para conectarte con los tuyos — justo donde estás.',
+          body: 'Hay otros padres esperando en la orilla también. Sideline Social usa tu ubicación para conectarte con los tuyos — justo donde estás.',
         },
         screen2: {
           headline: 'Jueguen Juntos',

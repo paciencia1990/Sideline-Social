@@ -15,7 +15,7 @@ export default function OnboardingScreen() {
   return (
     <ScreenWrapper>
       <View style={styles.content}>
-        <Text style={styles.title}>Sideline Squad</Text>
+        <Text style={styles.title}>Sideline Social</Text>
         <Text style={styles.tagline}>turn wait time into game time</Text>
         <Text style={styles.body}>Find nearby parents, join a squad, and make youth sports days easier to enjoy.</Text>
         <PrimaryButton title="Get Started" onPress={finish} />

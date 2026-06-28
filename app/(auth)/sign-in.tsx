@@ -11,7 +11,7 @@ export default function SignInScreen() {
     <ScreenWrapper>
       <View style={styles.content}>
         <Text style={styles.title}>Welcome back</Text>
-        <Text style={styles.body}>Sign in to find your sideline squad.</Text>
+        <Text style={styles.body}>Sign in to find your Sideline Social circle.</Text>
         <PrimaryButton title="Sign in with Email" onPress={() => router.push("/(auth)/email-login")} />
         <OutlineButton title="Create Account" onPress={() => router.push("/(auth)/sign-up")} />
       </View>

@@ -1,6 +1,6 @@
 /**
  * Custom Google Maps style for the Squad map.
- * Warm/muted palette using Sideline Squad design tokens.
+ * Warm/muted palette using Sideline Social design tokens.
  * Removes POI clutter, transit noise, and applies a cream-toned land color.
  */
 
