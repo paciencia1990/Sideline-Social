@@ -100,7 +100,6 @@ export default function RootLayout() {
                     <Stack.Screen name="(tabs)" />
                     <Stack.Screen name="(games)" />
                     <Stack.Screen name="(social)" />
-                    <Stack.Screen name="(future)" />
                     <Stack.Screen
                       name="leaderboard"
                       options={{

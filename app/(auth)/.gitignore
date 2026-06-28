@@ -1,0 +1,23 @@
+# Node and Expo build artifacts
+node_modules/
+npm-cache/
+.expo/
+.expo-shared/
+
+# IDE and system files
+.idea/
+.vscode/
+*.log
+*.tmp
+.DS_Store
+
+# Build outputs
+dist/
+build/
+.next/
+.turbo/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
