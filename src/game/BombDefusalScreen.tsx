@@ -40,24 +40,30 @@ export default function BombDefusalScreen() {
   const currentStep = steps[currentStepIndex];
 
   useEffect(() => {
-    set(ref(rtdb, `bombDefusal/${gameId}/result`), {
-      status: "started",
-      startedAt: Date.now(),
-      pattern: steps,
-    });
-  }, [gameId, steps]);
+  set(ref(rtdb, `bombDefusal/${gameId}/result`), {
+    status: "started",
+    startedAt: Date.now(),
+    pattern: steps,
+  }).catch((err) => {
+    console.log("WRITE ERROR:", err);
+  });
+}, [gameId, steps]);
+
 
   const finishGame = useCallback(
     (nextStatus: "defused" | "exploded", nextMessage: string) => {
       setStatus(nextStatus);
       setMessage(nextMessage);
-      set(ref(rtdb, `bombDefusal/${gameId}/result`), {
-        status: nextStatus,
-        completedAt: Date.now(),
-        timeLeft,
-        stepsCompleted: currentStepIndex,
-        totalSteps: steps.length,
-      });
+    set(ref(rtdb, `bombDefusal/${gameId}/result`), {
+  status: nextStatus,
+  completedAt: Date.now(),
+  timeLeft,
+  stepsCompleted: currentStepIndex,
+  totalSteps: steps.length,
+}).catch((err) => {
+  console.log("WRITE ERROR (finish):", err);
+});
+
     },
     [currentStepIndex, gameId, steps.length, timeLeft],
   );
