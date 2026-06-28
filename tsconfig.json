@@ -1,4 +1,4 @@
-﻿{
+{
     "extends":  "expo/tsconfig.base",
     "compilerOptions":  {
                             "strict":  true,
@@ -22,7 +22,7 @@
                     "context/**/*.tsx",
                     "hooks/**/*.ts",
                     "i18n/**/*.ts",
-                    "services/squadService.ts",
+                    "services/**/*.ts",
                     "utils/**/*.ts",
                     ".expo/types/**/*.ts",
                     "expo-env.d.ts",

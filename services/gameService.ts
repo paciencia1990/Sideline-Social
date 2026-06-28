@@ -1,16 +1,19 @@
-/**
- * gameService.ts
- * All Firebase Realtime Database operations for the Sideline Squad mini-game engine.
- * Uses Realtime DB (not Firestore) for low-latency (<100ms) live game state.
- * Follows the same dynamic-import pattern as squadService.ts.
- */
+import {
+  equalTo,
+  get,
+  onValue,
+  orderByChild,
+  query,
+  ref,
+  remove,
+  set,
+  update,
+  type DataSnapshot,
+} from "firebase/database";
+import { rtdb } from "@/config/firebase";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export type GameType = 'bomb_defusal' | 'spot_difference' | 'trivia_blitz';
-export type SessionStatus = 'lobby' | 'countdown' | 'active' | 'completed' | 'failed';
+export type GameType = "bomb_defusal" | "spot_difference" | "trivia_blitz";
+export type SessionStatus = "lobby" | "countdown" | "active" | "completed" | "failed";
 
 export interface GamePlayer {
   displayName: string;
@@ -44,26 +47,23 @@ export interface CreateSessionInput {
   hostAvatarUrl: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Game Config (minPlayers, maxPlayers per game type)
-// ---------------------------------------------------------------------------
-
-export const GAME_CONFIG: Record<GameType, { minPlayers: number; maxPlayers: number; defaultSettings: Record<string, unknown> }> = {
+export const GAME_CONFIG: Record<
+  GameType,
+  { minPlayers: number; maxPlayers: number; defaultSettings: Record<string, unknown> }
+> = {
   bomb_defusal: { minPlayers: 2, maxPlayers: 6, defaultSettings: { timerSeconds: 300 } },
   spot_difference: { minPlayers: 4, maxPlayers: 12, defaultSettings: { roundDuration: 420 } },
   trivia_blitz: { minPlayers: 3, maxPlayers: 20, defaultSettings: { questionCount: 10, timeLimitSeconds: 20 } },
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function generateJoinCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O, 0, I, 1 — too ambiguous
-  let code = '';
-  for (let i = 0; i < 4; i++) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+
+  for (let i = 0; i < 4; i += 1) {
     code += chars[Math.floor(Math.random() * chars.length)];
   }
+
   return code;
 }
 
@@ -71,19 +71,20 @@ function generateSessionId(): string {
   return `session_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-async function getDB() {
-  const database = (await import('@react-native-firebase/database')).default;
-  return database();
+function snapshotToSession(snapshot: DataSnapshot): GameSession | null {
+  if (!snapshot.exists()) return null;
+  return snapshot.val() as GameSession;
 }
 
-// ---------------------------------------------------------------------------
-// createGameSession
-// Called by host when they tap [Play Now]. Creates a Realtime DB session.
-// ---------------------------------------------------------------------------
+function getSessionsFromSnapshot(snapshot: DataSnapshot): GameSession[] {
+  if (!snapshot.exists()) return [];
+
+  const data = snapshot.val() as Record<string, GameSession> | null;
+  return data ? Object.values(data) : [];
+}
 
 export async function createGameSession(input: CreateSessionInput): Promise<GameSession> {
   try {
-    const db = await getDB();
     const sessionId = generateSessionId();
     const joinCode = generateJoinCode();
     const config = GAME_CONFIG[input.gameType];
@@ -103,7 +104,7 @@ export async function createGameSession(input: CreateSessionInput): Promise<Game
       hostUserId: input.hostUserId,
       joinCode,
       players: { [input.hostUserId]: hostPlayer },
-      status: 'lobby',
+      status: "lobby",
       startedAt: null,
       completedAt: null,
       gameState: {},
@@ -112,18 +113,13 @@ export async function createGameSession(input: CreateSessionInput): Promise<Game
       settings: config.defaultSettings,
     };
 
-    await db.ref(`/gameSessions/${sessionId}`).set(session);
+    await set(ref(rtdb, `gameSessions/${sessionId}`), session);
     return session;
-  } catch (err) {
-    console.error('[GameService] createGameSession error:', err);
-    throw err;
+  } catch (error) {
+    console.error("[GameService] createGameSession error:", error);
+    throw error;
   }
 }
-
-// ---------------------------------------------------------------------------
-// joinGameSession
-// Called by squad members — adds their player record.
-// ---------------------------------------------------------------------------
 
 export async function joinGameSession(
   sessionId: string,
@@ -132,7 +128,6 @@ export async function joinGameSession(
   avatarUrl: string | null
 ): Promise<void> {
   try {
-    const db = await getDB();
     const player: GamePlayer = {
       displayName,
       avatarUrl,
@@ -140,255 +135,172 @@ export async function joinGameSession(
       score: 0,
       isConnected: true,
     };
-    await db.ref(`/gameSessions/${sessionId}/players/${userId}`).set(player);
-  } catch (err) {
-    console.error('[GameService] joinGameSession error:', err);
-    throw err;
+
+    await set(ref(rtdb, `gameSessions/${sessionId}/players/${userId}`), player);
+  } catch (error) {
+    console.error("[GameService] joinGameSession error:", error);
+    throw error;
   }
 }
-
-// ---------------------------------------------------------------------------
-// setPlayerReady
-// Marks the player as ready in the lobby.
-// ---------------------------------------------------------------------------
 
 export async function setPlayerReady(sessionId: string, userId: string, ready: boolean): Promise<void> {
   try {
-    const db = await getDB();
-    await db.ref(`/gameSessions/${sessionId}/players/${userId}/isReady`).set(ready);
-  } catch (err) {
-    console.error('[GameService] setPlayerReady error:', err);
-    throw err;
+    await set(ref(rtdb, `gameSessions/${sessionId}/players/${userId}/isReady`), ready);
+  } catch (error) {
+    console.error("[GameService] setPlayerReady error:", error);
+    throw error;
   }
 }
-
-// ---------------------------------------------------------------------------
-// setPlayerConnected
-// Updates connection status — called on foreground/background changes.
-// ---------------------------------------------------------------------------
 
 export async function setPlayerConnected(sessionId: string, userId: string, connected: boolean): Promise<void> {
   try {
-    const db = await getDB();
-    await db.ref(`/gameSessions/${sessionId}/players/${userId}/isConnected`).set(connected);
-  } catch (err) {
-    console.error('[GameService] setPlayerConnected error:', err);
+    await set(ref(rtdb, `gameSessions/${sessionId}/players/${userId}/isConnected`), connected);
+  } catch (error) {
+    console.error("[GameService] setPlayerConnected error:", error);
   }
 }
-
-// ---------------------------------------------------------------------------
-// startCountdown
-// Host triggers countdown — sets status to 'countdown'.
-// ---------------------------------------------------------------------------
 
 export async function startCountdown(sessionId: string): Promise<void> {
   try {
-    const db = await getDB();
-    await db.ref(`/gameSessions/${sessionId}/status`).set('countdown');
-  } catch (err) {
-    console.error('[GameService] startCountdown error:', err);
-    throw err;
+    await set(ref(rtdb, `gameSessions/${sessionId}/status`), "countdown");
+  } catch (error) {
+    console.error("[GameService] startCountdown error:", error);
+    throw error;
   }
 }
-
-// ---------------------------------------------------------------------------
-// startGame
-// Called after countdown — sets status to 'active' and records startedAt.
-// ---------------------------------------------------------------------------
 
 export async function startGame(sessionId: string): Promise<void> {
   try {
-    const db = await getDB();
-    await db.ref(`/gameSessions/${sessionId}`).update({
-      status: 'active',
+    await update(ref(rtdb, `gameSessions/${sessionId}`), {
+      status: "active",
       startedAt: Date.now(),
     });
-  } catch (err) {
-    console.error('[GameService] startGame error:', err);
-    throw err;
+  } catch (error) {
+    console.error("[GameService] startGame error:", error);
+    throw error;
   }
 }
 
-// ---------------------------------------------------------------------------
-// completeGame
-// Marks session as completed and records final scores.
-// Stars are processed server-side via Cloud Function trigger.
-// ---------------------------------------------------------------------------
-
 export async function completeGame(
   sessionId: string,
-  outcome: 'completed' | 'failed',
+  outcome: "completed" | "failed",
   finalScores: Record<string, number>
 ): Promise<void> {
   try {
-    const db = await getDB();
+    const scoreUpdates: Record<string, unknown> = {
+      status: outcome,
+      completedAt: Date.now(),
+    };
 
-    // Update each player's score
-    const scoreUpdates: Record<string, unknown> = { status: outcome, completedAt: Date.now() };
     Object.entries(finalScores).forEach(([uid, score]) => {
       scoreUpdates[`players/${uid}/score`] = score;
     });
 
-    await db.ref(`/gameSessions/${sessionId}`).update(scoreUpdates);
-  } catch (err) {
-    console.error('[GameService] completeGame error:', err);
-    throw err;
+    await update(ref(rtdb, `gameSessions/${sessionId}`), scoreUpdates);
+  } catch (error) {
+    console.error("[GameService] completeGame error:", error);
+    throw error;
   }
 }
-
-// ---------------------------------------------------------------------------
-// fetchSessionByCode
-// Used by the "join by code" flow.
-// ---------------------------------------------------------------------------
 
 export async function fetchSessionByCode(joinCode: string): Promise<GameSession | null> {
   try {
-    const db = await getDB();
-    const snap = await db
-      .ref('/gameSessions')
-      .orderByChild('joinCode')
-      .equalTo(joinCode.toUpperCase())
-      .once('value');
+    const sessionsQuery = query(
+      ref(rtdb, "gameSessions"),
+      orderByChild("joinCode"),
+      equalTo(joinCode.toUpperCase())
+    );
+    const snapshot = await get(sessionsQuery);
+    const sessions = getSessionsFromSnapshot(snapshot);
+    const active = sessions.find((session) => session.status === "lobby");
 
-    if (!snap.exists()) return null;
-
-    const data = snap.val() as Record<string, GameSession>;
-    const sessions = Object.values(data);
-    // Return the most recent active lobby session
-    const active = sessions.find((s) => s.status === 'lobby');
     return active ?? sessions[0] ?? null;
-  } catch (err) {
-    console.error('[GameService] fetchSessionByCode error:', err);
+  } catch (error) {
+    console.error("[GameService] fetchSessionByCode error:", error);
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// fetchActiveSquadSession
-// Checks if the user's squad has an active or lobby session right now.
-// ---------------------------------------------------------------------------
 
 export async function fetchActiveSquadSession(squadId: string): Promise<GameSession | null> {
   try {
-    const db = await getDB();
-    const snap = await db
-      .ref('/gameSessions')
-      .orderByChild('squadId')
-      .equalTo(squadId)
-      .once('value');
+    const sessionsQuery = query(ref(rtdb, "gameSessions"), orderByChild("squadId"), equalTo(squadId));
+    const snapshot = await get(sessionsQuery);
 
-    if (!snap.exists()) return null;
-
-    const data = snap.val() as Record<string, GameSession>;
-    const active = Object.values(data).find(
-      (s) => s.status === 'lobby' || s.status === 'countdown' || s.status === 'active'
-    );
-    return active ?? null;
-  } catch (err) {
-    console.error('[GameService] fetchActiveSquadSession error:', err);
+    return getSessionsFromSnapshot(snapshot).find(
+      (session) => session.status === "lobby" || session.status === "countdown" || session.status === "active"
+    ) ?? null;
+  } catch (error) {
+    console.error("[GameService] fetchActiveSquadSession error:", error);
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// subscribeToSession
-// Real-time listener on a game session. Returns an unsubscribe function.
-// ---------------------------------------------------------------------------
 
 export function subscribeToSession(
   sessionId: string,
   callback: (session: GameSession | null) => void
 ): () => void {
-  let ref: any = null;
-  let mounted = true;
-
-  (async () => {
-    try {
-      const db = await getDB();
-      if (!mounted) return;
-
-      ref = db.ref(`/gameSessions/${sessionId}`);
-      ref.on('value', (snap: any) => {
-        if (!snap.exists()) {
-          callback(null);
-          return;
-        }
-        callback(snap.val() as GameSession);
-      });
-    } catch (err) {
-      console.error('[GameService] subscribeToSession error:', err);
-      callback(null);
-    }
-  })();
-
-  return () => {
-    mounted = false;
-    if (ref) ref.off('value');
-  };
+  try {
+    return onValue(
+      ref(rtdb, `gameSessions/${sessionId}`),
+      (snapshot) => callback(snapshotToSession(snapshot)),
+      (error) => {
+        console.error("[GameService] subscribeToSession error:", error);
+        callback(null);
+      }
+    );
+  } catch (error) {
+    console.error("[GameService] subscribeToSession setup error:", error);
+    callback(null);
+    return () => {};
+  }
 }
-
-// ---------------------------------------------------------------------------
-// removePlayer
-// Removes a player from the session (e.g., 60-second disconnect timeout).
-// ---------------------------------------------------------------------------
 
 export async function removePlayer(sessionId: string, userId: string): Promise<void> {
   try {
-    const db = await getDB();
-    await db.ref(`/gameSessions/${sessionId}/players/${userId}`).remove();
-  } catch (err) {
-    console.error('[GameService] removePlayer error:', err);
+    await remove(ref(rtdb, `gameSessions/${sessionId}/players/${userId}`));
+  } catch (error) {
+    console.error("[GameService] removePlayer error:", error);
   }
 }
-
-// ---------------------------------------------------------------------------
-// deleteSession
-// Removes the entire session (called on cleanup or host cancel).
-// ---------------------------------------------------------------------------
 
 export async function deleteSession(sessionId: string): Promise<void> {
   try {
-    const db = await getDB();
-    await db.ref(`/gameSessions/${sessionId}`).remove();
-  } catch (err) {
-    console.error('[GameService] deleteSession error:', err);
+    await remove(ref(rtdb, `gameSessions/${sessionId}`));
+  } catch (error) {
+    console.error("[GameService] deleteSession error:", error);
   }
 }
-
-// ---------------------------------------------------------------------------
-// updateGameState
-// Individual games call this to write their game-specific state.
-// ---------------------------------------------------------------------------
 
 export async function updateGameState(
   sessionId: string,
   gameState: Record<string, unknown>
 ): Promise<void> {
   try {
-    const db = await getDB();
-    await db.ref(`/gameSessions/${sessionId}/gameState`).update(gameState);
-  } catch (err) {
-    console.error('[GameService] updateGameState error:', err);
-    throw err;
+    await update(ref(rtdb, `gameSessions/${sessionId}/gameState`), gameState);
+  } catch (error) {
+    console.error("[GameService] updateGameState error:", error);
+    throw error;
   }
 }
 
-// ---------------------------------------------------------------------------
-// getGameLabel — human-readable name for a GameType
-// ---------------------------------------------------------------------------
-
 export function getGameLabel(gameType: GameType): string {
   switch (gameType) {
-    case 'bomb_defusal': return 'Bomb Defusal';
-    case 'spot_difference': return 'Spot the Difference';
-    case 'trivia_blitz': return 'Trivia Blitz';
+    case "bomb_defusal":
+      return "Bomb Defusal";
+    case "spot_difference":
+      return "Spot the Difference";
+    case "trivia_blitz":
+      return "Trivia Blitz";
   }
 }
 
 export function getGameEmoji(gameType: GameType): string {
   switch (gameType) {
-    case 'bomb_defusal': return '💣';
-    case 'spot_difference': return '🔍';
-    case 'trivia_blitz': return '⚡';
+    case "bomb_defusal":
+      return "\uD83D\uDCA3";
+    case "spot_difference":
+      return "\uD83D\uDD0D";
+    case "trivia_blitz":
+      return "\u26A1";
   }
 }
