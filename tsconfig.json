@@ -18,18 +18,19 @@
     "context/**/*.tsx",
     "hooks/**/*.ts",
     "i18n/**/*.ts",
-    "services/**/*.ts",
+    "services/squadService.ts",
     "utils/**/*.ts",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
   ],
   "exclude": [
-    "components/ui",
-    "components/colors",
-    "functions",
-    "node_modules",
-    ".npm-cache",
-    ".npm-install-cache",
-    "sideline-social"
+    "components/GluestackInitializer.tsx",
+    "components/ui/**/*",
+    "components/colors/**/*",
+    "functions/**/*",
+    "node_modules/**/*",
+    ".npm-cache/**/*",
+    ".npm-install-cache/**/*",
+    "sideline-social/**/*"
   ]
 }

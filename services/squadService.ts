@@ -12,9 +12,7 @@ import {
   increment,
   limit,
   query,
-  serverTimestamp,
-  updateDoc,
-  where,
+  serverTimestamp,  where,
   writeBatch,
 } from "firebase/firestore";
 import { db } from "@/config/firebase";
@@ -307,7 +305,7 @@ export async function fetchSquadDetail(squadId: string): Promise<SquadDetail | n
     const members = memberSnaps
       .filter((snap) => snap.exists())
       .map((snap) => {
-        const data = snap.data();
+        const data = snap.data() ?? {};
         return {
           uid: snap.id,
           displayName: (data.displayName as string) ?? (data.firstName as string) ?? null,

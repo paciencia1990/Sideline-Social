@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Colors, Typography } from '@/constants/theme';
 import { Squad } from '@/services/squadService';
@@ -25,13 +25,11 @@ interface SquadMarkerProps {
 }
 
 export function SquadMarker({ squad, isSelected }: SquadMarkerProps) {
-  const [loaded, setLoaded] = useState(false);
   const emoji = SPORT_EMOJI[squad.sport] ?? '🏅';
 
   return (
     <View
       style={styles.wrapper}
-      onLayout={() => setLoaded(true)}
       // Prevents constant re-renders on Android which causes jank
       // @ts-ignore — tracksViewChanges is a react-native-maps Marker prop, applied via the parent
     >

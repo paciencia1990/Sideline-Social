@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, router, Stack } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { MoreVertical, MessageSquare, MapPin, Users } from 'lucide-react-native';
+import { MoreVertical, MapPin, Users } from 'lucide-react-native';
 
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
