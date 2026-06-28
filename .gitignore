@@ -1,45 +1,27 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
-# dependencies
+# Node & Expo
 node_modules/
-
-# Expo
-.expo/
-dist/
-web-build/
-expo-env.d.ts
-
-# Native
-.kotlin/
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
-
-# Metro
-.metro-health-check*
-
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
+npm-cache/
 .npm-cache/
 .npm-install-cache/
-package.json.*-*
-tree.txt
-codex-write-test.tmp
+.expo/
+.expo-shared/
 
-# macOS
+# IDE junk
+.idea/
+.vscode/
+*.iml
+
+# Logs & temp
+*.log
+*.tmp
+
+# OS junk
 .DS_Store
-*.pem
 
-# local env files
-.env
-.env.*
+# Build outputs
+dist/
+build/
 
-# typescript
-*.tsbuildinfo
-
-app-example
+# Codex temp files
+codex-write-test.tmp
+tree.txt
