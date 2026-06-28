@@ -23,7 +23,7 @@ export default function TriviaBlitzLobby() {
         onReadyToggle={toggleReady}
         onStart={startGame}
       />
-      {showCountdown && <CountdownOverlay onComplete={handleComplete} />}
+      {showCountdown && <CountdownOverlay onComplete={handleComplete} onCancel={() => setShowCountdown(false)} />}
     </View>
   );
 }
@@ -33,3 +33,4 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 });
+

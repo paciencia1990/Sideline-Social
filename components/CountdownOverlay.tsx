@@ -1,14 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, StyleSheet, View } from "react-native";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 
 import { Colors, Typography } from "@/constants/theme";
 
 type CountdownOverlayProps = {
   onComplete: () => void;
+  onCancel?: () => void;
 };
 
-function CountdownOverlay({ onComplete }: CountdownOverlayProps) {
+function CountdownOverlay({ onComplete, onCancel }: CountdownOverlayProps) {
+  const insets = useSafeAreaInsets();
   const [count, setCount] = useState(3);
   const completedRef = useRef(false);
   const scale = useRef(new Animated.Value(1.5)).current;
@@ -74,6 +77,15 @@ function CountdownOverlay({ onComplete }: CountdownOverlayProps) {
 
   return (
     <View style={styles.overlay} pointerEvents="auto">
+      {onCancel && (
+        <Pressable
+          accessibilityRole="button"
+          style={[styles.cancelButton, { top: insets.top + 16 }]}
+          onPress={onCancel}
+        >
+          <Text style={styles.cancelText}>Cancel</Text>
+        </Pressable>
+      )}
       <Animated.Text style={[styles.countdownText, { opacity, transform: [{ scale }] }]}>
         {count <= 0 ? "GO!" : count.toString()}
       </Animated.Text>
@@ -97,6 +109,19 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.textHeading,
     zIndex: 9999,
     elevation: 9999,
+  },
+  cancelButton: {
+    position: "absolute",
+    right: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  cancelText: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodyBold,
+    fontSize: 14,
   },
   countdownText: {
     color: Colors.primary,

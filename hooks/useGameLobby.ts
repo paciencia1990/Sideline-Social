@@ -43,52 +43,68 @@ type GameLobbyRecord = {
 };
 
 const COUNTDOWN_DURATION_MS = 3000;
-
-const emptySelf: LobbyPlayer = {
-  id: "",
-  name: "Player",
-  ready: false,
-};
-
-const emptyPlayers: LobbyPlayers = {
-  joinCode: "",
-  list: [],
-  self: emptySelf,
-  isHost: false,
-};
+const LOCAL_JOIN_CODE = "LOCAL";
 
 export function useGameLobby(gameId: string): GameLobbyState {
   const { user } = useAuth();
   const params = useLocalSearchParams<{ sessionId?: string | string[] }>();
   const sessionId = normalizeParam(params.sessionId);
-  const currentUserId = user?.uid ?? "";
+  const currentUserId = user?.uid ?? "local-player";
   const currentUserName = getUserName(user?.displayName, user?.email);
 
   const [joinCode, setJoinCode] = useState("");
   const [playerList, setPlayerList] = useState<LobbyPlayer[]>([]);
   const [gameState, setGameState] = useState<GameLobbyRecord | null>(null);
   const [showCountdown, setShowCountdown] = useState(false);
+  const [localPlayers, setLocalPlayers] = useState<LobbyPlayer[]>(() =>
+    createLocalPlayers(currentUserId, currentUserName),
+  );
+
+  useEffect(() => {
+    if (sessionId) {
+      return;
+    }
+
+    setLocalPlayers((players) => {
+      const [self, ...rest] = players;
+      if (self?.id === currentUserId && self.name === currentUserName) {
+        return players;
+      }
+
+      return [
+        {
+          id: currentUserId,
+          name: currentUserName,
+          ready: self?.ready ?? false,
+        },
+        ...rest,
+      ];
+    });
+  }, [currentUserId, currentUserName, sessionId]);
+
+  const activePlayerList = sessionId ? playerList : localPlayers;
+  const activeJoinCode = sessionId ? joinCode : LOCAL_JOIN_CODE;
 
   const self = useMemo<LobbyPlayer>(() => {
     return (
-      playerList.find((player) => player.id === currentUserId) ?? {
+      activePlayerList.find((player) => player.id === currentUserId) ?? {
         id: currentUserId,
         name: currentUserName,
         ready: false,
       }
     );
-  }, [currentUserId, currentUserName, playerList]);
+  }, [activePlayerList, currentUserId, currentUserName]);
 
   const players = useMemo<LobbyPlayers>(() => {
-    const hostId = playerList[0]?.id;
+    const hostId = activePlayerList[0]?.id;
 
     return {
-      joinCode,
-      list: playerList,
+      joinCode: activeJoinCode,
+      list: activePlayerList,
       self,
-      isHost: Boolean(currentUserId && hostId === currentUserId),
+      isHost: Boolean(hostId === currentUserId),
     };
-  }, [currentUserId, joinCode, playerList, self]);
+  }, [activeJoinCode, activePlayerList, currentUserId, self]);
 
   useEffect(() => {
     if (!sessionId || !gameId) {
@@ -104,7 +120,7 @@ export function useGameLobby(gameId: string): GameLobbyState {
     const unsubscribeGame = onValue(gameRef, (snapshot) => {
       const nextGameState = snapshot.val() as GameLobbyRecord | null;
       setGameState(nextGameState);
-      setPlayerList(normalizePlayers(nextGameState?.players));
+      setPlayerList(normalizePlayers(nextGameState?.players, currentUserId, currentUserName));
 
       if (nextGameState?.starting) {
         setShowCountdown(true);
@@ -119,7 +135,7 @@ export function useGameLobby(gameId: string): GameLobbyState {
       unsubscribeGame();
       unsubscribeJoinCode();
     };
-  }, [gameId, sessionId]);
+  }, [currentUserId, currentUserName, gameId, sessionId]);
 
   useEffect(() => {
     if (!sessionId || !gameId || !gameState?.starting) {
@@ -139,7 +155,16 @@ export function useGameLobby(gameId: string): GameLobbyState {
   }, [gameId, gameState, sessionId]);
 
   const toggleReady = useCallback(() => {
-    if (!sessionId || !gameId || !currentUserId) {
+    if (!gameId) {
+      return;
+    }
+
+    if (!sessionId) {
+      setLocalPlayers((players) =>
+        players.map((player) =>
+          player.id === currentUserId ? { ...player, ready: !player.ready } : player,
+        ),
+      );
       return;
     }
 
@@ -156,14 +181,19 @@ export function useGameLobby(gameId: string): GameLobbyState {
   }, [currentUserId, currentUserName, gameId, self.name, self.ready, sessionId]);
 
   const startGame = useCallback(() => {
-    if (!sessionId || !gameId || !players.isHost) {
+    if (!gameId || !players.isHost) {
+      return;
+    }
+
+    const countdownStartedAt = Date.now();
+    setShowCountdown(true);
+
+    if (!sessionId) {
       return;
     }
 
     const gameRef = ref(rtdb, `/sessions/${sessionId}/games/${gameId}`);
-    const countdownStartedAt = Date.now();
 
-    setShowCountdown(true);
     update(gameRef, {
       starting: true,
       countdownStartedAt,
@@ -173,7 +203,7 @@ export function useGameLobby(gameId: string): GameLobbyState {
   }, [currentUserId, gameId, players.isHost, sessionId]);
 
   return {
-    players: sessionId && gameId ? players : emptyPlayers,
+    players,
     toggleReady,
     startGame,
     showCountdown,
@@ -191,20 +221,43 @@ function normalizeParam(value?: string | string[]) {
   return value ?? "";
 }
 
-function normalizePlayers(players?: GameLobbyRecord["players"]): LobbyPlayer[] {
+function createLocalPlayers(currentUserId: string, currentUserName: string): LobbyPlayer[] {
+  return [
+    {
+      id: currentUserId,
+      name: currentUserName,
+      ready: false,
+    },
+    {
+      id: "local-teammate",
+      name: "Teammate",
+      ready: true,
+    },
+  ];
+}
+
+function normalizePlayers(
+  players: GameLobbyRecord["players"],
+  currentUserId: string,
+  currentUserName: string,
+): LobbyPlayer[] {
   if (!players) {
-    return [];
+    return createLocalPlayers(currentUserId, currentUserName);
   }
 
-  if (Array.isArray(players)) {
-    return players
-      .map((player, index) => normalizePlayer(String(player.id ?? player.uid ?? index), player))
-      .filter(Boolean) as LobbyPlayer[];
+  const normalizedPlayers = Array.isArray(players)
+    ? players
+        .map((player, index) => normalizePlayer(String(player.id ?? player.uid ?? index), player))
+        .filter(Boolean)
+    : Object.entries(players)
+        .map(([id, player]) => normalizePlayer(id, player))
+        .filter(Boolean);
+
+  if (normalizedPlayers.length === 0) {
+    return createLocalPlayers(currentUserId, currentUserName);
   }
 
-  return Object.entries(players)
-    .map(([id, player]) => normalizePlayer(id, player))
-    .filter(Boolean) as LobbyPlayer[];
+  return normalizedPlayers as LobbyPlayer[];
 }
 
 function normalizePlayer(id: string, player?: LobbyPlayerRecord): LobbyPlayer | null {
@@ -230,4 +283,3 @@ function getUserName(displayName?: string | null, email?: string | null) {
 
   return "Player";
 }
-

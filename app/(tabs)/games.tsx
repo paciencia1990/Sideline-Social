@@ -1,15 +1,28 @@
 import React from "react";
 import { ScrollView, StyleSheet, Text } from "react-native";
 import { router } from "expo-router";
+
 import { Card } from "@/components/Card";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 
 const games = [
-  { title: "Bomb Defusal", route: "/(games)/bomb-defusal", body: "Team up to solve sideline clues before the timer runs out." },
-  { title: "Spot the Difference", route: "/(games)/spot-difference", body: "A quick visual game for parents between plays." },
-  { title: "Trivia Blitz", route: "/(games)/trivia-blitz", body: "Fast sports and community trivia for the whole squad." },
+  {
+    title: "Bomb Defusal",
+    route: "/(games)/bomb-defusal/Lobby",
+    body: "Team up to solve sideline clues before the timer runs out.",
+  },
+  {
+    title: "Spot the Difference",
+    route: "/(games)/spot-the-difference/Lobby",
+    body: "A quick visual game for parents between plays.",
+  },
+  {
+    title: "Trivia Blitz",
+    route: "/(games)/trivia-blitz/Lobby",
+    body: "Fast sports and community trivia for the whole squad.",
+  },
 ] as const;
 
 export default function GamesScreen() {
@@ -17,12 +30,12 @@ export default function GamesScreen() {
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>Games</Text>
-        <Text style={styles.subtitle}>Lightweight placeholders are ready for the game engine.</Text>
+        <Text style={styles.subtitle}>Open a lobby, ready up, and start the countdown.</Text>
         {games.map((game) => (
           <Card key={game.title} style={styles.card}>
             <Text style={styles.cardTitle}>{game.title}</Text>
             <Text style={styles.cardText}>{game.body}</Text>
-            <PrimaryButton title="Open" onPress={() => router.push(game.route)} />
+            <PrimaryButton title="Open Lobby" onPress={() => router.push(game.route as never)} />
           </Card>
         ))}
       </ScrollView>
