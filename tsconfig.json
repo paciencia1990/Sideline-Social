@@ -24,7 +24,6 @@
                     "i18n/**/*.ts",
                     "services/**/*.ts",
                     "utils/**/*.ts",
-                    ".expo/types/**/*.ts",
                     "expo-env.d.ts",
                     "src/**/*.ts",
                     "src/**/*.tsx"

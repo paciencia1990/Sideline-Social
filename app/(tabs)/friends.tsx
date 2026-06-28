@@ -10,7 +10,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { Check, Heart, Search, UserMinus, UserPlus, Users, X } from "lucide-react-native";
+import { Check, Heart, MessageCircle, Search, UserMinus, UserPlus, Users, X } from "lucide-react-native";
+import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -30,6 +31,7 @@ import {
   type FriendProfile,
   type FriendRequest,
 } from "@/services/friendsService";
+import { getOrCreateDirectChat } from "@/services/chatService";
 
 function getInitials(name: string) {
   return name
@@ -75,6 +77,10 @@ function FriendRow({
   busy,
   danger = false,
   disabled = false,
+  secondaryActionLabel,
+  secondaryActionIcon,
+  onSecondaryAction,
+  secondaryBusy = false,
 }: {
   profile: FriendProfile;
   actionLabel: string;
@@ -83,6 +89,10 @@ function FriendRow({
   busy: boolean;
   danger?: boolean;
   disabled?: boolean;
+  secondaryActionLabel?: string;
+  secondaryActionIcon?: React.ReactNode;
+  onSecondaryAction?: () => void;
+  secondaryBusy?: boolean;
 }) {
   return (
     <Card style={styles.personCard}>
@@ -91,16 +101,30 @@ function FriendRow({
         <Text style={styles.personName}>{profile.displayName}</Text>
         {profile.email ? <Text style={styles.personMeta}>{profile.email}</Text> : null}
       </View>
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel={actionLabel}
-        activeOpacity={0.82}
-        disabled={busy || disabled}
-        onPress={onAction}
-        style={[styles.iconButton, danger && styles.dangerButton, disabled && styles.disabledButton]}
-      >
-        {busy ? <ActivityIndicator color={Colors.surface} size="small" /> : actionIcon}
-      </TouchableOpacity>
+      <View style={styles.rowActions}>
+        {onSecondaryAction && secondaryActionIcon ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={secondaryActionLabel}
+            activeOpacity={0.82}
+            disabled={secondaryBusy}
+            onPress={onSecondaryAction}
+            style={[styles.iconButton, styles.messageButton, secondaryBusy && styles.disabledButton]}
+          >
+            {secondaryBusy ? <ActivityIndicator color={Colors.surface} size="small" /> : secondaryActionIcon}
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={actionLabel}
+          activeOpacity={0.82}
+          disabled={busy || disabled}
+          onPress={onAction}
+          style={[styles.iconButton, danger && styles.dangerButton, disabled && styles.disabledButton]}
+        >
+          {busy ? <ActivityIndicator color={Colors.surface} size="small" /> : actionIcon}
+        </TouchableOpacity>
+      </View>
     </Card>
   );
 }
@@ -262,6 +286,23 @@ export default function FriendsScreen() {
     [runAction, t]
   );
 
+  const openDirectChat = useCallback(
+    async (friend: FriendProfile) => {
+      setBusyAction(`chat:${friend.id}`);
+      setError(null);
+      try {
+        const chatId = await getOrCreateDirectChat(friend.id, friend.displayName);
+        router.push({ pathname: "/(social)/chat/[chatId]", params: { chatId } });
+      } catch (nextError) {
+        const message = nextError instanceof Error ? nextError.message : t("friends.errorBody");
+        setError(message);
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [t]
+  );
+
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     void loadFriends();
@@ -303,6 +344,15 @@ export default function FriendsScreen() {
           <Text style={styles.title}>{t("friends.title")}</Text>
           <Text style={styles.subtitle}>{t("friends.subtitle")}</Text>
           {currentProfile ? <Text style={styles.profileHint}>{currentProfile.displayName}</Text> : null}
+          <TouchableOpacity
+            accessibilityRole="button"
+            activeOpacity={0.82}
+            onPress={() => router.push("/(social)/chat")}
+            style={styles.chatListButton}
+          >
+            <MessageCircle size={16} color={Colors.surface} />
+            <Text style={styles.chatListButtonText}>{t("chat.title")}</Text>
+          </TouchableOpacity>
         </View>
 
         {error ? (
@@ -357,6 +407,10 @@ export default function FriendsScreen() {
               danger
               busy={busyAction === `remove:${friend.id}`}
               onAction={() => confirmRemove(friend)}
+              secondaryActionLabel={t("chat.startConversation")}
+              secondaryActionIcon={<MessageCircle size={18} color={Colors.surface} />}
+              secondaryBusy={busyAction === `chat:${friend.id}`}
+              onSecondaryAction={() => void openDirectChat(friend)}
             />
           ))
         ) : (
@@ -431,6 +485,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: Spacing.xs,
   },
+  chatListButton: {
+    alignItems: "center",
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.button,
+    flexDirection: "row",
+    gap: Spacing.xs,
+    minHeight: 40,
+    justifyContent: "center",
+    marginTop: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+  },
+  chatListButtonText: {
+    color: Colors.surface,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 14,
+  },
   sectionHeader: {
     alignItems: "center",
     flexDirection: "row",
@@ -498,8 +568,15 @@ const styles = StyleSheet.create({
   dangerButton: {
     backgroundColor: Colors.textHeading,
   },
+  messageButton: {
+    backgroundColor: Colors.accentGreen,
+  },
   disabledButton: {
     opacity: 0.45,
+  },
+  rowActions: {
+    flexDirection: "row",
+    gap: Spacing.xs,
   },
   requestActions: {
     flexDirection: "row",
