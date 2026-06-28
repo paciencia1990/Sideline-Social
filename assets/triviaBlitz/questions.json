@@ -1,0 +1,402 @@
+[
+  {
+    "category": "Sports",
+    "question_en": "In youth soccer, which rule prevents players from waiting right next to the opponent's goal?",
+    "question_es": "En el fútbol infantil, ¿qué regla evita que los jugadores esperen justo al lado de la portería contraria?",
+    "options_en": ["The Handball Rule", "The Offside Rule", "The Penalty Rule", "The Corner Kick Rule"],
+    "options_es": ["La regla de mano", "La regla de fuera de juego", "La regla del penalti", "La regla de saque de esquina"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "How many player positions are active on the field at one time for a single baseball team?",
+    "question_es": "¿Cuántas posiciones de jugadores en el campo están activas a la vez para un solo equipo de béisbol?",
+    "options_en": ["7 positions", "9 positions", "11 positions", "5 positions"],
+    "options_es": ["7 posiciones", "9 posiciones", "11 posiciones", "5 posiciones"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "What color card is shown by a referee in soccer to indicate a player is being sent off the field?",
+    "question_es": "¿De qué color es la tarjeta que muestra un árbitro en el fútbol para indicar la expulsión de un jugador?",
+    "options_en": ["Yellow Card", "Red Card", "Green Card", "Blue Card"],
+    "options_es": ["Tarjeta amarilla", "Tarjeta roja", "Tarjeta verde", "Tarjeta azul"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "In basketball, how many points is a shot worth if taken from behind the large semi-circular arc?",
+    "question_es": "En el baloncesto, ¿cuántos puntos vale un tiro realizado desde detrás del gran arco semicircular?",
+    "options_en": ["1 point", "2 points", "3 points", "4 points"],
+    "options_es": ["1 punto", "2 puntos", "3 puntos", "4 puntos"],
+    "answer": 2
+  },
+  {
+    "category": "Sports",
+    "question_en": "Which sport uses a heavy ball and ten pins arranged in a triangle at the end of a long wooden lane?",
+    "question_es": "¿Qué deporte utiliza una bola pesada y diez bolos colocados en triángulo al final de una larga pista de madera?",
+    "options_en": ["Bowling", "Curling", "Skiing", "Lawn Bowls"],
+    "options_es": ["Bolos", "Curling", "Esquí", "Bolos sobre hierba"],
+    "answer": 0
+  },
+  {
+    "category": "Sports",
+    "question_en": "What do we call a swim stroke where both arms move forward over the water simultaneously, mimicking a flying insect?",
+    "question_es": "¿Cómo llamamos al estilo de natación en el cual ambos brazos se mueven simultáneamente hacia adelante sobre el agua, imitando a un insecto volador?",
+    "options_en": ["Backstroke", "Breaststroke", "Butterfly stroke", "Dog paddle"],
+    "options_es": ["Estilo espalda", "Estilo braza", "Estilo mariposa", "Estilo perrito"],
+    "answer": 2
+  },
+  {
+    "category": "Sports",
+    "question_en": "In youth softball and baseball, what piece of protective gear must a batter always wear when stepping up to the plate?",
+    "question_es": "En el sóftbol y béisbol infantil, ¿qué equipo de protección debe usar siempre un bateador al acercarse al plato?",
+    "options_en": ["Chest protector", "Batting helmet", "Shin guards", "Mouthguard"],
+    "options_es": ["Protector de pecho", "Casco de bateo", "Espinilleras", "Protector bucal"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "How many strikes equal an 'out' for a batter in a standard baseball game?",
+    "question_es": "¿Cuántos strikes equivalen a un 'out' para un bateador en un juego estándar de béisbol?",
+    "options_en": ["2 strikes", "3 strikes", "4 strikes", "5 strikes"],
+    "options_es": ["2 strikes", "3 strikes", "4 strikes", "5 strikes"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "In tennis, what is the term used to describe a score of zero?",
+    "question_es": "En el tenis, ¿cuál es el término utilizado para describir una puntuación de cero?",
+    "options_en": ["Nada", "Nil", "Love", "Zero"],
+    "options_es": ["Nada", "Nulo", "Amor (Love)", "Cero"],
+    "answer": 2
+  },
+  {
+    "category": "Sports",
+    "question_en": "Which of the following track and field events involves running and passing a hollow baton to a teammate?",
+    "question_es": "¿Cuál de las siguientes pruebas de atletismo consiste en correr y pasar un testigo hueco a un compañero de equipo?",
+    "options_en": ["Relay race", "Hurdles", "Shot put", "High jump"],
+    "options_es": ["Carrera de relevos", "Carrera de vallas", "Lanzamiento de peso", "Salto de altura"],
+    "answer": 0
+  },
+  {
+    "category": "Sports",
+    "question_en": "What is the target score that a team must reach to win a standard set in high school or youth volleyball?",
+    "question_es": "¿Cuál es la puntuación objetivo que debe alcanzar un equipo para ganar un set estándar en voleibol juvenil o escolar?",
+    "options_en": ["15 points", "21 points", "25 points", "30 points"],
+    "options_es": ["15 puntos", "21 puntos", "25 puntos", "30 puntos"],
+    "answer": 2
+  },
+  {
+    "category": "Sports",
+    "question_en": "What is the official nickname of the famous international multi-sport competition held every four years in winter and summer?",
+    "question_es": "¿Cuál es el apodo oficial de la famosa competición deportiva internacional que se celebra cada cuatro años en invierno y verano?",
+    "options_en": ["The World Games", "The Goodwill Games", "The Olympic Games", "The Champions League"],
+    "options_es": ["Los Juegos Mundiales", "Los Juegos de Buena Voluntad", "Los Juegos Olímpicos", "La Liga de Campeones"],
+    "answer": 2
+  },
+  {
+    "category": "Sports",
+    "question_en": "What is the term for when a player scores three goals in a single soccer or ice hockey match?",
+    "question_es": "¿Cuál es el término técnico cuando un jugador marca tres goles en un solo partido de fútbol o hockey sobre hielo?",
+    "options_en": ["Triple play", "Hat trick", "Score sweep", "Grand slam"],
+    "options_es": ["Triple jugada", "Triple logro (Hat trick)", "Barrido de puntos", "Grand slam"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "In American football, how many points is a touchdown worth before any extra points are attempted?",
+    "question_es": "En el fútbol americano, ¿cuántos puntos vale un touchdown antes de intentar cualquier punto extra?",
+    "options_en": ["3 points", "6 points", "7 points", "4 points"],
+    "options_es": ["3 puntos", "6 puntos", "7 puntos", "4 puntos"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "What item do players slide and hit using hockey sticks on the ice rink during a hockey game?",
+    "question_es": "¿Qué objeto deslizan e impactan los jugadores usando palos de hockey sobre una pista de hielo?",
+    "options_en": ["A rubber puck", "A plastic ball", "A mini stone", "A disc slider"],
+    "options_es": ["Un disco de caucho (Puck)", "Una pelota de plástico", "Una mini piedra", "Un disco deslizante"],
+    "answer": 0
+  },
+  {
+    "category": "Sports",
+    "question_en": "In youth sports culture, what is the traditional snack parents often bring to hand out after a Saturday soccer game?",
+    "question_es": "En la cultura del deporte infantil, ¿cuál es el refrigerio tradicional que los padres suelen llevar al final de un partido de fútbol los sábados?",
+    "options_en": ["Pretzels", "Apple slices or Orange slices", "Granola bars", "Potato chips"],
+    "options_es": ["Pretzels", "Rodajas de manzana o naranja", "Barras de granola", "Patatas fritas"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "How many players are allowed on the court at once for a single active basketball team during a game?",
+    "question_es": "¿Cuántos jugadores de un solo equipo activo pueden estar en la cancha a la vez durante un partido de baloncesto?",
+    "options_en": ["5 players", "6 players", "7 players", "4 players"],
+    "options_es": ["5 jugadores", "6 jugadores", "7 jugadores", "4 jugadores"],
+    "answer": 0
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "Which term is commonly used to describe the transition period when children grow from childhood into full young adulthood?",
+    "question_es": "¿Qué término se utiliza comúnmente para describir el período de transición de la infancia a la edad adulta joven?",
+    "options_en": ["Infancy", "Toddlerhood", "Adolescence", "Preschool era"],
+    "options_es": ["Infancia", "Etapa de deambuladores", "Adolescencia", "Era preescolar"],
+    "answer": 2
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "What milestone is a toddler celebrating when they finally switch from diapers to using the bathroom like a big kid?",
+    "question_es": "¿Qué hito celebra un niño pequeño cuando finalmente deja los pañales y usa el baño como un niño grande?",
+    "options_en": ["First steps", "Potty training", "Weaning off formula", "Shedding baby teeth"],
+    "options_es": ["Primeros pasos", "Control de esfínteres", "Destete de fórmula", "Caída de dientes de leche"],
+    "answer": 1
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "In family household routines, what is a common card or board showing daily responsibilities like feeding pets or making beds?",
+    "question_es": "En las rutinas del hogar, ¿cómo se llama a la tabla común que detalla responsabilidades como alimentar mascotas o hacer camas?",
+    "options_en": ["A Chore chart", "A Reward system", "A Duty log", "A House list"],
+    "options_es": ["Tabla de tareas (Chore chart)", "Sistema de recompensas", "Registro de deberes", "Lista de la casa"],
+    "answer": 0
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "When a child loses a baby tooth, which mythical character is said to visit overnight and swap the tooth for money or coins?",
+    "question_es": "Cuando a un niño se le cae un diente de leche, ¿qué personaje de fábula se dice que lo visita por la noche para cambiarlo por monedas?",
+    "options_en": ["The Sandman", "The Tooth Fairy or Perez Mouse", "The Wishing Well Elf", "The Dream Weaver"],
+    "options_es": ["El hombre de arena", "El Hada de los Dientes o el Ratón Pérez", "El elfo de los deseos", "El tejedor de sueños"],
+    "answer": 1
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "What is the classic name of the soothing, gentle songs parents sing to help babies sleep peacefully?",
+    "question_es": "¿Cuál es el nombre clásico de las canciones relajantes que los padres cantan para ayudar a los bebés a dormir plácidamente?",
+    "options_en": ["Anthems", "Operettas", "Lullabies", "Ballads"],
+    "options_es": ["Himnos", "Operetas", "Nanas o Canciones de cuna", "Baladas"],
+    "answer": 2
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "What common sleepover item allows children to camp out on a living room floor while inside an insulated fabric envelope?",
+    "question_es": "¿Qué artículo de acampada nocturna permite dormir en el suelo del salón dentro de un sobre de tela térmica y acolchada?",
+    "options_en": ["Air mattress", "Sleeping bag", "Canvas sheet", "Fleece blanket"],
+    "options_es": ["Colchón de aire", "Saco de dormir (Sleeping bag)", "Lona", "Manta polar"],
+    "answer": 1
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "Which of these is a widely-used parenting strategy of temporarily removing an overstimulated child to a quiet area?",
+    "question_es": "¿Cuál de estas es una estrategia de crianza muy utilizada para retirar temporalmente a un niño sobreestimulado a una zona tranquila?",
+    "options_en": ["Grounding", "A Time-out", "Quiet hour", "Privilege loss"],
+    "options_es": ["Castigo de salida", "Un tiempo fuera (Time-out)", "Hora silenciosa", "Pérdida de privilegios"],
+    "answer": 1
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "What is considered the standard sequence of early motor movements in healthy babies before they learn to crawl and walk?",
+    "question_es": "¿Cuál se considera la secuencia motriz estándar del desarrollo de un bebé sano antes de gatear y caminar?",
+    "options_en": ["Climbing, running", "Sitting, rolling over", "Dancing, standing", "Talking, pointing"],
+    "options_es": ["Escalar, correr", "Sentarse, darse la vuelta", "Bailar, ponerse de pie", "Hablar, señalar"],
+    "answer": 1
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "Which common household game involves children taking turns hiding in various spots while one person counts with closed eyes?",
+    "question_es": "¿Qué juego infantil consiste en buscar escondites mientras una persona cuenta hasta diez con los ojos cerrados?",
+    "options_en": ["Tag", "Hide and Seek", "Simon Says", "Red Light, Green Light"],
+    "options_es": ["Tula (Tag)", "El Escondite", "Simón dice", "Luz roja, luz verde"],
+    "answer": 1
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "What is the term for a scheduled social gathering where babies or young children get together to play and socialize?",
+    "question_es": "¿Cómo se llama a la reunión social programada donde bebés o niños pequeños se juntan para jugar y socializar?",
+    "options_en": ["Youth forum", "A Playdate", "Family dinner", "Preschool prep"],
+    "options_es": ["Foro juvenil", "Una cita de juegos (Playdate)", "Cena familiar", "Preparatoria escolar"],
+    "answer": 1
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "In classic school culture, what is the title of the parent-led organization that supports teachers and plans school events?",
+    "question_es": "¿Cuál es la sigla de la organización liderada por padres que apoya a profesores, planea eventos y ayuda en la escuela?",
+    "options_en": ["The School Board", "The Student Council", "The PTA / PTO", "The Booster Club"],
+    "options_es": ["La junta escolar", "El consejo de estudiantes", "La Asociación de Padres y Maestros (PTA / PTO)", "El club de apoyo"],
+    "answer": 2
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "What classic creative modeling substance was originally created in the 1930s as a wallpaper cleaner before turning into a toy?",
+    "question_es": "¿Qué clásica sustancia para modelar fue creada en la década de 1930 como limpiador de papel pintado antes de convertirse en juguete?",
+    "options_en": ["Slime", "Clay", "Play-Doh", "Kinetic Sand"],
+    "options_es": ["Slime", "Arcilla", "Play-Doh", "Arena cinética"],
+    "answer": 2
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "What is the affectionate name given to the soft, comforting plush animal or blanket a child carries around for security?",
+    "question_es": "¿Qué nombre cariñoso recibe el peluche o mantita suave que un niño lleva consigo para sentirse seguro?",
+    "options_en": ["A Lovey or Security Blanket", "A Pajama set", "A Toddler kit", "A Sleep buddy"],
+    "options_es": ["Objeto de apego o mantita de seguridad", "Pijama", "Kit de niño pequeño", "Compañero de sueño"],
+    "answer": 0
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "Which of these milestones represents a baby's transition from consuming formula or milk to eating blended solid food?",
+    "question_es": "¿Cuál de estos hitos representa el inicio de la transición de un bebé de la leche o fórmula a probar frutas y verduras trituradas?",
+    "options_en": ["First laughter", "Starting solid foods", "Teething age", "Crawling start"],
+    "options_es": ["Primera risa", "Inicio de alimentación complementaria (sólidos)", "Etapa de dentición", "Inicio de gateo"],
+    "answer": 1
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "When compiling kids' lunches, what classic bread-spread combination is considered an school-lunch staple?",
+    "question_es": "Para las meriendas de los niños en el colegio, ¿qué clásica combinación untada en pan es la más icónica?",
+    "options_en": ["Ham and Cheese", "Turkey Club", "Peanut butter and jelly (PB&J)", "BLT sandwich"],
+    "options_es": ["Sándwich de jamón y queso", "Sándwich de pavo", "Crema de cacahuete y mermelada (PB&J)", "Sándwich BLT"],
+    "answer": 2
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "What is the name of the traditional yard game where children try to toss bean bags through holes in slanted wooden boards?",
+    "question_es": "¿Cómo se llama al tradicional juego de jardín donde se lanzan bolsas de judías a través de agujeros en tablas de madera?",
+    "options_en": ["Horseshoes", "Cornhole", "Ladder toss", "Ring toss"],
+    "options_es": ["Herraduras", "Cornhole", "Lanzamiento de escalerilla", "Lanzamiento de anillas"],
+    "answer": 1
+  },
+  {
+    "category": "Parenting & Family",
+    "question_en": "Which parenting term refers to the feeling of loneliness some parents experience when all of their children leave home?",
+    "question_es": "¿Qué término se refiere al sentimiento de soledad que experimentan algunos padres cuando todos sus hijos se van de casa?",
+    "options_en": ["Nostalgia phase", "Empty Nest Syndrome", "School blues", "Freedom shift"],
+    "options_es": ["Fase de nostalgia", "Síndrome del nido vacío", "Tristeza escolar", "Cambio de libertad"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In the famous family film about a clownfish searching for his lost son, what is the son's name?",
+    "question_es": "En la famosa película sobre un pez payaso que busca a su hijo perdido en el océano, ¿cómo se llama el hijo?",
+    "options_en": ["Marlin", "Dory", "Nemo", "Gill"],
+    "options_es": ["Marlin", "Dory", "Nemo", "Gill"],
+    "answer": 2
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Which colorful building-block toy brand from Denmark has themed cinematic universes and amusement parks?",
+    "question_es": "¿Qué marca de bloques de construcción de Dinamarca tiene universos cinematográficos y parques temáticos por todo el mundo?",
+    "options_en": ["Playmobil", "Duplo", "LEGO", "Mega Bloks"],
+    "options_es": ["Playmobil", "Duplo", "LEGO", "Mega Bloks"],
+    "answer": 2
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Which famous fictional British school trains young witches and wizards in spell-casting and flying on brooms?",
+    "question_es": "¿Qué famosa escuela ficticia entrena a jóvenes brujas y magos en hechizos y a volar en escobas?",
+    "options_en": ["Narnia", "Middle Earth", "Hogwarts", "Xavier Academy"],
+    "options_es": ["Narnia", "Tierra Media", "Hogwarts", "Academia Xavier"],
+    "answer": 2
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "What is the name of the cute, round white snowman who sings about hot summer days in the Disney film 'Frozen'?",
+    "question_es": "¿Cómo se llama el muñeco de nieve que canta sobre los calurosos días de verano en la película 'Frozen'?",
+    "options_en": ["Sven", "Kristoff", "Olaf", "Hans"],
+    "options_es": ["Sven", "Kristoff", "Olaf", "Hans"],
+    "answer": 2
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In the classic nursery rhyme, who fell off a wall so badly that all the king's horses and men couldn't fix him?",
+    "question_es": "En la canción infantil tradicional, ¿quién se cayó de una pared tan fuerte que los caballos y hombres del rey no pudieron repararlo?",
+    "options_en": ["Peter Pan", "Humpty Dumpty", "Jack Sprat", "Bo Peep"],
+    "options_es": ["Peter Pan", "Humpty Dumpty", "Jack Sprat", "Bo Peep"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Which highly popular video game lets players mine ores, craft tools, and build virtual pixelated brick structures?",
+    "question_es": "¿Qué videojuego permite minar minerales, fabricar herramientas y construir mundos virtuales utilizando bloques pixelados?",
+    "options_en": ["Roblox", "Fortnite", "Minecraft", "Terraria"],
+    "options_es": ["Roblox", "Fortnite", "Minecraft", "Terraria"],
+    "answer": 2
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In the famous family cartoon, a heroic team of rescue dogs are led by an energetic boy named Ryder. What is the show's name?",
+    "question_es": "En los dibujos animados, un equipo de perros rescatistas está liderado por un niño llamado Ryder. ¿Cómo se llama la serie?",
+    "options_en": ["Bluey", "PAW Patrol", "Bubble Guppies", "Peppa Pig"],
+    "options_es": ["Bluey", "La Patrulla Canina (PAW Patrol)", "Bubble Guppies", "Peppa Pig"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Which lovable Disney character is known for loving honey, living in the Hundred Acre Wood, and being best friends with Piglet?",
+    "question_es": "¿Qué adorable personaje de Disney ama la miel, vive en el Bosque de los Cien Acres y es el mejor amigo de Piglet?",
+    "options_en": ["Tigger", "Eeyore", "Winnie-the-Pooh", "Rabbit"],
+    "options_es": ["Tigger", "Ígor", "Winnie Pooh", "Conejo"],
+    "answer": 2
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "What is the name of the friendly neighborhood superhero who crawls walls and uses mechanical web-shooters to protect NYC?",
+    "question_es": "¿Cómo se llama el superhéroe del vecindario que trepa paredes y usa lanzarredes para proteger Nueva York?",
+    "options_en": ["Iron Man", "Spider-Man", "Batman", "Captain America"],
+    "options_es": ["Iron Man", "Spider-Man", "Batman", "Capitán América"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In the iconic animated movie 'Toy Story', who is the brave astronaut toy that famously says 'To infinity and beyond!'?",
+    "question_es": "En la icónica película animada 'Toy Story', ¿quién es el astronauta de juguete que dice '¡Al infinito y más allá!'?",
+    "options_en": ["Sheriff Woody", "Buzz Lightyear", "Rex", "Slinky Dog"],
+    "options_es": ["Comisario Woody", "Buzz Lightyear", "Rex", "Slinky Dog"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "What is the name of the popular Australian cartoon about a Blue Heeler puppy, her sister Bingo, and their funny parents?",
+    "question_es": "¿Cómo se llama la famosa serie de animación australiana sobre una cachorrita pastor ganadera, su hermana Bingo y sus padres?",
+    "options_en": ["Bluey", "Bingo Dogs", "Down Under Pup", "Kangaroo Jack"],
+    "options_es": ["Bluey", "Bingo Dogs", "Down Under Pup", "Kangaroo Jack"],
+    "answer": 0
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In the class board game 'Monopoly', what color is the property group that contains Boardwalk and Park Place?",
+    "question_es": "En el juego de mesa 'Monopoly', ¿de qué color es el grupo de propiedades que incluye a Boardwalk y Park Place?",
+    "options_en": ["Dark Blue", "Green", "Yellow", "Red"],
+    "options_es": ["Azul Oscuro", "Verde", "Amarillo", "Rojo"],
+    "answer": 0
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In the beloved fantasy movie 'The Wizard of Oz', what color are the magical slippers that Dorothy wears to get back home?",
+    "question_es": "En la querida película 'El Mago de Oz', ¿de qué color son los zapatos mágicos brillantes que lleva Dorothy?",
+    "options_en": ["Silver", "Ruby Red", "Golden Yellow", "Emerald Green"],
+    "options_es": ["Plata", "Rojo rubí", "Amarillo dorado", "Verde esmeralda"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Which classic Dr. Seuss character hates Christmas and tries to steal the holiday from the Whos in Whoville?",
+    "question_es": "¿Qué clásico personaje del Dr. Seuss odia la Navidad e intenta robársela a los habitantes de Villaquién (Whoville)?",
+    "options_en": ["The Lorax", "The Grinch", "Cat in the Hat", "Horton"],
+    "options_es": ["El Lórax", "El Grinch", "El Gato con Sombrero", "Horton"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "What classic arcade game features a yellow circle eating dots while running away from four colored ghosts?",
+    "question_es": "¿Qué videojuego clásico de arcade presenta a un círculo amarillo comiendo puntos mientras huye de cuatro fantasmas de colores?",
+    "options_en": ["Space Invaders", "Pac-Man", "Donkey Kong", "Frogger"],
+    "options_es": ["Space Invaders", "Pac-Man", "Donkey Kong", "Frogger"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Which giant ocean liner was called the 'Ship of Dreams' and is the setting of a major Oscar-winning 1997 film?",
+    "question_es": "¿Qué transatlántico gigante fue llamado el 'Barco de los Sueños' y es el escenario de una gran película ganadora del Oscar en 1997?",
+    "options_en": ["The Lusitania", "The Titanic", "The Britannic", "The Queen Mary"],
+    "options_es": ["El Lusitania", "El Titanic", "El Britannic", "El Queen Mary"],
+    "answer": 1
+  }
+]

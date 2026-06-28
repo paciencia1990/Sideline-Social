@@ -1,4 +1,4 @@
-{
+﻿{
     "extends":  "expo/tsconfig.base",
     "compilerOptions":  {
                             "strict":  true,
@@ -7,7 +7,9 @@
                                           "@/*":  [
                                                       "./*"
                                                   ]
-                                      }
+                                      },
+                            "resolveJsonModule":  true,
+                            "esModuleInterop":  true
                         },
     "include":  [
                     "app/**/*.ts",

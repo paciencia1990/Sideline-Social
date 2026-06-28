@@ -1,5 +1,3 @@
-import { GamePlaceholder } from "@/components/GamePlaceholder";
+import TriviaBlitzScreen from "@/src/game/triviaBlitz/TriviaBlitzScreen";
 
-export default function TriviaBlitzScreen() {
-  return <GamePlaceholder title="Trivia Blitz" body="Trivia rounds can be wired to Firestore when the question model is ready." />;
-}
+export default TriviaBlitzScreen;

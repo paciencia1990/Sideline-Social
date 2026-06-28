@@ -1,12 +1,3 @@
-import React from "react";
+import TriviaBlitzScreen from "@/src/game/triviaBlitz/TriviaBlitzScreen";
 
-import { GamePlaceholder } from "@/components/GamePlaceholder";
-
-export default function PlayScreen() {
-  return (
-    <GamePlaceholder
-      title="Trivia Blitz"
-      body="The Trivia Blitz play screen is ready for the game implementation."
-    />
-  );
-}
+export default TriviaBlitzScreen;
