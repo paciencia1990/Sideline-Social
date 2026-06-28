@@ -1,3 +1,4 @@
+import * as Location from "expo-location";
 import { geohashForLocation, geohashQueryBounds, distanceBetween } from "geofire-common";
 import {
   GeoPoint,
@@ -12,7 +13,9 @@ import {
   increment,
   limit,
   query,
-  serverTimestamp,  where,
+  serverTimestamp,
+  setDoc,
+  where,
   writeBatch,
 } from "firebase/firestore";
 import { db } from "@/config/firebase";
@@ -49,6 +52,20 @@ export interface CreateSquadInput {
 export interface AppConfig {
   squadRadiusMiles: number;
   maxSquadsPerUser: number;
+}
+
+export interface Coordinates {
+  latitude: number;
+  longitude: number;
+}
+
+export type LocationPermissionState = "undetermined" | "granted" | "denied";
+
+export interface CurrentLocationResult {
+  coords: Coordinates | null;
+  error: "services_disabled" | "unavailable" | null;
+  mocked: boolean;
+  timestamp: number | null;
 }
 
 export interface MemberPreview {
@@ -119,6 +136,79 @@ export function getSquadStatus(squad: Squad): SquadStatus {
   if (elapsed < THREE_HOURS_MS) return "starting_soon";
   return "quiet";
 }
+function normalizePermissionStatus(status: Location.PermissionStatus): LocationPermissionState {
+  if (status === Location.PermissionStatus.GRANTED) return "granted";
+  if (status === Location.PermissionStatus.DENIED) return "denied";
+  return "undetermined";
+}
+
+export async function getLocationPermissionStatus(): Promise<LocationPermissionState> {
+  try {
+    const permission = await Location.getForegroundPermissionsAsync();
+    return normalizePermissionStatus(permission.status);
+  } catch (error) {
+    console.warn("[SquadService] getLocationPermissionStatus error:", error);
+    return "undetermined";
+  }
+}
+
+export async function requestLocationPermission(): Promise<LocationPermissionState> {
+  try {
+    const permission = await Location.requestForegroundPermissionsAsync();
+    return normalizePermissionStatus(permission.status);
+  } catch (error) {
+    console.warn("[SquadService] requestLocationPermission error:", error);
+    return "denied";
+  }
+}
+
+export async function getCurrentLocation(): Promise<CurrentLocationResult> {
+  try {
+    const servicesEnabled = await Location.hasServicesEnabledAsync();
+    if (!servicesEnabled) {
+      return { coords: null, error: "services_disabled", mocked: false, timestamp: null };
+    }
+
+    const position = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+      mayShowUserSettingsDialog: true,
+    });
+
+    const mocked = "mocked" in position ? Boolean(position.mocked) : false;
+
+    return {
+      coords: {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      },
+      error: null,
+      mocked,
+      timestamp: position.timestamp ?? null,
+    };
+  } catch (error) {
+    console.warn("[SquadService] getCurrentLocation error:", error);
+    return { coords: null, error: "unavailable", mocked: false, timestamp: null };
+  }
+}
+
+export async function updateUserLocation(userId: string, coords: Coordinates): Promise<void> {
+  if (!userId) return;
+  if (!Number.isFinite(coords.latitude) || !Number.isFinite(coords.longitude)) return;
+
+  try {
+    await setDoc(doc(db, "users", userId), {
+      location: new GeoPoint(coords.latitude, coords.longitude),
+      locationGeohash: encodeGeohash(coords.latitude, coords.longitude),
+      locationUpdatedAt: serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    console.warn("[SquadService] updateUserLocation error:", error);
+  }
+}
+
+export async function findNearbySquads(coords: Coordinates, radiusMiles: number): Promise<Squad[]> {
+  return fetchNearbySquads(coords.latitude, coords.longitude, radiusMiles);
+}
 
 export async function fetchAppConfig(): Promise<AppConfig> {
   try {
@@ -146,6 +236,8 @@ export async function fetchUserSquadIds(userId: string): Promise<string[]> {
 }
 
 export async function fetchNearbySquads(lat: number, lng: number, radiusMiles: number): Promise<Squad[]> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radiusMiles)) return [];
+
   try {
     const radiusInMeters = radiusMiles * MILES_TO_METERS;
     const bounds = geohashQueryBounds([lat, lng], radiusInMeters);

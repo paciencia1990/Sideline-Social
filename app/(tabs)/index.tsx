@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import { router } from "expo-router";
-import { Bell, Gamepad2, Heart, MessageCircle, Play, Star, Trophy, Users } from "lucide-react-native";
+import { Bell, Gamepad2, Heart, MapPin, MessageCircle, Navigation, Play, RefreshCw, Star, Trophy } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -34,13 +34,23 @@ import {
   type SquadDetail,
 } from "@/services/homeFeedService";
 import { fetchActiveSquadSession, getGameLabel, type GameSession } from "@/services/gameService";
+import {
+  fetchNearbySquads,
+  getCurrentLocation,
+  getLocationPermissionStatus,
+  requestLocationPermission,
+  updateUserLocation,
+  type Squad,
+} from "@/services/squadService";
 
 const logoSource = require("@/assets/branding/sideline-social-logo.png");
+
+type HomeProximityState = "checking" | "idle" | "denied" | "loading" | "unavailable" | "nearby" | "memberNearby" | "none" | "error";
 
 export default function HomeScreen() {
   const { i18n, t } = useTranslation();
   const { user } = useAuth();
-  const { mySquadIds } = useSquad();
+  const { appConfig, mySquadIds } = useSquad();
   const activityUnsubscribe = useRef<(() => void) | null>(null);
   const liveSquadUnsubscribe = useRef<(() => void) | null>(null);
 
@@ -55,9 +65,58 @@ export default function HomeScreen() {
   const [challengeStatus, setChallengeStatus] = useState<"accepted" | "complete" | null>(null);
   const [connectionPrompt, setConnectionPrompt] = useState<ConnectionPrompt | null>(null);
   const [activeSession, setActiveSession] = useState<GameSession | null>(null);
+  const [proximityState, setProximityState] = useState<HomeProximityState>("checking");
+  const [nearestSquad, setNearestSquad] = useState<Squad | null>(null);
+  const [proximityLoading, setProximityLoading] = useState(false);
 
   const displayName = user?.displayName || user?.email?.split("@")[0] || t("profile.defaultName");
 
+  const loadHomeProximity = useCallback(async (requestPermission = false) => {
+    setProximityLoading(true);
+    setProximityState("loading");
+
+    try {
+      const permission = requestPermission ? await requestLocationPermission() : await getLocationPermissionStatus();
+      if (permission === "undetermined") {
+        setNearestSquad(null);
+        setProximityState("idle");
+        return;
+      }
+      if (permission === "denied") {
+        setNearestSquad(null);
+        setProximityState("denied");
+        return;
+      }
+
+      const location = await getCurrentLocation();
+      if (!location.coords) {
+        setNearestSquad(null);
+        setProximityState(location.error === "services_disabled" ? "unavailable" : "error");
+        return;
+      }
+
+      if (user?.uid) {
+        await updateUserLocation(user.uid, location.coords);
+      }
+
+      const nearby = await fetchNearbySquads(location.coords.latitude, location.coords.longitude, appConfig.squadRadiusMiles);
+      const closest = nearby[0] ?? null;
+      setNearestSquad(closest);
+
+      if (!closest) {
+        setProximityState("none");
+        return;
+      }
+
+      setProximityState(mySquadIds.includes(closest.squadId) ? "memberNearby" : "nearby");
+    } catch (nextError) {
+      console.warn("[HomeScreen] proximity error:", nextError);
+      setNearestSquad(null);
+      setProximityState("error");
+    } finally {
+      setProximityLoading(false);
+    }
+  }, [appConfig.squadRadiusMiles, mySquadIds, user?.uid]);
   const loadHome = useCallback(async () => {
     setError(null);
     const userId = user?.uid;
@@ -107,6 +166,10 @@ export default function HomeScreen() {
       liveSquadUnsubscribe.current?.();
     };
   }, [loadHome]);
+
+  useEffect(() => {
+    void loadHomeProximity(false);
+  }, [loadHomeProximity]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -173,17 +236,16 @@ export default function HomeScreen() {
             <SectionTitle title={t("home.liveSquad")} />
             {liveSquad ? (
               <LiveSquadCard squad={liveSquad} />
-            ) : squads.length > 0 ? (
-              <SquadSummaryCard squads={squads} />
             ) : (
-              <StateCard
-                icon={<Users size={28} color={Colors.primary} />}
-                title={t("home.noSquadsYet")}
-                body={t("home.noSquadsBody")}
-                actionLabel={t("home.findSquadsNearby")}
-                onAction={() => router.push("/(tabs)/squad")}
+              <HomeProximityCard
+                loading={proximityLoading}
+                nearestSquad={nearestSquad}
+                onFind={() => loadHomeProximity(true)}
+                onRetry={() => loadHomeProximity(false)}
+                state={proximityState}
               />
             )}
+            {!liveSquad && squads.length > 0 ? <SquadSummaryCard squads={squads} /> : null}
 
             {activeChallenge ? (
               <ChallengeCard
@@ -234,6 +296,70 @@ function QuickActions() {
         </TouchableOpacity>
       ))}
     </View>
+  );
+}
+
+function HomeProximityCard({
+  loading,
+  nearestSquad,
+  onFind,
+  onRetry,
+  state,
+}: {
+  loading: boolean;
+  nearestSquad: Squad | null;
+  onFind: () => void;
+  onRetry: () => void;
+  state: HomeProximityState;
+}) {
+  const { t } = useTranslation();
+  const isNearby = state === "nearby" || state === "memberNearby";
+  const title = (() => {
+    if (state === "checking" || state === "loading") return t("location.loading");
+    if (state === "idle") return t("squad.findNearby");
+    if (state === "denied") return t("location.permissionTitle");
+    if (state === "unavailable") return t("location.unavailableTitle");
+    if (state === "error") return t("location.errorTitle");
+    if (state === "memberNearby") return t("location.yourSquadNearbyTitle");
+    if (state === "nearby") return nearestSquad?.name ?? t("location.nearbyTitle");
+    return t("location.noNearbyTitle");
+  })();
+  const body = (() => {
+    if (state === "checking" || state === "loading") return t("location.loadingBody");
+    if (state === "idle") return t("location.findNearbyBody");
+    if (state === "denied") return t("location.permissionBody");
+    if (state === "unavailable") return t("location.unavailableBody");
+    if (state === "error") return t("location.errorBody");
+    if (state === "memberNearby") return t("location.yourSquadNearbyBody");
+    if (state === "nearby") return t("location.nearbyBody");
+    return t("location.noNearbyBody");
+  })();
+  const actionLabel = state === "idle" ? t("location.allowLocation") : isNearby ? t("squad.viewSquad") : t("location.retry");
+  const action = state === "idle" ? onFind : isNearby ? () => router.push("/(tabs)/squad") : onRetry;
+
+  return (
+    <Card style={[styles.proximityCard, isNearby && styles.proximityCardActive]}>
+      <View style={styles.proximityHeader}>
+        <View style={styles.proximityIcon}>
+          {loading ? <ActivityIndicator color={Colors.primary} size="small" /> : isNearby ? <Navigation size={22} color={Colors.primary} /> : <MapPin size={22} color={Colors.primary} />}
+        </View>
+        <View style={styles.cardCopy}>
+          <Text style={styles.cardEyebrow}>{t("squad.liveTitle")}</Text>
+          <Text style={styles.cardTitle}>{title}</Text>
+          <Text style={styles.cardText}>{body}</Text>
+        </View>
+      </View>
+      {nearestSquad ? (
+        <View style={styles.proximityMetaRow}>
+          <Text style={styles.proximityMeta}>{nearestSquad.venueName}</Text>
+          {nearestSquad.distanceMiles !== undefined ? <Text style={styles.proximityMeta}>{t("squad.distance", { distance: nearestSquad.distanceMiles.toFixed(1) })}</Text> : null}
+        </View>
+      ) : null}
+      <TouchableOpacity activeOpacity={0.86} onPress={action} style={isNearby ? styles.primaryInlineButton : styles.outlineInlineButton}>
+        {loading ? <RefreshCw size={16} color={isNearby ? Colors.surface : Colors.primary} /> : null}
+        <Text style={isNearby ? styles.primaryInlineText : styles.outlineInlineText}>{actionLabel}</Text>
+      </TouchableOpacity>
+    </Card>
   );
 }
 
@@ -502,7 +628,41 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodySemiBold,
     fontSize: 17,
   },
-  liveCard: {
+  proximityCard: {
+    gap: Spacing.md,
+  },
+  proximityCardActive: {
+    borderLeftColor: Colors.accentGreen,
+    borderLeftWidth: 4,
+  },
+  proximityHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: Spacing.md,
+  },
+  proximityIcon: {
+    alignItems: "center",
+    backgroundColor: Colors.background,
+    borderRadius: 24,
+    height: 48,
+    justifyContent: "center",
+    width: 48,
+  },
+  proximityMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: Spacing.sm,
+  },
+  proximityMeta: {
+    backgroundColor: Colors.background,
+    borderRadius: Radius.sm,
+    color: Colors.textPrimary,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 12,
+    overflow: "hidden",
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+  },  liveCard: {
     borderLeftColor: Colors.accentGreen,
     borderLeftWidth: 4,
     gap: Spacing.sm,
