@@ -13,10 +13,14 @@ const LOBBY_ROUTE_BY_GAME: Record<GameType, string> = {
   trivia_blitz: "/(games)/trivia-blitz/Lobby",
 };
 
+
+function isGameType(value?: string): value is GameType {
+  return value === "bomb_defusal" || value === "spot_difference" || value === "trivia_blitz";
+}
 export default function ResultsScreen() {
   const { t } = useTranslation();
-  const params = useLocalSearchParams<{ gameType?: GameType }>();
-  const lobbyRoute = params.gameType ? LOBBY_ROUTE_BY_GAME[params.gameType] : "/(tabs)/games";
+  const params = useLocalSearchParams<{ gameType?: string }>();
+  const lobbyRoute = isGameType(params.gameType) ? LOBBY_ROUTE_BY_GAME[params.gameType] : "/(tabs)/games";
 
   return (
     <ScreenWrapper>
