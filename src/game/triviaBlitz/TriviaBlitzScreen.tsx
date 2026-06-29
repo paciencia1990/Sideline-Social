@@ -11,6 +11,7 @@ import {
 import { useLocalSearchParams } from "expo-router";
 import { onSnapshot, orderBy, query, Unsubscribe } from "firebase/firestore";
 
+import { GameEndActions } from "@/components/GameEndActions";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 import {
@@ -301,11 +302,7 @@ export default function TriviaBlitzScreen() {
                 <Text style={styles.scoreText}>{player.score}</Text>
               </View>
             ))}
-            {isHost ? (
-              <Pressable style={styles.primaryButton} onPress={handleReset} disabled={busy}>
-                <Text style={styles.primaryButtonText}>Reset to Lobby</Text>
-              </Pressable>
-            ) : null}
+            <GameEndActions onPlayAgain={handleReset} lobbyRoute="/(games)/trivia-blitz/Lobby" />
           </View>
         ) : null}
       </ScrollView>

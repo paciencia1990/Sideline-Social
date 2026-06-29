@@ -1,12 +1,3 @@
-import React from "react";
+import SpotDifferenceScreen from "@/src/game/spotDifference/SpotDifferenceScreen";
 
-import { GamePlaceholder } from "@/components/GamePlaceholder";
-
-export default function PlayScreen() {
-  return (
-    <GamePlaceholder
-      title="Spot the Difference"
-      body="The Spot the Difference play screen is ready for the game implementation."
-    />
-  );
-}
+export default SpotDifferenceScreen;

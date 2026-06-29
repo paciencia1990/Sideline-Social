@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import LottieView from "lottie-react-native";
+import { GameEndActions } from "@/components/GameEndActions";
 import { ref, set } from "firebase/database";
 import { rtdb } from "@/config/firebase";
 import {
@@ -268,17 +269,13 @@ export default function BombDefusalScreen() {
           <View style={styles.resultPanel}>
             <Text style={styles.resultTitle}>Defused</Text>
             <Text style={styles.resultText}>The result was saved to Realtime Database.</Text>
-            <Pressable style={styles.submitButton} onPress={resetGame}>
-              <Text style={styles.submitButtonText}>PLAY AGAIN</Text>
-            </Pressable>
+            <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/bomb-defusal/Lobby" />
           </View>
         ) : status === "exploded" ? (
           <View style={styles.resultPanel}>
             <Text style={styles.resultTitle}>Exploded</Text>
             <Text style={styles.resultText}>The result was saved to Realtime Database.</Text>
-            <Pressable style={styles.submitButton} onPress={resetGame}>
-              <Text style={styles.submitButtonText}>TRY AGAIN</Text>
-            </Pressable>
+            <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/bomb-defusal/Lobby" />
           </View>
         ) : (
           renderControls()
