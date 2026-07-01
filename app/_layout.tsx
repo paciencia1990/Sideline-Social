@@ -1,4 +1,3 @@
-import "@/i18n/polyfills";
 import "@/i18n";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
