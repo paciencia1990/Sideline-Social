@@ -175,7 +175,7 @@ export default function GamesScreen() {
 
         <Card style={styles.joinCard}>
           <View style={styles.joinHeader}>
-            <View>
+            <View style={styles.joinCopy}>
               <Text style={styles.cardTitle}>{t("games.haveCode")}</Text>
               <Text style={styles.cardText}>{t("games.joinCodeBody")}</Text>
             </View>
@@ -319,16 +319,25 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
   },
   joinHeader: {
-    alignItems: "center",
+    alignItems: "flex-start",
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: Spacing.md,
     justifyContent: "space-between",
   },
+  joinCopy: {
+    flex: 1,
+    gap: 3,
+    minWidth: 180,
+  },
   smallToggle: {
     alignItems: "center",
+    alignSelf: "flex-start",
     borderColor: Colors.primary,
     borderRadius: Radius.button,
     borderWidth: 1,
+    flexShrink: 1,
+    maxWidth: "100%",
     minHeight: 38,
     justifyContent: "center",
     paddingHorizontal: Spacing.sm,
@@ -337,9 +346,11 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontFamily: Typography.bodySemiBold,
     fontSize: 12,
+    textAlign: "center",
   },
   joinRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: Spacing.sm,
   },
   joinInput: {
@@ -353,6 +364,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     letterSpacing: 5,
     minHeight: 48,
+    minWidth: 140,
     paddingHorizontal: Spacing.md,
     textAlign: "center",
   },
@@ -360,6 +372,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: Colors.primary,
     borderRadius: Radius.button,
+    flexShrink: 0,
     minHeight: 48,
     justifyContent: "center",
     minWidth: 76,

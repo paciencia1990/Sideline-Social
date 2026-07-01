@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -13,6 +13,7 @@ import { onSnapshot, orderBy, query, Unsubscribe } from "firebase/firestore";
 
 import { GameEndActions } from "@/components/GameEndActions";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { useAuth } from "@/context/AuthContext";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 import {
   createGameSession,
@@ -29,19 +30,46 @@ import { advanceTurn } from "./turnManager";
 import type { TriviaPlayer, TriviaQuestion, TriviaSession } from "./types";
 
 const QUESTION_SECONDS = 15;
+const FALLBACK_PLAYER_NAME = "Player";
 
 export default function TriviaBlitzScreen() {
+  const { user, firebaseUser } = useAuth();
   const params = useLocalSearchParams<{ sessionId?: string | string[] }>();
   const initialSessionId = normalizeParam(params.sessionId);
   const [sessionId, setSessionId] = useState(initialSessionId);
   const [joinCodeInput, setJoinCodeInput] = useState(initialSessionId);
   const [playerId, setPlayerId] = useState("");
-  const [playerName, setPlayerName] = useState("Player");
+  const [playerName, setPlayerName] = useState(FALLBACK_PLAYER_NAME);
   const [session, setSession] = useState<TriviaSession | null>(null);
   const [players, setPlayers] = useState<TriviaPlayer[]>([]);
   const [secondsRemaining, setSecondsRemaining] = useState(QUESTION_SECONDS);
   const [lastResult, setLastResult] = useState<ScoreResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const userEditedNameRef = useRef(false);
+
+  const resolvedPlayerName = useMemo(
+    () => resolvePlayerName(user?.displayName, firebaseUser?.displayName, user?.email ?? firebaseUser?.email),
+    [firebaseUser?.displayName, firebaseUser?.email, user?.displayName, user?.email],
+  );
+  const effectivePlayerName = useMemo(
+    () => getEffectivePlayerName(playerName, resolvedPlayerName),
+    [playerName, resolvedPlayerName],
+  );
+
+  useEffect(() => {
+    if (userEditedNameRef.current) {
+      return;
+    }
+
+    setPlayerName((currentName) => {
+      const trimmedName = currentName.trim();
+      if (trimmedName && trimmedName !== FALLBACK_PLAYER_NAME) {
+        return currentName;
+      }
+
+      return resolvedPlayerName;
+    });
+  }, [resolvedPlayerName]);
 
   const self = useMemo(
     () => players.find((player) => player.id === playerId) ?? null,
@@ -105,6 +133,11 @@ export default function TriviaBlitzScreen() {
     return () => clearInterval(timer);
   }, [lastResult, session?.status]);
 
+  const handlePlayerNameChange = useCallback((value: string) => {
+    userEditedNameRef.current = true;
+    setPlayerName(value);
+  }, []);
+
   const runAction = useCallback(async (action: () => Promise<void>) => {
     setBusy(true);
     try {
@@ -118,21 +151,21 @@ export default function TriviaBlitzScreen() {
 
   const handleCreate = useCallback(() => {
     runAction(async () => {
-      const created = await createGameSession(playerName.trim() || "Host");
+      const created = await createGameSession(effectivePlayerName);
       setSessionId(created.sessionId);
       setJoinCodeInput(created.sessionId);
       setPlayerId(created.playerId);
     });
-  }, [playerName, runAction]);
+  }, [effectivePlayerName, runAction]);
 
   const handleJoin = useCallback(() => {
     runAction(async () => {
-      const joined = await joinGameSession(joinCodeInput, playerName.trim() || "Player");
+      const joined = await joinGameSession(joinCodeInput, effectivePlayerName);
       setSessionId(joined.sessionId);
       setJoinCodeInput(joined.sessionId);
       setPlayerId(joined.playerId);
     });
-  }, [joinCodeInput, playerName, runAction]);
+  }, [effectivePlayerName, joinCodeInput, runAction]);
 
   const handleToggleReady = useCallback(() => {
     if (!sessionId || !self) {
@@ -205,7 +238,7 @@ export default function TriviaBlitzScreen() {
             <TextInput
               style={styles.input}
               value={playerName}
-              onChangeText={setPlayerName}
+              onChangeText={handlePlayerNameChange}
               placeholder="Your name"
               placeholderTextColor={Colors.textPrimary}
             />
@@ -316,6 +349,33 @@ function normalizeParam(value?: string | string[]) {
   }
 
   return value ?? "";
+}
+
+function resolvePlayerName(
+  appDisplayName?: string | null,
+  firebaseDisplayName?: string | null,
+  email?: string | null,
+) {
+  const displayName = appDisplayName?.trim() || firebaseDisplayName?.trim();
+  if (displayName) {
+    return displayName;
+  }
+
+  const emailPrefix = email?.split("@")[0]?.trim();
+  if (emailPrefix) {
+    return emailPrefix;
+  }
+
+  return FALLBACK_PLAYER_NAME;
+}
+
+function getEffectivePlayerName(playerName: string, resolvedPlayerName: string) {
+  const trimmedName = playerName.trim();
+  if (trimmedName && trimmedName !== FALLBACK_PLAYER_NAME) {
+    return trimmedName;
+  }
+
+  return resolvedPlayerName.trim() || FALLBACK_PLAYER_NAME;
 }
 
 const styles = StyleSheet.create({
@@ -482,4 +542,3 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodyBold,
   },
 });
-

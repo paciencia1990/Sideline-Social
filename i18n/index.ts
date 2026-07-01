@@ -416,7 +416,7 @@ const resources = {
       },
       tabs: {
         home: 'Inicio',
-        squad: 'Equipo',
+        squad: 'Comunidad',
         games: 'Juegos',
         friends: 'Amigos',
         profile: 'Perfil',
