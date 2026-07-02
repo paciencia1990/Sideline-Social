@@ -23,3 +23,15 @@ Likely Realtime Database rule coverage needed later:
 - `/bombDefusal/{gameId}/result`: allow authenticated game participants to write result logs.
 
 Until those rules are updated, the app should continue to show empty or limited states instead of crashing.
+## Coach Mode / Teams
+
+Coach Mode keeps Teams separate from Squads. Squads remain the location/community layer; Teams are private spaces for coach/staff communication.
+
+Firestore rules needed before production use:
+
+- `teams/{teamId}`: authenticated team members can read their team; only coaches/staff or trusted creation flows can create/update team metadata.
+- `teams/{teamId}/members/{userId}`: team members can read active membership records for their team; users can join by valid invite code as parent; coaches/staff can manage staff/parent membership as needed.
+- `teams/{teamId}/announcements/{announcementId}`: active team members can read announcements for their team; only `coach`, `assistantCoach`, or `teamParent` members can create coach announcements.
+- `teams/{teamId}/announcements/{announcementId}/replies/{replyId}`: active team members can create replies when `allowReplies` is true.
+- Private replies using `replyType: "privateToCoach"` need staff-only read rules before exposing that UI broadly.
+- Squad membership and Squad chat rules should remain separate from team membership and team announcements.

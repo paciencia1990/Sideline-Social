@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -8,6 +9,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
+import { getCurrentUserTeamMemberships, isCoachRole, switchActiveMode } from "@/services/teamService";
 import { flattenStyle } from "@/utils/flatten-style";
 
 const LANGUAGE_OPTIONS = [
@@ -17,8 +19,36 @@ const LANGUAGE_OPTIONS = [
 
 export default function ProfileScreen() {
   const { t } = useTranslation();
-  const { language, setLanguage } = useApp();
+  const { activeMode, language, setActiveMode, setLanguage } = useApp();
   const { user, signOut } = useAuth();
+  const [canUseCoachMode, setCanUseCoachMode] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    getCurrentUserTeamMemberships()
+      .then((memberships) => {
+        if (isMounted) setCanUseCoachMode(memberships.some((membership) => isCoachRole(membership.role)));
+      })
+      .catch(() => {
+        if (isMounted) setCanUseCoachMode(false);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.uid]);
+
+  const handleSwitchToParent = useCallback(async () => {
+    setActiveMode("parent");
+    await switchActiveMode("parent").catch(() => undefined);
+  }, [setActiveMode]);
+
+  const handleCoachPress = useCallback(async () => {
+    if (canUseCoachMode) {
+      setActiveMode("coach");
+      await switchActiveMode("coach").catch(() => undefined);
+    }
+    router.push("/coach" as never);
+  }, [canUseCoachMode, setActiveMode]);
 
   return (
     <ScreenWrapper>
@@ -61,6 +91,21 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
               );
             })}
+          </View>
+        </Card>
+
+        <Card style={styles.languageCard}>
+          <View style={styles.languageCopy}>
+            <Text style={styles.cardTitle}>{activeMode === "coach" ? t("mode.viewingCoach") : t("mode.viewingParent")}</Text>
+            <Text style={styles.cardText}>{canUseCoachMode ? t("coach.home.modeHelp") : t("coach.home.noCoachRole")}</Text>
+          </View>
+          <View style={styles.modeActions}>
+            <TouchableOpacity activeOpacity={0.86} onPress={handleSwitchToParent} style={styles.modeOutlineButton}>
+              <Text style={styles.modeOutlineText}>{t("mode.switchToParent")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity activeOpacity={0.86} onPress={handleCoachPress} style={styles.modePrimaryButton}>
+              <Text style={styles.modePrimaryText}>{canUseCoachMode ? t("mode.switchToCoach") : t("coach.team.createTeam")}</Text>
+            </TouchableOpacity>
           </View>
         </Card>
       </ScrollView>
@@ -140,5 +185,37 @@ const styles = StyleSheet.create({
   },
   languageButtonTextActive: {
     color: "#FFFFFF",
+  },
+  modeActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: Spacing.sm,
+  },
+  modePrimaryButton: {
+    alignItems: "center",
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.button,
+    flexGrow: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: Spacing.md,
+  },
+  modePrimaryText: {
+    color: Colors.surface,
+    fontFamily: Typography.bodySemiBold,
+  },
+  modeOutlineButton: {
+    alignItems: "center",
+    borderColor: Colors.primary,
+    borderRadius: Radius.button,
+    borderWidth: 1,
+    flexGrow: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: Spacing.md,
+  },
+  modeOutlineText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodySemiBold,
   },
 });
