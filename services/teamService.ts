@@ -103,6 +103,9 @@ export async function createTeam(input: TeamInput): Promise<Team> {
   const inviteCode = generateInviteCode();
   const displayName = resolveDisplayName();
   const teamRef = doc(collection(db, "teams"));
+  const memberPath = `teams/${teamRef.id}/members/${user.uid}`;
+  const teamPath = `teams/${teamRef.id}`;
+  const userPath = `users/${user.uid}`;
   const batch = writeBatch(db);
 
   batch.set(teamRef, {
@@ -143,7 +146,21 @@ export async function createTeam(input: TeamInput): Promise<Team> {
     { merge: true },
   );
 
-  await batch.commit();
+  logCreateTeamDiagnostics("commit-start", { memberPath, teamPath, userId: user.uid, userPath });
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    logCreateTeamDiagnostics("commit-error", {
+      code: getFirebaseErrorCode(error),
+      memberPath,
+      message: error instanceof Error ? error.message : String(error),
+      teamPath,
+      userId: user.uid,
+      userPath,
+    });
+    throw error;
+  }
 
   const created = await getTeamById(teamRef.id);
   if (!created) {
@@ -244,9 +261,23 @@ export function getMembershipDisplayName(membership: TeamMembership) {
 function requireUser() {
   const user = auth.currentUser;
   if (!user) {
-    throw new Error("Please sign in to use teams.");
+    const error = new Error("Please sign in to use teams.");
+    (error as { code?: string }).code = "unauthenticated";
+    throw error;
   }
   return user;
+}
+
+function getFirebaseErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+}
+
+function logCreateTeamDiagnostics(event: "commit-error" | "commit-start", details: Record<string, string>) {
+  if (!__DEV__) {
+    return;
+  }
+
+  console.info("[TeamService] createTeam", { event, ...details });
 }
 
 function resolveDisplayName() {

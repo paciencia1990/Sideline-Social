@@ -27,6 +27,14 @@ Until those rules are updated, the app should continue to show empty or limited 
 
 Coach Mode keeps Teams separate from Squads. Squads remain the location/community layer; Teams are private spaces for coach/staff communication.
 
+Device team creation writes a single Firestore batch to:
+
+- `teams/{teamId}`
+- `teams/{teamId}/members/{uid}`
+- `users/{uid}`
+
+If the device shows `FirebaseError: Missing or insufficient permissions` while creating a team, first confirm the signed-in user exists, then deploy the local `firestore.rules` file to the Firebase project used by the app. This repo currently has no `firebase.json`, so initialize or select the Firebase project before running a rules deploy.
+
 Firestore rules needed before production use:
 
 - `teams/{teamId}`: authenticated team members can read their team; only coaches/staff or trusted creation flows can create/update team metadata.

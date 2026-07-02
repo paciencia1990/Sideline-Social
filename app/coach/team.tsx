@@ -187,8 +187,14 @@ function MemberSection({ members, title }: { members: TeamMembership[]; title: s
 
 
 function getCreateTeamErrorMessage(error: unknown, t: (key: string) => string) {
-  if (typeof error === "object" && error && "code" in error && error.code === "permission-denied") {
-    return t("coach.team.createErrorBody");
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+
+  if (code === "permission-denied") {
+    return t("coach.team.permissionBlocked");
+  }
+
+  if (code === "unauthenticated") {
+    return t("coach.team.signInRequired");
   }
 
   return error instanceof Error ? error.message : t("coach.team.createErrorBody");
