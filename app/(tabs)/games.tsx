@@ -58,7 +58,7 @@ const GAME_CARDS: GameCardConfig[] = [
     gameType: "trivia_blitz",
     titleKey: "games.triviaBlitz.title",
     bodyKey: "games.triviaBlitz.desc",
-    route: "/games/trivia-blitz/play",
+    route: "/(games)/trivia-blitz/Lobby",
     players: "3-20",
     duration: "5-15 min",
     Icon: Zap,
@@ -68,7 +68,7 @@ const GAME_CARDS: GameCardConfig[] = [
 const ROUTE_BY_GAME: Record<GameType, string> = {
   bomb_defusal: "/(games)/bomb-defusal/Lobby",
   spot_difference: "/(games)/spot-the-difference/Lobby",
-  trivia_blitz: "/games/trivia-blitz/play",
+  trivia_blitz: "/(games)/trivia-blitz/Lobby",
 };
 
 export default function GamesScreen() {

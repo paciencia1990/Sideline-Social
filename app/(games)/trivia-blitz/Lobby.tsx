@@ -12,7 +12,7 @@ export default function TriviaBlitzLobby() {
 
   const handleComplete = useCallback(() => {
     setShowCountdown(false);
-    router.replace("/games/trivia-blitz/play" as never);
+    router.replace({ pathname: "/games/trivia-blitz/play", params: { start: "1" } } as never);
   }, [setShowCountdown]);
 
   return (

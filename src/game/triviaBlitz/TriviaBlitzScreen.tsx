@@ -40,11 +40,13 @@ export default function TriviaBlitzScreen() {
     sessionId?: string | string[];
     joinCode?: string | string[];
     code?: string | string[];
+    start?: string | string[];
   }>();
   const requestedSessionId = useMemo(
     () => normalizeParam(params.sessionId) || normalizeParam(params.joinCode) || normalizeParam(params.code),
     [params.code, params.joinCode, params.sessionId],
   );
+  const shouldAutoStart = normalizeParam(params.start) === "1";
   const [sessionId, setSessionId] = useState(requestedSessionId);
   const [playerId, setPlayerId] = useState("");
   const [session, setSession] = useState<TriviaSession | null>(null);
@@ -94,6 +96,10 @@ export default function TriviaBlitzScreen() {
           return;
         }
 
+        if (shouldAutoStart) {
+          await startGameSession(result.sessionId);
+        }
+
         setSessionId(result.sessionId);
         setPlayerId(result.playerId);
         setSetupError(null);
@@ -117,7 +123,7 @@ export default function TriviaBlitzScreen() {
     return () => {
       isMounted = false;
     };
-  }, [playerId, requestedSessionId, resolvedPlayerName, sessionId, setupAttempt, setupError]);
+  }, [playerId, requestedSessionId, resolvedPlayerName, sessionId, setupAttempt, setupError, shouldAutoStart]);
 
   const self = useMemo(
     () => players.find((player) => player.id === playerId) ?? null,
