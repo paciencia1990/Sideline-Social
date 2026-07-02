@@ -54,7 +54,9 @@ These rules match the current Coach Mode app writes:
 - announcements include `createdBy`, `audience`, and `allowReplies`.
 - replies include `userId` and `replyType`.
 
-Team reads are restricted to active team members. The current join-by-invite screen queries `teams` by `inviteCode`; that broad collection query is intentionally not opened in these MVP rules. If join-by-code needs production support, use a dedicated invite lookup document or a server-side callable join flow instead of making all team documents listable.
+Coach Mode membership loading uses the signed-in user's `users/{uid}` document as an index via `coachTeamIds`, `parentTeamIds`, and `activeTeamId`. It then reads only known team docs and the user's own member doc, instead of using a broad `collectionGroup("members")` query.
+
+Team reads are restricted to active team members or users listed in a team's `coachIds` or `parentIds`. Team listing remains blocked. The current join-by-invite screen queries `teams` by `inviteCode`; that broad collection query is intentionally not opened in these MVP rules. If join-by-code needs production support, use a dedicated invite lookup document or a server-side callable join flow instead of making all team documents listable.
 
 The team creation batch writes these paths:
 

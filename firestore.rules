@@ -41,6 +41,14 @@ service cloud.firestore {
         get(teamMemberPath(teamId, request.auth.uid)).data.status == "active";
     }
 
+    function isListedOnTeam() {
+      return signedIn() &&
+        (
+          request.auth.uid in resource.data.coachIds ||
+          request.auth.uid in resource.data.parentIds
+        );
+    }
+
     function isCoachStaff(teamId) {
       return isTeamMember(teamId) &&
         get(teamMemberPath(teamId, request.auth.uid)).data.role in ["coach", "assistantCoach", "teamParent"];
@@ -116,7 +124,7 @@ service cloud.firestore {
     // Teams are private official coach/team spaces, separate from Squads.
     // -----------------------------------------------------------------------
     match /teams/{teamId} {
-      allow get: if isTeamMember(teamId);
+      allow get: if isListedOnTeam() || isTeamMember(teamId);
       allow list: if false;
 
       allow create: if signedIn() &&
@@ -131,7 +139,7 @@ service cloud.firestore {
       allow delete: if false;
 
       match /members/{userId} {
-        allow get, list: if (signedIn() && resource.data.userId == request.auth.uid) || isTeamMember(teamId);
+        allow get, list: if isSelf(userId) || isTeamMember(teamId);
 
         allow create: if signedIn() &&
           request.resource.data.userId == userId &&

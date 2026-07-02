@@ -1,7 +1,6 @@
 import {
   arrayUnion,
   collection,
-  collectionGroup,
   doc,
   getDoc,
   getDocs,
@@ -70,22 +69,68 @@ export async function getCurrentUserTeamMemberships(): Promise<TeamMembership[]>
   if (!user) return [];
 
   try {
-    const membershipsQuery = query(collectionGroup(db, "members"), where("userId", "==", user.uid));
-    const snapshot = await getDocs(membershipsQuery);
-    const memberships = snapshot.docs.map((membershipDoc) => normalizeMembership(membershipDoc.id, membershipDoc.data()));
+    const userSnapshot = await getDoc(doc(db, "users", user.uid));
+    if (!userSnapshot.exists()) {
+      return [];
+    }
 
-    const enriched = await Promise.all(
-      memberships.map(async (membership) => ({
-        ...membership,
-        team: await getTeamById(membership.teamId),
-      })),
-    );
+    const teamIds = readIndexedTeamIds(userSnapshot.data());
+    const memberships = await Promise.all(teamIds.map((teamId) => getIndexedMembership(teamId, user.uid)));
 
-    return enriched.filter((membership) => membership.status === "active");
+    return memberships.filter((membership): membership is TeamMembership => Boolean(membership));
   } catch (error) {
-    console.warn("[TeamService] get memberships error:", error);
+    logMembershipLookupIssue(error);
     return [];
   }
+}
+
+async function getIndexedMembership(teamId: string, userId: string): Promise<TeamMembership | null> {
+  try {
+    const [teamSnapshot, memberSnapshot] = await Promise.all([
+      getDoc(doc(db, "teams", teamId)),
+      getDoc(doc(db, "teams", teamId, "members", userId)),
+    ]);
+
+    if (!teamSnapshot.exists() || !memberSnapshot.exists()) {
+      return null;
+    }
+
+    const membership = normalizeMembership(memberSnapshot.id, { ...memberSnapshot.data(), teamId });
+    if (membership.status !== "active") {
+      return null;
+    }
+
+    return {
+      ...membership,
+      team: normalizeTeam(teamSnapshot.id, teamSnapshot.data()),
+    };
+  } catch (error) {
+    logMembershipLookupIssue(error, teamId);
+    return null;
+  }
+}
+
+function readIndexedTeamIds(data: Record<string, unknown>) {
+  return uniqueStrings([
+    ...readStringArray(data.coachTeamIds),
+    ...readStringArray(data.parentTeamIds),
+    readNullableString(data.activeTeamId) ?? "",
+  ]);
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.filter((value) => value.trim())));
+}
+
+function logMembershipLookupIssue(error: unknown, teamId?: string) {
+  if (!__DEV__) {
+    return;
+  }
+
+  console.info("[TeamService] memberships unavailable", {
+    code: getFirebaseErrorCode(error),
+    teamId: teamId ?? "user-index",
+  });
 }
 
 export async function getCoachTeams(): Promise<TeamMembership[]> {
