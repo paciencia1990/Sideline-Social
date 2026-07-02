@@ -1,5 +1,4 @@
 import {
-  addDoc,
   arrayUnion,
   collection,
   collectionGroup,
@@ -103,7 +102,10 @@ export async function createTeam(input: TeamInput): Promise<Team> {
   const user = requireUser();
   const inviteCode = generateInviteCode();
   const displayName = resolveDisplayName();
-  const teamRef = await addDoc(collection(db, "teams"), {
+  const teamRef = doc(collection(db, "teams"));
+  const batch = writeBatch(db);
+
+  batch.set(teamRef, {
     name: input.name.trim(),
     sport: input.sport.trim(),
     ageRange: input.ageRange?.trim() ?? "",
@@ -119,7 +121,7 @@ export async function createTeam(input: TeamInput): Promise<Team> {
     updatedAt: serverTimestamp(),
   });
 
-  await setDoc(doc(db, "teams", teamRef.id, "members", user.uid), {
+  batch.set(doc(db, "teams", teamRef.id, "members", user.uid), {
     userId: user.uid,
     teamId: teamRef.id,
     displayName,
@@ -129,7 +131,19 @@ export async function createTeam(input: TeamInput): Promise<Team> {
     updatedAt: serverTimestamp(),
   });
 
-  await updateUserMode({ activeMode: "coach", defaultMode: "coach", activeTeamId: teamRef.id });
+  batch.set(
+    doc(db, "users", user.uid),
+    {
+      activeMode: "coach",
+      defaultMode: "coach",
+      activeTeamId: teamRef.id,
+      coachTeamIds: arrayUnion(teamRef.id),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  await batch.commit();
 
   const created = await getTeamById(teamRef.id);
   if (!created) {
@@ -173,6 +187,7 @@ export async function joinTeamByInviteCode(inviteCode: string): Promise<Team> {
     doc(db, "users", user.uid),
     {
       activeTeamId: teamDoc.id,
+      parentTeamIds: arrayUnion(teamDoc.id),
       updatedAt: serverTimestamp(),
     },
     { merge: true },

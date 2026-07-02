@@ -12,6 +12,7 @@ import {
   getCurrentUserTeamMemberships,
   getTeamMembers,
   isCoachRole,
+  switchActiveMode,
   switchActiveTeam,
   type Team,
   type TeamMembership,
@@ -79,7 +80,7 @@ export default function CoachTeamScreen() {
       router.replace({ pathname: "/coach/team", params: { teamId: team.id } } as never);
     } catch (nextError) {
       console.warn("[CoachTeam] create error:", nextError);
-      setError(nextError instanceof Error ? nextError.message : t("coach.team.error"));
+      setError(getCreateTeamErrorMessage(nextError, t));
     } finally {
       setSaving(false);
     }
@@ -109,17 +110,21 @@ export default function CoachTeamScreen() {
         {selectedTeam ? (
           <Card style={styles.cardGap}>
             <Text style={styles.cardTitle}>{selectedTeam.name}</Text>
-            <Text style={styles.cardText}>{[selectedTeam.sport, selectedTeam.ageRange, selectedTeam.division, selectedTeam.season].filter(Boolean).join(" • ")}</Text>
+            <Text style={styles.cardText}>{[selectedTeam.sport, selectedTeam.ageRange, selectedTeam.division, selectedTeam.season].filter(Boolean).join(" - ")}</Text>
+            <Text style={styles.successText}>{t("coach.team.youAreCoach")}</Text>
             <View style={styles.invitePanel}>
               <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
               <Text style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
             </View>
             <View style={styles.buttonRow}>
               <TouchableOpacity activeOpacity={0.86} onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: selectedTeam.id } } as never)} style={styles.primaryButton}>
-                <Text style={styles.primaryButtonText}>{t("coach.messages.title")}</Text>
+                <Text style={styles.primaryButtonText}>{t("coach.team.createMessage")}</Text>
               </TouchableOpacity>
-              <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/teams/join" as never)} style={styles.outlineButton}>
-                <Text style={styles.outlineButtonText}>{t("coach.team.joinTeam")}</Text>
+              <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/coach" as never)} style={styles.outlineButton}>
+                <Text style={styles.outlineButtonText}>{t("coach.team.viewTeam")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity activeOpacity={0.86} onPress={() => { setActiveMode("parent"); void switchActiveMode("parent"); }} style={styles.outlineButton}>
+                <Text style={styles.outlineButtonText}>{t("mode.switchToParent")}</Text>
               </TouchableOpacity>
             </View>
           </Card>
@@ -180,6 +185,14 @@ function MemberSection({ members, title }: { members: TeamMembership[]; title: s
   );
 }
 
+
+function getCreateTeamErrorMessage(error: unknown, t: (key: string) => string) {
+  if (typeof error === "object" && error && "code" in error && error.code === "permission-denied") {
+    return t("coach.team.createErrorBody");
+  }
+
+  return error instanceof Error ? error.message : t("coach.team.createErrorBody");
+}
 function normalizeParam(value?: string | string[]) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
@@ -193,6 +206,7 @@ const styles = StyleSheet.create({
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
   errorCard: { borderLeftColor: Colors.primary, borderLeftWidth: 4 },
   errorText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
+  successText: { color: Colors.accentGreen, fontFamily: Typography.bodyBold, textAlign: "center" },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
   invitePanel: { alignItems: "center", backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, padding: Spacing.md },

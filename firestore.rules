@@ -18,6 +18,16 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/squads/$(squadId)) &&
         request.auth.uid in get(/databases/$(database)/documents/squads/$(squadId)).data.memberIds;
     }
+    function isTeamMember(teamId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid)).data.status == "active";
+    }
+
+    function isTeamStaff(teamId) {
+      return isTeamMember(teamId) &&
+        get(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid)).data.role in ["coach", "assistantCoach", "teamParent"];
+    }
 
     // -----------------------------------------------------------------------
     // users collection
@@ -61,6 +71,49 @@ service cloud.firestore {
       allow delete: if false; // Never delete memberships — only deactivate
     }
 
+
+    // -----------------------------------------------------------------------
+    // teams collection
+    // Teams are private official coach/team spaces, separate from Squads.
+    // Authenticated users can create a team and their own coach membership.
+    // -----------------------------------------------------------------------
+    match /teams/{teamId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.auth.uid in request.resource.data.coachIds;
+      allow update: if isAuthenticated() && (
+        isTeamStaff(teamId) ||
+        request.auth.uid in request.resource.data.parentIds
+      );
+      allow delete: if false;
+
+      match /members/{userId} {
+        allow read: if isAuthenticated() && (isOwner(userId) || isTeamMember(teamId));
+        allow create: if isAuthenticated() &&
+          isOwner(userId) &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.status == "active" &&
+          request.resource.data.role in ["parent", "coach"];
+        allow update: if isAuthenticated() && (isOwner(userId) || isTeamStaff(teamId));
+        allow delete: if false;
+      }
+
+      match /announcements/{announcementId} {
+        allow read: if isTeamMember(teamId);
+        allow create: if isTeamStaff(teamId) &&
+          request.resource.data.createdBy == request.auth.uid;
+        allow update: if isTeamStaff(teamId);
+        allow delete: if false;
+
+        match /replies/{replyId} {
+          allow read: if isTeamMember(teamId);
+          allow create: if isTeamMember(teamId) &&
+            request.resource.data.userId == request.auth.uid;
+          allow update, delete: if false;
+        }
+      }
+    }
     // -----------------------------------------------------------------------
     // appConfig collection
     // Anyone authenticated can read. Only admin (server-side) can write.
