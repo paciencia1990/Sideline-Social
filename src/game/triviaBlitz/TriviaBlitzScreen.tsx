@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { onSnapshot, orderBy, query, Unsubscribe } from "firebase/firestore";
+import { useTranslation } from "react-i18next";
 
 import { GameEndActions } from "@/components/GameEndActions";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -33,43 +34,90 @@ const QUESTION_SECONDS = 15;
 const FALLBACK_PLAYER_NAME = "Player";
 
 export default function TriviaBlitzScreen() {
+  const { t } = useTranslation();
   const { user, firebaseUser } = useAuth();
-  const params = useLocalSearchParams<{ sessionId?: string | string[] }>();
-  const initialSessionId = normalizeParam(params.sessionId);
-  const [sessionId, setSessionId] = useState(initialSessionId);
-  const [joinCodeInput, setJoinCodeInput] = useState(initialSessionId);
+  const params = useLocalSearchParams<{
+    sessionId?: string | string[];
+    joinCode?: string | string[];
+    code?: string | string[];
+  }>();
+  const requestedSessionId = useMemo(
+    () => normalizeParam(params.sessionId) || normalizeParam(params.joinCode) || normalizeParam(params.code),
+    [params.code, params.joinCode, params.sessionId],
+  );
+  const [sessionId, setSessionId] = useState(requestedSessionId);
   const [playerId, setPlayerId] = useState("");
-  const [playerName, setPlayerName] = useState(FALLBACK_PLAYER_NAME);
   const [session, setSession] = useState<TriviaSession | null>(null);
   const [players, setPlayers] = useState<TriviaPlayer[]>([]);
   const [secondsRemaining, setSecondsRemaining] = useState(QUESTION_SECONDS);
   const [lastResult, setLastResult] = useState<ScoreResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const userEditedNameRef = useRef(false);
+  const [settingUp, setSettingUp] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupAttempt, setSetupAttempt] = useState(0);
+  const setupInFlightRef = useRef(false);
 
   const resolvedPlayerName = useMemo(
     () => resolvePlayerName(user?.displayName, firebaseUser?.displayName, user?.email ?? firebaseUser?.email),
     [firebaseUser?.displayName, firebaseUser?.email, user?.displayName, user?.email],
   );
-  const effectivePlayerName = useMemo(
-    () => getEffectivePlayerName(playerName, resolvedPlayerName),
-    [playerName, resolvedPlayerName],
-  );
 
   useEffect(() => {
-    if (userEditedNameRef.current) {
+    if (!requestedSessionId || playerId || requestedSessionId === sessionId) {
       return;
     }
 
-    setPlayerName((currentName) => {
-      const trimmedName = currentName.trim();
-      if (trimmedName && trimmedName !== FALLBACK_PLAYER_NAME) {
-        return currentName;
-      }
+    setSessionId(requestedSessionId);
+    setSession(null);
+    setPlayers([]);
+    setSetupError(null);
+  }, [playerId, requestedSessionId, sessionId]);
 
-      return resolvedPlayerName;
-    });
-  }, [resolvedPlayerName]);
+  useEffect(() => {
+    if (playerId || setupError || setupInFlightRef.current) {
+      return;
+    }
+
+    let isMounted = true;
+    const targetSessionId = requestedSessionId || sessionId;
+
+    setupInFlightRef.current = true;
+    setSettingUp(true);
+
+    async function setupTriviaSession() {
+      try {
+        const result = targetSessionId
+          ? await joinGameSession(targetSessionId, resolvedPlayerName)
+          : await createGameSession(resolvedPlayerName);
+
+        if (!isMounted) {
+          return;
+        }
+
+        setSessionId(result.sessionId);
+        setPlayerId(result.playerId);
+        setSetupError(null);
+        if (!requestedSessionId) {
+          router.replace({ pathname: "/games/trivia-blitz/play", params: { sessionId: result.sessionId } } as never);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setSetupError(getFirebaseErrorMessage(error));
+        }
+      } finally {
+        if (isMounted) {
+          setSettingUp(false);
+        }
+        setupInFlightRef.current = false;
+      }
+    }
+
+    void setupTriviaSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [playerId, requestedSessionId, resolvedPlayerName, sessionId, setupAttempt, setupError]);
 
   const self = useMemo(
     () => players.find((player) => player.id === playerId) ?? null,
@@ -133,10 +181,14 @@ export default function TriviaBlitzScreen() {
     return () => clearInterval(timer);
   }, [lastResult, session?.status]);
 
-  const handlePlayerNameChange = useCallback((value: string) => {
-    userEditedNameRef.current = true;
-    setPlayerName(value);
-  }, []);
+  const handleRetrySetup = useCallback(() => {
+    setSetupError(null);
+    setPlayerId("");
+    setSessionId(requestedSessionId);
+    setSession(null);
+    setPlayers([]);
+    setSetupAttempt((value) => value + 1);
+  }, [requestedSessionId]);
 
   const runAction = useCallback(async (action: () => Promise<void>) => {
     setBusy(true);
@@ -148,24 +200,6 @@ export default function TriviaBlitzScreen() {
       setBusy(false);
     }
   }, []);
-
-  const handleCreate = useCallback(() => {
-    runAction(async () => {
-      const created = await createGameSession(effectivePlayerName);
-      setSessionId(created.sessionId);
-      setJoinCodeInput(created.sessionId);
-      setPlayerId(created.playerId);
-    });
-  }, [effectivePlayerName, runAction]);
-
-  const handleJoin = useCallback(() => {
-    runAction(async () => {
-      const joined = await joinGameSession(joinCodeInput, effectivePlayerName);
-      setSessionId(joined.sessionId);
-      setJoinCodeInput(joined.sessionId);
-      setPlayerId(joined.playerId);
-    });
-  }, [effectivePlayerName, joinCodeInput, runAction]);
 
   const handleToggleReady = useCallback(() => {
     if (!sessionId || !self) {
@@ -232,30 +266,30 @@ export default function TriviaBlitzScreen() {
           <Text style={styles.subtitle}>Cooperative sideline trivia with rotating turns.</Text>
         </View>
 
-        {!sessionId || !session ? (
+        {setupError ? (
           <View style={styles.panel}>
-            <Text style={styles.sectionTitle}>Start or Join</Text>
-            <TextInput
-              style={styles.input}
-              value={playerName}
-              onChangeText={handlePlayerNameChange}
-              placeholder="Your name"
-              placeholderTextColor={Colors.textPrimary}
-            />
-            <Pressable style={styles.primaryButton} onPress={handleCreate} disabled={busy}>
-              <Text style={styles.primaryButtonText}>Create Session</Text>
-            </Pressable>
-            <TextInput
-              style={styles.input}
-              value={joinCodeInput}
-              onChangeText={setJoinCodeInput}
-              autoCapitalize="characters"
-              placeholder="Session code"
-              placeholderTextColor={Colors.textPrimary}
-            />
-            <Pressable style={styles.secondaryButton} onPress={handleJoin} disabled={busy}>
-              <Text style={styles.secondaryButtonText}>Join Session</Text>
-            </Pressable>
+            <Text style={styles.sectionTitle}>{t("trivia.setupErrorTitle")}</Text>
+            <Text style={styles.metaText}>{t("trivia.setupErrorBody")}</Text>
+            <Text style={styles.errorText}>{setupError}</Text>
+            <View style={styles.actionsRow}>
+              <Pressable style={styles.primaryButton} onPress={handleRetrySetup} disabled={busy || settingUp}>
+                <Text style={styles.primaryButtonText}>{t("trivia.tryAgain")}</Text>
+              </Pressable>
+              <Pressable style={styles.secondaryButton} onPress={() => router.replace("/(tabs)/games" as never)}>
+                <Text style={styles.secondaryButtonText}>{t("trivia.backToGames")}</Text>
+              </Pressable>
+              <Pressable style={styles.secondaryButton} onPress={() => router.replace("/(tabs)" as never)}>
+                <Text style={styles.secondaryButtonText}>{t("trivia.home")}</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {!setupError && (settingUp || !sessionId || !playerId || !session) ? (
+          <View style={styles.panel}>
+            <ActivityIndicator color={Colors.primary} />
+            <Text style={styles.sectionTitle}>{t("trivia.settingUp")}</Text>
+            <Text style={styles.metaText}>{resolvedPlayerName}</Text>
           </View>
         ) : null}
 
@@ -288,7 +322,7 @@ export default function TriviaBlitzScreen() {
             <Text style={styles.metaText}>
               Question {session.questionIndex + 1} of {session.selectedQuestions.length}
             </Text>
-            <Text style={styles.metaText}>Turn: {activePlayer?.name ?? "Player"}</Text>
+            <Text style={styles.metaText}>Turn: {activePlayer?.name ?? FALLBACK_PLAYER_NAME}</Text>
             <Text style={styles.timer}>{secondsRemaining}s</Text>
             <Text style={styles.category}>{currentQuestion.category}</Text>
             <Text style={styles.question}>{currentQuestion.question_en}</Text>
@@ -344,11 +378,8 @@ export default function TriviaBlitzScreen() {
 }
 
 function normalizeParam(value?: string | string[]) {
-  if (Array.isArray(value)) {
-    return value[0] ?? "";
-  }
-
-  return value ?? "";
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  return rawValue?.trim().toUpperCase() ?? "";
 }
 
 function resolvePlayerName(
@@ -367,15 +398,6 @@ function resolvePlayerName(
   }
 
   return FALLBACK_PLAYER_NAME;
-}
-
-function getEffectivePlayerName(playerName: string, resolvedPlayerName: string) {
-  const trimmedName = playerName.trim();
-  if (trimmedName && trimmedName !== FALLBACK_PLAYER_NAME) {
-    return trimmedName;
-  }
-
-  return resolvedPlayerName.trim() || FALLBACK_PLAYER_NAME;
 }
 
 const styles = StyleSheet.create({
@@ -411,16 +433,6 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodyBold,
     fontSize: 20,
     textAlign: "center",
-  },
-  input: {
-    backgroundColor: Colors.background,
-    borderColor: Colors.secondary,
-    borderRadius: 8,
-    borderWidth: 1,
-    color: Colors.textHeading,
-    fontFamily: Typography.bodyRegular,
-    minHeight: 48,
-    paddingHorizontal: Spacing.md,
   },
   actionsRow: {
     flexDirection: "row",
@@ -490,6 +502,12 @@ const styles = StyleSheet.create({
   metaText: {
     color: Colors.textPrimary,
     fontFamily: Typography.bodyMedium,
+    textAlign: "center",
+  },
+  errorText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyMedium,
+    lineHeight: 20,
     textAlign: "center",
   },
   timer: {

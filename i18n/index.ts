@@ -174,6 +174,14 @@ const resources = {
           cone: 'extra cone',
         },
       },
+      trivia: {
+        settingUp: 'Setting up Trivia Blitz...',
+        setupErrorTitle: 'Could not start Trivia Blitz',
+        setupErrorBody: 'We could not create or join the Trivia Blitz session. Try again or head back to Games.',
+        tryAgain: 'Try Again',
+        backToGames: 'Back to Games',
+        home: 'Home',
+      },
       games: {
         title: 'Games',
         subtitle: 'Quick games for sideline downtime',
@@ -578,6 +586,14 @@ const resources = {
           bottle: 'botella extra',
           cone: 'cono extra',
         },
+      },
+      trivia: {
+        settingUp: 'Preparando Trivia Blitz...',
+        setupErrorTitle: 'No se pudo iniciar Trivia Blitz',
+        setupErrorBody: 'No pudimos crear o unirnos a la sala de Trivia Blitz. Intenta de nuevo o vuelve a Juegos.',
+        tryAgain: 'Intentar de nuevo',
+        backToGames: 'Volver a Juegos',
+        home: 'Inicio',
       },
       games: {
         title: 'Juegos',
