@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   GestureResponderEvent,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,78 +13,74 @@ import { useTranslation } from "react-i18next";
 import { GameEndActions } from "@/components/GameEndActions";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
-
-type DifferenceZone = {
-  id: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  label: string;
-};
-
-type SpotDifferencePuzzle = {
-  id: string;
-  titleKey: string;
-  differences: DifferenceZone[];
-};
+import {
+  playableSpotDifferenceScenes,
+  spotDifferenceScenes,
+  type SpotDifferencePoint,
+  type SpotDifferenceScene,
+} from "@/src/game/spotDifference/spotDifferenceScenes";
 
 type SceneSize = {
   width: number;
   height: number;
 };
 
-const ROUND_SECONDS = 90;
-
-const PUZZLE: SpotDifferencePuzzle = {
-  id: "sideline-warmup",
-  titleKey: "spot.puzzleTitle",
-  differences: [
-    { id: "sun", x: 76, y: 8, width: 16, height: 16, label: "spot.differences.sun" },
-    { id: "score", x: 42, y: 13, width: 18, height: 13, label: "spot.differences.score" },
-    { id: "ball", x: 59, y: 67, width: 16, height: 14, label: "spot.differences.ball" },
-    { id: "bottle", x: 15, y: 61, width: 13, height: 22, label: "spot.differences.bottle" },
-    { id: "cone", x: 75, y: 50, width: 13, height: 19, label: "spot.differences.cone" },
-  ],
+type ImageRect = {
+  width: number;
+  height: number;
+  offsetX: number;
+  offsetY: number;
 };
+
+const ROUND_SECONDS = 90;
 
 export default function SpotDifferenceScreen() {
   const { t } = useTranslation();
+  const [usedSceneIds, setUsedSceneIds] = useState<string[]>([]);
+  const [currentScene, setCurrentScene] = useState<SpotDifferenceScene | null>(() => selectNextScene([]));
   const [foundIds, setFoundIds] = useState<string[]>([]);
   const [secondsLeft, setSecondsLeft] = useState(ROUND_SECONDS);
   const [feedback, setFeedback] = useState(t("spot.instructions"));
   const [sceneSize, setSceneSize] = useState<SceneSize>({ width: 0, height: 0 });
 
   const foundSet = useMemo(() => new Set(foundIds), [foundIds]);
-  const isComplete = foundIds.length === PUZZLE.differences.length;
+  const differences = currentScene?.differences ?? [];
+  const isComplete = currentScene ? foundIds.length === differences.length : false;
   const elapsedSeconds = ROUND_SECONDS - secondsLeft;
+  const imageRect = currentScene ? getContainedImageRect(sceneSize, currentScene) : null;
 
   useEffect(() => {
-    if (isComplete || secondsLeft <= 0) {
+    if (isComplete || secondsLeft <= 0 || !currentScene) {
       return;
     }
 
     const timer = setTimeout(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
     return () => clearTimeout(timer);
-  }, [isComplete, secondsLeft]);
+  }, [currentScene, isComplete, secondsLeft]);
 
   const resetGame = useCallback(() => {
+    const nextUsedIds = currentScene ? [...usedSceneIds, currentScene.id] : usedSceneIds;
+    const nextScene = selectNextScene(nextUsedIds);
+
     setFoundIds([]);
     setSecondsLeft(ROUND_SECONDS);
     setFeedback(t("spot.instructions"));
-  }, [t]);
+    setCurrentScene(nextScene);
+    setUsedSceneIds(nextScene && nextUsedIds.length < playableSpotDifferenceScenes.length ? nextUsedIds : []);
+  }, [currentScene, t, usedSceneIds]);
 
   const handleScenePress = useCallback((event: GestureResponderEvent) => {
-    if (isComplete || !sceneSize.width || !sceneSize.height) {
+    if (isComplete || !currentScene || !imageRect) {
       return;
     }
 
-    const tapX = (event.nativeEvent.locationX / sceneSize.width) * 100;
-    const tapY = (event.nativeEvent.locationY / sceneSize.height) * 100;
-    const match = PUZZLE.differences.find((zone) => {
-      return tapX >= zone.x && tapX <= zone.x + zone.width && tapY >= zone.y && tapY <= zone.y + zone.height;
-    });
+    const tap = toNormalizedImagePoint(event.nativeEvent.locationX, event.nativeEvent.locationY, imageRect);
+    if (!tap) {
+      setFeedback(t("spot.missed"));
+      return;
+    }
 
+    const match = currentScene.differences.find((zone) => isInsideDifference(tap.x, tap.y, zone));
     if (!match) {
       setFeedback(t("spot.missed"));
       return;
@@ -95,21 +92,32 @@ export default function SpotDifferenceScreen() {
     }
 
     setFoundIds((current) => [...current, match.id]);
-    setFeedback(t("spot.found", { label: t(match.label) }));
-  }, [foundSet, isComplete, sceneSize.height, sceneSize.width, t]);
+    setFeedback(t("spot.found", { label: match.label ?? match.id.replace("difference_", "#") }));
+  }, [currentScene, foundSet, imageRect, isComplete, t]);
+
+  if (!currentScene) {
+    return (
+      <ScreenWrapper>
+        <View style={styles.emptyState}>
+          <Text style={styles.resultTitle}>Spot the Difference</Text>
+          <Text style={styles.resultText}>No valid Spot the Difference scenes are available. Check the scene JSON files in development logs.</Text>
+        </View>
+      </ScreenWrapper>
+    );
+  }
 
   return (
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <Text style={styles.kicker}>{t("games.spotDifference.title")}</Text>
-          <Text style={styles.title}>{t(PUZZLE.titleKey)}</Text>
+          <Text style={styles.title}>{currentScene.title}</Text>
           <Text style={styles.subtitle}>{t("spot.subtitle")}</Text>
         </View>
 
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
-            <Text style={styles.statValue}>{t("spot.progress", { found: foundIds.length, total: PUZZLE.differences.length })}</Text>
+            <Text style={styles.statValue}>{t("spot.progress", { found: foundIds.length, total: differences.length })}</Text>
             <Text style={styles.statLabel}>{t("spot.progressLabel")}</Text>
           </View>
           <View style={styles.statCard}>
@@ -121,15 +129,25 @@ export default function SpotDifferenceScreen() {
         <Text style={styles.instructions}>{feedback}</Text>
 
         <View style={styles.scenesWrap}>
-          <SceneCard title={t("spot.original")} variant="original" foundSet={foundSet} />
+          <SceneCard scene={currentScene} title={t("spot.original")} variant="original" foundSet={foundSet} imageRect={imageRect} />
           <SceneCard
+            scene={currentScene}
             title={t("spot.changed")}
             variant="changed"
             foundSet={foundSet}
+            imageRect={imageRect}
             onLayout={(size) => setSceneSize(size)}
             onPress={handleScenePress}
           />
         </View>
+
+        {__DEV__ && currentScene.validationWarnings.length > 0 ? (
+          <View style={styles.devPanel}>
+            {currentScene.validationWarnings.map((warning) => (
+              <Text key={warning} style={styles.devText}>{warning}</Text>
+            ))}
+          </View>
+        ) : null}
 
         {isComplete ? (
           <View style={styles.resultPanel}>
@@ -140,7 +158,7 @@ export default function SpotDifferenceScreen() {
         ) : secondsLeft <= 0 ? (
           <View style={styles.resultPanel}>
             <Text style={styles.resultTitle}>{t("spot.timeUpTitle")}</Text>
-            <Text style={styles.resultText}>{t("spot.timeUpBody", { found: foundIds.length, total: PUZZLE.differences.length })}</Text>
+            <Text style={styles.resultText}>{t("spot.timeUpBody", { found: foundIds.length, total: differences.length })}</Text>
             <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/spot-the-difference/Lobby" />
           </View>
         ) : null}
@@ -151,48 +169,33 @@ export default function SpotDifferenceScreen() {
 
 function SceneCard({
   foundSet,
+  imageRect,
   onLayout,
   onPress,
+  scene,
   title,
   variant,
 }: {
   foundSet: Set<string>;
+  imageRect: ImageRect | null;
   onLayout?: (size: SceneSize) => void;
   onPress?: (event: GestureResponderEvent) => void;
+  scene: SpotDifferenceScene;
   title: string;
   variant: "original" | "changed";
 }) {
-  const scene = (
+  const image = (
     <View
-      style={styles.scene}
+      style={[styles.scene, { aspectRatio: scene.sourceWidth / scene.sourceHeight }]}
       onLayout={(event) => {
         const { height, width } = event.nativeEvent.layout;
         onLayout?.({ height, width });
       }}
     >
-      {/* TODO: Swap this built-in scalable scene for final Spot the Difference artwork when assets are available. */}
-      <View style={styles.sky} />
-      {variant === "original" ? <View style={styles.sun} /> : null}
-      <View style={styles.field} />
-      <View style={styles.sideline} />
-      <View style={styles.cloudLeft} />
-      <View style={styles.cloudRight} />
-      <View style={styles.scoreboard}>
-        <Text style={styles.scoreText}>{variant === "original" ? "2-1" : "3-1"}</Text>
-      </View>
-      <View style={styles.bleachers}>
-        <View style={styles.bleacherRow} />
-        <View style={styles.bleacherRow} />
-        <View style={styles.bleacherRow} />
-      </View>
-      <View style={[styles.player, styles.playerOne]} />
-      <View style={[styles.player, styles.playerTwo]} />
-      <View style={[styles.ball, variant === "original" ? styles.ballOriginal : styles.ballChanged]} />
-      {variant === "changed" ? <View style={styles.waterBottle} /> : null}
-      {variant === "changed" ? <View style={styles.cone} /> : null}
-      {PUZZLE.differences.map((zone) => (
-        foundSet.has(zone.id) ? <FoundMarker key={zone.id} zone={zone} /> : null
-      ))}
+      <Image source={variant === "original" ? scene.imageA : scene.imageB} style={styles.sceneImage} resizeMode="contain" />
+      {imageRect ? scene.differences.map((zone) => (
+        foundSet.has(zone.id) ? <FoundMarker key={zone.id} zone={zone} imageRect={imageRect} /> : null
+      )) : null}
     </View>
   );
 
@@ -201,26 +204,31 @@ function SceneCard({
       <Text style={styles.sceneTitle}>{title}</Text>
       {onPress ? (
         <Pressable onPress={onPress} style={styles.scenePressable}>
-          {scene}
+          {image}
         </Pressable>
       ) : (
-        scene
+        image
       )}
     </View>
   );
 }
 
-function FoundMarker({ zone }: { zone: DifferenceZone }) {
+function FoundMarker({ imageRect, zone }: { imageRect: ImageRect; zone: SpotDifferencePoint }) {
+  const radius = zone.radius * Math.min(imageRect.width, imageRect.height);
+  const centerX = imageRect.offsetX + zone.x * imageRect.width;
+  const centerY = imageRect.offsetY + zone.y * imageRect.height;
+
   return (
     <View
       pointerEvents="none"
       style={[
         styles.foundMarker,
         {
-          height: `${zone.height}%`,
-          left: `${zone.x}%`,
-          top: `${zone.y}%`,
-          width: `${zone.width}%`,
+          borderRadius: radius,
+          height: radius * 2,
+          left: centerX - radius,
+          top: centerY - radius,
+          width: radius * 2,
         },
       ]}
     >
@@ -229,11 +237,66 @@ function FoundMarker({ zone }: { zone: DifferenceZone }) {
   );
 }
 
+function selectNextScene(usedSceneIds: string[]) {
+  const availableScenes = playableSpotDifferenceScenes.length > 0 ? playableSpotDifferenceScenes : spotDifferenceScenes.filter((scene) => scene.differences.length > 0);
+  const unusedScenes = availableScenes.filter((scene) => !usedSceneIds.includes(scene.id));
+  const scenePool = unusedScenes.length > 0 ? unusedScenes : availableScenes;
+
+  if (scenePool.length === 0) {
+    return null;
+  }
+
+  return scenePool[Math.floor(Math.random() * scenePool.length)];
+}
+
+function getContainedImageRect(container: SceneSize, scene: SpotDifferenceScene): ImageRect | null {
+  if (!container.width || !container.height) {
+    return null;
+  }
+
+  const scale = Math.min(container.width / scene.sourceWidth, container.height / scene.sourceHeight);
+  const width = scene.sourceWidth * scale;
+  const height = scene.sourceHeight * scale;
+
+  return {
+    width,
+    height,
+    offsetX: (container.width - width) / 2,
+    offsetY: (container.height - height) / 2,
+  };
+}
+
+function toNormalizedImagePoint(locationX: number, locationY: number, imageRect: ImageRect) {
+  const imageX = locationX - imageRect.offsetX;
+  const imageY = locationY - imageRect.offsetY;
+
+  if (imageX < 0 || imageY < 0 || imageX > imageRect.width || imageY > imageRect.height) {
+    return null;
+  }
+
+  return {
+    x: imageX / imageRect.width,
+    y: imageY / imageRect.height,
+  };
+}
+
+function isInsideDifference(tapX: number, tapY: number, zone: SpotDifferencePoint) {
+  const distance = Math.hypot(tapX - zone.x, tapY - zone.y);
+  return distance <= zone.radius;
+}
+
 const styles = StyleSheet.create({
   content: {
     gap: Spacing.md,
     padding: Spacing.lg,
     paddingBottom: Spacing.xxl,
+  },
+  emptyState: {
+    alignItems: "center",
+    flex: 1,
+    gap: Spacing.md,
+    justifyContent: "center",
+    padding: Spacing.xl,
   },
   header: {
     alignItems: "center",
@@ -309,152 +372,19 @@ const styles = StyleSheet.create({
     borderRadius: Radius.sm,
   },
   scene: {
-    aspectRatio: 1.62,
-    backgroundColor: "#BFDCEC",
+    backgroundColor: Colors.background,
     borderRadius: Radius.sm,
-    minHeight: 205,
     overflow: "hidden",
     position: "relative",
     width: "100%",
   },
-  sky: {
-    backgroundColor: "#BFDCEC",
-    height: "56%",
+  sceneImage: {
+    height: "100%",
     width: "100%",
-  },
-  sun: {
-    backgroundColor: Colors.accentGold,
-    borderRadius: 16,
-    height: 32,
-    position: "absolute",
-    right: "10%",
-    top: "7%",
-    width: 32,
-  },
-  field: {
-    backgroundColor: Colors.accentGreen,
-    bottom: 0,
-    height: "47%",
-    left: 0,
-    position: "absolute",
-    right: 0,
-  },
-  sideline: {
-    backgroundColor: Colors.surface,
-    bottom: "23%",
-    height: 4,
-    left: "8%",
-    position: "absolute",
-    right: "8%",
-  },
-  cloudLeft: {
-    backgroundColor: Colors.surface,
-    borderRadius: 18,
-    height: 28,
-    left: "10%",
-    opacity: 0.88,
-    position: "absolute",
-    top: "12%",
-    width: 82,
-  },
-  cloudRight: {
-    backgroundColor: Colors.surface,
-    borderRadius: 14,
-    height: 22,
-    left: "25%",
-    opacity: 0.85,
-    position: "absolute",
-    top: "20%",
-    width: 58,
-  },
-  scoreboard: {
-    alignItems: "center",
-    backgroundColor: Colors.textHeading,
-    borderColor: Colors.secondary,
-    borderRadius: 4,
-    borderWidth: 2,
-    height: "13%",
-    justifyContent: "center",
-    left: "42%",
-    position: "absolute",
-    top: "12%",
-    width: "18%",
-  },
-  scoreText: {
-    color: Colors.surface,
-    fontFamily: Typography.bodyBold,
-    fontSize: 14,
-  },
-  bleachers: {
-    gap: 5,
-    left: "9%",
-    position: "absolute",
-    top: "38%",
-    width: "28%",
-  },
-  bleacherRow: {
-    backgroundColor: Colors.secondary,
-    borderRadius: 3,
-    height: 7,
-  },
-  player: {
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
-    height: 24,
-    position: "absolute",
-    width: 24,
-  },
-  playerOne: {
-    bottom: "28%",
-    left: "42%",
-  },
-  playerTwo: {
-    bottom: "34%",
-    right: "22%",
-  },
-  ball: {
-    backgroundColor: Colors.surface,
-    borderColor: Colors.textHeading,
-    borderRadius: 9,
-    borderWidth: 2,
-    height: 18,
-    position: "absolute",
-    width: 18,
-  },
-  ballOriginal: {
-    bottom: "18%",
-    left: "50%",
-  },
-  ballChanged: {
-    bottom: "24%",
-    left: "63%",
-  },
-  waterBottle: {
-    backgroundColor: "#2563EB",
-    borderRadius: 4,
-    bottom: "17%",
-    height: 36,
-    left: "18%",
-    position: "absolute",
-    width: 14,
-  },
-  cone: {
-    borderBottomColor: Colors.primary,
-    borderBottomWidth: 36,
-    borderLeftColor: "transparent",
-    borderLeftWidth: 15,
-    borderRightColor: "transparent",
-    borderRightWidth: 15,
-    bottom: "30%",
-    height: 0,
-    position: "absolute",
-    right: "12%",
-    width: 0,
   },
   foundMarker: {
     alignItems: "center",
     borderColor: Colors.primary,
-    borderRadius: 999,
     borderWidth: 3,
     justifyContent: "center",
     position: "absolute",
@@ -463,6 +393,19 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontFamily: Typography.bodyBold,
     fontSize: 11,
+  },
+  devPanel: {
+    backgroundColor: Colors.surface,
+    borderColor: Colors.primary,
+    borderRadius: Radius.card,
+    borderWidth: 1,
+    gap: 4,
+    padding: Spacing.md,
+  },
+  devText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyRegular,
+    fontSize: 12,
   },
   resultPanel: {
     alignItems: "center",
