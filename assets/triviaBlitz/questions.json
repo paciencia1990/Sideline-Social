@@ -143,22 +143,8 @@
     "options_es": ["Infancia", "Etapa de deambuladores", "Adolescencia", "Era preescolar"],
     "answer": 2
   },
-  {
-    "category": "Parenting & Family",
-    "question_en": "What milestone is a toddler celebrating when they finally switch from diapers to using the bathroom like a big kid?",
-    "question_es": "¿Qué hito celebra un niño pequeño cuando finalmente deja los pañales y usa el baño como un niño grande?",
-    "options_en": ["First steps", "Potty training", "Weaning off formula", "Shedding baby teeth"],
-    "options_es": ["Primeros pasos", "Control de esfínteres", "Destete de fórmula", "Caída de dientes de leche"],
-    "answer": 1
-  },
-  {
-    "category": "Parenting & Family",
-    "question_en": "In family household routines, what is a common card or board showing daily responsibilities like feeding pets or making beds?",
-    "question_es": "En las rutinas del hogar, ¿cómo se llama a la tabla común que detalla responsabilidades como alimentar mascotas o hacer camas?",
-    "options_en": ["A Chore chart", "A Reward system", "A Duty log", "A House list"],
-    "options_es": ["Tabla de tareas (Chore chart)", "Sistema de recompensas", "Registro de deberes", "Lista de la casa"],
-    "answer": 0
-  },
+
+  
   {
     "category": "Parenting & Family",
     "question_en": "When a child loses a baby tooth, which mythical character is said to visit overnight and swap the tooth for money or coins?",
@@ -167,52 +153,14 @@
     "options_es": ["El hombre de arena", "El Hada de los Dientes o el Ratón Pérez", "El elfo de los deseos", "El tejedor de sueños"],
     "answer": 1
   },
-  {
-    "category": "Parenting & Family",
-    "question_en": "What is the classic name of the soothing, gentle songs parents sing to help babies sleep peacefully?",
-    "question_es": "¿Cuál es el nombre clásico de las canciones relajantes que los padres cantan para ayudar a los bebés a dormir plácidamente?",
-    "options_en": ["Anthems", "Operettas", "Lullabies", "Ballads"],
-    "options_es": ["Himnos", "Operetas", "Nanas o Canciones de cuna", "Baladas"],
-    "answer": 2
-  },
-  {
-    "category": "Parenting & Family",
-    "question_en": "What common sleepover item allows children to camp out on a living room floor while inside an insulated fabric envelope?",
-    "question_es": "¿Qué artículo de acampada nocturna permite dormir en el suelo del salón dentro de un sobre de tela térmica y acolchada?",
-    "options_en": ["Air mattress", "Sleeping bag", "Canvas sheet", "Fleece blanket"],
-    "options_es": ["Colchón de aire", "Saco de dormir (Sleeping bag)", "Lona", "Manta polar"],
-    "answer": 1
-  },
-  {
-    "category": "Parenting & Family",
-    "question_en": "Which of these is a widely-used parenting strategy of temporarily removing an overstimulated child to a quiet area?",
-    "question_es": "¿Cuál de estas es una estrategia de crianza muy utilizada para retirar temporalmente a un niño sobreestimulado a una zona tranquila?",
-    "options_en": ["Grounding", "A Time-out", "Quiet hour", "Privilege loss"],
-    "options_es": ["Castigo de salida", "Un tiempo fuera (Time-out)", "Hora silenciosa", "Pérdida de privilegios"],
-    "answer": 1
-  },
+ 
+
   {
     "category": "Parenting & Family",
     "question_en": "What is considered the standard sequence of early motor movements in healthy babies before they learn to crawl and walk?",
     "question_es": "¿Cuál se considera la secuencia motriz estándar del desarrollo de un bebé sano antes de gatear y caminar?",
     "options_en": ["Climbing, running", "Sitting, rolling over", "Dancing, standing", "Talking, pointing"],
     "options_es": ["Escalar, correr", "Sentarse, darse la vuelta", "Bailar, ponerse de pie", "Hablar, señalar"],
-    "answer": 1
-  },
-  {
-    "category": "Parenting & Family",
-    "question_en": "Which common household game involves children taking turns hiding in various spots while one person counts with closed eyes?",
-    "question_es": "¿Qué juego infantil consiste en buscar escondites mientras una persona cuenta hasta diez con los ojos cerrados?",
-    "options_en": ["Tag", "Hide and Seek", "Simon Says", "Red Light, Green Light"],
-    "options_es": ["Tula (Tag)", "El Escondite", "Simón dice", "Luz roja, luz verde"],
-    "answer": 1
-  },
-  {
-    "category": "Parenting & Family",
-    "question_en": "What is the term for a scheduled social gathering where babies or young children get together to play and socialize?",
-    "question_es": "¿Cómo se llama a la reunión social programada donde bebés o niños pequeños se juntan para jugar y socializar?",
-    "options_en": ["Youth forum", "A Playdate", "Family dinner", "Preschool prep"],
-    "options_es": ["Foro juvenil", "Una cita de juegos (Playdate)", "Cena familiar", "Preparatoria escolar"],
     "answer": 1
   },
   {
@@ -231,30 +179,7 @@
     "options_es": ["Slime", "Arcilla", "Play-Doh", "Arena cinética"],
     "answer": 2
   },
-  {
-    "category": "Parenting & Family",
-    "question_en": "What is the affectionate name given to the soft, comforting plush animal or blanket a child carries around for security?",
-    "question_es": "¿Qué nombre cariñoso recibe el peluche o mantita suave que un niño lleva consigo para sentirse seguro?",
-    "options_en": ["A Lovey or Security Blanket", "A Pajama set", "A Toddler kit", "A Sleep buddy"],
-    "options_es": ["Objeto de apego o mantita de seguridad", "Pijama", "Kit de niño pequeño", "Compañero de sueño"],
-    "answer": 0
-  },
-  {
-    "category": "Parenting & Family",
-    "question_en": "Which of these milestones represents a baby's transition from consuming formula or milk to eating blended solid food?",
-    "question_es": "¿Cuál de estos hitos representa el inicio de la transición de un bebé de la leche o fórmula a probar frutas y verduras trituradas?",
-    "options_en": ["First laughter", "Starting solid foods", "Teething age", "Crawling start"],
-    "options_es": ["Primera risa", "Inicio de alimentación complementaria (sólidos)", "Etapa de dentición", "Inicio de gateo"],
-    "answer": 1
-  },
-  {
-    "category": "Parenting & Family",
-    "question_en": "When compiling kids' lunches, what classic bread-spread combination is considered an school-lunch staple?",
-    "question_es": "Para las meriendas de los niños en el colegio, ¿qué clásica combinación untada en pan es la más icónica?",
-    "options_en": ["Ham and Cheese", "Turkey Club", "Peanut butter and jelly (PB&J)", "BLT sandwich"],
-    "options_es": ["Sándwich de jamón y queso", "Sándwich de pavo", "Crema de cacahuete y mermelada (PB&J)", "Sándwich BLT"],
-    "answer": 2
-  },
+  
   {
     "category": "Parenting & Family",
     "question_en": "What is the name of the traditional yard game where children try to toss bean bags through holes in slanted wooden boards?",
@@ -398,5 +323,166 @@
     "options_en": ["The Lusitania", "The Titanic", "The Britannic", "The Queen Mary"],
     "options_es": ["El Lusitania", "El Titanic", "El Britannic", "El Queen Mary"],
     "answer": 1
+  }
+][
+  {
+    "category": "Pop Culture",
+    "question_en": "Which film became the first winner of the Academy Award for Best Animated Feature?",
+    "question_es": "¿Qué película se convirtió en la primera ganadora del Premio de la Academia a la Mejor Película Animada?",
+    "options_en": ["Toy Story", "Beauty and the Beast", "Shrek", "Spirited Away"],
+    "options_es": ["Toy Story", "La Bella y la Bestia", "Shrek", "El viaje de Chihiro"],
+    "answer": 2
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Which singer was born with the name Stefani Germanotta?",
+    "question_es": "¿Qué cantante nació con el nombre Stefani Germanotta?",
+    "options_en": ["Katy Perry", "Lady Gaga", "Adele", "Pink"],
+    "options_es": ["Katy Perry", "Lady Gaga", "Adele", "Pink"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In Game of Thrones, which family's motto is 'Winter Is Coming'?",
+    "question_es": "En Game of Thrones, ¿qué familia tiene como lema 'Se acerca el invierno'?",
+    "options_en": ["House Stark", "House Lannister", "House Targaryen", "House Baratheon"],
+    "options_es": ["Casa Stark", "Casa Lannister", "Casa Targaryen", "Casa Baratheon"],
+    "answer": 0
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "What is the name of the fictional African nation in Black Panther?",
+    "question_es": "¿Cómo se llama la nación africana ficticia de Black Panther?",
+    "options_en": ["Zamunda", "Genovia", "Wakanda", "Sokovia"],
+    "options_es": ["Zamunda", "Genovia", "Wakanda", "Sokovia"],
+    "answer": 2
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Which musician created the alter ego Ziggy Stardust?",
+    "question_es": "¿Qué músico creó el alter ego Ziggy Stardust?",
+    "options_en": ["Elton John", "Freddie Mercury", "Prince", "David Bowie"],
+    "options_es": ["Elton John", "Freddie Mercury", "Prince", "David Bowie"],
+    "answer": 3
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In which television series do characters enter a mysterious dimension called the Upside Down?",
+    "question_es": "¿En qué serie de televisión entran los personajes a una dimensión misteriosa llamada el Mundo del Revés?",
+    "options_en": ["The Umbrella Academy", "Stranger Things", "Wednesday", "The Last of Us"],
+    "options_es": ["The Umbrella Academy", "Stranger Things", "Wednesday", "The Last of Us"],
+    "answer": 1
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Lara Croft is the main character of which video game franchise?",
+    "question_es": "¿Lara Croft es la protagonista de qué franquicia de videojuegos?",
+    "options_en": ["Tomb Raider", "Uncharted", "Resident Evil", "Final Fantasy"],
+    "options_es": ["Tomb Raider", "Uncharted", "Resident Evil", "Final Fantasy"],
+    "answer": 0
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In The Hunger Games, Katniss Everdeen comes from which district?",
+    "question_es": "En Los juegos del hambre, ¿de qué distrito proviene Katniss Everdeen?",
+    "options_en": ["District 4", "District 7", "District 12", "District 13"],
+    "options_es": ["Distrito 4", "Distrito 7", "Distrito 12", "Distrito 13"],
+    "answer": 2
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "Which animated Disney film follows the magical Madrigal family?",
+    "question_es": "¿Qué película animada de Disney sigue a la mágica familia Madrigal?",
+    "options_en": ["Coco", "Moana", "Turning Red", "Encanto"],
+    "options_es": ["Coco", "Moana", "Red", "Encanto"],
+    "answer": 3
+  },
+  {
+    "category": "Pop Culture",
+    "question_en": "In The Lord of the Rings, where must the One Ring be destroyed?",
+    "question_es": "En El Señor de los Anillos, ¿dónde debe ser destruido el Anillo Único?",
+    "options_en": ["The Lonely Mountain", "Mount Doom", "Helm's Deep", "The Misty Mountains"],
+    "options_es": ["La Montaña Solitaria", "El Monte del Destino", "El Abismo de Helm", "Las Montañas Nubladas"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "The technique known as the Fosbury Flop is used in which track-and-field event?",
+    "question_es": "¿En qué prueba de atletismo se utiliza la técnica conocida como Fosbury Flop?",
+    "options_en": ["Pole vault", "Long jump", "High jump", "Triple jump"],
+    "options_es": ["Salto con pértiga", "Salto de longitud", "Salto de altura", "Triple salto"],
+    "answer": 2
+  },
+  {
+    "category": "Sports",
+    "question_en": "In which sporting event does the overall leader traditionally wear a yellow jersey?",
+    "question_es": "¿En qué evento deportivo el líder general viste tradicionalmente una camiseta amarilla?",
+    "options_en": ["Tour de France", "Indianapolis 500", "Boston Marathon", "America's Cup"],
+    "options_es": ["Tour de Francia", "500 Millas de Indianápolis", "Maratón de Boston", "Copa América de vela"],
+    "answer": 0
+  },
+  {
+    "category": "Sports",
+    "question_en": "During the 1980 'Miracle on Ice,' the United States hockey team defeated which country?",
+    "question_es": "Durante el 'Milagro sobre Hielo' de 1980, ¿a qué país derrotó el equipo de hockey de Estados Unidos?",
+    "options_en": ["Canada", "Soviet Union", "Sweden", "Finland"],
+    "options_es": ["Canadá", "Unión Soviética", "Suecia", "Finlandia"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "In cricket, what does it mean when a batter is dismissed for a duck?",
+    "question_es": "En el críquet, ¿qué significa que un bateador sea eliminado con un duck?",
+    "options_en": ["They missed three balls", "They hit the ball out of bounds", "They scored one run", "They scored zero runs"],
+    "options_es": ["Falló tres lanzamientos", "Golpeó la pelota fuera del campo", "Anotó una carrera", "Anotó cero carreras"],
+    "answer": 3
+  },
+  {
+    "category": "Sports",
+    "question_en": "Which tennis player completed the only calendar-year Golden Slam in 1988?",
+    "question_es": "¿Qué tenista completó el único Golden Slam en un mismo año calendario en 1988?",
+    "options_en": ["Martina Navratilova", "Serena Williams", "Steffi Graf", "Chris Evert"],
+    "options_es": ["Martina Navratilova", "Serena Williams", "Steffi Graf", "Chris Evert"],
+    "answer": 2
+  },
+  {
+    "category": "Sports",
+    "question_en": "What must happen for a pitcher to record a perfect game in baseball?",
+    "question_es": "¿Qué debe ocurrir para que un lanzador consiga un juego perfecto en el béisbol?",
+    "options_en": ["No opposing batter reaches base", "The pitcher strikes out every batter", "The pitcher allows only one hit", "The pitcher's team scores in every inning"],
+    "options_es": ["Ningún bateador rival llega a una base", "El lanzador poncha a todos los bateadores", "El lanzador permite solamente un hit", "El equipo del lanzador anota en cada entrada"],
+    "answer": 0
+  },
+  {
+    "category": "Sports",
+    "question_en": "The Ryder Cup is an international competition in which sport?",
+    "question_es": "¿La Ryder Cup es una competencia internacional de qué deporte?",
+    "options_en": ["Tennis", "Golf", "Cricket", "Polo"],
+    "options_es": ["Tenis", "Golf", "Críquet", "Polo"],
+    "answer": 1
+  },
+  {
+    "category": "Sports",
+    "question_en": "Which city hosted the first modern Olympic Games in 1896?",
+    "question_es": "¿Qué ciudad fue sede de los primeros Juegos Olímpicos modernos en 1896?",
+    "options_en": ["Paris", "London", "Rome", "Athens"],
+    "options_es": ["París", "Londres", "Roma", "Atenas"],
+    "answer": 3
+  },
+  {
+    "category": "Sports",
+    "question_en": "The 24 Hours of Le Mans is best known as what type of competition?",
+    "question_es": "¿Las 24 Horas de Le Mans son conocidas principalmente como qué tipo de competencia?",
+    "options_en": ["Motorcycle rally", "Sailing race", "Endurance automobile race", "Cycling time trial"],
+    "options_es": ["Rally de motocicletas", "Carrera de vela", "Carrera automovilística de resistencia", "Contrarreloj de ciclismo"],
+    "answer": 2
+  },
+  {
+    "category": "Sports",
+    "question_en": "The Vince Lombardi Trophy is awarded to the winner of which championship?",
+    "question_es": "¿El Trofeo Vince Lombardi se entrega al ganador de qué campeonato?",
+    "options_en": ["The Super Bowl", "The World Series", "The Stanley Cup Final", "The NBA Finals"],
+    "options_es": ["El Super Bowl", "La Serie Mundial", "La Final de la Copa Stanley", "Las Finales de la NBA"],
+    "answer": 0
   }
 ]
