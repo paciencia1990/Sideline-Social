@@ -263,7 +263,7 @@ const resources = {
         results: 'Results',
       },
       spot: {
-        title: 'Spot the Difference',
+        title: 'Spot the Differences',
         puzzleTitle: 'Sideline Warmup',
         subtitle: 'Find every change in the right-hand scene before time runs out.',
         instructions: 'Tap the changed scene anywhere you spot a difference.',
@@ -329,7 +329,7 @@ const resources = {
           desc: "Work together — don't let it blow!",
         },
         spotDifference: {
-          title: 'Spot the Difference',
+          title: 'Spot the Differences',
           desc: 'Two teams, one image, ten differences. Find them first!',
         },
         triviaBlitz: {

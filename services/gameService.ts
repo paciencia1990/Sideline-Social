@@ -288,7 +288,7 @@ export function getGameLabel(gameType: GameType): string {
     case "bomb_defusal":
       return "Bomb Defusal";
     case "spot_difference":
-      return "Spot the Difference";
+      return "Spot the Differences";
     case "trivia_blitz":
       return "Trivia Blitz";
   }

@@ -154,8 +154,8 @@ export default function SpotDifferenceScreen() {
     return (
       <ScreenWrapper>
         <View style={styles.emptyState}>
-          <Text style={styles.resultTitle}>Spot the Difference</Text>
-          <Text style={styles.resultText}>No valid Spot the Difference scenes are available. Check the scene JSON files in development logs.</Text>
+          <Text style={styles.resultTitle}>Spot the Differences</Text>
+          <Text style={styles.resultText}>No valid Spot the Differences scenes are available. Check the scene JSON files in development logs.</Text>
         </View>
       </ScreenWrapper>
     );
@@ -186,7 +186,7 @@ export default function SpotDifferenceScreen() {
 
         <View style={styles.zoomToolbar}>
           <TouchableOpacity
-            accessibilityLabel="Reset Spot the Difference zoom view"
+            accessibilityLabel="Reset Spot the Differences zoom view"
             activeOpacity={0.82}
             disabled={!zoomControls.isZoomed}
             onPress={zoomControls.resetView}

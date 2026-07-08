@@ -18,7 +18,7 @@ export default function SpotTheDifferenceLobby() {
   return (
     <View style={styles.container}>
       <LobbyBase
-        gameName="Spot the Difference"
+        gameName="Spot the Differences"
         players={players}
         onReadyToggle={toggleReady}
         onStart={startGame}
