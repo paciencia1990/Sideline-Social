@@ -37,6 +37,7 @@ export default function CoachTeamScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSwitchingMode, setIsSwitchingMode] = useState(false);
 
   const loadTeam = useCallback(async () => {
     setLoading(true);
@@ -63,6 +64,33 @@ export default function CoachTeamScreen() {
 
   const staffMembers = useMemo(() => members.filter((member) => isCoachRole(member.role)), [members]);
   const parentMembers = useMemo(() => members.filter((member) => member.role === "parent"), [members]);
+
+  const handleSwitchToParent = useCallback(async () => {
+    const targetRoute = "/(tabs)/profile";
+    setIsSwitchingMode(true);
+    setError(null);
+
+    try {
+      if (__DEV__) {
+        console.log("[ModeSwitch:toParent]", {
+          previousMode: "coach",
+          nextMode: "parent",
+          currentRoute: "/coach/team",
+          targetRoute,
+        });
+      }
+
+      await switchActiveMode("parent");
+      setActiveMode("parent");
+      router.dismissAll();
+      router.replace(targetRoute as never);
+    } catch (nextError) {
+      console.warn("[CoachTeam] switch to parent error:", nextError);
+      setError(t("coach.team.error"));
+    } finally {
+      setIsSwitchingMode(false);
+    }
+  }, [setActiveMode, t]);
 
   const handleCreate = useCallback(async () => {
     if (!form.name.trim() || !form.sport.trim()) {
@@ -123,7 +151,12 @@ export default function CoachTeamScreen() {
               <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/coach" as never)} style={styles.outlineButton}>
                 <Text style={styles.outlineButtonText}>{t("coach.team.viewTeam")}</Text>
               </TouchableOpacity>
-              <TouchableOpacity activeOpacity={0.86} onPress={() => { setActiveMode("parent"); void switchActiveMode("parent"); }} style={styles.outlineButton}>
+              <TouchableOpacity
+                activeOpacity={0.86}
+                disabled={isSwitchingMode}
+                onPress={handleSwitchToParent}
+                style={[styles.outlineButton, isSwitchingMode && styles.disabledButton]}
+              >
                 <Text style={styles.outlineButtonText}>{t("mode.switchToParent")}</Text>
               </TouchableOpacity>
             </View>

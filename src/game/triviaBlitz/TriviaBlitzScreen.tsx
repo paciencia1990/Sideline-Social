@@ -24,18 +24,28 @@ import {
   startGameSession,
   submitSessionSelection,
   togglePlayerReady,
+  updateSessionAllReady,
 } from "./gameState";
-import { getFirebaseErrorMessage, getTriviaPlayersRef, getTriviaSessionRef } from "./firebaseUtils";
+import {
+  getFirebaseErrorCode,
+  getFirebaseErrorMessage,
+  getTriviaPlayersPath,
+  getTriviaPlayersRef,
+  getTriviaSessionPath,
+  getTriviaSessionRef,
+  logTriviaFirebaseError,
+} from "./firebaseUtils";
 import { scoreSessionAnswer, type ScoreResult } from "./scoring";
 import { advanceTurn } from "./turnManager";
 import type { TriviaPlayer, TriviaQuestion, TriviaSession } from "./types";
 
 const QUESTION_SECONDS = 15;
+const TRIVIA_MIN_PLAYERS = 2;
 const FALLBACK_PLAYER_NAME = "Player";
 
 export default function TriviaBlitzScreen() {
   const { t } = useTranslation();
-  const { user, firebaseUser } = useAuth();
+  const { user, firebaseUser, loading: authLoading } = useAuth();
   const params = useLocalSearchParams<{
     sessionId?: string | string[];
     joinCode?: string | string[];
@@ -57,7 +67,10 @@ export default function TriviaBlitzScreen() {
   const [settingUp, setSettingUp] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [setupAttempt, setSetupAttempt] = useState(0);
+  const [soloTestMode, setSoloTestMode] = useState(__DEV__);
   const setupInFlightRef = useRef(false);
+  const scoringInFlightRef = useRef(false);
+  const scoredSelectionRef = useRef<string | null>(null);
 
   const resolvedPlayerName = useMemo(
     () => resolvePlayerName(user?.displayName, firebaseUser?.displayName, user?.email ?? firebaseUser?.email),
@@ -76,7 +89,12 @@ export default function TriviaBlitzScreen() {
   }, [playerId, requestedSessionId, sessionId]);
 
   useEffect(() => {
-    if (playerId || setupError || setupInFlightRef.current) {
+    if (authLoading || playerId || setupError || setupInFlightRef.current) {
+      return;
+    }
+
+    if (!firebaseUser) {
+      setSetupError("Please sign in before starting Trivia Blitz.");
       return;
     }
 
@@ -96,7 +114,7 @@ export default function TriviaBlitzScreen() {
           return;
         }
 
-        if (shouldAutoStart) {
+        if (shouldAutoStart && __DEV__) {
           await startGameSession(result.sessionId);
         }
 
@@ -123,7 +141,7 @@ export default function TriviaBlitzScreen() {
     return () => {
       isMounted = false;
     };
-  }, [playerId, requestedSessionId, resolvedPlayerName, sessionId, setupAttempt, setupError, shouldAutoStart]);
+  }, [authLoading, firebaseUser, playerId, requestedSessionId, resolvedPlayerName, sessionId, setupAttempt, setupError, shouldAutoStart]);
 
   const self = useMemo(
     () => players.find((player) => player.id === playerId) ?? null,
@@ -136,6 +154,11 @@ export default function TriviaBlitzScreen() {
   const currentQuestion = session?.selectedQuestions[session.questionIndex] as TriviaQuestion | undefined;
   const isHost = Boolean(self && (session?.hostPlayerId === self.id || self.playerIndex === 0));
   const isActiveTurn = Boolean(self && activePlayer?.id === self.id);
+  const canStartGame = players.length >= TRIVIA_MIN_PLAYERS || (__DEV__ && soloTestMode);
+  const lobbyPlayerSignature = players.map((player) => `${player.id}:${player.ready}`).join("|");
+  const activeSelectionKey = session?.currentSelection
+    ? `${session.currentSelection.playerId}:${session.currentSelection.answerIndex}:${session.currentSelection.selectedAt}`
+    : null;
 
   useEffect(() => {
     if (!sessionId) {
@@ -146,26 +169,61 @@ export default function TriviaBlitzScreen() {
 
     const unsubscribers: Unsubscribe[] = [];
     unsubscribers.push(
-      onSnapshot(getTriviaSessionRef(sessionId), (snapshot) => {
-        setSession(snapshot.exists() ? (snapshot.data() as TriviaSession) : null);
-      }),
+      onSnapshot(
+        getTriviaSessionRef(sessionId),
+        (snapshot) => {
+          setSession(snapshot.exists() ? (snapshot.data() as TriviaSession) : null);
+        },
+        (error) => {
+          logTriviaFirebaseError("subscribeSession", { sessionId, path: getTriviaSessionPath(sessionId) }, error);
+          setSetupError(getFirebaseErrorMessage(error));
+        },
+      ),
     );
 
     const playersQuery = query(getTriviaPlayersRef(sessionId), orderBy("playerIndex", "asc"));
     unsubscribers.push(
-      onSnapshot(playersQuery, (snapshot) => {
-        setPlayers(
-          snapshot.docs.map((playerDoc) => ({
-            id: playerDoc.id,
-            ...(playerDoc.data() as Omit<TriviaPlayer, "id">),
-          })),
-        );
-      }),
+      onSnapshot(
+        playersQuery,
+        (snapshot) => {
+          setPlayers(
+            snapshot.docs.map((playerDoc) => ({
+              id: playerDoc.id,
+              ...(playerDoc.data() as Omit<TriviaPlayer, "id">),
+            })),
+          );
+        },
+        (error) => {
+          logTriviaFirebaseError("subscribePlayers", { sessionId, path: getTriviaPlayersPath(sessionId) }, error);
+          setSetupError(getFirebaseErrorMessage(error));
+        },
+      ),
     );
 
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, [sessionId]);
 
+  useEffect(() => {
+    if (!isHost || !sessionId || session?.status !== "lobby" || players.length === 0) {
+      return;
+    }
+
+    const allReady = players.every((player) => player.ready);
+    if (session.totalPlayers === players.length && session.allReady === allReady) {
+      return;
+    }
+
+    let isMounted = true;
+    updateSessionAllReady(sessionId).catch((error) => {
+      if (isMounted) {
+        logTriviaFirebaseError("hostSyncLobbyPlayers", { sessionId, path: getTriviaSessionPath(sessionId) }, error);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isHost, lobbyPlayerSignature, players, session?.allReady, session?.status, session?.totalPlayers, sessionId]);
   useEffect(() => {
     if (session?.status !== "playing") {
       return;
@@ -173,6 +231,7 @@ export default function TriviaBlitzScreen() {
 
     setSecondsRemaining(QUESTION_SECONDS);
     setLastResult(null);
+    scoredSelectionRef.current = null;
   }, [session?.questionIndex, session?.status]);
 
   useEffect(() => {
@@ -186,6 +245,52 @@ export default function TriviaBlitzScreen() {
 
     return () => clearInterval(timer);
   }, [lastResult, session?.status]);
+
+  useEffect(() => {
+    const selectedAnswer = session?.currentSelection?.answerIndex;
+    if (
+      !isHost ||
+      !sessionId ||
+      session?.status !== "playing" ||
+      selectedAnswer === undefined ||
+      session.selectionRevealed ||
+      scoringInFlightRef.current ||
+      activeSelectionKey === scoredSelectionRef.current
+    ) {
+      return;
+    }
+
+    const answerIndex = selectedAnswer;
+    scoringInFlightRef.current = true;
+    scoredSelectionRef.current = activeSelectionKey;
+    let isMounted = true;
+
+    async function scoreAndAdvance() {
+      try {
+        const result = await scoreSessionAnswer(sessionId, answerIndex, secondsRemaining);
+        if (isMounted) {
+          setLastResult(result);
+        }
+        setTimeout(() => {
+          advanceTurn(sessionId).catch((error) => {
+            Alert.alert("Trivia Blitz", getFirebaseErrorMessage(error));
+          });
+        }, 1400);
+      } catch (error) {
+        if (isMounted) {
+          Alert.alert("Trivia Blitz", getFirebaseErrorMessage(error));
+        }
+      } finally {
+        scoringInFlightRef.current = false;
+      }
+    }
+
+    void scoreAndAdvance();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeSelectionKey, isHost, secondsRemaining, session?.currentSelection?.answerIndex, session?.selectionRevealed, session?.status, sessionId]);
 
   const handleRetrySetup = useCallback(() => {
     setSetupError(null);
@@ -220,34 +325,113 @@ export default function TriviaBlitzScreen() {
       return;
     }
 
+    if (!canStartGame) {
+      Alert.alert("Trivia Blitz", `At least ${TRIVIA_MIN_PLAYERS} players are needed to start.`);
+      return;
+    }
+
     runAction(() => startGameSession(sessionId));
-  }, [runAction, sessionId]);
+  }, [canStartGame, runAction, sessionId]);
 
   const handleSelectAnswer = useCallback(
     (answerIndex: number) => {
-      if (!sessionId || !self || !currentQuestion || session?.currentSelection) {
+      const questionIndex = session?.questionIndex ?? null;
+      const gameStatus = session?.status ?? null;
+      const hasAlreadyAnswered = Boolean(session?.currentSelection);
+      const timerExpired = secondsRemaining <= 0;
+      const isPlayer = Boolean(self);
+
+      if (__DEV__) {
+        console.log("[TriviaBlitz:answerTap]", {
+          sessionId,
+          authUid: firebaseUser?.uid ?? null,
+          playerId: (self?.id ?? playerId) || null,
+          questionIndex,
+          selectedOptionIndex: answerIndex,
+          gameStatus,
+        });
+      }
+
+      const blockAnswer = (reason: string) => {
+        if (__DEV__) {
+          console.warn("[TriviaBlitz:answerBlocked]", {
+            reason,
+            sessionId,
+            authUid: firebaseUser?.uid ?? null,
+            playerId: (self?.id ?? playerId) || null,
+            questionIndex,
+            gameStatus,
+            isPlayer,
+            isActiveTurn,
+            hasAlreadyAnswered,
+            timerExpired,
+          });
+        }
+      };
+
+      if (!sessionId) {
+        blockAnswer("missing-session-id");
+        return;
+      }
+
+      if (!self) {
+        blockAnswer("missing-current-player");
+        return;
+      }
+
+      if (!currentQuestion) {
+        blockAnswer("missing-current-question");
+        return;
+      }
+
+      if (session?.status !== "playing") {
+        blockAnswer("game-not-playing");
+        return;
+      }
+
+      if (hasAlreadyAnswered) {
+        blockAnswer("answer-already-submitted");
         return;
       }
 
       if (!isActiveTurn) {
+        blockAnswer("not-active-turn");
         Alert.alert("Trivia Blitz", "It is another player's turn.");
         return;
       }
 
       runAction(async () => {
-        await submitSessionSelection(sessionId, self.id, answerIndex);
-        const result = await scoreSessionAnswer(sessionId, answerIndex, secondsRemaining);
-        setLastResult(result);
-        setTimeout(() => {
-          advanceTurn(sessionId).catch((error) => {
-            Alert.alert("Trivia Blitz", getFirebaseErrorMessage(error));
+        try {
+          await submitSessionSelection(sessionId, self.id, answerIndex);
+        } catch (error) {
+          console.error("[TriviaBlitz:submitAnswer]", {
+            path: `sessions/${sessionId}/games/triviaBlitz`,
+            authUid: firebaseUser?.uid ?? null,
+            playerId: self.id,
+            sessionId,
+            questionIndex,
+            selectedOptionIndex: answerIndex,
+            code: getFirebaseErrorCode(error),
+            message: getFirebaseErrorMessage(error),
           });
-        }, 1400);
+          throw error;
+        }
       });
     },
-    [currentQuestion, isActiveTurn, runAction, secondsRemaining, self, session?.currentSelection, sessionId],
+    [
+      currentQuestion,
+      firebaseUser?.uid,
+      isActiveTurn,
+      playerId,
+      runAction,
+      secondsRemaining,
+      self,
+      session?.currentSelection,
+      session?.questionIndex,
+      session?.status,
+      sessionId,
+    ],
   );
-
   const handleReset = useCallback(() => {
     if (!sessionId) {
       return;
@@ -310,12 +494,20 @@ export default function TriviaBlitzScreen() {
                 </Text>
               </View>
             ))}
+            {__DEV__ ? (
+              <Pressable style={styles.secondaryButton} onPress={() => setSoloTestMode((value) => !value)}>
+                <Text style={styles.secondaryButtonText}>Solo Test Mode: {soloTestMode ? "On" : "Off"}</Text>
+              </Pressable>
+            ) : null}
+            {!canStartGame ? (
+              <Text style={styles.metaText}>At least {TRIVIA_MIN_PLAYERS} players are needed to start.</Text>
+            ) : null}
             <View style={styles.actionsRow}>
               <Pressable style={styles.secondaryButton} onPress={handleToggleReady} disabled={busy || !self}>
                 <Text style={styles.secondaryButtonText}>{self?.ready ? "Unready" : "Ready"}</Text>
               </Pressable>
               {isHost ? (
-                <Pressable style={styles.primaryButton} onPress={handleStart} disabled={busy}>
+                <Pressable style={[styles.primaryButton, !canStartGame && styles.disabledButton]} onPress={handleStart} disabled={busy || !canStartGame}>
                   <Text style={styles.primaryButtonText}>Start Game</Text>
                 </Pressable>
               ) : null}
@@ -334,7 +526,7 @@ export default function TriviaBlitzScreen() {
             <Text style={styles.question}>{currentQuestion.question_en}</Text>
             {currentQuestion.options_en.map((option, index) => {
               const selected = session.currentSelection?.answerIndex === index;
-              const correct = lastResult?.correctAnswerIndex === index;
+              const correct = (lastResult?.correctAnswerIndex ?? (session.selectionRevealed ? currentQuestion.answer : -1)) === index;
 
               return (
                 <Pressable
@@ -342,10 +534,10 @@ export default function TriviaBlitzScreen() {
                   style={[
                     styles.answerButton,
                     selected && styles.selectedAnswer,
-                    lastResult && correct && styles.correctAnswer,
+                    (lastResult || session.selectionRevealed) && correct && styles.correctAnswer,
                   ]}
                   onPress={() => handleSelectAnswer(index)}
-                  disabled={busy || Boolean(lastResult)}
+                  disabled={busy}
                 >
                   <Text style={styles.answerText}>{option}</Text>
                 </Pressable>
@@ -471,6 +663,9 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: Colors.primary,
     fontFamily: Typography.bodyBold,
+  },
+  disabledButton: {
+    opacity: 0.5,
   },
   dangerButton: {
     alignItems: "center",

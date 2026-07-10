@@ -1,11 +1,28 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { signInAnonymously } from "firebase/auth";
 import { collection, doc } from "firebase/firestore";
 
 import { auth, db } from "@/config/firebase";
 import type { PlayerIdentity } from "./types";
 
-const GUEST_PLAYER_KEY = "triviaBlitzGuestPlayerId";
+export function getTriviaParentSessionPath(sessionId: string) {
+  return `sessions/${sessionId}`;
+}
+
+export function getTriviaSessionPath(sessionId: string) {
+  return `${getTriviaParentSessionPath(sessionId)}/games/triviaBlitz`;
+}
+
+export function getTriviaPlayersPath(sessionId: string) {
+  return `${getTriviaSessionPath(sessionId)}/players`;
+}
+
+export function getTriviaPlayerPath(sessionId: string, playerId: string) {
+  return `${getTriviaPlayersPath(sessionId)}/${playerId}`;
+}
+
+export function getTriviaParentSessionRef(sessionId: string) {
+  return doc(db, "sessions", sessionId);
+}
 
 export function getTriviaSessionRef(sessionId: string) {
   return doc(db, "sessions", sessionId, "games", "triviaBlitz");
@@ -36,13 +53,9 @@ export async function getCurrentPlayer(defaultName = "Player"): Promise<PlayerId
       name: credential.user.displayName || defaultName,
       isAuthenticated: true,
     };
-  } catch {
-    const guestId = await getStableGuestPlayerId();
-    return {
-      id: guestId,
-      name: defaultName,
-      isAuthenticated: false,
-    };
+  } catch (error) {
+    logTriviaFirebaseError("anonymousSignIn", { path: "auth/anonymous" }, error);
+    throw new Error("Please sign in before starting Trivia Blitz.");
   }
 }
 
@@ -54,13 +67,27 @@ export function getFirebaseErrorMessage(error: unknown) {
   return "Something went wrong while contacting Firebase.";
 }
 
-async function getStableGuestPlayerId() {
-  const existingId = await AsyncStorage.getItem(GUEST_PLAYER_KEY);
-  if (existingId) {
-    return existingId;
+export function getFirebaseErrorCode(error: unknown) {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    return String((error as { code?: unknown }).code);
   }
 
-  const nextId = `guest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  await AsyncStorage.setItem(GUEST_PLAYER_KEY, nextId);
-  return nextId;
+  return "unknown";
+}
+
+export function logTriviaFirebaseError(
+  operation: string,
+  details: Record<string, unknown>,
+  error: unknown,
+) {
+  if (!__DEV__) {
+    return;
+  }
+
+  console.error(`[TriviaBlitz:${operation}]`, {
+    ...details,
+    authUid: auth.currentUser?.uid ?? null,
+    code: getFirebaseErrorCode(error),
+    message: getFirebaseErrorMessage(error),
+  });
 }

@@ -21,7 +21,9 @@ import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
   fetchActiveChallenge,
   fetchConnectionPrompt,
+  getActiveChallengeFallback,
   fetchUnreadNotificationCount,
+  fetchUserWeeklyChallengeProgress,
   fetchUserFriendIds,
   fetchUserSquadsDetail,
   subscribeLiveSquadCard,
@@ -31,6 +33,7 @@ import {
   type Challenge,
   type ConnectionPrompt,
   type LiveSquadData,
+  type WeeklyChallengeStatus,
   type SquadDetail,
 } from "@/services/homeFeedService";
 import { fetchActiveSquadSession, getGameLabel, type GameSession } from "@/services/gameService";
@@ -61,8 +64,8 @@ export default function HomeScreen() {
   const [squads, setSquads] = useState<SquadDetail[]>([]);
   const [liveSquad, setLiveSquad] = useState<LiveSquadData | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
-  const [activeChallenge, setActiveChallenge] = useState<Challenge | null>(null);
-  const [challengeStatus, setChallengeStatus] = useState<"accepted" | "complete" | null>(null);
+  const [activeChallenge, setActiveChallenge] = useState<Challenge>(() => getActiveChallengeFallback());
+  const [challengeStatus, setChallengeStatus] = useState<WeeklyChallengeStatus>("available");
   const [connectionPrompt, setConnectionPrompt] = useState<ConnectionPrompt | null>(null);
   const [activeSession, setActiveSession] = useState<GameSession | null>(null);
   const [proximityState, setProximityState] = useState<HomeProximityState>("checking");
@@ -70,6 +73,16 @@ export default function HomeScreen() {
   const [proximityLoading, setProximityLoading] = useState(false);
 
   const displayName = user?.displayName || user?.email?.split("@")[0] || t("profile.defaultName");
+
+  useEffect(() => {
+    if (__DEV__) {
+      console.log("[WeeklyChallenge:HomeMounted]", {
+        route: "/(tabs)/index",
+        userId: user?.uid ?? null,
+        language: i18n.language,
+      });
+    }
+  }, [i18n.language, user?.uid]);
 
   const loadHomeProximity = useCallback(async (requestPermission = false) => {
     setProximityLoading(true);
@@ -136,13 +149,17 @@ export default function HomeScreen() {
         mySquadIds[0] ? fetchActiveSquadSession(mySquadIds[0]) : Promise.resolve(null),
       ]);
 
+      const challengeProgress = userId && challenge ? await fetchUserWeeklyChallengeProgress(userId, challenge.weekKey) : null;
+      const feedUserIds = userId ? Array.from(new Set([userId, ...friendIds])) : friendIds;
+
       setSquads(squadDetails);
       setActiveChallenge(challenge);
+      setChallengeStatus(challengeProgress?.status ?? "available");
       setConnectionPrompt(prompt);
       setUnreadCount(notificationCount);
       setActiveSession(session);
 
-      activityUnsubscribe.current = subscribeToActivityFeed(mySquadIds, friendIds, (items) => {
+      activityUnsubscribe.current = subscribeToActivityFeed(mySquadIds, feedUserIds, (items) => {
         setActivity(items.slice(0, 4));
       });
 
@@ -150,6 +167,8 @@ export default function HomeScreen() {
     } catch (nextError) {
       console.warn("[HomeScreen] load error:", nextError);
       setError(t("home.errorBody"));
+      setActiveChallenge((current) => current ?? getActiveChallengeFallback());
+      setChallengeStatus("available");
       setActivity([]);
       setLiveSquad(null);
     } finally {
@@ -179,15 +198,17 @@ export default function HomeScreen() {
   const handleChallengePress = useCallback(async () => {
     if (!user?.uid || !activeChallenge) return;
 
-    const nextStatus = challengeStatus === "accepted" ? "complete" : "accepted";
+    if (challengeStatus === "completed") return;
+
+    const nextStatus: Exclude<WeeklyChallengeStatus, "available"> = challengeStatus === "accepted" ? "completed" : "accepted";
     try {
-      await updateChallengeStatus(user.uid, activeChallenge.challengeId, nextStatus);
-      setChallengeStatus(nextStatus);
+      const nextProgress = await updateChallengeStatus(user.uid, displayName, activeChallenge, nextStatus);
+      setChallengeStatus(nextProgress.status);
     } catch (nextError) {
       console.warn("[HomeScreen] challenge update error:", nextError);
       setError(t("home.errorBody"));
     }
-  }, [activeChallenge, challengeStatus, t, user?.uid]);
+  }, [activeChallenge, challengeStatus, displayName, t, user?.uid]);
 
   return (
     <ScreenWrapper>
@@ -208,6 +229,15 @@ export default function HomeScreen() {
             <Text style={styles.notificationText}>{unreadCount}</Text>
           </View>
         </View>
+
+        <ChallengeCard
+          challenge={activeChallenge}
+          error={error}
+          language={i18n.language}
+          loading={isLoading}
+          status={challengeStatus}
+          onPress={handleChallengePress}
+        />
 
         {isLoading ? (
           <LoadingCard />
@@ -247,16 +277,7 @@ export default function HomeScreen() {
             )}
             {!liveSquad && squads.length > 0 ? <SquadSummaryCard squads={squads} /> : null}
 
-            {activeChallenge ? (
-              <ChallengeCard
-                challenge={activeChallenge}
-                language={i18n.language}
-                status={challengeStatus}
-                onPress={handleChallengePress}
-              />
-            ) : (
-              <CommunityPromptCard prompt={connectionPrompt} language={i18n.language} />
-            )}
+            <CommunityPromptCard prompt={connectionPrompt} language={i18n.language} />
 
             <SectionTitle title={t("home.activity")} />
             {activity.length > 0 ? (
@@ -407,26 +428,51 @@ function SquadSummaryCard({ squads }: { squads: SquadDetail[] }) {
 
 function ChallengeCard({
   challenge,
+  error,
   language,
+  loading,
   onPress,
   status,
 }: {
   challenge: Challenge;
+  error: string | null;
   language: string;
+  loading: boolean;
   onPress: () => void;
-  status: "accepted" | "complete" | null;
+  status: WeeklyChallengeStatus;
 }) {
   const { t } = useTranslation();
   const title = language === "es" ? challenge.title_es || challenge.title : challenge.title;
   const description = language === "es" ? challenge.description_es || challenge.description : challenge.description;
-  const label = status === "complete" ? t("home.completed") : status === "accepted" ? t("home.markComplete") : t("home.acceptChallenge");
+  const progress = status === "completed" ? 100 : status === "accepted" ? 50 : 0;
+  const label = status === "completed" ? t("home.completed") : status === "accepted" ? t("home.markComplete") : t("home.acceptChallenge");
+  const statusLabel = status === "completed" ? t("home.challengeCompleted") : status === "accepted" ? t("home.challengeInProgress") : t("home.challengeAvailable");
+
+  useEffect(() => {
+    if (__DEV__) {
+      console.log("[WeeklyChallenge:CardRender]", {
+        weekKey: challenge.weekKey,
+        challengeId: challenge.challengeId,
+        status,
+        loading,
+        error,
+      });
+    }
+  }, [challenge.challengeId, challenge.weekKey, error, loading, status]);
 
   return (
     <Card style={styles.challengeCard}>
       <Text style={styles.cardEyebrow}>{t("home.thisWeeksChallenge")}</Text>
       <Text style={styles.cardTitle}>{title}</Text>
       <Text style={styles.cardText}>{description}</Text>
-      <TouchableOpacity activeOpacity={0.86} onPress={onPress} style={styles.primaryInlineButton}>
+      <View style={styles.challengeProgressHeader}>
+        <Text style={styles.challengeStatus}>{statusLabel}</Text>
+        <Text style={styles.challengeStatus}>{progress}%</Text>
+      </View>
+      <View style={styles.challengeProgressTrack}>
+        <View style={[styles.challengeProgressFill, { width: `${progress}%` }]} />
+      </View>
+      <TouchableOpacity activeOpacity={0.86} disabled={status === "completed"} onPress={onPress} style={[styles.primaryInlineButton, status === "completed" && styles.disabledInlineButton]}>
         <Star size={16} color={Colors.surface} />
         <Text style={styles.primaryInlineText}>{label}</Text>
       </TouchableOpacity>
@@ -713,6 +759,27 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     gap: Spacing.sm,
   },
+  challengeProgressHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  challengeProgressTrack: {
+    backgroundColor: Colors.background,
+    borderRadius: Radius.sm,
+    height: 8,
+    overflow: "hidden",
+  },
+  challengeProgressFill: {
+    backgroundColor: Colors.accentGold,
+    borderRadius: Radius.sm,
+    height: "100%",
+  },
+  challengeStatus: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 12,
+  },
   primaryInlineButton: {
     alignItems: "center",
     alignSelf: "flex-start",
@@ -728,6 +795,9 @@ const styles = StyleSheet.create({
     color: Colors.surface,
     fontFamily: Typography.bodySemiBold,
     fontSize: 14,
+  },
+  disabledInlineButton: {
+    opacity: 0.7,
   },
   outlineInlineButton: {
     alignItems: "center",

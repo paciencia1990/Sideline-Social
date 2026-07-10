@@ -324,7 +324,7 @@
     "options_es": ["El Lusitania", "El Titanic", "El Britannic", "El Queen Mary"],
     "answer": 1
   }
-][
+,
   {
     "category": "Pop Culture",
     "question_en": "Which film became the first winner of the Academy Award for Best Animated Feature?",

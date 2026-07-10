@@ -16,6 +16,7 @@ export default function CoachHomeScreen() {
   const [memberships, setMemberships] = useState<TeamMembership[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isSwitchingMode, setIsSwitchingMode] = useState(false);
 
   const loadTeams = useCallback(async () => {
     setLoading(true);
@@ -52,14 +53,46 @@ export default function CoachHomeScreen() {
 
   const switchToCoach = useCallback(async () => {
     if (!canUseCoachMode) return;
-    setActiveMode("coach");
-    await switchActiveMode("coach").catch(() => undefined);
-  }, [canUseCoachMode, setActiveMode]);
+    setIsSwitchingMode(true);
+    setError(null);
+
+    try {
+      await switchActiveMode("coach");
+      setActiveMode("coach");
+    } catch (nextError) {
+      console.warn("[CoachHome] switch to coach error:", nextError);
+      setError(t("coach.home.error"));
+    } finally {
+      setIsSwitchingMode(false);
+    }
+  }, [canUseCoachMode, setActiveMode, t]);
 
   const switchToParent = useCallback(async () => {
-    setActiveMode("parent");
-    await switchActiveMode("parent").catch(() => undefined);
-  }, [setActiveMode]);
+    const targetRoute = "/(tabs)/profile";
+    setIsSwitchingMode(true);
+    setError(null);
+
+    try {
+      if (__DEV__) {
+        console.log("[ModeSwitch:toParent]", {
+          previousMode: activeMode,
+          nextMode: "parent",
+          currentRoute: "/coach",
+          targetRoute,
+        });
+      }
+
+      await switchActiveMode("parent");
+      setActiveMode("parent");
+      router.dismissAll();
+      router.replace(targetRoute as never);
+    } catch (nextError) {
+      console.warn("[CoachHome] switch to parent error:", nextError);
+      setError(t("coach.home.error"));
+    } finally {
+      setIsSwitchingMode(false);
+    }
+  }, [activeMode, setActiveMode, t]);
 
   return (
     <ScreenWrapper>
@@ -87,17 +120,25 @@ export default function CoachHomeScreen() {
                 {canUseCoachMode ? t("coach.home.modeHelp") : t("coach.home.noCoachRole")}
               </Text>
               <View style={styles.buttonRow}>
-                <TouchableOpacity activeOpacity={0.86} onPress={switchToParent} style={styles.outlineButton}>
-                  <Text style={styles.outlineButtonText}>{t("mode.switchToParent")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  activeOpacity={0.86}
-                  disabled={!canUseCoachMode}
-                  onPress={switchToCoach}
-                  style={[styles.primaryButton, !canUseCoachMode && styles.disabledButton]}
-                >
-                  <Text style={styles.primaryButtonText}>{t("mode.switchToCoach")}</Text>
-                </TouchableOpacity>
+                {activeMode === "coach" ? (
+                  <TouchableOpacity
+                    activeOpacity={0.86}
+                    disabled={isSwitchingMode}
+                    onPress={switchToParent}
+                    style={[styles.outlineButton, isSwitchingMode && styles.disabledButton]}
+                  >
+                    <Text style={styles.outlineButtonText}>{t("mode.switchToParent")}</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    activeOpacity={0.86}
+                    disabled={!canUseCoachMode || isSwitchingMode}
+                    onPress={switchToCoach}
+                    style={[styles.primaryButton, (!canUseCoachMode || isSwitchingMode) && styles.disabledButton]}
+                  >
+                    <Text style={styles.primaryButtonText}>{t("mode.switchToCoach")}</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </Card>
 

@@ -53,7 +53,7 @@ export const GAME_CONFIG: Record<
 > = {
   bomb_defusal: { minPlayers: 2, maxPlayers: 6, defaultSettings: { timerSeconds: 300 } },
   spot_difference: { minPlayers: 4, maxPlayers: 12, defaultSettings: { roundDuration: 420 } },
-  trivia_blitz: { minPlayers: 3, maxPlayers: 20, defaultSettings: { questionCount: 10, timeLimitSeconds: 20 } },
+  trivia_blitz: { minPlayers: 2, maxPlayers: 20, defaultSettings: { questionCount: 10, timeLimitSeconds: 20 } },
 };
 
 function generateJoinCode(): string {
@@ -304,3 +304,4 @@ export function getGameEmoji(gameType: GameType): string {
       return "\u26A1";
   }
 }
+

@@ -3,12 +3,13 @@ import {
   doc,
   getDoc,
   getDocs,
+  increment,
   limit,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
-  setDoc,
+  writeBatch,
   where,
   type DocumentData,
   type QueryDocumentSnapshot,
@@ -25,17 +26,29 @@ export interface SquadDetail {
   lastActivityAt: Date | null;
 }
 
+export type WeeklyChallengeStatus = "available" | "accepted" | "completed";
+
 export interface Challenge {
   challengeId: string;
+  weekKey: string;
   title: string;
   title_es: string;
   description: string;
   description_es: string;
-  type: string;
+  type: "weekly_challenge";
   starsReward: number;
   weekStart: Date;
   weekEnd: Date;
   isActive: boolean;
+}
+
+interface WeeklyChallengeDefinition {
+  id: string;
+  title_en: string;
+  title_es: string;
+  description_en: string;
+  description_es: string;
+  rewardStars?: number;
 }
 
 export interface ConnectionPrompt {
@@ -67,7 +80,10 @@ export interface LiveSquadData {
 }
 
 export interface UserChallengeProgress {
-  status: "accepted" | "complete" | null;
+  challengeId: string;
+  rewardGranted: boolean;
+  status: WeeklyChallengeStatus;
+  weekKey: string;
 }
 
 type FirestoreDate =
@@ -96,6 +112,56 @@ function chunkArray<T>(items: T[], size = 30): T[][] {
   }
   return chunks;
 }
+const WEEKLY_CHALLENGES: WeeklyChallengeDefinition[] = [
+  {
+    id: "sideline-social-hello",
+    title_en: "Sideline Social",
+    title_es: "Conexión en la Banda",
+    description_en: "Say hello to a parent you have not met yet.",
+    description_es: "Saluda a un padre o una madre que todavía no conozcas.",
+    rewardStars: 25,
+  },
+];
+
+function getActiveWeekInfo(now = new Date()) {
+  const date = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const day = date.getUTCDay() || 7;
+  const weekStart = new Date(date);
+  weekStart.setUTCDate(date.getUTCDate() - day + 1);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setUTCDate(weekStart.getUTCDate() + 7);
+
+  const thursday = new Date(weekStart);
+  thursday.setUTCDate(weekStart.getUTCDate() + 3);
+  const yearStart = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 1));
+  const weekNumber = Math.ceil((((thursday.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  const weekKey = `${thursday.getUTCFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
+
+  return { weekEnd, weekKey, weekStart };
+}
+
+function getChallengeForWeek(weekKey: string) {
+  const index = Math.abs(hashString(weekKey)) % WEEKLY_CHALLENGES.length;
+  return WEEKLY_CHALLENGES[index];
+}
+
+function hashString(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash) + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return hash;
+}
+
+function challengeToActivityMessages(displayName: string) {
+  const name = displayName.trim() || "Sideline Parent";
+  return {
+    message: `${name} completed this week's challenge!`,
+    message_es: `¡${name} completó el reto de esta semana!`,
+  };
+}
+
 
 function docToSquadDetail(squadDoc: QueryDocumentSnapshot<DocumentData>): SquadDetail {
   const data = squadDoc.data();
@@ -143,33 +209,27 @@ export async function fetchUserSquadsDetail(squadIds: string[]): Promise<SquadDe
   }
 }
 
-export async function fetchActiveChallenge(): Promise<Challenge | null> {
-  try {
-    const snapshot = await getDocs(
-      query(collection(db, "challenges"), where("isActive", "==", true), limit(1))
-    );
+export function getActiveChallengeFallback(now = new Date()): Challenge {
+  const { weekEnd, weekKey, weekStart } = getActiveWeekInfo(now);
+  const definition = getChallengeForWeek(weekKey);
 
-    if (snapshot.empty) return null;
+  return {
+    challengeId: definition.id,
+    weekKey,
+    title: definition.title_en,
+    title_es: definition.title_es,
+    description: definition.description_en,
+    description_es: definition.description_es,
+    type: "weekly_challenge",
+    starsReward: definition.rewardStars ?? 0,
+    weekStart,
+    weekEnd,
+    isActive: true,
+  };
+}
 
-    const challengeDoc = snapshot.docs[0];
-    const data = challengeDoc.data();
-
-    return {
-      challengeId: challengeDoc.id,
-      title: (data.title as string) ?? "",
-      title_es: (data.title_es as string) ?? "",
-      description: (data.description as string) ?? "",
-      description_es: (data.description_es as string) ?? "",
-      type: (data.type as string) ?? "",
-      starsReward: (data.starsReward as number) ?? 0,
-      weekStart: tsToDate(data.weekStart as FirestoreDate) ?? new Date(),
-      weekEnd: tsToDate(data.weekEnd as FirestoreDate) ?? new Date(),
-      isActive: (data.isActive as boolean) ?? false,
-    };
-  } catch (error) {
-    console.warn("[HomeFeedService] fetchActiveChallenge error:", error);
-    return null;
-  }
+export async function fetchActiveChallenge(): Promise<Challenge> {
+  return getActiveChallengeFallback();
 }
 
 export async function fetchConnectionPrompt(): Promise<ConnectionPrompt | null> {
@@ -385,23 +445,109 @@ export async function fetchUnreadNotificationCount(userId: string): Promise<numb
   }
 }
 
+export async function fetchUserWeeklyChallengeProgress(userId: string, weekKey: string): Promise<UserChallengeProgress | null> {
+  try {
+    const snapshot = await getDoc(doc(db, "users", userId, "weeklyChallenges", weekKey));
+    if (!snapshot.exists()) return null;
+
+    const data = snapshot.data();
+    const status = data.status === "completed" || data.status === "accepted" ? data.status : "available";
+    return {
+      challengeId: (data.challengeId as string) ?? "",
+      rewardGranted: (data.rewardGranted as boolean) ?? false,
+      status,
+      weekKey: (data.weekKey as string) ?? weekKey,
+    };
+  } catch (error) {
+    console.warn("[HomeFeedService] fetchUserWeeklyChallengeProgress error:", error);
+    return null;
+  }
+}
+
 export async function updateChallengeStatus(
   userId: string,
-  challengeId: string,
-  status: "accepted" | "complete"
-): Promise<void> {
+  displayName: string,
+  challenge: Challenge,
+  status: Exclude<WeeklyChallengeStatus, "available">
+): Promise<UserChallengeProgress> {
   try {
-    const progressId = `${userId}__${challengeId}`;
-    await setDoc(
-      doc(db, "userChallengeProgress", progressId),
-      {
+    const progressRef = doc(db, "users", userId, "weeklyChallenges", challenge.weekKey);
+    const progressSnapshot = await getDoc(progressRef);
+    const currentData = progressSnapshot.data();
+    const currentStatus = currentData?.status === "completed" || currentData?.status === "accepted" ? currentData.status : "available";
+
+    if (currentStatus === "completed") {
+      return {
+        challengeId: challenge.challengeId,
+        rewardGranted: (currentData?.rewardGranted as boolean) ?? true,
+        status: "completed",
+        weekKey: challenge.weekKey,
+      };
+    }
+
+    if (status === "accepted" && currentStatus === "accepted") {
+      return {
+        challengeId: challenge.challengeId,
+        rewardGranted: (currentData?.rewardGranted as boolean) ?? false,
+        status: "accepted",
+        weekKey: challenge.weekKey,
+      };
+    }
+
+    const batch = writeBatch(db);
+    const baseRecord = {
+      challengeId: challenge.challengeId,
+      weekKey: challenge.weekKey,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (status === "accepted") {
+      batch.set(progressRef, {
+        ...baseRecord,
+        status: "accepted",
+        acceptedAt: currentData?.acceptedAt ?? serverTimestamp(),
+        rewardGranted: (currentData?.rewardGranted as boolean) ?? false,
+      }, { merge: true });
+    } else {
+      const activityRef = doc(db, "activity", `weeklyChallenge_${challenge.weekKey}_${userId}`);
+      const messages = challengeToActivityMessages(displayName);
+      batch.set(progressRef, {
+        ...baseRecord,
+        status: "completed",
+        acceptedAt: currentData?.acceptedAt ?? serverTimestamp(),
+        completedAt: serverTimestamp(),
+        rewardGranted: true,
+      }, { merge: true });
+
+      if (challenge.starsReward > 0 && !(currentData?.rewardGranted as boolean)) {
+        batch.set(doc(db, "users", userId), {
+          sidelineStars: increment(challenge.starsReward),
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      }
+
+      batch.set(activityRef, {
+        avatarUrl: null,
+        challengeId: challenge.challengeId,
+        createdAt: serverTimestamp(),
+        displayName,
+        message: messages.message,
+        message_es: messages.message_es,
+        squadId: null,
+        type: "complete_challenge",
         userId,
-        challengeId,
-        status,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+        weekKey: challenge.weekKey,
+      });
+    }
+
+    await batch.commit();
+
+    return {
+      challengeId: challenge.challengeId,
+      rewardGranted: status === "completed" || ((currentData?.rewardGranted as boolean) ?? false),
+      status,
+      weekKey: challenge.weekKey,
+    };
   } catch (error) {
     console.warn("[HomeFeedService] updateChallengeStatus error:", error);
     throw error;

@@ -42,6 +42,17 @@ export type TriviaSession = {
   updatedAt?: unknown;
 };
 
+
+export type TriviaParentSession = {
+  sessionId: string;
+  gameId: "triviaBlitz";
+  gameType: "triviaBlitz";
+  hostPlayerId: string;
+  playerIds: string[];
+  status: TriviaStatus;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+};
 export type PlayerIdentity = {
   id: string;
   name: string;

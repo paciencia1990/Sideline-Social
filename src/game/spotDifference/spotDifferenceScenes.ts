@@ -10,6 +10,17 @@ import scene007Data from "../../../assets/games/spot-the-difference/scene_007.js
 import scene008Data from "../../../assets/games/spot-the-difference/scene_008.json";
 import scene009Data from "../../../assets/games/spot-the-difference/scene_009.json";
 import scene010Data from "../../../assets/games/spot-the-difference/scene_010.json";
+import scene011Data from "../../../assets/games/spot-the-difference/scene_011.json";
+import scene012Data from "../../../assets/games/spot-the-difference/scene_012.json";
+import scene013Data from "../../../assets/games/spot-the-difference/scene_013.json";
+import scene014Data from "../../../assets/games/spot-the-difference/scene_014.json";
+import scene015Data from "../../../assets/games/spot-the-difference/scene_015.json";
+import scene016Data from "../../../assets/games/spot-the-difference/scene_016.json";
+import scene017Data from "../../../assets/games/spot-the-difference/scene_017.json";
+import scene018Data from "../../../assets/games/spot-the-difference/scene_018.json";
+import scene019Data from "../../../assets/games/spot-the-difference/scene_019.json";
+import scene020Data from "../../../assets/games/spot-the-difference/scene_020.json";
+import scene021Data from "../../../assets/games/spot-the-difference/scene_021.json";
 
 export type SpotDifferencePoint = {
   id: string;
@@ -131,6 +142,83 @@ const sceneDefinitions: SceneDefinition[] = [
     imageA: require("../../../assets/games/spot-the-difference/scene_010_A.png"),
     imageB: require("../../../assets/games/spot-the-difference/scene_010_B.png"),
     data: scene010Data,
+  },
+  {
+    id: "scene_011",
+    title: "Scene 11",
+    imageA: require("../../../assets/games/spot-the-difference/scene_011_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_011_B.png"),
+    data: scene011Data,
+  },
+  {
+    id: "scene_012",
+    title: "Scene 12",
+    imageA: require("../../../assets/games/spot-the-difference/scene_012_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_012_B.png"),
+    data: scene012Data,
+  },
+  {
+    id: "scene_013",
+    title: "Scene 13",
+    imageA: require("../../../assets/games/spot-the-difference/scene_013_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_013_B.png"),
+    data: scene013Data,
+  },
+  {
+    id: "scene_014",
+    title: "Scene 14",
+    imageA: require("../../../assets/games/spot-the-difference/scene_014_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_014_B.png"),
+    data: scene014Data,
+  },
+  {
+    id: "scene_015",
+    title: "Scene 15",
+    imageA: require("../../../assets/games/spot-the-difference/scene_015_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_015_B.png"),
+    data: scene015Data,
+  },
+  {
+    id: "scene_016",
+    title: "Scene 16",
+    imageA: require("../../../assets/games/spot-the-difference/scene_016_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_016_B.png"),
+    data: scene016Data,
+  },
+  {
+    id: "scene_017",
+    title: "Scene 17",
+    imageA: require("../../../assets/games/spot-the-difference/scene_017_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_017_B.png"),
+    data: scene017Data,
+  },
+  {
+    id: "scene_018",
+    title: "Scene 18",
+    imageA: require("../../../assets/games/spot-the-difference/scene_018_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_018_B.png"),
+    data: scene018Data,
+  },
+  {
+    id: "scene_019",
+    title: "Scene 19",
+    imageA: require("../../../assets/games/spot-the-difference/scene_019_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_019_B.png"),
+    data: scene019Data,
+  },
+  {
+    id: "scene_020",
+    title: "Scene 20",
+    imageA: require("../../../assets/games/spot-the-difference/scene_020_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_020_B.png"),
+    data: scene020Data,
+  },
+  {
+    id: "scene_021",
+    title: "Scene 21",
+    imageA: require("../../../assets/games/spot-the-difference/scene_021_A.png"),
+    imageB: require("../../../assets/games/spot-the-difference/scene_021_B.png"),
+    data: scene021Data,
   },
 ];
 

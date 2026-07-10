@@ -31,10 +31,14 @@ import {
   type SpotDifferenceScene,
 } from "@/src/game/spotDifference/spotDifferenceScenes";
 
+type ImageSide = "A" | "B";
+
 type SceneSize = {
   width: number;
   height: number;
 };
+
+type SceneLayouts = Record<ImageSide, SceneSize>;
 
 type ImageRect = {
   width: number;
@@ -64,6 +68,7 @@ type ZoomControls = {
   animatedStyle: {
     transform: ({ translateX: Animated.Value } | { translateY: Animated.Value } | { scale: Animated.Value })[];
   };
+  isGestureActive: boolean;
   isZoomed: boolean;
   onDoubleTap: (event: TapStateEvent) => void;
   onPanGesture: (event: PanGestureEvent) => void;
@@ -81,22 +86,34 @@ const DOUBLE_TAP_ZOOM = 2;
 const PAN_MIN_DISTANCE = 8;
 const ZOOM_EPSILON = 0.01;
 const RESET_THRESHOLD = 1.02;
+const FOUND_MARKER_RADIUS_SCALE = 0.4;
+const MIN_FOUND_MARKER_RADIUS = 10;
+const MAX_FOUND_MARKER_RADIUS = 16;
 
 export default function SpotDifferenceScreen() {
   const { t } = useTranslation();
   const [usedSceneIds, setUsedSceneIds] = useState<string[]>([]);
   const [currentScene, setCurrentScene] = useState<SpotDifferenceScene | null>(() => selectNextScene([]));
   const [foundIds, setFoundIds] = useState<string[]>([]);
+  const [roundInstance, setRoundInstance] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(ROUND_SECONDS);
   const [feedback, setFeedback] = useState(t("spot.instructions"));
-  const [sceneSize, setSceneSize] = useState<SceneSize>({ width: 0, height: 0 });
+  const [sceneLayouts, setSceneLayouts] = useState<SceneLayouts>({
+    A: { width: 0, height: 0 },
+    B: { width: 0, height: 0 },
+  });
 
   const foundSet = useMemo(() => new Set(foundIds), [foundIds]);
   const differences = currentScene?.differences ?? [];
   const isComplete = currentScene ? foundIds.length === differences.length : false;
   const elapsedSeconds = ROUND_SECONDS - secondsLeft;
-  const imageRect = currentScene ? calculateContainedImageLayout(sceneSize, currentScene) : null;
-  const zoomControls = useSpotDifferenceZoom(currentScene, sceneSize, imageRect);
+  const imageRects = useMemo(() => ({
+    A: currentScene ? calculateContainedImageLayout(sceneLayouts.A, currentScene) : null,
+    B: currentScene ? calculateContainedImageLayout(sceneLayouts.B, currentScene) : null,
+  }), [currentScene, sceneLayouts.A, sceneLayouts.B]);
+  const zoomViewport = sceneLayouts.B.width && sceneLayouts.B.height ? sceneLayouts.B : sceneLayouts.A;
+  const zoomImageRect = imageRects.B ?? imageRects.A;
+  const zoomControls = useSpotDifferenceZoom(currentScene, zoomViewport, zoomImageRect, secondsLeft, foundIds.length, differences.length, roundInstance);
 
   useEffect(() => {
     if (isComplete || secondsLeft <= 0 || !currentScene) {
@@ -112,30 +129,63 @@ export default function SpotDifferenceScreen() {
     const nextScene = selectNextScene(nextUsedIds);
 
     setFoundIds([]);
+    setRoundInstance((value) => value + 1);
     setSecondsLeft(ROUND_SECONDS);
     setFeedback(t("spot.instructions"));
     setCurrentScene(nextScene);
     setUsedSceneIds(nextScene && nextUsedIds.length < playableSpotDifferenceScenes.length ? nextUsedIds : []);
   }, [currentScene, t, usedSceneIds]);
 
-  const handleChangedImageTap = useCallback((event: TapStateEvent) => {
-    if (event.nativeEvent.state !== State.ACTIVE || isComplete || !currentScene || !imageRect) {
+  const handleSceneLayout = useCallback((side: ImageSide, size: SceneSize) => {
+    setSceneLayouts((current) => {
+      const previous = current[side];
+      if (previous.width === size.width && previous.height === size.height) {
+        return current;
+      }
+
+      return { ...current, [side]: size };
+    });
+  }, []);
+
+  const handleImageTap = useCallback((imageSide: ImageSide, event: TapStateEvent) => {
+    if (event.nativeEvent.state !== State.ACTIVE || isComplete || !currentScene) {
+      return;
+    }
+
+    const localX = event.nativeEvent.x;
+    const localY = event.nativeEvent.y;
+    const viewport = sceneLayouts[imageSide];
+    const imageRect = imageRects[imageSide];
+    const transform = zoomControls.transformRef.current;
+
+    if (__DEV__) {
+      console.log("[SpotDifferences:imageTap]", {
+        imageSide,
+        localX,
+        localY,
+        scale: transform.scale,
+        translateX: transform.translateX,
+        translateY: transform.translateY,
+      });
+    }
+
+    if (!imageRect) {
       return;
     }
 
     const tap = screenPointToSourcePoint(
-      event.nativeEvent.x,
-      event.nativeEvent.y,
-      sceneSize,
+      localX,
+      localY,
+      viewport,
       imageRect,
-      zoomControls.transformRef.current,
+      transform,
     );
     if (!tap) {
       setFeedback(t("spot.missed"));
       return;
     }
 
-    const match = currentScene.differences.find((zone) => isInsideDifference(tap, zone));
+    const match = findDifferenceAtPoint(currentScene.differences, tap);
     if (!match) {
       setFeedback(t("spot.missed"));
       return;
@@ -148,7 +198,7 @@ export default function SpotDifferenceScreen() {
 
     setFoundIds((current) => [...current, match.id]);
     setFeedback(t("spot.found", { label: match.label ?? match.id.replace("difference_", "#") }));
-  }, [currentScene, foundSet, imageRect, isComplete, sceneSize, t, zoomControls.transformRef]);
+  }, [currentScene, foundSet, imageRects, isComplete, sceneLayouts, t, zoomControls.transformRef]);
 
   if (!currentScene) {
     return (
@@ -163,7 +213,7 @@ export default function SpotDifferenceScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} scrollEnabled={!zoomControls.isZoomed}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} scrollEnabled={!zoomControls.isZoomed && !zoomControls.isGestureActive}>
         <View style={styles.header}>
           <Text style={styles.kicker}>{t("games.spotDifference.title")}</Text>
           <Text style={styles.title}>{currentScene.title}</Text>
@@ -182,30 +232,40 @@ export default function SpotDifferenceScreen() {
         </View>
 
         <Text style={styles.instructions}>{feedback}</Text>
-        <Text style={styles.zoomHint}>Pinch to zoom. Drag to move. Tap the changed image to select a difference.</Text>
+        <Text style={styles.zoomHint}>{t("spot.zoomHint")}</Text>
 
-        <View style={styles.zoomToolbar}>
-          <TouchableOpacity
-            accessibilityLabel="Reset Spot the Differences zoom view"
-            activeOpacity={0.82}
-            disabled={!zoomControls.isZoomed}
-            onPress={zoomControls.resetView}
-            style={[styles.resetButton, !zoomControls.isZoomed && styles.resetButtonDisabled]}
-          >
-            <Text style={[styles.resetButtonText, !zoomControls.isZoomed && styles.resetButtonTextDisabled]}>Reset View</Text>
-          </TouchableOpacity>
-        </View>
+        {zoomControls.isZoomed ? (
+          <View style={styles.resetToolbar}>
+            <TouchableOpacity
+              accessibilityLabel="Reset image view"
+              activeOpacity={0.82}
+              onPress={zoomControls.resetView}
+              style={styles.resetButton}
+            >
+              <Text style={styles.resetButtonText}>Reset View</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         <View style={styles.scenesWrap}>
-          <SceneCard scene={currentScene} title={t("spot.original")} variant="original" foundSet={foundSet} imageRect={imageRect} zoomControls={zoomControls} />
+          <SceneCard
+            scene={currentScene}
+            title={t("spot.original")}
+            variant="A"
+            foundSet={foundSet}
+            imageRect={imageRects.A}
+            onLayout={(size) => handleSceneLayout("A", size)}
+            onTap={(event) => handleImageTap("A", event)}
+            zoomControls={zoomControls}
+          />
           <SceneCard
             scene={currentScene}
             title={t("spot.changed")}
-            variant="changed"
+            variant="B"
             foundSet={foundSet}
-            imageRect={imageRect}
-            onLayout={(size) => setSceneSize(size)}
-            onTap={handleChangedImageTap}
+            imageRect={imageRects.B}
+            onLayout={(size) => handleSceneLayout("B", size)}
+            onTap={(event) => handleImageTap("B", event)}
             zoomControls={zoomControls}
           />
         </View>
@@ -236,7 +296,7 @@ export default function SpotDifferenceScreen() {
   );
 }
 
-function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: SceneSize, imageRect: ImageRect | null): ZoomControls {
+function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: SceneSize, imageRect: ImageRect | null, secondsLeft: number, foundCount: number, totalDifferences: number, roundInstance: number): ZoomControls {
   const scale = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(0)).current;
@@ -245,6 +305,11 @@ function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: Scen
   const transformRef = useRef<TransformSnapshot>({ scale: 1, translateX: 0, translateY: 0 });
   const pinchStartRef = useRef<TransformSnapshot>({ scale: 1, translateX: 0, translateY: 0 });
   const panStartRef = useRef<TransformSnapshot>({ scale: 1, translateX: 0, translateY: 0 });
+  const automaticResetForRoundRef = useRef(false);
+  const previousFoundCountRef = useRef(foundCount);
+  const previousSecondsLeftRef = useRef(secondsLeft);
+  const roundEndedRef = useRef(false);
+  const [isGestureActive, setIsGestureActive] = useState(false);
   const [isZoomed, setIsZoomed] = useState(false);
 
   useEffect(() => {
@@ -283,24 +348,62 @@ function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: Scen
     const reset = { scale: MIN_ZOOM, translateX: 0, translateY: 0 };
     pinchStartRef.current = reset;
     panStartRef.current = reset;
+    setIsGestureActive(false);
     setTransform(reset, { animated: true, updateZoomState: true });
   }, [setTransform]);
 
-  useEffect(() => {
-    resetView();
-  }, [resetView, scene?.id]);
 
   useEffect(() => {
+    automaticResetForRoundRef.current = false;
+    previousFoundCountRef.current = 0;
+    previousSecondsLeftRef.current = ROUND_SECONDS;
+    roundEndedRef.current = false;
+    resetView();
+  }, [resetView, roundInstance, scene?.id]);
+
+  const resetViewForRoundEnd = useCallback(() => {
+    if (automaticResetForRoundRef.current) {
+      return;
+    }
+
+    automaticResetForRoundRef.current = true;
+    roundEndedRef.current = true;
+    resetView();
+  }, [resetView]);
+
+  useEffect(() => {
+    const timerJustExpired = previousSecondsLeftRef.current > 0 && secondsLeft === 0;
+    const roundJustCompleted = totalDifferences > 0 && previousFoundCountRef.current < totalDifferences && foundCount >= totalDifferences;
+
+    if (timerJustExpired || roundJustCompleted) {
+      resetViewForRoundEnd();
+    }
+
+    previousFoundCountRef.current = foundCount;
+    previousSecondsLeftRef.current = secondsLeft;
+  }, [foundCount, resetViewForRoundEnd, secondsLeft, totalDifferences]);
+
+  useEffect(() => {
+    if (!imageRectRef.current) {
+      return;
+    }
+
     setTransform(transformRef.current, { animated: true, updateZoomState: true });
   }, [imageRect?.height, imageRect?.offsetX, imageRect?.offsetY, imageRect?.width, setTransform, viewport.height, viewport.width]);
 
   const onPinchStateChange = useCallback((event: PinchStateEvent) => {
+    if (roundEndedRef.current) {
+      return;
+    }
+
     if (event.nativeEvent.state === State.BEGAN) {
       pinchStartRef.current = transformRef.current;
+      setIsGestureActive(true);
       return;
     }
 
     if (event.nativeEvent.state === State.END || event.nativeEvent.state === State.CANCELLED || event.nativeEvent.state === State.FAILED) {
+      setIsGestureActive(false);
       const current = transformRef.current;
       if (current.scale <= RESET_THRESHOLD) {
         resetView();
@@ -315,6 +418,10 @@ function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: Scen
   }, [resetView, setTransform]);
 
   const onPinchGesture = useCallback((event: PinchGestureEvent) => {
+    if (roundEndedRef.current) {
+      return;
+    }
+
     if (!imageRectRef.current) {
       return;
     }
@@ -335,6 +442,10 @@ function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: Scen
   }, [setTransform]);
 
   const onPanStateChange = useCallback((event: PanStateEvent) => {
+    if (roundEndedRef.current) {
+      return;
+    }
+
     if (event.nativeEvent.state === State.BEGAN) {
       panStartRef.current = transformRef.current;
       return;
@@ -349,6 +460,10 @@ function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: Scen
   }, [setTransform]);
 
   const onPanGesture = useCallback((event: PanGestureEvent) => {
+    if (roundEndedRef.current) {
+      return;
+    }
+
     const start = panStartRef.current;
     if (start.scale <= MIN_ZOOM + ZOOM_EPSILON) {
       return;
@@ -362,6 +477,10 @@ function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: Scen
   }, [setTransform]);
 
   const onDoubleTap = useCallback((event: TapStateEvent) => {
+    if (roundEndedRef.current) {
+      return;
+    }
+
     if (event.nativeEvent.state !== State.ACTIVE || !imageRectRef.current) {
       return;
     }
@@ -386,6 +505,7 @@ function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: Scen
     animatedStyle: {
       transform: [{ translateX }, { translateY }, { scale }],
     },
+    isGestureActive,
     isZoomed,
     onDoubleTap,
     onPanGesture,
@@ -413,7 +533,7 @@ function SceneCard({
   onTap?: (event: TapStateEvent) => void;
   scene: SpotDifferenceScene;
   title: string;
-  variant: "original" | "changed";
+  variant: ImageSide;
   zoomControls: ZoomControls;
 }) {
   const pinchRef = useRef(null);
@@ -429,7 +549,7 @@ function SceneCard({
       }}
     >
       <Animated.View style={[styles.transformedSceneContent, zoomControls.animatedStyle]}>
-        <Image source={variant === "original" ? scene.imageA : scene.imageB} style={styles.sceneImage} resizeMode="contain" />
+        <Image source={variant === "A" ? scene.imageA : scene.imageB} style={styles.sceneImage} resizeMode="contain" />
         {imageRect ? scene.differences.map((zone) => (
           foundSet.has(zone.id) ? <FoundMarker key={zone.id} zone={zone} imageRect={imageRect} /> : null
         )) : null}
@@ -446,7 +566,7 @@ function SceneCard({
         onGestureEvent={zoomControls.onPinchGesture}
         onHandlerStateChange={zoomControls.onPinchStateChange}
       >
-        <Animated.View>
+        <Animated.View collapsable={false} style={styles.gestureLayer}>
           <PanGestureHandler
             ref={panRef}
             enabled={zoomControls.isZoomed}
@@ -455,12 +575,12 @@ function SceneCard({
             onGestureEvent={zoomControls.onPanGesture}
             onHandlerStateChange={zoomControls.onPanStateChange}
           >
-            <Animated.View>
+            <Animated.View collapsable={false} style={styles.gestureLayer}>
               <TapGestureHandler ref={doubleTapRef} numberOfTaps={2} onHandlerStateChange={zoomControls.onDoubleTap}>
-                <Animated.View>
+                <Animated.View collapsable={false} style={styles.gestureLayer}>
                   {onTap ? (
                     <TapGestureHandler numberOfTaps={1} waitFor={doubleTapRef} onHandlerStateChange={onTap}>
-                      <Animated.View>{viewport}</Animated.View>
+                      <Animated.View collapsable={false} style={styles.gestureLayer}>{viewport}</Animated.View>
                     </TapGestureHandler>
                   ) : viewport}
                 </Animated.View>
@@ -474,7 +594,8 @@ function SceneCard({
 }
 
 function FoundMarker({ imageRect, zone }: { imageRect: ImageRect; zone: SpotDifferencePoint }) {
-  const radius = zone.radius * Math.min(imageRect.width, imageRect.height);
+  const hitRadius = zone.radius * Math.min(imageRect.width, imageRect.height);
+  const radius = clamp(hitRadius * FOUND_MARKER_RADIUS_SCALE, MIN_FOUND_MARKER_RADIUS, MAX_FOUND_MARKER_RADIUS);
   const centerX = imageRect.offsetX + zone.x * imageRect.width;
   const centerY = imageRect.offsetY + zone.y * imageRect.height;
 
@@ -491,9 +612,7 @@ function FoundMarker({ imageRect, zone }: { imageRect: ImageRect; zone: SpotDiff
           width: radius * 2,
         },
       ]}
-    >
-      <Text style={styles.foundMarkerText}>OK</Text>
-    </View>
+    />
   );
 }
 
@@ -547,6 +666,10 @@ function screenPointToSourcePoint(
     x: imageX / imageRect.width,
     y: imageY / imageRect.height,
   };
+}
+
+function findDifferenceAtPoint(differences: SpotDifferencePoint[], tap: NormalizedPoint) {
+  return differences.find((zone) => isInsideDifference(tap, zone));
 }
 
 function isInsideDifference(tap: NormalizedPoint, zone: SpotDifferencePoint) {
@@ -655,7 +778,7 @@ const styles = StyleSheet.create({
     marginTop: -Spacing.sm,
     textAlign: "center",
   },
-  zoomToolbar: {
+  resetToolbar: {
     alignItems: "flex-end",
   },
   resetButton: {
@@ -668,18 +791,13 @@ const styles = StyleSheet.create({
     minWidth: 112,
     paddingHorizontal: Spacing.md,
   },
-  resetButtonDisabled: {
-    borderColor: Colors.secondary,
-    opacity: 0.55,
-  },
+
   resetButtonText: {
     color: Colors.primary,
     fontFamily: Typography.bodySemiBold,
     fontSize: 13,
   },
-  resetButtonTextDisabled: {
-    color: Colors.textPrimary,
-  },
+
   scenesWrap: {
     gap: Spacing.md,
   },
@@ -697,6 +815,9 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodyBold,
     textAlign: "center",
   },
+  gestureLayer: {
+    width: "100%",
+  },
   scene: {
     backgroundColor: Colors.background,
     borderRadius: Radius.sm,
@@ -712,16 +833,9 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   foundMarker: {
-    alignItems: "center",
     borderColor: Colors.primary,
-    borderWidth: 3,
-    justifyContent: "center",
+    borderWidth: 2,
     position: "absolute",
-  },
-  foundMarkerText: {
-    color: Colors.primary,
-    fontFamily: Typography.bodyBold,
-    fontSize: 11,
   },
   devPanel: {
     backgroundColor: Colors.surface,
