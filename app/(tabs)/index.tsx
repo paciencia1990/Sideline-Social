@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import { router } from "expo-router";
-import { Bell, Gamepad2, Heart, MapPin, MessageCircle, Navigation, Play, RefreshCw, Star, Trophy } from "lucide-react-native";
+import { Bell, MapPin, MessageCircle, Navigation, Play, RefreshCw, Star, Trophy } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -230,6 +230,8 @@ export default function HomeScreen() {
           </View>
         </View>
 
+        <SecondaryActions />
+
         <ChallengeCard
           challenge={activeChallenge}
           error={error}
@@ -244,8 +246,6 @@ export default function HomeScreen() {
         ) : (
           <>
             {error ? <StateCard title={t("home.errorTitle")} body={error} /> : null}
-
-            <QuickActions />
 
             {activeSession ? (
               <TouchableOpacity
@@ -298,22 +298,26 @@ export default function HomeScreen() {
   );
 }
 
-function QuickActions() {
+function SecondaryActions() {
   const { t } = useTranslation();
   const actions = [
-    { label: t("home.playNow"), Icon: Gamepad2, route: "/(tabs)/games" },
-    { label: t("home.joinCode"), Icon: Play, route: "/(tabs)/games?join=1" },
-    { label: t("home.friends"), Icon: Heart, route: "/(tabs)/friends" },
     { label: t("home.chat"), Icon: MessageCircle, route: "/(social)/chat" },
     { label: t("home.leaderboard"), Icon: Trophy, route: "/leaderboard" },
   ];
 
   return (
-    <View style={styles.quickGrid}>
+    <View style={styles.secondaryActionRow}>
       {actions.map(({ Icon, label, route }) => (
-        <TouchableOpacity key={label} activeOpacity={0.86} onPress={() => router.push(route as never)} style={styles.quickAction}>
+        <TouchableOpacity
+          key={label}
+          accessibilityLabel={label}
+          accessibilityRole="button"
+          activeOpacity={0.86}
+          onPress={() => router.push(route as never)}
+          style={styles.secondaryActionCard}
+        >
           <Icon size={21} color={Colors.primary} />
-          <Text style={styles.quickText}>{label}</Text>
+          <Text style={styles.secondaryActionText}>{label}</Text>
         </TouchableOpacity>
       ))}
     </View>
@@ -627,29 +631,31 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodySemiBold,
     fontSize: 12,
   },
-  quickGrid: {
+  secondaryActionRow: {
+    alignItems: "stretch",
     flexDirection: "row",
-    flexWrap: "wrap",
     gap: Spacing.sm,
   },
-  quickAction: {
+  secondaryActionCard: {
     alignItems: "center",
     backgroundColor: Colors.surface,
     borderColor: Colors.secondary,
     borderRadius: Radius.button,
     borderWidth: 1,
-    flexBasis: "31%",
-    flexGrow: 1,
+    flex: 1,
     gap: Spacing.xs,
-    minHeight: 78,
     justifyContent: "center",
+    minHeight: 82,
+    minWidth: 0,
     padding: Spacing.sm,
     ...Shadow.card,
   },
-  quickText: {
+  secondaryActionText: {
     color: Colors.textHeading,
+    flexShrink: 1,
     fontFamily: Typography.bodySemiBold,
     fontSize: 12,
+    lineHeight: 16,
     textAlign: "center",
   },
   activeGameCard: {
