@@ -10,6 +10,7 @@ interface AppContextType {
   setLanguage: (lang: SupportedLanguage) => void;
   theme: "light" | "dark";
   activeMode: AppMode;
+  modeHydrated: boolean;
   setActiveMode: (mode: AppMode) => void;
 }
 
@@ -28,6 +29,7 @@ const AppContext = createContext<AppContextType>({
   setLanguage: () => {},
   theme: "light",
   activeMode: "parent",
+  modeHydrated: false,
   setActiveMode: () => {},
 });
 
@@ -36,11 +38,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     normalizeLanguage(i18n.resolvedLanguage ?? i18n.language)
   );
   const [activeMode, setActiveModeState] = useState<AppMode>("parent");
+  const [modeHydrated, setModeHydrated] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
+
     AsyncStorage.getItem(MODE_STORAGE_KEY)
-      .then((storedMode) => setActiveModeState(normalizeMode(storedMode)))
-      .catch(() => setActiveModeState("parent"));
+      .then((storedMode) => {
+        if (isMounted) setActiveModeState(normalizeMode(storedMode));
+      })
+      .catch(() => {
+        if (isMounted) setActiveModeState("parent");
+      })
+      .finally(() => {
+        if (isMounted) setModeHydrated(true);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -67,7 +83,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AppContext.Provider value={{ language, setLanguage, theme: "light", activeMode, setActiveMode }}>
+    <AppContext.Provider value={{ language, setLanguage, theme: "light", activeMode, modeHydrated, setActiveMode }}>
       {children}
     </AppContext.Provider>
   );

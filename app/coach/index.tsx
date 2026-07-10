@@ -6,13 +6,14 @@ import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { PARENT_PROFILE_ROUTE } from "@/constants/routes";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { getCurrentUserTeamMemberships, isCoachRole, switchActiveMode, type TeamMembership } from "@/services/teamService";
 
 export default function CoachHomeScreen() {
   const { t } = useTranslation();
-  const { activeMode, setActiveMode } = useApp();
+  const { activeMode, modeHydrated, setActiveMode } = useApp();
   const [memberships, setMemberships] = useState<TeamMembership[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -38,37 +39,27 @@ export default function CoachHomeScreen() {
     }, [loadTeams]),
   );
 
-  useEffect(() => {
-    const coachTeams = memberships.filter((membership) => isCoachRole(membership.role));
-    if (activeMode === "coach" && coachTeams.length === 0) {
-      setActiveMode("parent");
-    }
-  }, [activeMode, memberships, setActiveMode]);
-
   const coachTeams = memberships.filter((membership) => isCoachRole(membership.role));
   const parentTeams = memberships.filter((membership) => membership.role === "parent");
-  const selectedMembership = coachTeams[0] ?? memberships[0] ?? null;
+  const selectedMembership = coachTeams[0] ?? null;
   const selectedTeam = selectedMembership?.team ?? null;
-  const canUseCoachMode = coachTeams.length > 0;
+  const hasTeams = coachTeams.length > 0;
+  const teamSectionTitle = hasTeams ? t("coach.home.addTeam") : t("coach.home.getStarted");
+  const teamActionLabel = hasTeams ? t("coach.home.addTeam") : t("coach.team.createTeam");
 
-  const switchToCoach = useCallback(async () => {
-    if (!canUseCoachMode) return;
-    setIsSwitchingMode(true);
-    setError(null);
+  useEffect(() => {
+    if (!__DEV__ || loading || activeMode !== "coach") return;
 
-    try {
-      await switchActiveMode("coach");
-      setActiveMode("coach");
-    } catch (nextError) {
-      console.warn("[CoachHome] switch to coach error:", nextError);
-      setError(t("coach.home.error"));
-    } finally {
-      setIsSwitchingMode(false);
-    }
-  }, [canUseCoachMode, setActiveMode, t]);
+    console.log("[CoachMode:teamSection]", {
+      teamsLoading: loading,
+      teamCount: coachTeams.length,
+      hasTeams,
+      sectionTitle: hasTeams ? "Add Team" : "Get Started",
+    });
+  }, [activeMode, coachTeams.length, hasTeams, loading]);
 
   const switchToParent = useCallback(async () => {
-    const targetRoute = "/(tabs)/profile";
+    const targetRoute = PARENT_PROFILE_ROUTE;
     setIsSwitchingMode(true);
     setError(null);
 
@@ -94,11 +85,21 @@ export default function CoachHomeScreen() {
     }
   }, [activeMode, setActiveMode, t]);
 
+  if (!modeHydrated || activeMode !== "coach") {
+    return (
+      <ScreenWrapper>
+        <View style={styles.centerScreen}>
+          <ActivityIndicator color={Colors.primary} />
+        </View>
+      </ScreenWrapper>
+    );
+  }
+
   return (
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Text style={styles.kicker}>{activeMode === "coach" ? t("mode.coach") : t("mode.parent")}</Text>
+          <Text style={styles.kicker}>{t("mode.coach")}</Text>
           <Text style={styles.title}>{t("coach.home.title")}</Text>
           <Text style={styles.subtitle}>{t("coach.home.subtitle")}</Text>
         </View>
@@ -115,37 +116,24 @@ export default function CoachHomeScreen() {
         {!loading && !error ? (
           <>
             <Card style={styles.modeCard}>
-              <Text style={styles.cardTitle}>{activeMode === "coach" ? t("mode.viewingCoach") : t("mode.viewingParent")}</Text>
-              <Text style={styles.cardText}>
-                {canUseCoachMode ? t("coach.home.modeHelp") : t("coach.home.noCoachRole")}
-              </Text>
+              <Text style={styles.cardTitle}>{t("mode.viewingCoach")}</Text>
+              <Text style={styles.cardText}>{hasTeams ? t("coach.home.modeHelp") : t("coach.home.emptyBody")}</Text>
               <View style={styles.buttonRow}>
-                {activeMode === "coach" ? (
-                  <TouchableOpacity
-                    activeOpacity={0.86}
-                    disabled={isSwitchingMode}
-                    onPress={switchToParent}
-                    style={[styles.outlineButton, isSwitchingMode && styles.disabledButton]}
-                  >
-                    <Text style={styles.outlineButtonText}>{t("mode.switchToParent")}</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity
-                    activeOpacity={0.86}
-                    disabled={!canUseCoachMode || isSwitchingMode}
-                    onPress={switchToCoach}
-                    style={[styles.primaryButton, (!canUseCoachMode || isSwitchingMode) && styles.disabledButton]}
-                  >
-                    <Text style={styles.primaryButtonText}>{t("mode.switchToCoach")}</Text>
-                  </TouchableOpacity>
-                )}
+                <TouchableOpacity
+                  activeOpacity={0.86}
+                  disabled={isSwitchingMode}
+                  onPress={switchToParent}
+                  style={[styles.outlineButton, isSwitchingMode && styles.disabledButton]}
+                >
+                  <Text style={styles.outlineButtonText}>{t("mode.switchToParent")}</Text>
+                </TouchableOpacity>
               </View>
             </Card>
 
             {selectedTeam ? (
               <Card style={styles.cardGap}>
                 <Text style={styles.cardTitle}>{selectedTeam.name}</Text>
-                <Text style={styles.cardText}>{[selectedTeam.sport, selectedTeam.ageRange, selectedTeam.division].filter(Boolean).join(" • ")}</Text>
+                <Text style={styles.cardText}>{[selectedTeam.sport, selectedTeam.ageRange, selectedTeam.division].filter(Boolean).join(" - ")}</Text>
                 <Text style={styles.inviteCode}>{t("coach.team.inviteCode")}: {selectedTeam.inviteCode}</Text>
                 <View style={styles.quickGrid}>
                   <QuickAction label={t("coach.home.viewTeam")} Icon={Users} onPress={() => router.push({ pathname: "/coach/team", params: { teamId: selectedTeam.id } } as never)} />
@@ -158,13 +146,10 @@ export default function CoachHomeScreen() {
             )}
 
             <Card style={styles.cardGap}>
-              <Text style={styles.cardTitle}>{t("coach.home.getStarted")}</Text>
+              <Text style={styles.cardTitle}>{teamSectionTitle}</Text>
               <View style={styles.buttonRow}>
                 <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/coach/team" as never)} style={styles.primaryButton}>
-                  <Text style={styles.primaryButtonText}>{t("coach.team.createTeam")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/teams/join" as never)} style={styles.outlineButton}>
-                  <Text style={styles.outlineButtonText}>{t("coach.team.joinTeam")}</Text>
+                  <Text style={styles.primaryButtonText}>{teamActionLabel}</Text>
                 </TouchableOpacity>
               </View>
             </Card>
@@ -199,6 +184,7 @@ function StateCard({ body, title }: { body: string; title: string }) {
 }
 
 const styles = StyleSheet.create({
+  centerScreen: { alignItems: "center", flex: 1, justifyContent: "center" },
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
   header: { alignItems: "center", gap: Spacing.xs },
   kicker: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 12, textTransform: "uppercase" },
@@ -208,17 +194,17 @@ const styles = StyleSheet.create({
   modeCard: { gap: Spacing.md, borderLeftColor: Colors.accentGreen, borderLeftWidth: 4 },
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
-  cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
-  inviteCode: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 15, textAlign: "center" },
+  cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21, textAlign: "center" },
+  inviteCode: { color: Colors.primary, fontFamily: Typography.bodyBold, textAlign: "center" },
+  quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  quickAction: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.card, borderWidth: 1, flexBasis: "31%", flexGrow: 1, gap: Spacing.xs, minHeight: 86, justifyContent: "center", padding: Spacing.sm, ...Shadow.card },
+  quickText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center" },
   buttonRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, justifyContent: "center" },
   primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, flexGrow: 1, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   outlineButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexGrow: 1, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
   outlineButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
-  disabledButton: { opacity: 0.45 },
-  quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
-  quickAction: { alignItems: "center", backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexBasis: "31%", flexGrow: 1, gap: Spacing.xs, justifyContent: "center", minHeight: 82, padding: Spacing.sm, ...Shadow.card },
-  quickText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center" },
-  countRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, justifyContent: "center" },
-  countText: { backgroundColor: Colors.surface, borderRadius: Radius.sm, color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, overflow: "hidden", paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs },
+  disabledButton: { opacity: 0.6 },
+  countRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, justifyContent: "center" },
+  countText: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, fontSize: 12 },
 });

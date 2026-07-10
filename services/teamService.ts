@@ -281,7 +281,7 @@ export async function getTeamMembers(teamId: string): Promise<TeamMembership[]> 
       .filter((member) => member.status === "active");
   } catch (error) {
     console.warn("[TeamService] get members error:", error);
-    return [];
+    throw error;
   }
 }
 

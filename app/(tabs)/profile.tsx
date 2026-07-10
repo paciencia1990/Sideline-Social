@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { COACH_MODE_ROUTE, PARENT_PROFILE_ROUTE } from "@/constants/routes";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
@@ -19,13 +20,12 @@ const LANGUAGE_OPTIONS = [
 
 export default function ProfileScreen() {
   const { t } = useTranslation();
-  const { activeMode, language, setActiveMode, setLanguage } = useApp();
+  const { activeMode, language, modeHydrated, setActiveMode, setLanguage } = useApp();
   const { user, signOut } = useAuth();
   const [canUseCoachMode, setCanUseCoachMode] = useState(false);
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
   const isParentMode = activeMode === "parent";
-  const isCoachMode = activeMode === "coach";
 
   useEffect(() => {
     let isMounted = true;
@@ -41,50 +41,44 @@ export default function ProfileScreen() {
     };
   }, [user?.uid]);
 
-  const handleSwitchToParent = useCallback(async () => {
-    const targetRoute = "/(tabs)/profile";
+  const handleCoachPress = useCallback(async () => {
+    if (!canUseCoachMode || activeMode !== "parent") return;
+
+    const targetRoute = COACH_MODE_ROUTE;
     setIsSwitchingMode(true);
     setModeError(null);
 
     try {
       if (__DEV__) {
-        console.log("[ModeSwitch:toParent]", {
+        console.log("[ModeSwitch:toCoach]", {
           previousMode: activeMode,
-          nextMode: "parent",
-          currentRoute: "/(tabs)/profile",
+          nextMode: "coach",
+          currentRoute: PARENT_PROFILE_ROUTE,
           targetRoute,
         });
       }
 
-      await switchActiveMode("parent");
-      setActiveMode("parent");
+      await switchActiveMode("coach");
+      setActiveMode("coach");
       router.dismissAll();
       router.replace(targetRoute as never);
-    } catch (nextError) {
-      console.warn("[Profile] switch to parent error:", nextError);
-      setModeError(t("coach.home.error"));
-    } finally {
-      setIsSwitchingMode(false);
-    }
-  }, [activeMode, setActiveMode, t]);
-
-  const handleCoachPress = useCallback(async () => {
-    setIsSwitchingMode(true);
-    setModeError(null);
-
-    try {
-      if (canUseCoachMode) {
-        await switchActiveMode("coach");
-        setActiveMode("coach");
-      }
-      router.push("/coach" as never);
     } catch (nextError) {
       console.warn("[Profile] switch to coach error:", nextError);
       setModeError(t("coach.home.error"));
     } finally {
       setIsSwitchingMode(false);
     }
-  }, [canUseCoachMode, setActiveMode, t]);
+  }, [activeMode, canUseCoachMode, setActiveMode, t]);
+
+  if (!modeHydrated || !isParentMode) {
+    return (
+      <ScreenWrapper>
+        <View style={styles.loadingScreen}>
+          <ActivityIndicator color={Colors.primary} />
+        </View>
+      </ScreenWrapper>
+    );
+  }
 
   return (
     <ScreenWrapper>
@@ -132,31 +126,22 @@ export default function ProfileScreen() {
 
         <Card style={styles.languageCard}>
           <View style={styles.languageCopy}>
-            <Text style={styles.cardTitle}>{isCoachMode ? t("mode.viewingCoach") : t("mode.viewingParent")}</Text>
-            <Text style={styles.cardText}>{isParentMode && !canUseCoachMode ? t("coach.home.noCoachRole") : t("coach.home.modeHelp")}</Text>
+            <Text style={styles.cardTitle}>{t("mode.viewingParent")}</Text>
+            <Text style={styles.cardText}>{canUseCoachMode ? t("coach.home.modeHelp") : t("coach.home.noCoachRole")}</Text>
           </View>
           {modeError ? <Text style={styles.modeError}>{modeError}</Text> : null}
-          <View style={styles.modeActions}>
-            {isCoachMode ? (
-              <TouchableOpacity
-                activeOpacity={0.86}
-                disabled={isSwitchingMode}
-                onPress={handleSwitchToParent}
-                style={flattenStyle([styles.modeOutlineButton, isSwitchingMode && styles.modeDisabledButton])}
-              >
-                <Text style={styles.modeOutlineText}>{t("mode.switchToParent")}</Text>
-              </TouchableOpacity>
-            ) : (
+          {canUseCoachMode ? (
+            <View style={styles.modeActions}>
               <TouchableOpacity
                 activeOpacity={0.86}
                 disabled={isSwitchingMode}
                 onPress={handleCoachPress}
                 style={flattenStyle([styles.modePrimaryButton, isSwitchingMode && styles.modeDisabledButton])}
               >
-                <Text style={styles.modePrimaryText}>{canUseCoachMode ? t("mode.switchToCoach") : t("coach.team.createTeam")}</Text>
+                <Text style={styles.modePrimaryText}>{t("mode.switchToCoach")}</Text>
               </TouchableOpacity>
-            )}
-          </View>
+            </View>
+          ) : null}
         </Card>
       </ScrollView>
     </ScreenWrapper>
@@ -164,6 +149,11 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  loadingScreen: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+  },
   content: {
     padding: Spacing.lg,
     gap: Spacing.md,

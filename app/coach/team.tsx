@@ -1,60 +1,64 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
-import { useApp } from "@/context/AppContext";
 import {
-  createTeam,
   getCurrentUserTeamMemberships,
   getTeamMembers,
-  isCoachRole,
-  switchActiveMode,
-  switchActiveTeam,
   type Team,
   type TeamMembership,
 } from "@/services/teamService";
 
-const EMPTY_TEAM = {
-  name: "",
-  sport: "",
-  ageRange: "",
-  division: "",
-  season: "",
-};
-
 export default function CoachTeamScreen() {
   const { t } = useTranslation();
-  const { setActiveMode } = useApp();
   const params = useLocalSearchParams<{ teamId?: string | string[] }>();
   const requestedTeamId = normalizeParam(params.teamId);
   const [members, setMembers] = useState<TeamMembership[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
-  const [form, setForm] = useState(EMPTY_TEAM);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [isSwitchingMode, setIsSwitchingMode] = useState(false);
+  const [teamLoading, setTeamLoading] = useState(true);
+  const [parentsLoading, setParentsLoading] = useState(false);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  const [parentsError, setParentsError] = useState<string | null>(null);
 
   const loadTeam = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setTeamLoading(true);
+    setTeamError(null);
+    setParentsError(null);
+
     try {
       const nextMemberships = await getCurrentUserTeamMemberships();
       const selectedMembership = nextMemberships.find((membership) => membership.teamId === requestedTeamId) ?? nextMemberships[0] ?? null;
       const nextTeam = selectedMembership?.team ?? null;
+
       setSelectedTeam(nextTeam);
-      setMembers(nextTeam ? await getTeamMembers(nextTeam.id) : []);
+      setMembers([]);
+
+      if (!nextTeam) {
+        return;
+      }
+
+      setParentsLoading(true);
+      try {
+        setMembers(await getTeamMembers(nextTeam.id));
+      } catch (nextError) {
+        console.warn("[CoachTeam] parents load error:", nextError);
+        setMembers([]);
+        setParentsError(t("coach.team.parentsLoadError"));
+      } finally {
+        setParentsLoading(false);
+      }
     } catch (nextError) {
       console.warn("[CoachTeam] load error:", nextError);
-      setError(t("coach.team.error"));
+      setTeamError(t("coach.team.error"));
       setSelectedTeam(null);
       setMembers([]);
+      setParentsLoading(false);
     } finally {
-      setLoading(false);
+      setTeamLoading(false);
     }
   }, [requestedTeamId, t]);
 
@@ -62,130 +66,77 @@ export default function CoachTeamScreen() {
     void loadTeam();
   }, [loadTeam]);
 
-  const staffMembers = useMemo(() => members.filter((member) => isCoachRole(member.role)), [members]);
-  const parentMembers = useMemo(() => members.filter((member) => member.role === "parent"), [members]);
-
-  const handleSwitchToParent = useCallback(async () => {
-    const targetRoute = "/(tabs)/profile";
-    setIsSwitchingMode(true);
-    setError(null);
-
-    try {
-      if (__DEV__) {
-        console.log("[ModeSwitch:toParent]", {
-          previousMode: "coach",
-          nextMode: "parent",
-          currentRoute: "/coach/team",
-          targetRoute,
-        });
-      }
-
-      await switchActiveMode("parent");
-      setActiveMode("parent");
-      router.dismissAll();
-      router.replace(targetRoute as never);
-    } catch (nextError) {
-      console.warn("[CoachTeam] switch to parent error:", nextError);
-      setError(t("coach.team.error"));
-    } finally {
-      setIsSwitchingMode(false);
-    }
-  }, [setActiveMode, t]);
-
-  const handleCreate = useCallback(async () => {
-    if (!form.name.trim() || !form.sport.trim()) {
-      setError(t("coach.team.required"));
-      return;
-    }
-
-    setSaving(true);
-    setError(null);
-    try {
-      const team = await createTeam(form);
-      setActiveMode("coach");
-      await switchActiveTeam(team.id).catch(() => undefined);
-      setForm(EMPTY_TEAM);
-      router.replace({ pathname: "/coach/team", params: { teamId: team.id } } as never);
-    } catch (nextError) {
-      console.warn("[CoachTeam] create error:", nextError);
-      setError(getCreateTeamErrorMessage(nextError, t));
-    } finally {
-      setSaving(false);
-    }
-  }, [form, setActiveMode, t]);
+  const acceptedParents = useMemo(
+    () => members
+      .filter((member) => member.role === "parent" && member.status === "active")
+      .sort((first, second) => getParentName(first, t).localeCompare(getParentName(second, t))),
+    [members, t],
+  );
 
   return (
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <Text style={styles.title}>{t("coach.team.title")}</Text>
-          <Text style={styles.subtitle}>{t("coach.team.subtitle")}</Text>
-        </View>
-
-        {loading ? (
+        {teamLoading && !selectedTeam ? (
           <Card style={styles.centerCard}>
             <ActivityIndicator color={Colors.primary} />
             <Text style={styles.cardText}>{t("common.loading")}</Text>
           </Card>
         ) : null}
 
-        {error ? (
+        {teamError ? (
           <Card style={styles.errorCard}>
-            <Text style={styles.errorText}>{error}</Text>
+            <Text style={styles.errorText}>{teamError}</Text>
+            <TouchableOpacity accessibilityRole="button" activeOpacity={0.86} onPress={loadTeam} style={styles.retryButton}>
+              <Text style={styles.retryText}>{t("common.retry")}</Text>
+            </TouchableOpacity>
           </Card>
         ) : null}
-
-        {selectedTeam ? (
-          <Card style={styles.cardGap}>
-            <Text style={styles.cardTitle}>{selectedTeam.name}</Text>
-            <Text style={styles.cardText}>{[selectedTeam.sport, selectedTeam.ageRange, selectedTeam.division, selectedTeam.season].filter(Boolean).join(" - ")}</Text>
-            <Text style={styles.successText}>{t("coach.team.youAreCoach")}</Text>
-            <View style={styles.invitePanel}>
-              <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
-              <Text style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
-            </View>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity activeOpacity={0.86} onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: selectedTeam.id } } as never)} style={styles.primaryButton}>
-                <Text style={styles.primaryButtonText}>{t("coach.team.createMessage")}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/coach" as never)} style={styles.outlineButton}>
-                <Text style={styles.outlineButtonText}>{t("coach.team.viewTeam")}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.86}
-                disabled={isSwitchingMode}
-                onPress={handleSwitchToParent}
-                style={[styles.outlineButton, isSwitchingMode && styles.disabledButton]}
-              >
-                <Text style={styles.outlineButtonText}>{t("mode.switchToParent")}</Text>
-              </TouchableOpacity>
-            </View>
-          </Card>
-        ) : null}
-
-        {!selectedTeam && !loading ? (
-          <Card style={styles.centerCard}>
-            <Text style={styles.cardTitle}>{t("coach.team.emptyTitle")}</Text>
-            <Text style={styles.cardText}>{t("coach.team.emptyBody")}</Text>
-          </Card>
-        ) : null}
-
-        <Card style={styles.cardGap}>
-          <Text style={styles.cardTitle}>{t("coach.team.createTeam")}</Text>
-          <TeamInput label={t("coach.team.name")} value={form.name} onChangeText={(name) => setForm((current) => ({ ...current, name }))} />
-          <TeamInput label={t("coach.team.sport")} value={form.sport} onChangeText={(sport) => setForm((current) => ({ ...current, sport }))} />
-          <TeamInput label={t("coach.team.ageRange")} value={form.ageRange} onChangeText={(ageRange) => setForm((current) => ({ ...current, ageRange }))} />
-          <TeamInput label={t("coach.team.division")} value={form.division} onChangeText={(division) => setForm((current) => ({ ...current, division }))} />
-          <TeamInput label={t("coach.team.season")} value={form.season} onChangeText={(season) => setForm((current) => ({ ...current, season }))} />
-          <TouchableOpacity activeOpacity={0.86} disabled={saving} onPress={handleCreate} style={[styles.primaryButton, saving && styles.disabledButton]}>
-            {saving ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.primaryButtonText}>{t("coach.team.createTeam")}</Text>}
-          </TouchableOpacity>
-        </Card>
 
         {selectedTeam ? (
           <>
-            <MemberSection title={t("coach.team.staff")} members={staffMembers} />
-            <MemberSection title={t("coach.team.parents")} members={parentMembers} />
+            <Card style={styles.cardGap}>
+              <Text style={styles.cardTitle}>{selectedTeam.name}</Text>
+              <Text style={styles.cardText}>{formatTeamDetails(selectedTeam)}</Text>
+              <Text style={styles.successText}>{t("coach.team.youAreCoach")}</Text>
+              <View style={styles.invitePanel}>
+                <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
+                <Text style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
+              </View>
+            </Card>
+
+            <Card style={styles.cardGap}>
+              <Text accessibilityRole="header" style={styles.cardTitle}>{t("coach.team.parents")}</Text>
+              {parentsLoading ? (
+                <View accessibilityLiveRegion="polite" style={styles.centerInline}>
+                  <ActivityIndicator color={Colors.primary} />
+                  <Text style={styles.cardText}>{t("common.loading")}</Text>
+                </View>
+              ) : null}
+
+              {!parentsLoading && parentsError ? (
+                <View accessibilityLiveRegion="polite" style={styles.centerInline}>
+                  <Text style={styles.errorText}>{parentsError}</Text>
+                  <TouchableOpacity accessibilityRole="button" activeOpacity={0.86} onPress={loadTeam} style={styles.retryButton}>
+                    <Text style={styles.retryText}>{t("common.retry")}</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {!parentsLoading && !parentsError && acceptedParents.length === 0 ? (
+                <View accessibilityLiveRegion="polite" style={styles.emptyState}>
+                  <Text style={styles.emptyTitle}>{t("coach.team.noParentsTitle")}</Text>
+                  <Text style={styles.cardText}>{t("coach.team.noParentsBody")}</Text>
+                </View>
+              ) : null}
+
+              {!parentsLoading && !parentsError && acceptedParents.length > 0 ? (
+                <View style={styles.parentList}>
+                  {acceptedParents.map((parent) => (
+                    <ParentRow key={parent.userId} member={parent} />
+                  ))}
+                </View>
+              ) : null}
+            </Card>
           </>
         ) : null}
       </ScrollView>
@@ -193,57 +144,42 @@ export default function CoachTeamScreen() {
   );
 }
 
-function TeamInput({ label, onChangeText, value }: { label: string; onChangeText: (value: string) => void; value: string }) {
+function ParentRow({ member }: { member: TeamMembership }) {
+  const { t } = useTranslation();
+  const name = getParentName(member, t);
+
   return (
-    <View style={styles.inputGroup}>
-      <Text style={styles.inputLabel}>{label}</Text>
-      <TextInput autoCapitalize="words" onChangeText={onChangeText} placeholder={label} placeholderTextColor={Colors.textPrimary} style={styles.input} value={value} />
+    <View accessibilityLabel={t("coach.team.parentAccessibilityLabel", { name })} accessible style={styles.parentRow}>
+      <View importantForAccessibility="no" style={styles.parentAvatar}>
+        <Text style={styles.parentInitial}>{getInitial(name)}</Text>
+      </View>
+      <Text style={styles.parentName}>{name}</Text>
     </View>
   );
 }
 
-function MemberSection({ members, title }: { members: TeamMembership[]; title: string }) {
-  const { t } = useTranslation();
-  return (
-    <Card style={styles.cardGap}>
-      <Text style={styles.cardTitle}>{title}</Text>
-      {members.length === 0 ? <Text style={styles.cardText}>{t("coach.team.noMembers")}</Text> : null}
-      {members.map((member) => (
-        <View key={member.userId} style={styles.memberRow}>
-          <Text style={styles.memberName}>{member.displayName}</Text>
-          <Text style={styles.roleText}>{member.role}</Text>
-        </View>
-      ))}
-    </Card>
-  );
+function formatTeamDetails(team: Team) {
+  return [team.sport, team.ageRange, team.division, team.season].filter(Boolean).join(" - ");
 }
 
-
-function getCreateTeamErrorMessage(error: unknown, t: (key: string) => string) {
-  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
-
-  if (code === "permission-denied") {
-    return t("coach.team.permissionBlocked");
-  }
-
-  if (code === "unauthenticated") {
-    return t("coach.team.signInRequired");
-  }
-
-  return error instanceof Error ? error.message : t("coach.team.createErrorBody");
+function getParentName(member: TeamMembership, t: (key: string) => string) {
+  return member.displayName.trim() || t("coach.team.teamParentFallback");
 }
+
+function getInitial(name: string) {
+  return name.trim().charAt(0).toUpperCase() || "P";
+}
+
 function normalizeParam(value?: string | string[]) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
 const styles = StyleSheet.create({
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
-  header: { alignItems: "center", gap: Spacing.xs },
-  title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 31, textAlign: "center" },
-  subtitle: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, lineHeight: 21, textAlign: "center" },
   cardGap: { gap: Spacing.md },
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
-  errorCard: { borderLeftColor: Colors.primary, borderLeftWidth: 4 },
+  centerInline: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.md },
+  errorCard: { alignItems: "center", borderLeftColor: Colors.primary, borderLeftWidth: 4, gap: Spacing.md },
   errorText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   successText: { color: Colors.accentGreen, fontFamily: Typography.bodyBold, textAlign: "center" },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
@@ -251,16 +187,13 @@ const styles = StyleSheet.create({
   invitePanel: { alignItems: "center", backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, padding: Spacing.md },
   inviteLabel: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, fontSize: 12, textTransform: "uppercase" },
   inviteCode: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 26 },
-  inputGroup: { gap: Spacing.xs },
-  inputLabel: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13 },
-  input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 46, paddingHorizontal: Spacing.md },
-  buttonRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
-  primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, flexGrow: 1, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
-  primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 14 },
-  outlineButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexGrow: 1, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
-  outlineButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
-  disabledButton: { opacity: 0.55 },
-  memberRow: { alignItems: "center", borderBottomColor: Colors.secondary, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", paddingVertical: Spacing.sm },
-  memberName: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodySemiBold },
-  roleText: { color: Colors.textPrimary, fontFamily: Typography.bodyMedium, fontSize: 12 },
+  retryButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 42, paddingHorizontal: Spacing.lg },
+  retryText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
+  emptyState: { alignItems: "center", gap: Spacing.xs, paddingVertical: Spacing.md },
+  emptyTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 16, textAlign: "center" },
+  parentList: { gap: Spacing.xs },
+  parentRow: { alignItems: "center", borderBottomColor: Colors.secondary, borderBottomWidth: 1, flexDirection: "row", gap: Spacing.sm, paddingVertical: Spacing.sm },
+  parentAvatar: { alignItems: "center", backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: 18, borderWidth: 1, height: 36, justifyContent: "center", width: 36 },
+  parentInitial: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 15 },
+  parentName: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodySemiBold, fontSize: 15 },
 });
