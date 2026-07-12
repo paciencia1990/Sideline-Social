@@ -7,6 +7,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 
+import { getPendingCoachUpdateRoute } from "@/services/notificationService";
 LogBox.ignoreAllLogs(false);
 
 export default function Index() {
@@ -22,6 +23,17 @@ export default function Index() {
       if (!mounted) return;
 
       if (user) {
+        try {
+          const pendingRoute = await getPendingCoachUpdateRoute();
+          if (!mounted) return;
+          if (pendingRoute) {
+            router.replace(pendingRoute as never);
+            return;
+          }
+        } catch (error) {
+          console.warn("[Notifications] initial route error:", getErrorCode(error));
+        }
+
         router.replace("/(tabs)");
         return;
       }
@@ -43,6 +55,10 @@ export default function Index() {
       </View>
     </ScreenWrapper>
   );
+}
+
+function getErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
 }
 
 const styles = StyleSheet.create({

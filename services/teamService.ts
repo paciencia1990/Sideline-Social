@@ -4,19 +4,32 @@ import {
   doc,
   getDoc,
   getDocs,
-  limit,
-  query,
   serverTimestamp,
   setDoc,
-  where,
   writeBatch,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
-import { auth, db } from "@/config/firebase";
+import { auth, db, functions } from "@/config/firebase";
 
 export type TeamRole = "parent" | "coach" | "assistantCoach" | "teamParent";
-export type TeamMemberStatus = "active" | "pending";
+export type TeamMemberStatus = "active" | "pending" | "inactive" | "removed";
+export type TeamRoleFlags = {
+  parent: boolean;
+  coach: boolean;
+  staff: boolean;
+};
+export type TeamRoleKey = keyof TeamRoleFlags;
+
 export type AppMode = "parent" | "coach";
+
+export type TeamLookupOptions = {
+  throwOnError?: boolean;
+};
+
+export type TeamChildInput = {
+  childIds?: string[];
+};
 
 export type Team = {
   id: string;
@@ -40,7 +53,10 @@ export type TeamMembership = {
   teamId: string;
   userId: string;
   displayName: string;
+  childId?: string | null;
+  childName: string;
   role: TeamRole;
+  roles: TeamRoleFlags;
   status: TeamMemberStatus;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -64,7 +80,18 @@ export function isCoachRole(role?: string | null) {
   return COACH_ROLES.includes(role as TeamRole);
 }
 
-export async function getCurrentUserTeamMemberships(): Promise<TeamMembership[]> {
+export function hasTeamRole(
+  membership: Pick<TeamMembership, "roles"> | null | undefined,
+  role: TeamRoleKey,
+) {
+  return membership?.roles[role] === true;
+}
+
+export function hasCoachAccess(membership: Pick<TeamMembership, "roles"> | null | undefined) {
+  return hasTeamRole(membership, "coach") || hasTeamRole(membership, "staff");
+}
+
+export async function getCurrentUserTeamMemberships(options: TeamLookupOptions = {}): Promise<TeamMembership[]> {
   const user = auth.currentUser;
   if (!user) return [];
 
@@ -75,28 +102,42 @@ export async function getCurrentUserTeamMemberships(): Promise<TeamMembership[]>
     }
 
     const teamIds = readIndexedTeamIds(userSnapshot.data());
-    const memberships = await Promise.all(teamIds.map((teamId) => getIndexedMembership(teamId, user.uid)));
+    const results = await Promise.allSettled(
+      teamIds.map((teamId) => getIndexedMembership(teamId, user.uid, options)),
+    );
+    const memberships = results
+      .filter((result): result is PromiseFulfilledResult<TeamMembership | null> => result.status === "fulfilled")
+      .map((result) => result.value)
+      .filter((membership): membership is TeamMembership => Boolean(membership));
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (options.throwOnError && memberships.length === 0 && failed) throw failed.reason;
 
-    return memberships.filter((membership): membership is TeamMembership => Boolean(membership));
+    return memberships;
   } catch (error) {
     logMembershipLookupIssue(error);
+    if (options.throwOnError) throw error;
     return [];
   }
 }
 
-async function getIndexedMembership(teamId: string, userId: string): Promise<TeamMembership | null> {
+async function getIndexedMembership(teamId: string, userId: string, options: TeamLookupOptions): Promise<TeamMembership | null> {
   try {
-    const [teamSnapshot, memberSnapshot] = await Promise.all([
-      getDoc(doc(db, "teams", teamId)),
-      getDoc(doc(db, "teams", teamId, "members", userId)),
-    ]);
-
-    if (!teamSnapshot.exists() || !memberSnapshot.exists()) {
+    // Read the caller's membership first. A removed parent can still read their
+    // own membership document, but no longer has permission to read the team.
+    // Checking status before the team lookup lets stale user indexes resolve to
+    // an inactive membership instead of surfacing a misleading permission error.
+    const memberSnapshot = await getDoc(doc(db, "teams", teamId, "members", userId));
+    if (!memberSnapshot.exists()) {
       return null;
     }
 
     const membership = normalizeMembership(memberSnapshot.id, { ...memberSnapshot.data(), teamId });
     if (membership.status !== "active") {
+      return null;
+    }
+
+    const teamSnapshot = await getDoc(doc(db, "teams", teamId));
+    if (!teamSnapshot.exists()) {
       return null;
     }
 
@@ -106,6 +147,7 @@ async function getIndexedMembership(teamId: string, userId: string): Promise<Tea
     };
   } catch (error) {
     logMembershipLookupIssue(error, teamId);
+    if (options.throwOnError) throw error;
     return null;
   }
 }
@@ -135,12 +177,12 @@ function logMembershipLookupIssue(error: unknown, teamId?: string) {
 
 export async function getCoachTeams(): Promise<TeamMembership[]> {
   const memberships = await getCurrentUserTeamMemberships();
-  return memberships.filter((membership) => isCoachRole(membership.role));
+  return memberships.filter(hasCoachAccess);
 }
 
-export async function getParentTeams(): Promise<TeamMembership[]> {
-  const memberships = await getCurrentUserTeamMemberships();
-  return memberships.filter((membership) => membership.role === "parent");
+export async function getParentTeams(options: TeamLookupOptions = {}): Promise<TeamMembership[]> {
+  const memberships = await getCurrentUserTeamMemberships(options);
+  return memberships.filter((membership) => hasTeamRole(membership, "parent"));
 }
 
 export async function createTeam(input: TeamInput): Promise<Team> {
@@ -174,6 +216,11 @@ export async function createTeam(input: TeamInput): Promise<Team> {
     teamId: teamRef.id,
     displayName,
     role: "coach",
+    roles: {
+      parent: false,
+      coach: true,
+      staff: false,
+    },
     status: "active",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -215,50 +262,17 @@ export async function createTeam(input: TeamInput): Promise<Team> {
   return created;
 }
 
-export async function joinTeamByInviteCode(inviteCode: string): Promise<Team> {
-  const user = requireUser();
-  const normalizedCode = inviteCode.trim().toUpperCase();
-  const teamsQuery = query(collection(db, "teams"), where("inviteCode", "==", normalizedCode), limit(1));
-  const snapshot = await getDocs(teamsQuery);
-  const teamDoc = snapshot.docs[0];
-
-  if (!teamDoc) {
-    throw new Error("Team invite code was not found.");
-  }
-
-  const displayName = resolveDisplayName();
-  const batch = writeBatch(db);
-  batch.set(
-    doc(db, "teams", teamDoc.id, "members", user.uid),
-    {
-      userId: user.uid,
-      teamId: teamDoc.id,
-      displayName,
-      role: "parent",
-      status: "active",
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-  batch.update(doc(db, "teams", teamDoc.id), {
-    parentIds: arrayUnion(user.uid),
-    updatedAt: serverTimestamp(),
+export async function joinTeamByInviteCode(inviteCode: string, child: TeamChildInput = {}): Promise<Team> {
+  const callable = httpsCallable<
+    { inviteCode: string; childIds: string[] },
+    { team: Record<string, unknown> & { id: string } }
+  >(functions, "joinParentTeamByInviteCode");
+  const response = await callable({
+    inviteCode: inviteCode.trim().toUpperCase(),
+    childIds: Array.from(new Set(child.childIds ?? [])),
   });
-  batch.set(
-    doc(db, "users", user.uid),
-    {
-      activeTeamId: teamDoc.id,
-      parentTeamIds: arrayUnion(teamDoc.id),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-  await batch.commit();
-
-  return normalizeTeam(teamDoc.id, teamDoc.data());
+  return normalizeTeam(response.data.team.id, response.data.team);
 }
-
 export async function getTeamById(teamId: string): Promise<Team | null> {
   if (!teamId) return null;
 
@@ -375,18 +389,43 @@ function normalizeMembership(id: string, data: Record<string, unknown>): TeamMem
     teamId: readString(data.teamId),
     userId: readString(data.userId, id),
     displayName: readString(data.displayName, "Sideline Parent"),
+    childId: readNullableString(data.childId),
+    childName: readString(data.childName),
     role: readRole(data.role),
-    status: data.status === "pending" ? "pending" : "active",
+    roles: resolveTeamRoles(data.roles, data.role),
+    status: readMemberStatus(data.status),
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };
 }
 
+function readMemberStatus(value: unknown): TeamMemberStatus {
+  if (value === "active" || value === "pending" || value === "inactive" || value === "removed") {
+    return value;
+  }
+  return "inactive";
+}
 function readRole(value: unknown): TeamRole {
   if (value === "coach" || value === "assistantCoach" || value === "teamParent" || value === "parent") {
     return value;
   }
   return "parent";
+}
+
+export function resolveTeamRoles(value: unknown, legacyRole: unknown): TeamRoleFlags {
+  const roles = isRecord(value) ? value : {};
+  return {
+    parent: roles.parent === true || legacyRole === "parent",
+    coach: roles.coach === true || legacyRole === "coach",
+    staff:
+      roles.staff === true ||
+      legacyRole === "assistantCoach" ||
+      legacyRole === "teamParent",
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readString(value: unknown, fallback = "") {

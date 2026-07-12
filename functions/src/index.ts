@@ -7,9 +7,27 @@
  *  1. updateActiveMemberCount — triggered on squadMemberships writes
  *  2. deactivateInactiveMembers — scheduled daily at 02:00 UTC
  */
+import { createHash } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import * as functions from 'firebase-functions';
+import {
+  WEEKLY_CHALLENGES,
+  getPreviousWeekKey,
+  getWeekInfo,
+  resolveTimeZone,
+  selectWeeklyChallenge,
+} from './weeklyChallengeCore';
+import {
+  activeLinkReferencesChild,
+  allChildProfilesExist,
+  hasParentRole,
+  legacyRoleForMergedMembership,
+  mergeChildIds,
+  mergeParentRole,
+  normalizeChildIds,
+  removeChildReference,
+} from './teamMembershipCore';
 
 admin.initializeApp();
 
@@ -358,3 +376,505 @@ export const cleanupExpiredGameSessions = functions.pubsub
     console.log(`[cleanupExpiredGameSessions] Removed ${toDelete.length} expired sessions.`);
     return null;
   });
+// ---------------------------------------------------------------------------
+// Weekly parent challenges
+// Assignment and reward processing stay server-side so clients cannot choose
+// challenge rewards or add Sideline Stars directly.
+// ---------------------------------------------------------------------------
+
+export const getCurrentWeeklyChallenge = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to view your weekly challenge.');
+
+  const firestore = admin.firestore();
+  const userRef = firestore.collection('users').doc(uid);
+  const userSnapshot = await userRef.get();
+  if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
+
+  const storedTimezone = userSnapshot.data()?.timezone;
+  const requestedTimezone = typeof data?.timezone === 'string' ? data.timezone : null;
+  const timezone = resolveTimeZone(typeof storedTimezone === 'string' ? storedTimezone : null, requestedTimezone);
+  const { weekKey, nextWeekKey } = getWeekInfo(timezone);
+  const assignmentRef = userRef.collection('weeklyChallenges').doc(weekKey);
+  const previousRef = userRef.collection('weeklyChallenges').doc(getPreviousWeekKey(weekKey));
+
+  const assignment = await firestore.runTransaction(async (transaction) => {
+    const currentSnapshot = await transaction.get(assignmentRef);
+    if (currentSnapshot.exists) return currentSnapshot.data()!;
+
+    const previousSnapshot = await transaction.get(previousRef);
+    const previousChallengeId = previousSnapshot.exists ? previousSnapshot.data()?.challengeId : null;
+    const challenge = selectWeeklyChallenge(uid, weekKey, previousChallengeId);
+    const record = {
+      weekKey,
+      challengeId: challenge.id,
+      title: challenge.title,
+      description: challenge.description,
+      points: challenge.points,
+      category: challenge.category,
+      isActive: challenge.isActive,
+      assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+      completed: false,
+      completedAt: null,
+      pointsAwarded: false,
+      timezone,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    transaction.create(assignmentRef, record);
+    return record;
+  });
+
+  return { challenge: serializeWeeklyChallenge(assignment, nextWeekKey) };
+});
+
+export const completeWeeklyChallenge = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to complete your weekly challenge.');
+  const weekKey = typeof data?.weekKey === 'string' ? data.weekKey : '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekKey)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid weekly challenge key is required.');
+  }
+
+  const firestore = admin.firestore();
+  const userRef = firestore.collection('users').doc(uid);
+  const assignmentRef = userRef.collection('weeklyChallenges').doc(weekKey);
+  const rewardId = `weeklyChallenge_${weekKey}`;
+  const rewardRef = userRef.collection('rewardTransactions').doc(rewardId);
+  const activityRef = firestore.collection('activity').doc(`${rewardId}_${uid}`);
+
+  const result = await firestore.runTransaction(async (transaction) => {
+    const assignmentSnapshot = await transaction.get(assignmentRef);
+    const rewardSnapshot = await transaction.get(rewardRef);
+    const userSnapshot = await transaction.get(userRef);
+    if (!assignmentSnapshot.exists || !userSnapshot.exists) {
+      throw new functions.https.HttpsError('failed-precondition', 'Weekly challenge assignment not found.');
+    }
+
+    const assignment = assignmentSnapshot.data()!;
+    const timezone = resolveTimeZone(typeof assignment.timezone === 'string' ? assignment.timezone : null);
+    const currentWeek = getWeekInfo(timezone);
+    if (currentWeek.weekKey !== weekKey) {
+      throw new functions.https.HttpsError('failed-precondition', 'This weekly challenge is no longer active.');
+    }
+
+    const definition = WEEKLY_CHALLENGES.find((challenge) => challenge.id === assignment.challengeId && challenge.isActive);
+    if (!definition) throw new functions.https.HttpsError('failed-precondition', 'Weekly challenge is not valid.');
+
+    const currentStars = typeof userSnapshot.data()?.sidelineStars === 'number' ? userSnapshot.data()!.sidelineStars : 0;
+    const alreadyCompleted = assignment.completed === true || assignment.pointsAwarded === true || rewardSnapshot.exists;
+    if (alreadyCompleted) {
+      if (assignment.completed !== true || assignment.pointsAwarded !== true) {
+        transaction.update(assignmentRef, {
+          completed: true,
+          pointsAwarded: true,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+      return {
+        assignment: { ...assignment, completed: true, pointsAwarded: true },
+        alreadyCompleted: true,
+        pointsAwarded: 0,
+        sidelineStars: currentStars,
+        nextResetKey: currentWeek.nextWeekKey,
+      };
+    }
+
+    const completedAt = admin.firestore.Timestamp.now();
+    transaction.update(assignmentRef, {
+      completed: true,
+      completedAt,
+      pointsAwarded: true,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    transaction.update(userRef, {
+      sidelineStars: admin.firestore.FieldValue.increment(definition.points),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    transaction.create(rewardRef, {
+      transactionId: rewardId,
+      type: 'weekly_challenge',
+      weekKey,
+      challengeId: definition.id,
+      points: definition.points,
+      awardedAt: completedAt,
+    });
+    const displayName = userSnapshot.data()?.displayName || 'Sideline Parent';
+    transaction.set(activityRef, {
+      type: 'complete_challenge',
+      userId: uid,
+      displayName,
+      avatarUrl: userSnapshot.data()?.photoURL ?? null,
+      squadId: null,
+      challengeId: definition.id,
+      weekKey,
+      message: `${displayName} completed this week's challenge!`,
+      message_es: `¡${displayName} completó el reto de esta semana!`,
+      createdAt: completedAt,
+    });
+
+    return {
+      assignment: { ...assignment, completed: true, completedAt, pointsAwarded: true },
+      alreadyCompleted: false,
+      pointsAwarded: definition.points,
+      sidelineStars: currentStars + definition.points,
+      nextResetKey: currentWeek.nextWeekKey,
+    };
+  });
+
+  return {
+    challenge: serializeWeeklyChallenge(result.assignment, result.nextResetKey),
+    alreadyCompleted: result.alreadyCompleted,
+    pointsAwarded: result.pointsAwarded,
+    sidelineStars: result.sidelineStars,
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Private per-device notification tokens
+// Tokens are never stored on broadly readable user profiles and are bound to
+// the currently authenticated account by callable functions.
+// ---------------------------------------------------------------------------
+
+export const registerDeviceNotificationToken = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to register notifications.');
+
+  const token = typeof data?.token === 'string' ? data.token.trim() : '';
+  const platform = data?.platform;
+  if (platform !== 'android' || token.length < 20 || token.length > 4096) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid Android notification token is required.');
+  }
+
+  const firestore = admin.firestore();
+  const tokenId = createHash('sha256').update(token).digest('hex');
+  await Promise.all([
+    firestore.collection('notificationTokens').doc(tokenId).set({
+      uid,
+      token,
+      platform,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }),
+    // Remove the legacy profile fields if a development build ever wrote them.
+    firestore.collection('users').doc(uid).set({
+      fcmToken: admin.firestore.FieldValue.delete(),
+      fcmTokenUpdatedAt: admin.firestore.FieldValue.delete(),
+    }, { merge: true }),
+  ]);
+
+  return { registered: true };
+});
+
+export const unregisterDeviceNotificationToken = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to unregister notifications.');
+
+  const token = typeof data?.token === 'string' ? data.token.trim() : '';
+  if (token.length < 20 || token.length > 4096) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid notification token is required.');
+  }
+
+  const tokenId = createHash('sha256').update(token).digest('hex');
+  const tokenRef = admin.firestore().collection('notificationTokens').doc(tokenId);
+  const tokenSnapshot = await tokenRef.get();
+  if (tokenSnapshot.exists && tokenSnapshot.data()?.uid === uid) {
+    await tokenRef.delete();
+    return { unregistered: true };
+  }
+  return { unregistered: false };
+});
+
+// ---------------------------------------------------------------------------
+// Coach update notifications
+// Delivery contains team and announcement identifiers only. Child identity
+// stays in the parent's private Firestore area and is never sent through FCM.
+// ---------------------------------------------------------------------------
+
+export const notifyParentsOfTeamAnnouncement = functions.firestore
+  .document('teams/{teamId}/announcements/{announcementId}')
+  .onCreate(async (snapshot, context) => {
+    const announcement = snapshot.data();
+    if (announcement.audience !== 'parents' && announcement.audience !== 'all') return null;
+
+    const teamId = context.params.teamId as string;
+    const announcementId = context.params.announcementId as string;
+    const firestore = admin.firestore();
+    const membersSnapshot = await firestore.collection('teams').doc(teamId).collection('members')
+      .where('status', '==', 'active')
+      .get();
+    if (membersSnapshot.empty) return null;
+
+    // Lock-screen copy is intentionally generic. The authenticated destination
+    // reloads the team and announcement after membership rules are rechecked.
+    const title = 'New team update';
+    const body = 'Open Sideline Social to view it.';
+    const deliveries = await Promise.allSettled(
+      membersSnapshot.docs.map(async (memberSnapshot) => {
+        const member = memberSnapshot.data();
+        if (!hasParentRole(member)) return;
+        const tokenSnapshot = await firestore.collection('notificationTokens')
+          .where('uid', '==', memberSnapshot.id)
+          .get();
+        if (tokenSnapshot.empty) return;
+
+        await Promise.all(tokenSnapshot.docs.map(async (tokenDocument) => {
+          const token = tokenDocument.data()?.token;
+          if (typeof token !== 'string' || !token) return;
+
+          try {
+            await admin.messaging().send({
+              token,
+              notification: { title, body },
+              data: {
+                type: 'coach_update',
+                teamId,
+                announcementId,
+                route: '/teams/' + teamId + '/announcements/' + announcementId,
+              },
+              android: {
+                notification: {
+                  channelId: 'coach-updates',
+                },
+              },
+            });
+          } catch (error) {
+            const code = typeof error === 'object' && error && 'code' in error
+              ? String(error.code)
+              : '';
+            if (
+              code === 'messaging/registration-token-not-registered' ||
+              code === 'messaging/invalid-registration-token'
+            ) {
+              await tokenDocument.ref.delete();
+            }
+            throw error;
+          }
+        }));
+      }),
+    );
+
+    const failures = deliveries.filter((delivery) => delivery.status === 'rejected');
+    if (failures.length > 0) {
+      console.warn('[notifyParentsOfTeamAnnouncement] delivery failures', {
+        failures: failures.length,
+        teamId,
+        announcementId,
+      });
+    }
+    return null;
+  });
+// ---------------------------------------------------------------------------
+// Parent team invite joining
+// Invite codes are resolved server-side because private team rules intentionally
+// prohibit clients from listing or querying the teams collection.
+// ---------------------------------------------------------------------------
+
+export const joinParentTeamByInviteCode = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to join a team.');
+
+  const inviteCode = typeof data?.inviteCode === 'string' ? data.inviteCode.trim().toUpperCase() : '';
+  let childIds: string[];
+  try {
+    childIds = normalizeChildIds(data?.childIds);
+  } catch (error) {
+    throw new functions.https.HttpsError('invalid-argument', error instanceof Error ? error.message : 'Valid child profiles are required.');
+  }
+  if (!/^[A-HJ-NP-Z2-9]{6}$/.test(inviteCode)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid team code is required.');
+  }
+
+  const firestore = admin.firestore();
+  const teamQuery = await firestore.collection('teams').where('inviteCode', '==', inviteCode).limit(2).get();
+  const teamSnapshot = teamQuery.docs[0];
+  if (!teamSnapshot) throw new functions.https.HttpsError('not-found', 'Team invite code was not found.');
+  if (teamQuery.size > 1) {
+    throw new functions.https.HttpsError('failed-precondition', 'This team code is not unique. Ask the coach for a new code.');
+  }
+
+  const teamRef = teamSnapshot.ref;
+  const memberRef = teamRef.collection('members').doc(uid);
+  const userRef = firestore.collection('users').doc(uid);
+  const linkRef = userRef.collection('teamChildLinks').doc(teamRef.id);
+  const childRefs = childIds.map((childId) => userRef.collection('children').doc(childId));
+
+  await firestore.runTransaction(async (transaction) => {
+    const [memberSnapshot, userSnapshot, linkSnapshot, ...childSnapshots] = await transaction.getAll(
+      memberRef,
+      userRef,
+      linkRef,
+      ...childRefs,
+    );
+    if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
+    if (!allChildProfilesExist(childIds, childSnapshots.map((childSnapshot) => childSnapshot.exists))) {
+      throw new functions.https.HttpsError('permission-denied', 'Every selected child profile must belong to this account.');
+    }
+    const member = memberSnapshot.exists ? memberSnapshot.data() : undefined;
+    if (member?.status === 'removed') {
+      throw new functions.https.HttpsError('permission-denied', 'A coach must restore this removed membership.');
+    }
+
+    const roles = mergeParentRole(member?.roles, member?.role);
+    const linkedChildIds = mergeChildIds(linkSnapshot.data()?.childIds, childIds);
+    const displayName = userSnapshot.data()?.displayName
+      || context.auth?.token?.name
+      || context.auth?.token?.email
+      || 'Sideline Parent';
+    transaction.set(memberRef, {
+      userId: uid,
+      teamId: teamRef.id,
+      displayName,
+      roles,
+      role: legacyRoleForMergedMembership(member?.role, roles),
+      status: 'active',
+      createdAt: memberSnapshot.exists
+        ? member?.createdAt ?? admin.firestore.FieldValue.serverTimestamp()
+        : admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    transaction.set(linkRef, {
+      teamId: teamRef.id,
+      childIds: linkedChildIds,
+      status: 'active',
+      createdAt: linkSnapshot.exists
+        ? linkSnapshot.data()?.createdAt ?? admin.firestore.FieldValue.serverTimestamp()
+        : admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    transaction.update(teamRef, {
+      parentIds: admin.firestore.FieldValue.arrayUnion(uid),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    transaction.set(userRef, {
+      activeTeamId: teamRef.id,
+      parentTeamIds: admin.firestore.FieldValue.arrayUnion(teamRef.id),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+
+  const team = teamSnapshot.data();
+  return {
+    team: {
+      id: teamRef.id,
+      name: team.name ?? '',
+      sport: team.sport ?? '',
+      ageRange: team.ageRange ?? '',
+      division: team.division ?? '',
+      season: team.season ?? '',
+      leagueId: team.leagueId ?? null,
+      squadId: team.squadId ?? null,
+      createdBy: team.createdBy ?? '',
+      inviteCode: team.inviteCode ?? '',
+      coachIds: team.coachIds ?? [],
+      parentIds: Array.from(new Set([...(team.parentIds ?? []), uid])),
+    },
+  };
+});
+
+export const setParentTeamChildLinks = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to update team children.');
+  const teamId = typeof data?.teamId === 'string' ? data.teamId.trim() : '';
+  let childIds: string[];
+  try {
+    childIds = normalizeChildIds(data?.childIds, { allowEmpty: true });
+  } catch (error) {
+    throw new functions.https.HttpsError('invalid-argument', error instanceof Error ? error.message : 'Valid child profiles are required.');
+  }
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(teamId)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid team is required.');
+  }
+
+  const firestore = admin.firestore();
+  const userRef = firestore.collection('users').doc(uid);
+  const memberRef = firestore.collection('teams').doc(teamId).collection('members').doc(uid);
+  const linkRef = userRef.collection('teamChildLinks').doc(teamId);
+  const childRefs = childIds.map((childId) => userRef.collection('children').doc(childId));
+  await firestore.runTransaction(async (transaction) => {
+    const [memberSnapshot, linkSnapshot, ...childSnapshots] = await transaction.getAll(memberRef, linkRef, ...childRefs);
+    const member = memberSnapshot.exists ? memberSnapshot.data() : undefined;
+    if (!member || member.status !== 'active' || !hasParentRole(member)) {
+      throw new functions.https.HttpsError('permission-denied', 'An active parent role is required.');
+    }
+    if (!allChildProfilesExist(childIds, childSnapshots.map((childSnapshot) => childSnapshot.exists))) {
+      throw new functions.https.HttpsError('permission-denied', 'Every selected child profile must belong to this account.');
+    }
+    transaction.update(memberRef, {
+      childId: admin.firestore.FieldValue.delete(),
+      childName: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    transaction.set(linkRef, {
+      teamId,
+      childIds,
+      status: childIds.length > 0 ? 'active' : 'inactive',
+      createdAt: linkSnapshot.exists
+        ? linkSnapshot.data()?.createdAt ?? admin.firestore.FieldValue.serverTimestamp()
+        : admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+  return { childIds };
+});
+export const deleteChildProfile = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to manage child profiles.');
+  const childId = typeof data?.childId === 'string' ? data.childId.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(childId)) {
+    throw new functions.https.HttpsError('permission-denied', 'Child profile reference is invalid or unavailable.');
+  }
+
+  const firestore = admin.firestore();
+  const userRef = firestore.collection('users').doc(uid);
+  const childRef = userRef.collection('children').doc(childId);
+  const linksQuery = userRef.collection('teamChildLinks');
+  await firestore.runTransaction(async (transaction) => {
+    const [childSnapshot, linksSnapshot] = await Promise.all([
+      transaction.get(childRef),
+      transaction.get(linksQuery),
+    ]);
+    if (!childSnapshot.exists) {
+      throw new functions.https.HttpsError('permission-denied', 'Child profile reference is invalid or unavailable.');
+    }
+    const links = linksSnapshot.docs.map((linkDocument) => linkDocument.data());
+    if (activeLinkReferencesChild(childId, links)) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Remove this child from active teams before deleting the profile.',
+      );
+    }
+
+    linksSnapshot.docs.forEach((linkDocument) => {
+      const nextChildIds = removeChildReference(childId, linkDocument.data().childIds);
+      if (nextChildIds.length !== (Array.isArray(linkDocument.data().childIds)
+        ? linkDocument.data().childIds.length
+        : 0)) {
+        transaction.update(linkDocument.ref, {
+          childIds: nextChildIds,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    });
+    transaction.delete(childRef);
+  });
+
+  return { deleted: true };
+});
+
+function serializeWeeklyChallenge(data: FirebaseFirestore.DocumentData, nextResetKey: string) {
+  const completedAt = data.completedAt instanceof admin.firestore.Timestamp
+    ? data.completedAt.toDate().toISOString()
+    : null;
+  return {
+    weekKey: data.weekKey,
+    challengeId: data.challengeId,
+    title: data.title,
+    description: data.description,
+    points: data.points,
+    category: data.category,
+    completed: data.completed === true,
+    completedAt,
+    pointsAwarded: data.pointsAwarded === true,
+    timezone: data.timezone,
+    nextResetKey,
+  };
+}

@@ -11,6 +11,7 @@ import {
   getTeamMembers,
   type Team,
   type TeamMembership,
+  hasTeamRole,
 } from "@/services/teamService";
 
 export default function CoachTeamScreen() {
@@ -68,7 +69,7 @@ export default function CoachTeamScreen() {
 
   const acceptedParents = useMemo(
     () => members
-      .filter((member) => member.role === "parent" && member.status === "active")
+      .filter((member) => hasTeamRole(member, "parent") && member.status === "active")
       .sort((first, second) => getParentName(first, t).localeCompare(getParentName(second, t))),
     [members, t],
   );

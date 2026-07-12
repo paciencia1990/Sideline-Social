@@ -7,7 +7,7 @@ import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { createTeamAnnouncement, listenToTeamAnnouncements, type AnnouncementAudience, type TeamAnnouncement } from "@/services/teamMessageService";
-import { getCurrentUserTeamMemberships, isCoachRole, type TeamMembership } from "@/services/teamService";
+import { getCurrentUserTeamMemberships, hasCoachAccess, type TeamMembership } from "@/services/teamService";
 
 const AUDIENCES: AnnouncementAudience[] = ["parents", "staff", "all"];
 
@@ -51,7 +51,7 @@ export default function CoachMessagesScreen() {
     [memberships, requestedTeamId],
   );
   const selectedTeam = selectedMembership?.team ?? null;
-  const canCreate = isCoachRole(selectedMembership?.role);
+  const canCreate = hasCoachAccess(selectedMembership);
 
   useEffect(() => {
     if (!selectedTeam) {

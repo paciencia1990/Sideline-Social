@@ -10,7 +10,7 @@ import { COACH_MODE_ROUTE, PARENT_PROFILE_ROUTE } from "@/constants/routes";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
-import { getCurrentUserTeamMemberships, isCoachRole, switchActiveMode } from "@/services/teamService";
+import { getCurrentUserTeamMemberships, hasCoachAccess, switchActiveMode } from "@/services/teamService";
 import { flattenStyle } from "@/utils/flatten-style";
 
 const LANGUAGE_OPTIONS = [
@@ -31,7 +31,7 @@ export default function ProfileScreen() {
     let isMounted = true;
     getCurrentUserTeamMemberships()
       .then((memberships) => {
-        if (isMounted) setCanUseCoachMode(memberships.some((membership) => isCoachRole(membership.role)));
+        if (isMounted) setCanUseCoachMode(memberships.some(hasCoachAccess));
       })
       .catch(() => {
         if (isMounted) setCanUseCoachMode(false);

@@ -1,4 +1,4 @@
-﻿const fs = require("node:fs");
+const fs = require("node:fs");
 const path = require("node:path");
 const {
   assertFails,
@@ -98,6 +98,9 @@ async function run() {
     await assertFails(setDoc(childRef(hostDb), triviaPayload("TEST1", "other-uid")));
     await assertFails(setDoc(childRef(hostDb, "TEST1", "trivia-blitz"), triviaPayload("TEST1", "host-uid")));
     await assertFails(setDoc(childRef(otherDb), triviaPayload("TEST1", "other-uid")));
+    await seed(testEnv, async (db) => {
+      await setDoc(childRef(db), triviaPayload("TEST1", "host-uid"));
+    });
 
     await assertSucceeds(updateDoc(parentRef(playerDb), {
       playerIds: ["host-uid", "player-uid"],

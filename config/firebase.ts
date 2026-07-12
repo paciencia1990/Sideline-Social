@@ -9,6 +9,7 @@ import {
 } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 import { getFirestore } from "firebase/firestore";
+import { getFunctions } from "firebase/functions";
 import { getStorage } from "firebase/storage";
 
 const firebaseConfig: FirebaseOptions = {
@@ -28,6 +29,7 @@ export const app = firebaseApp;
 
 export const auth = initializeReactNativeAuth(firebaseApp);
 export const db = getFirestore(firebaseApp);
+export const functions = getFunctions(firebaseApp);
 export const storage = getStorage(firebaseApp);
 export const rtdb = getDatabase(firebaseApp);
 

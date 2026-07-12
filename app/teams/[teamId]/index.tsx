@@ -1,0 +1,275 @@
+import React, { useCallback, useState } from "react";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { ArrowLeft, ChevronRight, Mail, Shield } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
+
+import { Card } from "@/components/Card";
+import { ChildProfilePicker } from "@/components/ChildProfilePicker";
+import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import {
+  getCoachUpdateRoute,
+  getParentTeamSummary,
+  getTeamChildNames,
+  type ParentTeamSummary,
+} from "@/services/parentTeamService";
+
+import { setParentTeamChildLinks } from "@/services/childService";
+export default function ParentTeamHubScreen() {
+  const { i18n, t } = useTranslation();
+  const params = useLocalSearchParams<{ teamId?: string | string[] }>();
+  const teamId = normalizeParam(params.teamId);
+  const [summary, setSummary] = useState<ParentTeamSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedChildIds, setSelectedChildIds] = useState<string[]>([]);
+  const [savingChild, setSavingChild] = useState(false);
+
+  const loadTeam = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const nextSummary = await getParentTeamSummary(teamId);
+      setSummary(nextSummary);
+      setSelectedChildIds(nextSummary.children.map((child) => child.id));
+    } catch (nextError) {
+      console.warn("[ParentTeamHub] load error:", getErrorCode(nextError));
+      setSummary(null);
+      setError(t("myTeams.teamLoadError"));
+    } finally {
+      setLoading(false);
+    }
+  }, [t, teamId]);
+
+  useFocusEffect(useCallback(() => {
+    void loadTeam();
+  }, [loadTeam]));
+
+  const saveChildLinks = useCallback(async () => {
+    setSavingChild(true);
+    setError(null);
+    try {
+      await setParentTeamChildLinks(teamId, selectedChildIds);
+      await loadTeam();
+    } catch (nextError) {
+      console.warn("[ParentTeamHub] child update error:", getErrorCode(nextError));
+      setError(t("myTeams.childUpdateError"));
+    } finally {
+      setSavingChild(false);
+    }
+  }, [loadTeam, selectedChildIds, t, teamId]);
+  const details = summary
+    ? [summary.team.sport, summary.team.season || summary.team.division || summary.team.ageRange].filter(Boolean).join(" · ")
+    : "";
+
+  return (
+    <ScreenWrapper>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={styles.headerRow}>
+          <TouchableOpacity accessibilityLabel={t("myTeams.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
+            <ArrowLeft color={Colors.textHeading} size={22} />
+          </TouchableOpacity>
+          <View style={styles.headerCopy}>
+            <Text accessibilityRole="header" style={styles.title}>{summary?.team.name ?? t("myTeams.team")}</Text>
+            <Text style={styles.subtitle}>{summary ? formatTeamChildren(summary, t) : t("myTeams.childNotSpecified")}</Text>
+          </View>
+          <View style={styles.headerIcon}>
+            <Shield color={Colors.primary} size={22} />
+          </View>
+        </View>
+
+        {loading && !summary ? (
+          <Card style={styles.stateCard}>
+            <ActivityIndicator color={Colors.primary} />
+            <Text style={styles.cardText}>{t("myTeams.loadingTeam")}</Text>
+          </Card>
+        ) : null}
+
+        {error ? (
+          <Card style={[styles.stateCard, styles.errorCard]}>
+            <Text style={styles.stateTitle}>{t("myTeams.teamUnavailable")}</Text>
+            <Text style={styles.cardText}>{error}</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={loadTeam} style={styles.outlineButton}>
+              <Text style={styles.outlineButtonText}>{t("myTeams.tryAgain")}</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : null}
+
+        {summary ? (
+          <>
+            <Card style={styles.teamHeaderCard}>
+              <View style={styles.identityRow}>
+                <Text style={styles.childLabel}>{t("myTeams.child")}</Text>
+                <Text style={styles.childName}>{formatTeamChildren(summary, t)}</Text>
+              </View>
+              <Text style={styles.teamName}>{summary.team.name}</Text>
+              {details ? <Text style={styles.teamDetails}>{details}</Text> : null}
+              <View style={styles.factGrid}>
+                <Fact label={t("myTeams.sport")} value={summary.team.sport} />
+                {summary.team.season ? <Fact label={t("myTeams.season")} value={summary.team.season} /> : null}
+                {summary.team.division ? <Fact label={t("myTeams.division")} value={summary.team.division} /> : null}
+                <Fact label={t("myTeams.coach")} value={summary.coachName ?? t("myTeams.coachFallback")} />
+              </View>
+            </Card>
+
+            {summary.needsChildMigration ? (
+              <Card style={styles.assignChildCard}>
+                <Text style={styles.stateTitle}>{t("myTeams.confirmChildrenTitle")}</Text>
+                <Text style={styles.cardText}>
+                  {t("myTeams.confirmChildrenBody", { legacyName: summary.legacyChildName ?? "" })}
+                </Text>
+                <ChildProfilePicker onChange={setSelectedChildIds} selectedIds={selectedChildIds} />
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  disabled={savingChild || selectedChildIds.length === 0}
+                  onPress={saveChildLinks}
+                  style={[styles.primaryButton, (savingChild || selectedChildIds.length === 0) && styles.disabledButton]}
+                >
+                  {savingChild
+                    ? <ActivityIndicator color={Colors.surface} />
+                    : <Text style={styles.primaryButtonText}>{t("myTeams.confirmChildren")}</Text>}
+                </TouchableOpacity>
+              </Card>
+            ) : null}
+
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text accessibilityRole="header" style={styles.sectionTitle}>{t("myTeams.coachUpdates")}</Text>
+                <Text style={styles.sectionSubtitle}>
+                  {summary.unreadCount > 0
+                    ? t("myTeams.unreadUpdates", { count: summary.unreadCount })
+                    : t("myTeams.caughtUp")}
+                </Text>
+              </View>
+              {summary.unreadCount > 0 ? (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{summary.unreadCount}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            {summary.announcements.length === 0 ? (
+              <Card style={styles.stateCard}>
+                <Mail color={Colors.secondary} size={30} />
+                <Text style={styles.stateTitle}>{t("myTeams.noUpdates")}</Text>
+                <Text style={styles.cardText}>{t("myTeams.noUpdatesBody")}</Text>
+              </Card>
+            ) : summary.announcements.map((announcement) => (
+              <TouchableOpacity
+                accessibilityLabel={t("myTeams.openUpdate")}
+                accessibilityRole="button"
+                activeOpacity={0.86}
+                key={announcement.id}
+                onPress={() => router.push(getCoachUpdateRoute(
+                  summary.teamId,
+                  announcement.id,
+                  summary.childId,
+                  summary.childName,
+                ) as never)}
+              >
+                <Card style={[styles.announcementCard, !announcement.isRead && styles.announcementUnread]}>
+                  <View style={styles.announcementTopRow}>
+                    <View style={[styles.readDot, announcement.isRead && styles.readDotRead]} />
+                    <View style={styles.announcementCopy}>
+                      {announcement.title ? <Text style={styles.announcementTitle}>{announcement.title}</Text> : null}
+                      <Text numberOfLines={3} style={styles.announcementBody}>{announcement.body}</Text>
+                    </View>
+                    <ChevronRight color={Colors.textPrimary} size={20} />
+                  </View>
+                  <View style={styles.announcementMetaRow}>
+                    <Text style={styles.announcementMeta}>{announcement.createdByName || t("myTeams.coachFallback")}</Text>
+                    <Text style={styles.announcementMeta}>{formatUpdateTime(announcement.createdAtDate, i18n.language)}</Text>
+                    <Text style={styles.announcementMeta}>
+                      {announcement.allowReplies ? t("myTeams.repliesEnabled") : t("myTeams.repliesDisabledShort")}
+                    </Text>
+                  </View>
+                </Card>
+              </TouchableOpacity>
+            ))}
+          </>
+        ) : null}
+      </ScrollView>
+    </ScreenWrapper>
+  );
+}
+
+function formatTeamChildren(
+  summary: ParentTeamSummary,
+  t: (key: string, options?: Record<string, unknown>) => string,
+) {
+  const names = getTeamChildNames(summary);
+  if (names.length === 0) return t("myTeams.childNotSpecified");
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return t("myTeams.twoChildrenNames", { first: names[0], second: names[1] });
+  return t("myTeams.childrenCount", { count: names.length });
+}
+
+function Fact({ label, value }: { label: string; value: string }) {
+  if (!value) return null;
+  return (
+    <View style={styles.fact}>
+      <Text style={styles.factLabel}>{label}</Text>
+      <Text style={styles.factValue}>{value}</Text>
+    </View>
+  );
+}
+
+function formatUpdateTime(date: Date | null, locale: string) {
+  if (!date) return "";
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function getErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+}
+
+function normalizeParam(value?: string | string[]) {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+const styles = StyleSheet.create({
+  content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
+  headerRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
+  headerCopy: { flex: 1 },
+  backButton: { alignItems: "center", backgroundColor: Colors.surface, borderRadius: 22, height: 44, justifyContent: "center", width: 44 },
+  headerIcon: { alignItems: "center", backgroundColor: Colors.surface, borderRadius: 22, height: 44, justifyContent: "center", width: 44 },
+  title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 28 },
+  subtitle: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
+  stateCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.xl },
+  errorCard: { borderLeftColor: Colors.primary, borderLeftWidth: 4 },
+  stateTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17, textAlign: "center" },
+  cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
+  outlineButton: { borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm },
+  outlineButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold },
+  assignChildCard: { gap: Spacing.sm },
+  input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 46, paddingHorizontal: Spacing.md },
+  primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.md },
+  primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold },
+  disabledButton: { opacity: 0.55 },
+  teamHeaderCard: { borderLeftColor: Colors.textHeading, borderLeftWidth: 4, gap: Spacing.sm },
+  identityRow: { alignItems: "baseline", flexDirection: "row", gap: Spacing.sm },
+  childLabel: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 11, textTransform: "uppercase" },
+  childName: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 22 },
+  teamName: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 20 },
+  teamDetails: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13 },
+  factGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  fact: { backgroundColor: Colors.background, borderRadius: Radius.sm, minWidth: "46%", padding: Spacing.sm },
+  factLabel: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 10, textTransform: "uppercase" },
+  factValue: { color: Colors.textHeading, fontFamily: Typography.bodyMedium, fontSize: 13 },
+  sectionHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  sectionTitle: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 23 },
+  sectionSubtitle: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12 },
+  badge: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: 14, minWidth: 28, paddingHorizontal: 8, paddingVertical: 4 },
+  badgeText: { color: Colors.surface, fontFamily: Typography.bodyBold },
+  announcementCard: { borderLeftColor: Colors.secondary, borderLeftWidth: 4, gap: Spacing.sm },
+  announcementUnread: { borderLeftColor: Colors.accentGold },
+  announcementTopRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
+  announcementCopy: { flex: 1, gap: 3 },
+  readDot: { backgroundColor: Colors.accentGold, borderRadius: 5, height: 10, width: 10 },
+  readDotRead: { backgroundColor: Colors.secondary },
+  announcementTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 16 },
+  announcementBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20 },
+  announcementMetaRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, paddingLeft: 18 },
+  announcementMeta: { color: Colors.primary, fontFamily: Typography.bodyMedium, fontSize: 11 },
+});

@@ -10,6 +10,7 @@ import {
 } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "@/config/firebase";
+import { unregisterCurrentDeviceNotificationToken } from "@/services/notificationService";
 
 type AppUser = {
   uid: string;
@@ -123,6 +124,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await sendPasswordResetEmail(auth, email.trim());
     },
     signOut: async () => {
+      try {
+        await unregisterCurrentDeviceNotificationToken();
+      } catch (error) {
+        console.warn("[Notifications] sign-out cleanup unavailable:", getErrorCode(error));
+      }
       await firebaseSignOut(auth);
     },
     signInWithGoogle: async () => {
@@ -134,6 +140,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }), [firebaseUser, loading]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+function getErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
 }
 
 export function useAuth() {

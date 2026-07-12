@@ -25,4 +25,5 @@ build/
 # Codex temp files
 codex-write-test.tmp
 tree.txt
+functions/lib/
 

@@ -7,11 +7,12 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  where,
   type Unsubscribe,
 } from "firebase/firestore";
 
 import { auth, db } from "@/config/firebase";
-import { isCoachRole, type TeamRole } from "@/services/teamService";
+import { hasCoachAccess, resolveTeamRoles, type TeamRoleFlags } from "@/services/teamService";
 
 export type AnnouncementAudience = "parents" | "staff" | "all";
 export type ReplyType = "team" | "privateToCoach";
@@ -47,7 +48,7 @@ export type AnnouncementInput = {
 export async function createTeamAnnouncement(teamId: string, input: AnnouncementInput) {
   const user = requireUser();
   const membership = await getCurrentMembership(teamId, user.uid);
-  if (!isCoachRole(membership?.role)) {
+  if (!hasCoachAccess(membership)) {
     throw new Error("Only team staff can send announcements.");
   }
 
@@ -87,7 +88,11 @@ export function listenToTeamAnnouncements(
   );
 }
 
-export async function getTeamAnnouncement(teamId: string, announcementId: string): Promise<TeamAnnouncement | null> {
+export async function getTeamAnnouncement(
+  teamId: string,
+  announcementId: string,
+  options: { throwOnError?: boolean } = {},
+): Promise<TeamAnnouncement | null> {
   if (!teamId || !announcementId) return null;
 
   try {
@@ -95,6 +100,7 @@ export async function getTeamAnnouncement(teamId: string, announcementId: string
     return snapshot.exists() ? normalizeAnnouncement(snapshot.id, snapshot.data()) : null;
   } catch (error) {
     console.warn("[TeamMessageService] get announcement error:", error);
+    if (options.throwOnError) throw error;
     return null;
   }
 }
@@ -127,6 +133,37 @@ export function listenToAnnouncementReplies(
   );
 }
 
+export function listenToParentAnnouncementReplies(
+  teamId: string,
+  announcementId: string,
+  callback: (replies: AnnouncementReply[]) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  if (!teamId || !announcementId) {
+    callback([]);
+    return () => {};
+  }
+
+  const repliesQuery = query(
+    collection(db, "teams", teamId, "announcements", announcementId, "replies"),
+    where("replyType", "==", "team"),
+  );
+  return onSnapshot(
+    repliesQuery,
+    (snapshot) => {
+      callback(
+        snapshot.docs
+          .map((replyDoc) => normalizeReply(replyDoc.id, replyDoc.data()))
+          .sort((first, second) => readMillis(first.createdAt) - readMillis(second.createdAt)),
+      );
+    },
+    (error) => {
+      console.warn("[TeamMessageService] listen parent replies error:", error);
+      callback([]);
+      onError?.(error);
+    },
+  );
+}
 export async function replyToAnnouncement(
   teamId: string,
   announcementId: string,
@@ -158,13 +195,13 @@ export async function replyToAnnouncement(
   });
 }
 
-async function getCurrentMembership(teamId: string, userId: string): Promise<{ role: TeamRole; displayName: string } | null> {
+async function getCurrentMembership(teamId: string, userId: string): Promise<{ roles: TeamRoleFlags; displayName: string } | null> {
   try {
     const snapshot = await getDoc(doc(db, "teams", teamId, "members", userId));
     if (!snapshot.exists()) return null;
     const data = snapshot.data();
     return {
-      role: readRole(data.role),
+      roles: resolveTeamRoles(data.roles, data.role),
       displayName: typeof data.displayName === "string" ? data.displayName : "",
     };
   } catch (error) {
@@ -189,7 +226,7 @@ function resolveDisplayName() {
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamAnnouncement {
   return {
     id,
-    title: readString(data.title, "Team update"),
+    title: readString(data.title),
     body: readString(data.body),
     createdBy: readString(data.createdBy),
     createdByName: readString(data.createdByName, "Coach"),
@@ -211,12 +248,6 @@ function normalizeReply(id: string, data: Record<string, unknown>): Announcement
   };
 }
 
-function readRole(value: unknown): TeamRole {
-  if (value === "coach" || value === "assistantCoach" || value === "teamParent" || value === "parent") {
-    return value;
-  }
-  return "parent";
-}
 
 function readAudience(value: unknown): AnnouncementAudience {
   if (value === "staff" || value === "all" || value === "parents") {
@@ -225,6 +256,13 @@ function readAudience(value: unknown): AnnouncementAudience {
   return "parents";
 }
 
+function readMillis(value: unknown) {
+  if (value instanceof Date) return value.getTime();
+  if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") {
+    return value.toMillis();
+  }
+  return 0;
+}
 function readString(value: unknown, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }

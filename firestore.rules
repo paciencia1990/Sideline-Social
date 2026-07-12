@@ -165,27 +165,67 @@ service cloud.firestore {
         get(teamMemberPath(teamId, request.auth.uid)).data.status == "active";
     }
 
-    function isListedOnTeam() {
-      return signedIn() &&
-        (
-          request.auth.uid in resource.data.coachIds ||
-          request.auth.uid in resource.data.parentIds
-        );
+    function hasParentRoleData(data) {
+      return (data.roles is map && data.roles.parent == true) || data.role == "parent";
+    }
+
+    function hasCoachRoleData(data) {
+      return (data.roles is map && data.roles.coach == true) || data.role == "coach";
+    }
+
+    function hasStaffRoleData(data) {
+      return (data.roles is map && data.roles.staff == true) ||
+        data.role in ["assistantCoach", "teamParent"];
+    }
+
+    function hasCoachAccessData(data) {
+      return hasCoachRoleData(data) || hasStaffRoleData(data);
     }
 
     function isCoachStaff(teamId) {
       return isTeamMember(teamId) &&
-        get(teamMemberPath(teamId, request.auth.uid)).data.role in ["coach", "assistantCoach", "teamParent"];
-    }
-    function isValidWeeklyChallengeRecord(userId, weekKey) {
-      return isSelf(userId) &&
-        request.resource.data.keys().hasOnly(["challengeId", "weekKey", "status", "acceptedAt", "completedAt", "rewardGranted", "updatedAt"]) &&
-        request.resource.data.challengeId is string &&
-        request.resource.data.weekKey == weekKey &&
-        request.resource.data.status in ["accepted", "completed"] &&
-        request.resource.data.rewardGranted is bool;
+        hasCoachAccessData(get(teamMemberPath(teamId, request.auth.uid)).data);
     }
 
+    function isParentTeamMember(teamId) {
+      return isTeamMember(teamId) &&
+        hasParentRoleData(get(teamMemberPath(teamId, request.auth.uid)).data);
+    }
+
+    function canReadTeamAnnouncement(teamId) {
+      return isTeamMember(teamId) &&
+        (
+          isCoachStaff(teamId) ||
+          (isParentTeamMember(teamId) && resource.data.audience in ["parents", "all"])
+        );
+    }
+
+    function canReadAnnouncementPath(teamId, announcementId) {
+      return isTeamMember(teamId) &&
+        exists(announcementPath(teamId, announcementId)) &&
+        (
+          isCoachStaff(teamId) ||
+          (
+            isParentTeamMember(teamId) &&
+            get(announcementPath(teamId, announcementId)).data.audience in ["parents", "all"]
+          )
+        );
+    }
+    function canReadTeamReply(teamId, announcementId) {
+      return canReadAnnouncementPath(teamId, announcementId) &&
+        (
+          isCoachStaff(teamId) ||
+          resource.data.replyType == "team"
+        );
+    }
+
+    function isValidOwnAnnouncementRead(teamId, announcementId, userId) {
+      return isSelf(userId) &&
+        canReadAnnouncementPath(teamId, announcementId) &&
+        request.resource.data.keys().hasOnly(["userId", "readAt"]) &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.readAt is timestamp;
+    }
     function isTeamCreator(teamId) {
       return signedIn() &&
         existsAfter(teamPath(teamId)) &&
@@ -197,15 +237,6 @@ service cloud.firestore {
         get(announcementPath(teamId, announcementId)).data.allowReplies == true;
     }
 
-    function isJoiningParentUpdate(teamId) {
-      return signedIn() &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(["parentIds", "updatedAt"]) &&
-        request.resource.data.parentIds.hasAll(resource.data.parentIds) &&
-        request.auth.uid in request.resource.data.parentIds &&
-        existsAfter(teamMemberPath(teamId, request.auth.uid)) &&
-        getAfter(teamMemberPath(teamId, request.auth.uid)).data.role == "parent" &&
-        getAfter(teamMemberPath(teamId, request.auth.uid)).data.status == "active";
-    }
 
     // -----------------------------------------------------------------------
     // users collection
@@ -217,11 +248,53 @@ service cloud.firestore {
       allow create, update: if isSelf(userId);
       allow delete: if false;
 
-      match /weeklyChallenges/{weekKey} {
-        allow read: if isSelf(userId);
-        allow create, update: if isValidWeeklyChallengeRecord(userId, weekKey);
+      match /children/{childId} {
+        allow get, list: if isSelf(userId);
+        allow create: if isSelf(userId) &&
+          request.resource.data.keys().hasOnly(["displayName", "createdAt", "updatedAt"]) &&
+          request.resource.data.keys().hasAll(["displayName", "createdAt", "updatedAt"]) &&
+          request.resource.data.displayName is string &&
+          request.resource.data.displayName.size() > 0 &&
+          request.resource.data.displayName.size() <= 80 &&
+          request.resource.data.createdAt is timestamp &&
+          request.resource.data.updatedAt is timestamp;
+        allow update: if isSelf(userId) &&
+          request.resource.data.keys().hasOnly(["displayName", "createdAt", "updatedAt"]) &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.displayName is string &&
+          request.resource.data.displayName.size() > 0 &&
+          request.resource.data.displayName.size() <= 80 &&
+          request.resource.data.updatedAt is timestamp;
+        // Deletion is owner-initiated through a callable that checks team links.
         allow delete: if false;
       }
+
+      match /teamChildLinks/{teamId} {
+        allow get, list: if isSelf(userId);
+        // Relationship writes require callable ownership and membership checks.
+        allow create, update, delete: if false;
+      }
+
+      match /weeklyChallenges/{weekKey} {
+        allow read: if isSelf(userId);
+        // Assignments and completion rewards are written only by trusted
+        // callable functions using the Admin SDK.
+        allow create, update, delete: if false;
+      }
+
+      match /rewardTransactions/{transactionId} {
+        allow read: if isSelf(userId);
+        allow create, update, delete: if false;
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // notificationTokens collection
+    // Device tokens contain private delivery credentials and are managed only
+    // by authenticated callable functions using the Admin SDK.
+    // -----------------------------------------------------------------------
+    match /notificationTokens/{tokenId} {
+      allow read, write: if false;
     }
 
     // -----------------------------------------------------------------------
@@ -262,7 +335,7 @@ service cloud.firestore {
     // Teams are private official coach/team spaces, separate from Squads.
     // -----------------------------------------------------------------------
     match /teams/{teamId} {
-      allow get: if isListedOnTeam() || isTeamMember(teamId);
+      allow get: if isTeamMember(teamId);
       allow list: if false;
 
       allow create: if signedIn() &&
@@ -273,11 +346,12 @@ service cloud.firestore {
         request.resource.data.parentIds is list &&
         request.resource.data.parentIds.size() == 0;
 
-      allow update: if isCoachStaff(teamId) || isJoiningParentUpdate(teamId);
+      allow update: if isCoachStaff(teamId);
       allow delete: if false;
 
       match /members/{userId} {
-        allow get, list: if isSelf(userId) || isTeamMember(teamId);
+        allow get: if isSelf(userId) || isCoachStaff(teamId);
+        allow list: if isCoachStaff(teamId);
 
         allow create: if signedIn() &&
           request.resource.data.userId == userId &&
@@ -286,26 +360,26 @@ service cloud.firestore {
           (
             (
               isSelf(userId) &&
-              request.resource.data.role == "coach" &&
+              hasCoachRoleData(request.resource.data) &&
               isTeamCreator(teamId)
             ) ||
             (
-              isSelf(userId) &&
-              request.resource.data.role == "parent" &&
-              exists(teamPath(teamId))
-            ) ||
-            (
               isCoachStaff(teamId) &&
-              request.resource.data.role in ["coach", "assistantCoach", "teamParent", "parent"]
+              (
+                hasParentRoleData(request.resource.data) ||
+                hasCoachAccessData(request.resource.data)
+              )
             )
           );
 
-        allow update: if isSelf(userId) || isCoachStaff(teamId);
+        // Parents cannot mutate memberships or grant themselves roles. Private
+        // child relationships are updated only through callable functions.
+        allow update: if isCoachStaff(teamId);
         allow delete: if false;
       }
 
       match /announcements/{announcementId} {
-        allow get, list: if isTeamMember(teamId);
+        allow get, list: if canReadTeamAnnouncement(teamId);
 
         allow create: if isCoachStaff(teamId) &&
           request.resource.data.createdBy == request.auth.uid &&
@@ -315,14 +389,34 @@ service cloud.firestore {
         allow update, delete: if isCoachStaff(teamId);
 
         match /replies/{replyId} {
-          allow get, list: if isTeamMember(teamId);
+          allow get, list: if canReadTeamReply(teamId, announcementId);
 
-          allow create: if isTeamMember(teamId) &&
+          allow create: if canReadAnnouncementPath(teamId, announcementId) &&
             announcementAllowsReplies(teamId, announcementId) &&
+            request.resource.data.keys().hasOnly(["userId", "displayName", "body", "replyType", "createdAt"]) &&
             request.resource.data.userId == request.auth.uid &&
-            request.resource.data.replyType in ["team", "privateToCoach"];
+            request.resource.data.displayName is string &&
+            request.resource.data.displayName == get(teamMemberPath(teamId, request.auth.uid)).data.displayName &&
+            request.resource.data.body is string &&
+            request.resource.data.body.size() > 0 &&
+            request.resource.data.body.size() <= 2000 &&
+            request.resource.data.createdAt is timestamp &&
+            (
+              request.resource.data.replyType == "team" ||
+              (
+                isCoachStaff(teamId) &&
+                request.resource.data.replyType == "privateToCoach"
+              )
+            );
 
           allow update, delete: if false;
+        }
+
+        match /reads/{userId} {
+          allow get: if isSelf(userId) && canReadAnnouncementPath(teamId, announcementId);
+          allow list: if false;
+          allow create, update: if isValidOwnAnnouncementRead(teamId, announcementId, userId);
+          allow delete: if false;
         }
       }
     }

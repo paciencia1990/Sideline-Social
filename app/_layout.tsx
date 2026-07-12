@@ -28,6 +28,7 @@ import {
 import { Caveat_400Regular, Caveat_700Bold } from "@expo-google-fonts/caveat";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { NotificationCoordinator } from "@/components/NotificationCoordinator";
 import { AppProvider } from "@/context/AppContext";
 import { AuthProvider } from "@/context/AuthContext";
 import { SquadProvider } from "@/context/SquadContext";
@@ -88,6 +89,7 @@ export default function RootLayout() {
             <AuthProvider>
               <SquadProvider>
                 <AppProvider>
+                  <NotificationCoordinator />
                   <Stack
                     screenOptions={{
                       headerShown: false,

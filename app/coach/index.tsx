@@ -9,7 +9,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { PARENT_PROFILE_ROUTE } from "@/constants/routes";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
-import { getCurrentUserTeamMemberships, isCoachRole, switchActiveMode, type TeamMembership } from "@/services/teamService";
+import { getCurrentUserTeamMemberships, hasCoachAccess, hasTeamRole, switchActiveMode, type TeamMembership } from "@/services/teamService";
 
 export default function CoachHomeScreen() {
   const { t } = useTranslation();
@@ -39,8 +39,8 @@ export default function CoachHomeScreen() {
     }, [loadTeams]),
   );
 
-  const coachTeams = memberships.filter((membership) => isCoachRole(membership.role));
-  const parentTeams = memberships.filter((membership) => membership.role === "parent");
+  const coachTeams = memberships.filter(hasCoachAccess);
+  const parentTeams = memberships.filter((membership) => hasTeamRole(membership, "parent"));
   const selectedMembership = coachTeams[0] ?? null;
   const selectedTeam = selectedMembership?.team ?? null;
   const hasTeams = coachTeams.length > 0;

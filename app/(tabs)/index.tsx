@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   RefreshControl,
   ScrollView,
@@ -9,8 +10,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { router } from "expo-router";
-import { Bell, MapPin, MessageCircle, Navigation, Play, RefreshCw, Star, Trophy } from "lucide-react-native";
+import { router, useFocusEffect } from "expo-router";
+import { Bell, CheckCircle2, ChevronRight, MapPin, MessageCircle, Navigation, Play, RefreshCw, Star, Trophy, Users } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -19,24 +20,29 @@ import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
-  fetchActiveChallenge,
   fetchConnectionPrompt,
-  getActiveChallengeFallback,
   fetchUnreadNotificationCount,
-  fetchUserWeeklyChallengeProgress,
   fetchUserFriendIds,
   fetchUserSquadsDetail,
   subscribeLiveSquadCard,
   subscribeToActivityFeed,
-  updateChallengeStatus,
   type ActivityItem,
-  type Challenge,
   type ConnectionPrompt,
   type LiveSquadData,
-  type WeeklyChallengeStatus,
   type SquadDetail,
 } from "@/services/homeFeedService";
 import { fetchActiveSquadSession, getGameLabel, type GameSession } from "@/services/gameService";
+import {
+  getParentTeamsOverview,
+  getTeamChildNames,
+  type ParentTeamsOverview,
+  type ParentTeamSummary,
+} from "@/services/parentTeamService";
+import {
+  completeWeeklyChallenge,
+  getCurrentWeeklyChallenge,
+  type UserWeeklyChallenge,
+} from "@/services/weeklyChallengeService";
 import {
   fetchNearbySquads,
   getCurrentLocation,
@@ -64,8 +70,12 @@ export default function HomeScreen() {
   const [squads, setSquads] = useState<SquadDetail[]>([]);
   const [liveSquad, setLiveSquad] = useState<LiveSquadData | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
-  const [activeChallenge, setActiveChallenge] = useState<Challenge>(() => getActiveChallengeFallback());
-  const [challengeStatus, setChallengeStatus] = useState<WeeklyChallengeStatus>("available");
+  const [myTeamsOverview, setMyTeamsOverview] = useState<ParentTeamsOverview | null>(null);
+  const [myTeamsLoading, setMyTeamsLoading] = useState(true);
+  const [myTeamsError, setMyTeamsError] = useState<string | null>(null);
+  const [activeChallenge, setActiveChallenge] = useState<UserWeeklyChallenge | null>(null);
+  const [challengeError, setChallengeError] = useState<string | null>(null);
+  const [challengeCompletionLoading, setChallengeCompletionLoading] = useState(false);
   const [connectionPrompt, setConnectionPrompt] = useState<ConnectionPrompt | null>(null);
   const [activeSession, setActiveSession] = useState<GameSession | null>(null);
   const [proximityState, setProximityState] = useState<HomeProximityState>("checking");
@@ -84,6 +94,23 @@ export default function HomeScreen() {
     }
   }, [i18n.language, user?.uid]);
 
+  const loadMyTeams = useCallback(async () => {
+    if (!user?.uid) {
+      setMyTeamsOverview(null);
+      setMyTeamsLoading(false);
+      return;
+    }
+    setMyTeamsLoading(true);
+    setMyTeamsError(null);
+    try {
+      setMyTeamsOverview(await getParentTeamsOverview());
+    } catch (nextError) {
+      console.warn("[HomeScreen] My Teams load error:", nextError);
+      setMyTeamsError(t("myTeams.loadError"));
+    } finally {
+      setMyTeamsLoading(false);
+    }
+  }, [t, user?.uid]);
   const loadHomeProximity = useCallback(async (requestPermission = false) => {
     setProximityLoading(true);
     setProximityState("loading");
@@ -132,6 +159,7 @@ export default function HomeScreen() {
   }, [appConfig.squadRadiusMiles, mySquadIds, user?.uid]);
   const loadHome = useCallback(async () => {
     setError(null);
+    setChallengeError(null);
     const userId = user?.uid;
 
     activityUnsubscribe.current?.();
@@ -140,21 +168,27 @@ export default function HomeScreen() {
     liveSquadUnsubscribe.current = null;
 
     try {
-      const [friendIds, squadDetails, challenge, prompt, notificationCount, session] = await Promise.all([
+      const [friendIds, squadDetails, challengeResult, prompt, notificationCount, session] = await Promise.all([
         userId ? fetchUserFriendIds(userId) : Promise.resolve([]),
         fetchUserSquadsDetail(mySquadIds),
-        fetchActiveChallenge(),
+        userId
+          ? getCurrentWeeklyChallenge()
+              .then((challenge) => ({ challenge, failed: false }))
+              .catch((challengeLoadError) => {
+                console.warn("[HomeScreen] weekly challenge load error:", challengeLoadError);
+                return { challenge: null, failed: true };
+              })
+          : Promise.resolve({ challenge: null, failed: false }),
         fetchConnectionPrompt(),
         userId ? fetchUnreadNotificationCount(userId) : Promise.resolve(0),
         mySquadIds[0] ? fetchActiveSquadSession(mySquadIds[0]) : Promise.resolve(null),
       ]);
 
-      const challengeProgress = userId && challenge ? await fetchUserWeeklyChallengeProgress(userId, challenge.weekKey) : null;
       const feedUserIds = userId ? Array.from(new Set([userId, ...friendIds])) : friendIds;
 
       setSquads(squadDetails);
-      setActiveChallenge(challenge);
-      setChallengeStatus(challengeProgress?.status ?? "available");
+      setActiveChallenge(challengeResult.challenge);
+      setChallengeError(challengeResult.failed ? t("home.challengeError") : null);
       setConnectionPrompt(prompt);
       setUnreadCount(notificationCount);
       setActiveSession(session);
@@ -167,8 +201,8 @@ export default function HomeScreen() {
     } catch (nextError) {
       console.warn("[HomeScreen] load error:", nextError);
       setError(t("home.errorBody"));
-      setActiveChallenge((current) => current ?? getActiveChallengeFallback());
-      setChallengeStatus("available");
+      setActiveChallenge(null);
+      setChallengeError(t("home.challengeError"));
       setActivity([]);
       setLiveSquad(null);
     } finally {
@@ -190,25 +224,48 @@ export default function HomeScreen() {
     void loadHomeProximity(false);
   }, [loadHomeProximity]);
 
+  useFocusEffect(useCallback(() => {
+    void loadMyTeams();
+  }, [loadMyTeams]));
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     void loadHome();
-  }, [loadHome]);
+    void loadMyTeams();
+  }, [loadHome, loadMyTeams]);
 
-  const handleChallengePress = useCallback(async () => {
-    if (!user?.uid || !activeChallenge) return;
-
-    if (challengeStatus === "completed") return;
-
-    const nextStatus: Exclude<WeeklyChallengeStatus, "available"> = challengeStatus === "accepted" ? "completed" : "accepted";
-    try {
-      const nextProgress = await updateChallengeStatus(user.uid, displayName, activeChallenge, nextStatus);
-      setChallengeStatus(nextProgress.status);
-    } catch (nextError) {
-      console.warn("[HomeScreen] challenge update error:", nextError);
-      setError(t("home.errorBody"));
-    }
-  }, [activeChallenge, challengeStatus, displayName, t, user?.uid]);
+  const confirmChallengeCompletion = useCallback(() => {
+    if (!activeChallenge || activeChallenge.completed || challengeCompletionLoading) return;
+    Alert.alert(
+      t("home.challengeConfirmTitle"),
+      t("home.challengeConfirmBody"),
+      [
+        { text: t("home.challengeNotYet"), style: "cancel" },
+        {
+          text: t("home.challengeConfirmAction"),
+          onPress: () => {
+            setChallengeCompletionLoading(true);
+            setChallengeError(null);
+            void completeWeeklyChallenge(activeChallenge.weekKey)
+              .then((result) => {
+                setActiveChallenge(result.challenge);
+                Alert.alert(
+                  t("home.challengeSuccessTitle"),
+                  result.alreadyCompleted
+                    ? t("home.challengeAlreadyCompleted")
+                    : t("home.challengeSuccessBody", { points: result.pointsAwarded }),
+                );
+              })
+              .catch((nextError) => {
+                console.warn("[HomeScreen] challenge completion error:", nextError);
+                setChallengeError(t("home.challengeError"));
+                Alert.alert(t("home.challengeErrorTitle"), t("home.challengeError"));
+              })
+              .finally(() => setChallengeCompletionLoading(false));
+          },
+        },
+      ],
+    );
+  }, [activeChallenge, challengeCompletionLoading, t]);
 
   return (
     <ScreenWrapper>
@@ -229,18 +286,12 @@ export default function HomeScreen() {
             <Text style={styles.notificationText}>{unreadCount}</Text>
           </View>
         </View>
-
-        <SecondaryActions />
-
-        <ChallengeCard
-          challenge={activeChallenge}
-          error={error}
-          language={i18n.language}
-          loading={isLoading}
-          status={challengeStatus}
-          onPress={handleChallengePress}
+        <MyTeamsCard
+          error={myTeamsError}
+          loading={myTeamsLoading}
+          onRetry={loadMyTeams}
+          overview={myTeamsOverview}
         />
-
         {isLoading ? (
           <LoadingCard />
         ) : (
@@ -277,6 +328,17 @@ export default function HomeScreen() {
             )}
             {!liveSquad && squads.length > 0 ? <SquadSummaryCard squads={squads} /> : null}
 
+            <SecondaryActions />
+
+            <ChallengeCard
+              challenge={activeChallenge}
+              completionLoading={challengeCompletionLoading}
+              error={challengeError}
+              loading={isLoading}
+              onPress={confirmChallengeCompletion}
+              onRetry={loadHome}
+            />
+
             <CommunityPromptCard prompt={connectionPrompt} language={i18n.language} />
 
             <SectionTitle title={t("home.activity")} />
@@ -298,6 +360,91 @@ export default function HomeScreen() {
   );
 }
 
+function MyTeamsCard({
+  error,
+  loading,
+  onRetry,
+  overview,
+}: {
+  error: string | null;
+  loading: boolean;
+  onRetry: () => void;
+  overview: ParentTeamsOverview | null;
+}) {
+  const { t } = useTranslation();
+  const latestTeam = overview?.latestTeam ?? null;
+  const latest = overview?.latestAnnouncement ?? null;
+
+  if (error && !overview) {
+    return (
+      <Card style={[styles.myTeamsCard, styles.myTeamsErrorCard]}>
+        <View style={styles.myTeamsTopRow}>
+          <Users color={Colors.textHeading} size={22} />
+          <Text style={styles.myTeamsTitle}>{t("myTeams.title")}</Text>
+        </View>
+        <Text style={styles.cardText}>{error}</Text>
+        <TouchableOpacity accessibilityRole="button" onPress={onRetry} style={styles.outlineInlineButton}>
+          <Text style={styles.outlineInlineText}>{t("myTeams.tryAgain")}</Text>
+        </TouchableOpacity>
+      </Card>
+    );
+  }
+
+  return (
+    <TouchableOpacity
+      accessibilityLabel={t("myTeams.viewTeams")}
+      accessibilityRole="button"
+      activeOpacity={0.86}
+      onPress={() => router.push("/teams" as never)}
+    >
+      <Card style={styles.myTeamsCard}>
+        <View style={styles.myTeamsTopRow}>
+          <View style={styles.myTeamsIcon}>
+            {loading && !overview ? <ActivityIndicator color={Colors.primary} size="small" /> : <Users color={Colors.primary} size={22} />}
+          </View>
+          <View style={styles.cardCopy}>
+            <Text style={styles.myTeamsTitle}>{t("myTeams.title")}</Text>
+            {loading && !overview ? (
+              <Text style={styles.cardText}>{t("myTeams.loading")}</Text>
+            ) : overview?.totalTeams ? (
+              <Text style={styles.myTeamsSummary}>
+                {t("myTeams.teamCount", { count: overview.totalTeams })}
+                {overview.unreadCount > 0 ? " · " + t("myTeams.unreadUpdates", { count: overview.unreadCount }) : ""}
+              </Text>
+            ) : (
+              <Text style={styles.myTeamsSummary}>{t("myTeams.noTeams")}</Text>
+            )}
+          </View>
+          {overview?.unreadCount ? (
+            <View style={styles.myTeamsBadge}>
+              <Text style={styles.myTeamsBadgeText}>{overview.unreadCount}</Text>
+            </View>
+          ) : null}
+          <ChevronRight color={Colors.textPrimary} size={20} />
+        </View>
+
+        {!loading && overview?.totalTeams === 0 ? (
+          <Text style={styles.cardText}>{t("myTeams.noTeamsBody")}</Text>
+        ) : null}
+
+        {latestTeam && latest ? (
+          <View style={styles.myTeamsPreview}>
+            <Text style={styles.myTeamsPreviewTeam}>
+              {formatHomeTeamLabel(latestTeam, t("myTeams.childNotSpecified"))}
+            </Text>
+            <Text numberOfLines={2} style={styles.myTeamsPreviewBody}>{latest.body}</Text>
+          </View>
+        ) : null}
+
+        {!loading && overview?.totalTeams && overview.unreadCount === 0 ? (
+          <Text style={styles.myTeamsCaughtUp}>{t("myTeams.caughtUp")}</Text>
+        ) : null}
+
+        <Text style={styles.myTeamsAction}>{t("myTeams.viewTeams")}</Text>
+      </Card>
+    </TouchableOpacity>
+  );
+}
 function SecondaryActions() {
   const { t } = useTranslation();
   const actions = [
@@ -432,58 +579,83 @@ function SquadSummaryCard({ squads }: { squads: SquadDetail[] }) {
 
 function ChallengeCard({
   challenge,
+  completionLoading,
   error,
-  language,
   loading,
   onPress,
-  status,
+  onRetry,
 }: {
-  challenge: Challenge;
+  challenge: UserWeeklyChallenge | null;
+  completionLoading: boolean;
   error: string | null;
-  language: string;
   loading: boolean;
   onPress: () => void;
-  status: WeeklyChallengeStatus;
+  onRetry: () => void;
 }) {
   const { t } = useTranslation();
-  const title = language === "es" ? challenge.title_es || challenge.title : challenge.title;
-  const description = language === "es" ? challenge.description_es || challenge.description : challenge.description;
-  const progress = status === "completed" ? 100 : status === "accepted" ? 50 : 0;
-  const label = status === "completed" ? t("home.completed") : status === "accepted" ? t("home.markComplete") : t("home.acceptChallenge");
-  const statusLabel = status === "completed" ? t("home.challengeCompleted") : status === "accepted" ? t("home.challengeInProgress") : t("home.challengeAvailable");
 
-  useEffect(() => {
-    if (__DEV__) {
-      console.log("[WeeklyChallenge:CardRender]", {
-        weekKey: challenge.weekKey,
-        challengeId: challenge.challengeId,
-        status,
-        loading,
-        error,
-      });
-    }
-  }, [challenge.challengeId, challenge.weekKey, error, loading, status]);
+  if (loading && !challenge) {
+    return (
+      <Card style={styles.challengeCard}>
+        <Text style={styles.cardEyebrow}>{t("home.thisWeeksChallenge")}</Text>
+        <View style={styles.challengeLoadingRow}>
+          <ActivityIndicator color={Colors.primary} size="small" />
+          <Text style={styles.cardText}>{t("home.challengeLoading")}</Text>
+        </View>
+      </Card>
+    );
+  }
+
+  if (!challenge) {
+    return (
+      <Card style={styles.challengeCard}>
+        <Text style={styles.cardEyebrow}>{t("home.thisWeeksChallenge")}</Text>
+        <Text style={styles.cardTitle}>{t("home.challengeErrorTitle")}</Text>
+        <Text style={styles.cardText}>{error ?? t("home.challengeError")}</Text>
+        <TouchableOpacity activeOpacity={0.86} onPress={onRetry} style={styles.outlineInlineButton}>
+          <Text style={styles.outlineInlineText}>{t("home.challengeRetry")}</Text>
+        </TouchableOpacity>
+      </Card>
+    );
+  }
 
   return (
-    <Card style={styles.challengeCard}>
+    <Card style={[styles.challengeCard, challenge.completed && styles.challengeCardCompleted]}>
       <Text style={styles.cardEyebrow}>{t("home.thisWeeksChallenge")}</Text>
-      <Text style={styles.cardTitle}>{title}</Text>
-      <Text style={styles.cardText}>{description}</Text>
-      <View style={styles.challengeProgressHeader}>
-        <Text style={styles.challengeStatus}>{statusLabel}</Text>
-        <Text style={styles.challengeStatus}>{progress}%</Text>
-      </View>
-      <View style={styles.challengeProgressTrack}>
-        <View style={[styles.challengeProgressFill, { width: `${progress}%` }]} />
-      </View>
-      <TouchableOpacity activeOpacity={0.86} disabled={status === "completed"} onPress={onPress} style={[styles.primaryInlineButton, status === "completed" && styles.disabledInlineButton]}>
-        <Star size={16} color={Colors.surface} />
-        <Text style={styles.primaryInlineText}>{label}</Text>
-      </TouchableOpacity>
+      <Text style={styles.cardTitle}>{challenge.title}</Text>
+      <Text style={styles.cardText}>{challenge.description}</Text>
+      {challenge.completed ? (
+        <View style={styles.challengeCompletedRow}>
+          <CheckCircle2 size={22} color={Colors.accentGreen} />
+          <View style={styles.cardCopy}>
+            <Text style={styles.challengeCompleteTitle}>{t("home.challengeCompleted")}</Text>
+            <Text style={styles.cardText}>{t("home.challengeEarned", { points: challenge.points })}</Text>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.challengeRewardRow}>
+          <Star size={18} color={Colors.accentGold} fill={Colors.accentGold} />
+          <Text style={styles.challengeRewardText}>{t("home.challengeReward", { points: challenge.points })}</Text>
+        </View>
+      )}
+      {error ? <Text style={styles.challengeErrorText}>{error}</Text> : null}
+      <Text style={styles.challengeResetText}>
+        {challenge.completed ? t("home.challengeNewMonday") : t("home.challengeResetsMonday")}
+      </Text>
+      {!challenge.completed ? (
+        <TouchableOpacity
+          activeOpacity={0.86}
+          disabled={completionLoading}
+          onPress={onPress}
+          style={[styles.primaryInlineButton, completionLoading && styles.disabledInlineButton]}
+        >
+          {completionLoading ? <ActivityIndicator color={Colors.surface} size="small" /> : <Star size={16} color={Colors.surface} />}
+          <Text style={styles.primaryInlineText}>{t("home.challengeCompleteAction")}</Text>
+        </TouchableOpacity>
+      ) : null}
     </Card>
   );
 }
-
 function CommunityPromptCard({ prompt, language }: { prompt: ConnectionPrompt | null; language: string }) {
   const { t } = useTranslation();
   const text = prompt
@@ -560,6 +732,12 @@ function StateCard({
   );
 }
 
+function formatHomeTeamLabel(summary: ParentTeamSummary, childFallback: string) {
+  const childNames = getTeamChildNames(summary);
+  const childLabel = childNames.length > 0 ? childNames.join(", ") : childFallback;
+  return `${childLabel} - ${summary.team.name}`;
+}
+
 function getInitial(name: string) {
   return name.trim()[0]?.toUpperCase() || "S";
 }
@@ -630,6 +808,79 @@ const styles = StyleSheet.create({
     color: Colors.textHeading,
     fontFamily: Typography.bodySemiBold,
     fontSize: 12,
+  },
+  myTeamsCard: {
+    borderLeftColor: Colors.textHeading,
+    borderLeftWidth: 4,
+    gap: Spacing.sm,
+  },
+  myTeamsErrorCard: {
+    borderLeftColor: Colors.primary,
+  },
+  myTeamsTopRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: Spacing.sm,
+  },
+  myTeamsIcon: {
+    alignItems: "center",
+    backgroundColor: Colors.background,
+    borderRadius: 22,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  myTeamsTitle: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodyBold,
+    fontSize: 18,
+  },
+  myTeamsSummary: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.bodyMedium,
+    fontSize: 12,
+  },
+  myTeamsBadge: {
+    alignItems: "center",
+    backgroundColor: Colors.primary,
+    borderRadius: 13,
+    minWidth: 26,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  myTeamsBadgeText: {
+    color: Colors.surface,
+    fontFamily: Typography.bodyBold,
+    fontSize: 12,
+  },
+  myTeamsPreview: {
+    backgroundColor: Colors.background,
+    borderColor: Colors.accentGold,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+    gap: 3,
+    padding: Spacing.sm,
+  },
+  myTeamsPreviewTeam: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 13,
+  },
+  myTeamsPreviewBody: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.bodyRegular,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  myTeamsCaughtUp: {
+    color: Colors.accentGreen,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 13,
+  },
+  myTeamsAction: {
+    color: Colors.primary,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 14,
   },
   secondaryActionRow: {
     alignItems: "stretch",
@@ -765,26 +1016,47 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     gap: Spacing.sm,
   },
-  challengeProgressHeader: {
+  challengeCardCompleted: {
+    borderLeftColor: Colors.accentGreen,
+  },
+  challengeLoadingRow: {
     alignItems: "center",
     flexDirection: "row",
-    justifyContent: "space-between",
+    gap: Spacing.sm,
   },
-  challengeProgressTrack: {
+  challengeRewardRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: Spacing.sm,
+  },
+  challengeRewardText: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 14,
+  },
+  challengeCompletedRow: {
+    alignItems: "center",
     backgroundColor: Colors.background,
     borderRadius: Radius.sm,
-    height: 8,
-    overflow: "hidden",
+    flexDirection: "row",
+    gap: Spacing.sm,
+    padding: Spacing.sm,
   },
-  challengeProgressFill: {
-    backgroundColor: Colors.accentGold,
-    borderRadius: Radius.sm,
-    height: "100%",
+  challengeCompleteTitle: {
+    color: Colors.accentGreen,
+    fontFamily: Typography.bodyBold,
+    fontSize: 14,
   },
-  challengeStatus: {
+  challengeResetText: {
     color: Colors.textPrimary,
-    fontFamily: Typography.bodySemiBold,
+    fontFamily: Typography.bodyMedium,
     fontSize: 12,
+  },
+  challengeErrorText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyMedium,
+    fontSize: 12,
+    lineHeight: 17,
   },
   primaryInlineButton: {
     alignItems: "center",
