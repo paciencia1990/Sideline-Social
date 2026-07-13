@@ -1,15 +1,17 @@
-import { ExpoConfig, ConfigContext } from "expo/config";
-
-export default ({ config }: ConfigContext): ExpoConfig => ({
+module.exports = ({ config }) => ({
   ...config,
+
+  owner: "paciencia1990",
   slug: "sideline-squad",
   name: "Sideline Social",
   version: "1.0.0",
+
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: "sidelinesquad",
   userInterfaceStyle: "automatic",
   newArchEnabled: false,
+
   ios: {
     supportsTablet: true,
     bundleIdentifier: "com.sidelinesquad.app",
@@ -17,6 +19,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       ITSAppUsesNonExemptEncryption: false,
     },
   },
+
   android: {
     package: "com.sidelinesquad.app",
     googleServicesFile: "./google-services.json",
@@ -25,11 +28,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       backgroundColor: "#ffffff",
     },
   },
+
   web: {
     bundler: "metro",
     output: "static",
     favicon: "./assets/images/favicon.png",
   },
+
   plugins: [
     "expo-font",
     "expo-notifications",
@@ -43,7 +48,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       },
     ],
   ],
+
   experiments: {
     typedRoutes: false,
+  },
+
+  extra: {
+    ...(config.extra || {}),
+    eas: {
+      ...((config.extra && config.extra.eas) || {}),
+      projectId: "7ea7aaf2-355d-4aec-a175-82898c8cc0c7",
+    },
   },
 });
