@@ -24,6 +24,10 @@ export function NotificationCoordinator() {
   const handledResponses = useRef(new Set<string>());
 
   useEffect(() => {
+    handledResponses.current.clear();
+  }, [user?.uid]);
+
+  useEffect(() => {
     if (!user?.uid) return;
     void registerDeviceToken();
     const tokenSubscription = Notifications.addPushTokenListener((token) => {

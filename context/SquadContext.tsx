@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useState, ReactNode } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { useAuth } from "@/context/AuthContext";
 import {
   AppConfig,
@@ -53,22 +53,36 @@ export function SquadProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_CONFIG);
+  const activeUserId = useRef(user?.uid);
+
+  useEffect(() => {
+    activeUserId.current = user?.uid;
+    setNearbySquads([]);
+    setMySquadIds([]);
+    setCurrentSquad(null);
+    setLoading(false);
+    setError(null);
+  }, [user?.uid]);
 
   const fetchSquads = useCallback(async (lat: number, lng: number) => {
+    const requestUserId = user?.uid;
     setLoading(true);
     setError(null);
     try {
       const config = await fetchAppConfig();
+      const squadIds = requestUserId ? await fetchUserSquadIds(requestUserId) : [];
+      const nextNearbySquads = await fetchNearbySquads(lat, lng, config.squadRadiusMiles);
+      if (activeUserId.current !== requestUserId) return;
+
       setAppConfig(config);
-      if (user?.uid) {
-        setMySquadIds(await fetchUserSquadIds(user.uid));
-      }
-      setNearbySquads(await fetchNearbySquads(lat, lng, config.squadRadiusMiles));
+      setMySquadIds(squadIds);
+      setNearbySquads(nextNearbySquads);
     } catch (nextError) {
+      if (activeUserId.current !== requestUserId) return;
       console.warn("[SquadContext] fetchSquads error:", nextError);
       setError("Could not load nearby squads.");
     } finally {
-      setLoading(false);
+      if (activeUserId.current === requestUserId) setLoading(false);
     }
   }, [user?.uid]);
 

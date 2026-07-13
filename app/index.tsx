@@ -4,6 +4,7 @@ import React, { useEffect } from "react";
 import { ActivityIndicator, LogBox, StyleSheet, View } from "react-native";
 
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 
@@ -38,7 +39,7 @@ export default function Index() {
         return;
       }
 
-      router.replace(onboardingComplete === "true" ? "/(auth)/sign-in" : "/splash");
+      router.replace(onboardingComplete === "true" ? SIGN_IN_ROUTE : "/splash");
     }
 
     routeUser();

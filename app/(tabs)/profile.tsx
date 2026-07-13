@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { COACH_MODE_ROUTE, PARENT_PROFILE_ROUTE } from "@/constants/routes";
+import { COACH_MODE_ROUTE, PARENT_PROFILE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
@@ -21,10 +21,12 @@ const LANGUAGE_OPTIONS = [
 export default function ProfileScreen() {
   const { t } = useTranslation();
   const { activeMode, language, modeHydrated, setActiveMode, setLanguage } = useApp();
-  const { user, signOut } = useAuth();
+  const { loading: authLoading, user, signOut } = useAuth();
   const [canUseCoachMode, setCanUseCoachMode] = useState(false);
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
   const isParentMode = activeMode === "parent";
 
   useEffect(() => {
@@ -41,6 +43,21 @@ export default function ProfileScreen() {
     };
   }, [user?.uid]);
 
+  const handleSignOut = useCallback(async () => {
+    if (isSigningOut) return;
+
+    setIsSigningOut(true);
+    setSignOutError(null);
+
+    try {
+      await signOut();
+      router.replace(SIGN_IN_ROUTE as never);
+    } catch (nextError) {
+      console.warn("[Profile] sign out error:", nextError);
+      setSignOutError(t("profile.signOutError"));
+      setIsSigningOut(false);
+    }
+  }, [isSigningOut, signOut, t]);
   const handleCoachPress = useCallback(async () => {
     if (!canUseCoachMode || activeMode !== "parent") return;
 
@@ -70,7 +87,7 @@ export default function ProfileScreen() {
     }
   }, [activeMode, canUseCoachMode, setActiveMode, t]);
 
-  if (!modeHydrated || !isParentMode) {
+  if (authLoading || !user || !modeHydrated || !isParentMode) {
     return (
       <ScreenWrapper>
         <View style={styles.loadingScreen}>
@@ -88,7 +105,13 @@ export default function ProfileScreen() {
         <Card style={styles.card}>
           <Text style={styles.name}>{user?.displayName || t("profile.defaultName")}</Text>
           <Text style={styles.email}>{user?.email || t("profile.notSignedIn")}</Text>
-          <PrimaryButton title={t("profile.signOut")} onPress={signOut} disabled={!user} />
+          <PrimaryButton
+            disabled={isSigningOut}
+            loading={isSigningOut}
+            onPress={handleSignOut}
+            title={t("profile.signOut")}
+          />
+          {signOutError ? <Text style={styles.signOutError}>{signOutError}</Text> : null}
         </Card>
 
         <View style={styles.sectionHeader}>
@@ -174,6 +197,11 @@ const styles = StyleSheet.create({
   email: {
     fontFamily: Typography.bodyRegular,
     color: Colors.textPrimary,
+  },
+  signOutError: {
+    color: Colors.primary,
+    fontFamily: Typography.bodySemiBold,
+    lineHeight: 20,
   },
   sectionHeader: {
     marginTop: Spacing.xs,

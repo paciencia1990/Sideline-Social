@@ -15,19 +15,18 @@ import { Bell, CheckCircle2, ChevronRight, MapPin, MessageCircle, Navigation, Pl
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { IcebreakerCard } from "@/components/IcebreakerCard";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
-  fetchConnectionPrompt,
   fetchUnreadNotificationCount,
   fetchUserFriendIds,
   fetchUserSquadsDetail,
   subscribeLiveSquadCard,
   subscribeToActivityFeed,
   type ActivityItem,
-  type ConnectionPrompt,
   type LiveSquadData,
   type SquadDetail,
 } from "@/services/homeFeedService";
@@ -76,7 +75,6 @@ export default function HomeScreen() {
   const [activeChallenge, setActiveChallenge] = useState<UserWeeklyChallenge | null>(null);
   const [challengeError, setChallengeError] = useState<string | null>(null);
   const [challengeCompletionLoading, setChallengeCompletionLoading] = useState(false);
-  const [connectionPrompt, setConnectionPrompt] = useState<ConnectionPrompt | null>(null);
   const [activeSession, setActiveSession] = useState<GameSession | null>(null);
   const [proximityState, setProximityState] = useState<HomeProximityState>("checking");
   const [nearestSquad, setNearestSquad] = useState<Squad | null>(null);
@@ -168,7 +166,7 @@ export default function HomeScreen() {
     liveSquadUnsubscribe.current = null;
 
     try {
-      const [friendIds, squadDetails, challengeResult, prompt, notificationCount, session] = await Promise.all([
+      const [friendIds, squadDetails, challengeResult, notificationCount, session] = await Promise.all([
         userId ? fetchUserFriendIds(userId) : Promise.resolve([]),
         fetchUserSquadsDetail(mySquadIds),
         userId
@@ -179,7 +177,6 @@ export default function HomeScreen() {
                 return { challenge: null, failed: true };
               })
           : Promise.resolve({ challenge: null, failed: false }),
-        fetchConnectionPrompt(),
         userId ? fetchUnreadNotificationCount(userId) : Promise.resolve(0),
         mySquadIds[0] ? fetchActiveSquadSession(mySquadIds[0]) : Promise.resolve(null),
       ]);
@@ -189,7 +186,6 @@ export default function HomeScreen() {
       setSquads(squadDetails);
       setActiveChallenge(challengeResult.challenge);
       setChallengeError(challengeResult.failed ? t("home.challengeError") : null);
-      setConnectionPrompt(prompt);
       setUnreadCount(notificationCount);
       setActiveSession(session);
 
@@ -339,7 +335,7 @@ export default function HomeScreen() {
               onRetry={loadHome}
             />
 
-            <CommunityPromptCard prompt={connectionPrompt} language={i18n.language} />
+            <IcebreakerCard />
 
             <SectionTitle title={t("home.activity")} />
             {activity.length > 0 ? (
@@ -656,24 +652,6 @@ function ChallengeCard({
     </Card>
   );
 }
-function CommunityPromptCard({ prompt, language }: { prompt: ConnectionPrompt | null; language: string }) {
-  const { t } = useTranslation();
-  const text = prompt
-    ? language === "es"
-      ? prompt.promptText_es || prompt.promptText
-      : prompt.promptText
-    : t("home.communityPromptFallback");
-
-  return (
-    <Card style={styles.promptCard}>
-      <Text style={styles.promptText}>{text}</Text>
-      <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/(tabs)/friends")} style={styles.promptButton}>
-        <Text style={styles.promptButtonText}>{t("home.friends")}</Text>
-      </TouchableOpacity>
-    </Card>
-  );
-}
-
 function ActivityRow({ item, language }: { item: ActivityItem; language: string }) {
   const message = language === "es" ? item.message_es || item.message : item.message;
 
@@ -1089,30 +1067,6 @@ const styles = StyleSheet.create({
   },
   outlineInlineText: {
     color: Colors.primary,
-    fontFamily: Typography.bodySemiBold,
-    fontSize: 14,
-  },
-  promptCard: {
-    backgroundColor: Colors.textHeading,
-    gap: Spacing.md,
-  },
-  promptText: {
-    color: Colors.background,
-    fontFamily: Typography.accent,
-    fontSize: 24,
-    lineHeight: 30,
-  },
-  promptButton: {
-    alignSelf: "flex-start",
-    borderColor: Colors.background,
-    borderRadius: Radius.button,
-    borderWidth: 1,
-    minHeight: 40,
-    justifyContent: "center",
-    paddingHorizontal: Spacing.md,
-  },
-  promptButtonText: {
-    color: Colors.background,
     fontFamily: Typography.bodySemiBold,
     fontSize: 14,
   },

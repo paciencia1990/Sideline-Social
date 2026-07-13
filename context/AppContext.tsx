@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import i18n from "@/i18n";
+import { useAuth } from "@/context/AuthContext";
 
 type SupportedLanguage = "en" | "es";
 type AppMode = "parent" | "coach";
@@ -34,6 +35,7 @@ const AppContext = createContext<AppContextType>({
 });
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  const { loading: authLoading, user } = useAuth();
   const [language, setLanguageState] = useState<SupportedLanguage>(() =>
     normalizeLanguage(i18n.resolvedLanguage ?? i18n.language)
   );
@@ -59,6 +61,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (authLoading || !modeHydrated || user) return;
+
+    setActiveModeState("parent");
+    AsyncStorage.removeItem(MODE_STORAGE_KEY).catch(() => undefined);
+  }, [authLoading, modeHydrated, user]);
   useEffect(() => {
     const handleLanguageChanged = (nextLanguage: string) => {
       setLanguageState(normalizeLanguage(nextLanguage));
