@@ -91,6 +91,26 @@ export function hasCoachAccess(membership: Pick<TeamMembership, "roles"> | null 
   return hasTeamRole(membership, "coach") || hasTeamRole(membership, "staff");
 }
 
+export function canSendTeamMessages(membership: Pick<TeamMembership, "roles"> | null | undefined) {
+  return hasCoachAccess(membership);
+}
+
+export function canManageTeamRoles(
+  membership: Pick<TeamMembership, "roles" | "status" | "userId"> | null | undefined,
+  team?: Pick<Team, "createdBy"> | null,
+) {
+  return Boolean(membership?.status === "active" &&
+    (hasTeamRole(membership, "coach") || team?.createdBy === membership.userId));
+}
+
+export function isEligibleStaffRoleTarget(
+  membership: Pick<TeamMembership, "roles" | "status"> | null | undefined,
+) {
+  return membership?.status === "active" &&
+    hasTeamRole(membership, "parent") &&
+    !hasTeamRole(membership, "coach");
+}
+
 export async function getCurrentUserTeamMemberships(options: TeamLookupOptions = {}): Promise<TeamMembership[]> {
   const user = auth.currentUser;
   if (!user) return [];
@@ -273,6 +293,23 @@ export async function joinTeamByInviteCode(inviteCode: string, child: TeamChildI
   });
   return normalizeTeam(response.data.team.id, response.data.team);
 }
+
+export async function setTeamStaffRole(teamId: string, targetUserId: string, isStaff: boolean) {
+  const callable = httpsCallable<
+    { teamId: string; targetUserId: string; isStaff: boolean },
+    { roles: TeamRoleFlags; role: TeamRole }
+  >(functions, "setTeamStaffRole");
+  const response = await callable({
+    teamId: teamId.trim(),
+    targetUserId: targetUserId.trim(),
+    isStaff,
+  });
+  return {
+    roles: resolveTeamRoles(response.data.roles, response.data.role),
+    role: readRole(response.data.role),
+  };
+}
+
 export async function getTeamById(teamId: string): Promise<Team | null> {
   if (!teamId) return null;
 

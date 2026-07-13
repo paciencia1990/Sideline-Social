@@ -187,6 +187,14 @@ service cloud.firestore {
         hasCoachAccessData(get(teamMemberPath(teamId, request.auth.uid)).data);
     }
 
+    function isTeamCoach(teamId) {
+      return isTeamMember(teamId) &&
+        (
+          hasCoachRoleData(get(teamMemberPath(teamId, request.auth.uid)).data) ||
+          get(teamPath(teamId)).data.createdBy == request.auth.uid
+        );
+    }
+
     function isParentTeamMember(teamId) {
       return isTeamMember(teamId) &&
         hasParentRoleData(get(teamMemberPath(teamId, request.auth.uid)).data);
@@ -346,7 +354,10 @@ service cloud.firestore {
         request.resource.data.parentIds is list &&
         request.resource.data.parentIds.size() == 0;
 
-      allow update: if isCoachStaff(teamId);
+      allow update: if isTeamCoach(teamId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "name", "sport", "ageRange", "division", "season", "leagueId", "squadId", "updatedAt"
+        ]);
       allow delete: if false;
 
       match /members/{userId} {
@@ -362,19 +373,12 @@ service cloud.firestore {
               isSelf(userId) &&
               hasCoachRoleData(request.resource.data) &&
               isTeamCreator(teamId)
-            ) ||
-            (
-              isCoachStaff(teamId) &&
-              (
-                hasParentRoleData(request.resource.data) ||
-                hasCoachAccessData(request.resource.data)
-              )
             )
           );
 
-        // Parents cannot mutate memberships or grant themselves roles. Private
-        // child relationships are updated only through callable functions.
-        allow update: if isCoachStaff(teamId);
+        // Membership mutations, including team-scoped staff access and private
+        // child relationships, are validated by authenticated callable functions.
+        allow update: if false;
         allow delete: if false;
       }
 

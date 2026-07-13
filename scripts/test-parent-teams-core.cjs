@@ -17,13 +17,16 @@ const { groupTeamsByChild, summarizeTeamUpdates } = loadTypeScript("utils/parent
 const {
   activeLinkReferencesChild,
   allChildProfilesExist,
+  canManageTeamRoles,
   hasCoachAccess,
   hasParentRole,
+  isEligibleStaffRoleTarget,
   mergeChildIds,
   mergeParentRole,
   normalizeChildIds,
   removeChildReference,
   resolveTeamRoleFlags,
+  setStaffRole,
 } = loadTypeScript("functions/src/teamMembershipCore.ts");
 
 function team(teamId, name, children, unreadCount, updatedAt, legacyChildName = null) {
@@ -54,6 +57,21 @@ assert.deepEqual(resolveTeamRoleFlags({ parent: true, staff: false, coach: false
 assert.equal(activeLinkReferencesChild("child-a", [{ status: "active", childIds: ["child-a"] }]), true);
 assert.equal(activeLinkReferencesChild("child-a", [{ status: "inactive", childIds: ["child-a"] }]), false);
 assert.deepEqual(removeChildReference("child-a", ["child-a", "child-b"]), ["child-b"]);
+assert.equal(canManageTeamRoles({ status: "active", roles: { coach: true } }), true);
+assert.equal(canManageTeamRoles({ status: "active", roles: { staff: true } }), false);
+assert.equal(canManageTeamRoles({ status: "active", roles: { staff: true } }, true), true);
+assert.equal(canManageTeamRoles({ status: "removed", roles: { coach: true } }), false);
+assert.equal(isEligibleStaffRoleTarget({ status: "active", roles: { parent: true, coach: false, staff: false } }), true);
+assert.equal(isEligibleStaffRoleTarget({ status: "active", roles: { parent: true, coach: true, staff: false } }), false);
+assert.equal(isEligibleStaffRoleTarget({ status: "removed", roles: { parent: true, coach: false, staff: false } }), false);
+assert.deepEqual(
+  setStaffRole({ parent: true, coach: false, staff: false, customRole: "preserved" }, "parent", true),
+  { parent: true, coach: false, staff: true, customRole: "preserved" },
+);
+assert.deepEqual(
+  setStaffRole({ parent: true, coach: false, staff: true }, "teamParent", false),
+  { parent: true, coach: false, staff: false },
+);
 
 const emma = child("child-emma", "Emma");
 const sameNameA = child("child-sam-a", "Sam");
@@ -106,6 +124,37 @@ const notificationSource = functionsSource.slice(
 assert.equal(notificationSource.includes("announcement.body"), false);
 assert.equal(notificationSource.includes("announcement.title"), false);
 assert.equal(notificationSource.includes("Open Sideline Social to view it."), true);
+const staffRoleCallableSource = functionsSource.slice(
+  functionsSource.indexOf("export const setTeamStaffRole"),
+  functionsSource.indexOf("export const setParentTeamChildLinks"),
+);
+assert.equal(staffRoleCallableSource.includes("context.auth?.uid"), true);
+assert.equal(staffRoleCallableSource.includes("data.requester"), false);
+assert.equal(staffRoleCallableSource.includes("staffRoleUpdatedBy: uid"), true);
+assert.equal(staffRoleCallableSource.includes("staffRoleUpdatedAt"), true);
+assert.equal(staffRoleCallableSource.includes("team.createdBy === targetUserId"), true);
+assert.equal(staffRoleCallableSource.includes("childIds"), false);
+
+const teamServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "teamService.ts"), "utf8");
+const staffRoleClientSource = teamServiceSource.slice(
+  teamServiceSource.indexOf("export async function setTeamStaffRole"),
+  teamServiceSource.indexOf("export async function getTeamById"),
+);
+assert.equal(staffRoleClientSource.includes('functions, "setTeamStaffRole"'), true);
+assert.equal(staffRoleClientSource.includes("updateDoc"), false);
+
+const rosterServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "teamRosterService.ts"), "utf8");
+assert.equal(rosterServiceSource.includes("getPersistedDisplayName"), true);
+assert.equal(rosterServiceSource.includes("documentId()"), true);
+assert.equal(rosterServiceSource.includes("looksLikeEmailAddress"), true);
+assert.equal(rosterServiceSource.includes('.split("@")'), false);
+
+const coachRosterSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "team.tsx"), "utf8");
+assert.equal(coachRosterSource.includes("member.displayName"), false);
+assert.equal(coachRosterSource.includes("roleStaffParent"), true);
+assert.equal(coachRosterSource.includes("updatingUserId"), true);
+assert.equal(coachRosterSource.includes("staffRoleUpdateInFlight.current"), true);
+assert.equal(coachRosterSource.includes("Alert.alert"), true);
 
 const childServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "childService.ts"), "utf8");
 const createChildSource = childServiceSource.slice(
@@ -118,5 +167,8 @@ assert.equal(createChildSource.includes("doc(collection(db, \"users\", user.uid,
 const translations = fs.readFileSync(path.join(process.cwd(), "i18n", "index.ts"), "utf8");
 assert.equal((translations.match(/selectChildren:/g) || []).length, 2);
 assert.equal((translations.match(/confirmChildrenTitle:/g) || []).length, 2);
+assert.equal((translations.match(/makeStaffTitle:/g) || []).length, 2);
+assert.equal((translations.match(/roleStaffParent:/g) || []).length, 2);
+assert.equal((translations.match(/staffRoleError:/g) || []).length, 2);
 
-console.log("Parent Teams multi-role, stable-child, privacy core tests passed (39 assertions).");
+console.log("Parent Teams multi-role, stable-child, privacy, and staff-role core tests passed.");

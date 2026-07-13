@@ -119,7 +119,18 @@ async function run() {
 
     await assertFails(updateDoc(doc(parentDb, "teams", "team-1", "members", "parent-a"), { roles: { parent: true, coach: true, staff: false }, updatedAt: now() }));
     await assertFails(updateDoc(doc(parentDb, "teams", "team-1", "members", "parent-a"), { childName: "Leaked", updatedAt: now() }));
-    await assertSucceeds(updateDoc(doc(coachDb, "teams", "team-1", "members", "parent-a"), { roles: { parent: true, coach: false, staff: true }, updatedAt: now() }));
+    // All membership role changes are callable-only. Even coaches and staff may
+    // not bypass server validation with a direct client write.
+    await assertFails(updateDoc(doc(coachDb, "teams", "team-1", "members", "parent-a"), { roles: { parent: true, coach: false, staff: true }, updatedAt: now() }));
+    await assertFails(updateDoc(doc(staffDb, "teams", "team-1", "members", "staff"), { roles: { parent: false, coach: true, staff: true }, updatedAt: now() }));
+    await assertFails(updateDoc(doc(staffDb, "teams", "team-1", "members", "parent-a"), { roles: { parent: true, coach: false, staff: true }, updatedAt: now() }));
+    await assertFails(setDoc(doc(staffDb, "teams", "team-1", "members", "new-coach"), {
+      userId: "new-coach", teamId: "team-1", displayName: "New Coach", role: "coach",
+      roles: { parent: false, coach: true, staff: false }, status: "active", createdAt: now(), updatedAt: now(),
+    }));
+    await assertSucceeds(updateDoc(doc(coachDb, "teams", "team-1"), { updatedAt: now() }));
+    await assertFails(updateDoc(doc(staffDb, "teams", "team-1"), { updatedAt: now() }));
+    await assertFails(updateDoc(doc(coachDb, "teams", "team-1"), { createdBy: "multi-role", updatedAt: now() }));
 
     const newAnnouncement = { title: "New", body: "Body", createdBy: "multi-role", createdByName: "Multi", audience: "parents", allowReplies: true, createdAt: now(), updatedAt: now() };
     await assertFails(setDoc(doc(parentDb, "teams", "team-1", "announcements", "parent-created"), newAnnouncement));
@@ -128,7 +139,7 @@ async function run() {
     await assertSucceeds(getDoc(doc(coachDb, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply")));
     await assertFails(getDoc(doc(parentDb, "notificationTokens", "private-token")));
 
-    console.log("Parent Teams Firestore multi-role and child-privacy rules tests passed (40 assertions).");
+    console.log("Parent Teams Firestore multi-role, child-privacy, and staff-role rules tests passed.");
   } finally {
     await testEnv.cleanup();
   }

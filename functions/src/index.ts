@@ -21,12 +21,15 @@ import {
 import {
   activeLinkReferencesChild,
   allChildProfilesExist,
+  canManageTeamRoles,
   hasParentRole,
+  isEligibleStaffRoleTarget,
   legacyRoleForMergedMembership,
   mergeChildIds,
   mergeParentRole,
   normalizeChildIds,
   removeChildReference,
+  setStaffRole,
 } from './teamMembershipCore';
 
 admin.initializeApp();
@@ -768,6 +771,76 @@ export const joinParentTeamByInviteCode = functions.https.onCall(async (data, co
       parentIds: Array.from(new Set([...(team.parentIds ?? []), uid])),
     },
   };
+});
+
+// Staff access is a team-scoped secondary role. The authenticated caller is
+// always taken from context.auth; requester identity is never client supplied.
+export const setTeamStaffRole = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to manage team staff.');
+
+  const teamId = typeof data?.teamId === 'string' ? data.teamId.trim() : '';
+  const targetUserId = typeof data?.targetUserId === 'string' ? data.targetUserId.trim() : '';
+  const isStaff = data?.isStaff;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(teamId)
+    || !/^[A-Za-z0-9_-]{1,128}$/.test(targetUserId)
+    || typeof isStaff !== 'boolean') {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid team, member, and staff role are required.');
+  }
+  if (uid === targetUserId) {
+    throw new functions.https.HttpsError('permission-denied', 'You cannot manage your own team role.');
+  }
+
+  const firestore = admin.firestore();
+  const teamRef = firestore.collection('teams').doc(teamId);
+  const requesterRef = teamRef.collection('members').doc(uid);
+  const targetRef = teamRef.collection('members').doc(targetUserId);
+
+  return firestore.runTransaction(async (transaction) => {
+    const [teamSnapshot, requesterSnapshot, targetSnapshot] = await transaction.getAll(
+      teamRef,
+      requesterRef,
+      targetRef,
+    );
+    if (!teamSnapshot.exists) {
+      throw new functions.https.HttpsError('not-found', 'Team not found.');
+    }
+
+    const team = teamSnapshot.data()!;
+    const requester = requesterSnapshot.exists ? requesterSnapshot.data() : undefined;
+    if (!canManageTeamRoles(requester, team.createdBy === uid)) {
+      throw new functions.https.HttpsError('permission-denied', 'Only an active coach or team owner can manage staff roles.');
+    }
+
+    const target = targetSnapshot.exists ? targetSnapshot.data() : undefined;
+    if (!target
+      || !isEligibleStaffRoleTarget(target)
+      || target.userId !== targetUserId
+      || target.teamId !== teamId
+      || team.createdBy === targetUserId) {
+      throw new functions.https.HttpsError('failed-precondition', 'The selected member is not eligible for a staff role change.');
+    }
+
+    const roles = setStaffRole(target.roles, target.role, isStaff);
+    transaction.update(targetRef, {
+      roles,
+      // Parent remains the primary legacy role. Explicit role flags retain the
+      // additional staff permission without weakening older client behavior.
+      role: 'parent',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      staffRoleUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      staffRoleUpdatedBy: uid,
+    });
+
+    return {
+      roles: {
+        parent: roles.parent === true,
+        coach: roles.coach === true,
+        staff: roles.staff === true,
+      },
+      role: 'parent',
+    };
+  });
 });
 
 export const setParentTeamChildLinks = functions.https.onCall(async (data, context) => {

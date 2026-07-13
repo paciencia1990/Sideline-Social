@@ -89,7 +89,8 @@ assert.ok(teamService.includes("await batch.commit()"), "Team, membership, and u
 const rules = read("firestore.rules");
 assert.ok(rules.includes("hasCoachRoleData(request.resource.data)"), "Rules must validate creator coach membership data.");
 assert.ok(rules.includes("isTeamCreator(teamId)"), "Rules must restrict initial coach membership to the authenticated team creator.");
-assert.ok(rules.includes("allow update: if isCoachStaff(teamId);"), "Parents must not grant themselves team roles.");
+assert.ok(rules.includes("allow update: if false;"), "Mobile clients must not grant or modify team roles directly.");
+assert.ok(teamService.includes('functions, "setTeamStaffRole"'), "Staff role changes must use the protected callable.");
 
 const translations = read("i18n", "index.ts");
 for (const key of ["eyebrow", "parentTitle", "parentBody", "coachTitle", "coachBody", "switchNote", "coachWelcome", "coachWelcomeBody", "continue", "saveError"]) {

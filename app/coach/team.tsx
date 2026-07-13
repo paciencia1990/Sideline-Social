@@ -1,63 +1,100 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { useLocalSearchParams } from "expo-router";
+import { MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
+import { getTeamRosterProfiles } from "@/services/teamRosterService";
 import {
+  canManageTeamRoles,
   getCurrentUserTeamMemberships,
   getTeamMembers,
+  hasCoachAccess,
+  hasTeamRole,
+  isEligibleStaffRoleTarget,
+  setTeamStaffRole,
   type Team,
   type TeamMembership,
-  hasTeamRole,
 } from "@/services/teamService";
+
+type RosterProfiles = Record<string, string | null>;
+type StaffRoleFeedback = { message: string; isError: boolean };
 
 export default function CoachTeamScreen() {
   const { t } = useTranslation();
   const params = useLocalSearchParams<{ teamId?: string | string[] }>();
   const requestedTeamId = normalizeParam(params.teamId);
   const [members, setMembers] = useState<TeamMembership[]>([]);
+  const [profiles, setProfiles] = useState<RosterProfiles>({});
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
+  const [currentMembership, setCurrentMembership] = useState<TeamMembership | null>(null);
   const [teamLoading, setTeamLoading] = useState(true);
-  const [parentsLoading, setParentsLoading] = useState(false);
+  const [rosterLoading, setRosterLoading] = useState(false);
   const [teamError, setTeamError] = useState<string | null>(null);
-  const [parentsError, setParentsError] = useState<string | null>(null);
+  const [rosterError, setRosterError] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<StaffRoleFeedback | null>(null);
+  const staffRoleUpdateInFlight = useRef(false);
 
   const loadTeam = useCallback(async () => {
     setTeamLoading(true);
     setTeamError(null);
-    setParentsError(null);
+    setRosterError(null);
+    setProfileError(null);
+    setFeedback(null);
+    setRosterLoading(false);
 
     try {
-      const nextMemberships = await getCurrentUserTeamMemberships();
-      const selectedMembership = nextMemberships.find((membership) => membership.teamId === requestedTeamId) ?? nextMemberships[0] ?? null;
+      const nextMemberships = await getCurrentUserTeamMemberships({ throwOnError: true });
+      const selectedMembership = requestedTeamId
+        ? nextMemberships.find((membership) =>
+          membership.teamId === requestedTeamId && hasCoachAccess(membership)) ?? null
+        : nextMemberships.find(hasCoachAccess) ?? null;
       const nextTeam = selectedMembership?.team ?? null;
 
       setSelectedTeam(nextTeam);
+      setCurrentMembership(selectedMembership);
       setMembers([]);
+      setProfiles({});
 
-      if (!nextTeam) {
-        return;
-      }
+      if (!nextTeam) return;
 
-      setParentsLoading(true);
+      setRosterLoading(true);
       try {
-        setMembers(await getTeamMembers(nextTeam.id));
-      } catch (nextError) {
-        console.warn("[CoachTeam] parents load error:", nextError);
+        const nextMembers = await getTeamMembers(nextTeam.id);
+        setMembers(nextMembers);
+        try {
+          setProfiles(await getTeamRosterProfiles(nextMembers.map((member) => member.userId)));
+        } catch {
+          setProfiles({});
+          setProfileError(t("coach.team.profilesLoadError"));
+        }
+      } catch {
         setMembers([]);
-        setParentsError(t("coach.team.parentsLoadError"));
+        setProfiles({});
+        setRosterError(t("coach.team.rosterLoadError"));
       } finally {
-        setParentsLoading(false);
+        setRosterLoading(false);
       }
-    } catch (nextError) {
-      console.warn("[CoachTeam] load error:", nextError);
+    } catch {
       setTeamError(t("coach.team.error"));
       setSelectedTeam(null);
+      setCurrentMembership(null);
       setMembers([]);
-      setParentsLoading(false);
+      setProfiles({});
+      setRosterLoading(false);
     } finally {
       setTeamLoading(false);
     }
@@ -67,12 +104,106 @@ export default function CoachTeamScreen() {
     void loadTeam();
   }, [loadTeam]);
 
-  const acceptedParents = useMemo(
-    () => members
-      .filter((member) => hasTeamRole(member, "parent") && member.status === "active")
-      .sort((first, second) => getParentName(first, t).localeCompare(getParentName(second, t))),
-    [members, t],
+  const getRosterName = useCallback(
+    (member: TeamMembership) => profiles[member.userId] ?? t("coach.team.teamParentFallback"),
+    [profiles, t],
   );
+
+  const staffMembers = useMemo(
+    () => members
+      .filter((member) => member.status === "active" &&
+        (hasTeamRole(member, "coach") || hasTeamRole(member, "staff")))
+      .sort((first, second) => getRosterName(first).localeCompare(getRosterName(second))),
+    [getRosterName, members],
+  );
+
+  const parentMembers = useMemo(
+    () => members
+      .filter((member) => member.status === "active" &&
+        hasTeamRole(member, "parent") &&
+        !hasTeamRole(member, "coach") &&
+        !hasTeamRole(member, "staff"))
+      .sort((first, second) => getRosterName(first).localeCompare(getRosterName(second))),
+    [getRosterName, members],
+  );
+
+  const mayManageRoles = canManageTeamRoles(currentMembership, selectedTeam);
+
+  const changeStaffRole = useCallback(async (
+    member: TeamMembership,
+    name: string,
+    isStaff: boolean,
+  ) => {
+    if (!selectedTeam || staffRoleUpdateInFlight.current || !mayManageRoles) return;
+    staffRoleUpdateInFlight.current = true;
+    setUpdatingUserId(member.userId);
+    setFeedback(null);
+    try {
+      const result = await setTeamStaffRole(selectedTeam.id, member.userId, isStaff);
+      setMembers((currentMembers) => currentMembers.map((currentMember) =>
+        currentMember.userId === member.userId
+          ? { ...currentMember, role: result.role, roles: result.roles }
+          : currentMember,
+      ));
+      setFeedback({
+        isError: false,
+        message: isStaff
+          ? t("coach.team.staffAddedSuccess", { name })
+          : t("coach.team.staffRemovedSuccess"),
+      });
+    } catch {
+      setFeedback({ isError: true, message: t("coach.team.staffRoleError") });
+    } finally {
+      staffRoleUpdateInFlight.current = false;
+      setUpdatingUserId(null);
+    }
+  }, [mayManageRoles, selectedTeam, t]);
+
+  const confirmStaffRole = useCallback((member: TeamMembership, name: string, isStaff: boolean) => {
+    Alert.alert(
+      isStaff
+        ? t("coach.team.makeStaffTitle", { name })
+        : t("coach.team.removeStaffTitle"),
+      isStaff
+        ? t("coach.team.makeStaffBody")
+        : t("coach.team.removeStaffBody", { name }),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: isStaff ? t("coach.team.makeStaff") : t("coach.team.removeAccess"),
+          style: isStaff ? "default" : "destructive",
+          onPress: () => { void changeStaffRole(member, name, isStaff); },
+        },
+      ],
+    );
+  }, [changeStaffRole, t]);
+
+  const openMemberActions = useCallback((member: TeamMembership, name: string) => {
+    if (updatingUserId) return;
+    const isStaff = hasTeamRole(member, "staff");
+    const nextStaffValue = !isStaff;
+    Alert.alert(
+      t("coach.team.memberActionsTitle", { name }),
+      undefined,
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: nextStaffValue ? t("coach.team.makeStaff") : t("coach.team.removeStaffAccess"),
+          style: nextStaffValue ? "default" : "destructive",
+          onPress: () => confirmStaffRole(member, name, nextStaffValue),
+        },
+      ],
+    );
+  }, [confirmStaffRole, t, updatingUserId]);
+
+  const canManageMember = useCallback((member: TeamMembership) => Boolean(
+    mayManageRoles &&
+    currentMembership &&
+    selectedTeam &&
+    member.userId !== currentMembership.userId &&
+    member.userId !== selectedTeam.createdBy &&
+    isEligibleStaffRoleTarget(member),
+  ), [currentMembership, mayManageRoles, selectedTeam]);
 
   return (
     <ScreenWrapper>
@@ -106,36 +237,62 @@ export default function CoachTeamScreen() {
             </Card>
 
             <Card style={styles.cardGap}>
-              <Text accessibilityRole="header" style={styles.cardTitle}>{t("coach.team.parents")}</Text>
-              {parentsLoading ? (
+              <Text accessibilityRole="header" style={styles.cardTitle}>{t("coach.team.members")}</Text>
+
+              {rosterLoading ? (
                 <View accessibilityLiveRegion="polite" style={styles.centerInline}>
                   <ActivityIndicator color={Colors.primary} />
                   <Text style={styles.cardText}>{t("common.loading")}</Text>
                 </View>
               ) : null}
 
-              {!parentsLoading && parentsError ? (
+              {!rosterLoading && rosterError ? (
                 <View accessibilityLiveRegion="polite" style={styles.centerInline}>
-                  <Text style={styles.errorText}>{parentsError}</Text>
+                  <Text style={styles.errorText}>{rosterError}</Text>
                   <TouchableOpacity accessibilityRole="button" activeOpacity={0.86} onPress={loadTeam} style={styles.retryButton}>
                     <Text style={styles.retryText}>{t("common.retry")}</Text>
                   </TouchableOpacity>
                 </View>
               ) : null}
 
-              {!parentsLoading && !parentsError && acceptedParents.length === 0 ? (
-                <View accessibilityLiveRegion="polite" style={styles.emptyState}>
-                  <Text style={styles.emptyTitle}>{t("coach.team.noParentsTitle")}</Text>
-                  <Text style={styles.cardText}>{t("coach.team.noParentsBody")}</Text>
-                </View>
-              ) : null}
+              {!rosterLoading && !rosterError ? (
+                <>
+                  {profileError ? (
+                    <Text accessibilityLiveRegion="polite" style={styles.profileError}>{profileError}</Text>
+                  ) : null}
+                  {feedback ? (
+                    <Text
+                      accessibilityLiveRegion="polite"
+                      style={feedback.isError ? styles.errorText : styles.feedbackText}
+                    >
+                      {feedback.message}
+                    </Text>
+                  ) : null}
 
-              {!parentsLoading && !parentsError && acceptedParents.length > 0 ? (
-                <View style={styles.parentList}>
-                  {acceptedParents.map((parent) => (
-                    <ParentRow key={parent.userId} member={parent} />
-                  ))}
-                </View>
+                  <RosterSection
+                    emptyText={t("coach.team.noStaffTitle")}
+                    members={staffMembers}
+                    profiles={profiles}
+                    title={t("coach.team.staff")}
+                    updatingUserId={updatingUserId}
+                    canManageMember={canManageMember}
+                    onOpenActions={openMemberActions}
+                  />
+
+                  <RosterSection
+                    emptyText={t("coach.team.noParentsTitle")}
+                    members={parentMembers}
+                    profiles={profiles}
+                    title={t("coach.team.parents")}
+                    updatingUserId={updatingUserId}
+                    canManageMember={canManageMember}
+                    onOpenActions={openMemberActions}
+                  />
+
+                  {parentMembers.length === 0 ? (
+                    <Text style={styles.cardText}>{t("coach.team.noParentsBody")}</Text>
+                  ) : null}
+                </>
               ) : null}
             </Card>
           </>
@@ -145,26 +302,103 @@ export default function CoachTeamScreen() {
   );
 }
 
-function ParentRow({ member }: { member: TeamMembership }) {
+function RosterSection({
+  canManageMember,
+  emptyText,
+  members,
+  onOpenActions,
+  profiles,
+  title,
+  updatingUserId,
+}: {
+  canManageMember: (member: TeamMembership) => boolean;
+  emptyText: string;
+  members: TeamMembership[];
+  onOpenActions: (member: TeamMembership, name: string) => void;
+  profiles: RosterProfiles;
+  title: string;
+  updatingUserId: string | null;
+}) {
   const { t } = useTranslation();
-  const name = getParentName(member, t);
-
   return (
-    <View accessibilityLabel={t("coach.team.parentAccessibilityLabel", { name })} accessible style={styles.parentRow}>
-      <View importantForAccessibility="no" style={styles.parentAvatar}>
-        <Text style={styles.parentInitial}>{getInitial(name)}</Text>
-      </View>
-      <Text style={styles.parentName}>{name}</Text>
+    <View style={styles.section}>
+      <Text accessibilityRole="header" style={styles.sectionTitle}>{title}</Text>
+      {members.length === 0 ? <Text style={styles.emptyText}>{emptyText}</Text> : null}
+      {members.map((member) => {
+        const name = profiles[member.userId] ?? t("coach.team.teamParentFallback");
+        return (
+          <MemberRow
+            key={member.userId}
+            canManage={canManageMember(member)}
+            isUpdating={updatingUserId === member.userId}
+            name={name}
+            onOpenActions={() => onOpenActions(member, name)}
+            roleLabel={getRoleLabel(member, t)}
+            updatesDisabled={Boolean(updatingUserId)}
+          />
+        );
+      })}
     </View>
   );
 }
 
-function formatTeamDetails(team: Team) {
-  return [team.sport, team.ageRange, team.division, team.season].filter(Boolean).join(" - ");
+function MemberRow({
+  canManage,
+  isUpdating,
+  name,
+  onOpenActions,
+  roleLabel,
+  updatesDisabled,
+}: {
+  canManage: boolean;
+  isUpdating: boolean;
+  name: string;
+  onOpenActions: () => void;
+  roleLabel: string;
+  updatesDisabled: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <View accessibilityLabel={t("coach.team.memberAccessibilityLabel", { name, role: roleLabel })} style={styles.memberRow}>
+      <View importantForAccessibility="no" style={styles.memberAvatar}>
+        <Text style={styles.memberInitial}>{getInitial(name)}</Text>
+      </View>
+      <View style={styles.memberText}>
+        <Text style={styles.memberName}>{name}</Text>
+        <Text style={styles.roleLabel}>{roleLabel}</Text>
+      </View>
+      {canManage ? (
+        <TouchableOpacity
+          accessibilityLabel={t("coach.team.memberActionsTitle", { name })}
+          accessibilityRole="button"
+          activeOpacity={0.75}
+          disabled={updatesDisabled}
+          hitSlop={8}
+          onPress={onOpenActions}
+          style={[styles.actionButton, updatesDisabled ? styles.actionDisabled : null]}
+        >
+          {isUpdating
+            ? <ActivityIndicator color={Colors.primary} size="small" />
+            : <MoreVertical color={Colors.primary} size={22} strokeWidth={2.2} />}
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
 }
 
-function getParentName(member: TeamMembership, t: (key: string) => string) {
-  return member.displayName.trim() || t("coach.team.teamParentFallback");
+function getRoleLabel(member: TeamMembership, t: (key: string) => string) {
+  const isParent = hasTeamRole(member, "parent");
+  if (hasTeamRole(member, "coach")) {
+    return isParent ? t("coach.team.roleCoachParent") : t("coach.team.roleCoach");
+  }
+  if (hasTeamRole(member, "staff")) {
+    return isParent ? t("coach.team.roleStaffParent") : t("coach.team.roleStaff");
+  }
+  return t("coach.team.roleParent");
+}
+
+function formatTeamDetails(team: Team) {
+  return [team.sport, team.ageRange, team.division, team.season].filter(Boolean).join(" - ");
 }
 
 function getInitial(name: string) {
@@ -182,6 +416,8 @@ const styles = StyleSheet.create({
   centerInline: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.md },
   errorCard: { alignItems: "center", borderLeftColor: Colors.primary, borderLeftWidth: 4, gap: Spacing.md },
   errorText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
+  profileError: { color: Colors.primary, fontFamily: Typography.bodyRegular, fontSize: 13, textAlign: "center" },
+  feedbackText: { color: Colors.accentGreen, fontFamily: Typography.bodySemiBold, fontSize: 14, textAlign: "center" },
   successText: { color: Colors.accentGreen, fontFamily: Typography.bodyBold, textAlign: "center" },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
@@ -190,11 +426,15 @@ const styles = StyleSheet.create({
   inviteCode: { ...TeamCodeTypography, color: Colors.textHeading, fontSize: 26 },
   retryButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 42, paddingHorizontal: Spacing.lg },
   retryText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
-  emptyState: { alignItems: "center", gap: Spacing.xs, paddingVertical: Spacing.md },
-  emptyTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 16, textAlign: "center" },
-  parentList: { gap: Spacing.xs },
-  parentRow: { alignItems: "center", borderBottomColor: Colors.secondary, borderBottomWidth: 1, flexDirection: "row", gap: Spacing.sm, paddingVertical: Spacing.sm },
-  parentAvatar: { alignItems: "center", backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: 18, borderWidth: 1, height: 36, justifyContent: "center", width: 36 },
-  parentInitial: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 15 },
-  parentName: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodySemiBold, fontSize: 15 },
+  section: { gap: Spacing.xs },
+  sectionTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 16, marginTop: Spacing.xs },
+  emptyText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, paddingVertical: Spacing.sm },
+  memberRow: { alignItems: "center", borderBottomColor: Colors.secondary, borderBottomWidth: 1, flexDirection: "row", gap: Spacing.sm, minHeight: 58, paddingVertical: Spacing.sm },
+  memberAvatar: { alignItems: "center", backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: 18, borderWidth: 1, height: 36, justifyContent: "center", width: 36 },
+  memberInitial: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 15 },
+  memberText: { flex: 1, gap: 2 },
+  memberName: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 15 },
+  roleLabel: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13 },
+  actionButton: { alignItems: "center", height: 44, justifyContent: "center", width: 44 },
+  actionDisabled: { opacity: 0.45 },
 });

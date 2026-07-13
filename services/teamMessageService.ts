@@ -12,7 +12,7 @@ import {
 } from "firebase/firestore";
 
 import { auth, db } from "@/config/firebase";
-import { hasCoachAccess, resolveTeamRoles, type TeamRoleFlags } from "@/services/teamService";
+import { canSendTeamMessages, resolveTeamRoles, type TeamRoleFlags } from "@/services/teamService";
 
 export type AnnouncementAudience = "parents" | "staff" | "all";
 export type ReplyType = "team" | "privateToCoach";
@@ -48,7 +48,7 @@ export type AnnouncementInput = {
 export async function createTeamAnnouncement(teamId: string, input: AnnouncementInput) {
   const user = requireUser();
   const membership = await getCurrentMembership(teamId, user.uid);
-  if (!hasCoachAccess(membership)) {
+  if (!canSendTeamMessages(membership)) {
     throw new Error("Only team staff can send announcements.");
   }
 

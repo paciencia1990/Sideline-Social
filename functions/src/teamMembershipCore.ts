@@ -27,6 +27,37 @@ export function hasCoachAccess(data: Record<string, unknown> | undefined): boole
   return roles.coach || roles.staff;
 }
 
+export function canManageTeamRoles(
+  data: Record<string, unknown> | undefined,
+  isTeamOwner = false,
+): boolean {
+  if (!data || data.status !== 'active') return false;
+  return resolveTeamRoleFlags(data.roles, data.role).coach || isTeamOwner;
+}
+
+export function isEligibleStaffRoleTarget(data: Record<string, unknown> | undefined): boolean {
+  if (!data || data.status !== 'active') return false;
+  const roles = resolveTeamRoleFlags(data.roles, data.role);
+  return roles.parent && !roles.coach;
+}
+
+export function setStaffRole(
+  value: unknown,
+  legacyRole: unknown,
+  isStaff: boolean,
+): TeamRoleFlags & Record<string, unknown> {
+  const existingRoles = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const currentRoles = resolveTeamRoleFlags(value, legacyRole);
+  return {
+    ...existingRoles,
+    parent: currentRoles.parent,
+    coach: currentRoles.coach,
+    staff: isStaff,
+  };
+}
+
 export function normalizeChildIds(value: unknown, options: { allowEmpty?: boolean } = {}): string[] {
   if (!Array.isArray(value)) throw new Error('childIds must be an array.');
   const childIds = Array.from(new Set(value.map((item) => typeof item === 'string' ? item.trim() : '')));
