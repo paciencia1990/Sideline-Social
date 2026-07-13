@@ -3,6 +3,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View
 import { RefreshCw, Star, Trophy } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
+import { AuthenticatedRouteGate } from "@/components/AuthenticatedRouteGate";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
@@ -13,7 +14,15 @@ import {
 } from "@/services/leaderboardService";
 import { flattenStyle } from "@/utils/flatten-style";
 
-export default function LeaderboardScreen() {
+export default function ProtectedLeaderboardScreen() {
+  return (
+    <AuthenticatedRouteGate>
+      <LeaderboardScreen />
+    </AuthenticatedRouteGate>
+  );
+}
+
+function LeaderboardScreen() {
   const { i18n, t } = useTranslation();
   const [players, setPlayers] = useState<LeaderboardUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);

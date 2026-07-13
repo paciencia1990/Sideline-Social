@@ -1,37 +1,19 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
-import { Redirect, Tabs, router, usePathname } from "expo-router";
+import { Redirect, Tabs } from "expo-router";
 import { Gamepad2, Heart, Home, MapPin, User } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { TabIcon } from "@/components/TabIcon";
-import { COACH_MODE_ROUTE, PARENT_PROFILE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
+import { CHOOSE_START_MODE_ROUTE, COACH_MODE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 
 export default function TabLayout() {
   const { t } = useTranslation();
-  const pathname = usePathname();
   const { activeMode, modeHydrated } = useApp();
   const { loading: authLoading, user } = useAuth();
-  const shouldRedirectToCoach = Boolean(user) && modeHydrated && activeMode === "coach";
-
-  useEffect(() => {
-    if (!shouldRedirectToCoach) return;
-
-    if (__DEV__) {
-      console.log("[ModeRouteGuard]", {
-        activeMode,
-        modeHydrated,
-        currentRoute: pathname,
-        parentProfileRoute: PARENT_PROFILE_ROUTE,
-        coachModeRoute: COACH_MODE_ROUTE,
-      });
-    }
-
-    router.replace(COACH_MODE_ROUTE as never);
-  }, [activeMode, modeHydrated, pathname, shouldRedirectToCoach]);
 
   if (authLoading || !modeHydrated) {
     return (
@@ -45,8 +27,12 @@ export default function TabLayout() {
     return <Redirect href={SIGN_IN_ROUTE as never} />;
   }
 
-  if (shouldRedirectToCoach) {
-    return null;
+  if (!user.modeOnboardingCompleted) {
+    return <Redirect href={CHOOSE_START_MODE_ROUTE as never} />;
+  }
+
+  if (activeMode === "coach") {
+    return <Redirect href={COACH_MODE_ROUTE as never} />;
   }
 
   return (

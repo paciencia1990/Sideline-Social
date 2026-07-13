@@ -1,17 +1,15 @@
-import React from "react";
+import type { ReactNode } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
-import { Redirect, Stack } from "expo-router";
+import { Redirect } from "expo-router";
 
-import { CHOOSE_START_MODE_ROUTE, PARENT_PROFILE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
+import { CHOOSE_START_MODE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors } from "@/constants/theme";
-import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 
-export default function CoachLayout() {
-  const { activeMode, modeHydrated } = useApp();
-  const { loading: authLoading, user } = useAuth();
+export function AuthenticatedRouteGate({ children }: { children: ReactNode }) {
+  const { loading, user } = useAuth();
 
-  if (authLoading || !modeHydrated) {
+  if (loading) {
     return (
       <View style={styles.loadingScreen}>
         <ActivityIndicator color={Colors.primary} />
@@ -27,11 +25,7 @@ export default function CoachLayout() {
     return <Redirect href={CHOOSE_START_MODE_ROUTE as never} />;
   }
 
-  if (activeMode !== "coach") {
-    return <Redirect href={PARENT_PROFILE_ROUTE as never} />;
-  }
-
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return <>{children}</>;
 }
 
 const styles = StyleSheet.create({

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState, ReactNode } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, ReactNode } from "react";
 import {
   User,
   createUserWithEmailAndPassword,
@@ -8,9 +8,10 @@ import {
   signOut as firebaseSignOut,
   updateProfile,
 } from "firebase/auth";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { doc, getDoc, serverTimestamp, setDoc, type DocumentData } from "firebase/firestore";
 import { auth, db } from "@/config/firebase";
 import { unregisterCurrentDeviceNotificationToken } from "@/services/notificationService";
+import { readModeOnboardingState, type AppMode } from "@/utils/onboardingMode";
 import { resolveDisplayName } from "@/utils/profileName";
 
 type AppUser = {
@@ -19,6 +20,10 @@ type AppUser = {
   displayName: string | null;
   phoneNumber?: string | null;
   photoURL?: string | null;
+  activeMode: AppMode | null;
+  defaultMode: AppMode | null;
+  onboardingPath: AppMode | null;
+  modeOnboardingCompleted: boolean;
 };
 
 type SignUpProfile = {
@@ -33,6 +38,7 @@ interface AuthContextType {
   user: AppUser | null;
   firebaseUser: User | null;
   loading: boolean;
+  refreshProfile: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string, profile?: SignUpProfile) => Promise<AppUser>;
   resetPassword: (email: string) => Promise<void>;
@@ -45,21 +51,35 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   firebaseUser: null,
   loading: true,
+  refreshProfile: async () => {},
   signIn: async () => {},
-  signUp: async () => ({ uid: "", email: null, displayName: null }),
+  signUp: async () => ({
+    uid: "",
+    email: null,
+    displayName: null,
+    activeMode: null,
+    defaultMode: null,
+    onboardingPath: null,
+    modeOnboardingCompleted: true,
+  }),
   resetPassword: async () => {},
   signOut: async () => {},
   signInWithGoogle: async () => {},
   signInWithApple: async () => {},
 });
 
-function mapUser(firebaseUser: User, displayName: string | null): AppUser {
+function mapUser(firebaseUser: User, profile?: DocumentData): AppUser {
+  const modeState = readModeOnboardingState(profile);
   return {
     uid: firebaseUser.uid,
     email: firebaseUser.email,
-    displayName,
+    displayName: resolveDisplayName(profile, firebaseUser.displayName),
     phoneNumber: firebaseUser.phoneNumber,
     photoURL: firebaseUser.photoURL,
+    activeMode: modeState.activeMode,
+    defaultMode: modeState.preferredMode,
+    onboardingPath: modeState.onboardingPath,
+    modeOnboardingCompleted: modeState.onboardingCompleted,
   };
 }
 
@@ -84,12 +104,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setLoading(true);
       void getDoc(doc(db, "users", nextUser.uid))
-        .then((profileDoc) => resolveDisplayName(profileDoc.data(), nextUser.displayName))
+        .then((profileDoc) => profileDoc.data())
         .catch((error) => {
           console.warn("[Auth] profile hydration unavailable:", getErrorCode(error));
-          return resolveDisplayName(null, nextUser.displayName);
+          return undefined;
         })
-        .then((displayName) => {
+        .then((profile) => {
           if (
             disposed ||
             loadVersion !== profileLoadVersion.current ||
@@ -98,7 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
           }
 
-          setUser(mapUser(nextUser, displayName));
+          setUser(mapUser(nextUser, profile));
           setLoading(false);
         });
     });
@@ -110,10 +130,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const refreshProfile = useCallback(async () => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      setFirebaseUser(null);
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+
+    const loadVersion = ++profileLoadVersion.current;
+    setLoading(true);
+    try {
+      const profileDoc = await getDoc(doc(db, "users", currentUser.uid));
+      if (
+        loadVersion !== profileLoadVersion.current ||
+        auth.currentUser?.uid !== currentUser.uid
+      ) {
+        return;
+      }
+
+      setFirebaseUser(currentUser);
+      setUser(mapUser(currentUser, profileDoc.data()));
+    } finally {
+      if (
+        loadVersion === profileLoadVersion.current &&
+        auth.currentUser?.uid === currentUser.uid
+      ) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
   const value = useMemo<AuthContextType>(() => ({
     user,
     firebaseUser,
     loading,
+    refreshProfile,
     signIn: async (email, password) => {
       setUser(null);
       setLoading(true);
@@ -151,13 +204,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         friendIds: [],
         preferredLanguage: "en",
         profileVisibility: "squad_only",
+        modeOnboardingCompleted: false,
       }, { merge: true });
 
       const userDoc = await getDoc(doc(db, "users", credential.user.uid));
-      const nextUser = mapUser(
-        credential.user,
-        resolveDisplayName(userDoc.data(), credential.user.displayName),
-      );
+      const nextUser = mapUser(credential.user, userDoc.data());
 
       profileLoadVersion.current += 1;
       setFirebaseUser(credential.user);
@@ -186,7 +237,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signInWithApple: async () => {
       console.warn("Apple sign-in is not configured yet.");
     },
-  }), [firebaseUser, loading, user]);
+  }), [firebaseUser, loading, refreshProfile, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

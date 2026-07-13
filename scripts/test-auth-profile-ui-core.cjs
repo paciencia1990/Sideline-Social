@@ -70,7 +70,7 @@ for (const file of [["app", "coach", "index.tsx"], ["app", "coach", "team.tsx"]]
 
 const authContext = read("context", "AuthContext.tsx");
 assert.ok(authContext.includes('getDoc(doc(db, "users", nextUser.uid))'), "Sign-in and restart must hydrate the persisted profile.");
-assert.ok(authContext.includes("resolveDisplayName(profileDoc.data(), nextUser.displayName)"), "Firestore display name must precede Firebase displayName.");
+assert.ok(authContext.includes("displayName: resolveDisplayName(profile, firebaseUser.displayName)"), "Firestore display name must precede Firebase displayName.");
 assert.ok(authContext.includes("const profileLoadVersion = useRef(0)"), "Profile hydration must reject stale account results.");
 assert.ok(authContext.includes("setUser(null);"), "Sign-out and account changes must clear the previous profile.");
 assert.ok(authContext.includes("await updateProfile(credential.user, { displayName })"), "Sign-up must await Firebase displayName persistence.");

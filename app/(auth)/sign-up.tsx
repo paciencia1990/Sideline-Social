@@ -5,6 +5,7 @@ import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { CHOOSE_START_MODE_ROUTE } from "@/constants/routes";
 import { useAuth } from "@/context/AuthContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 
@@ -36,7 +37,7 @@ export default function SignUpScreen() {
         sports: sport.trim() ? [sport.trim()] : [],
       });
       await AsyncStorage.setItem("onboardingComplete", "true");
-      router.replace("/(tabs)");
+      router.replace(CHOOSE_START_MODE_ROUTE as never);
     } catch (nextError) {
       console.warn("[SignUp] create account error:", nextError);
       setError("Could not create this account.");

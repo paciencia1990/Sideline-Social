@@ -116,8 +116,8 @@ export default function CoachHomeScreen() {
         {!loading && !error ? (
           <>
             <Card style={styles.modeCard}>
-              <Text style={styles.cardTitle}>{t("mode.viewingCoach")}</Text>
-              <Text style={styles.cardText}>{hasTeams ? t("coach.home.modeHelp") : t("coach.home.emptyBody")}</Text>
+              <Text style={styles.cardTitle}>{hasTeams ? t("mode.viewingCoach") : t("startMode.coachWelcome")}</Text>
+              <Text style={styles.cardText}>{hasTeams ? t("coach.home.modeHelp") : t("startMode.coachWelcomeBody")}</Text>
               <View style={styles.buttonRow}>
                 <TouchableOpacity
                   activeOpacity={0.86}
@@ -144,14 +144,12 @@ export default function CoachHomeScreen() {
                   <QuickAction label={t("coach.home.resources")} Icon={Shield} onPress={() => router.push("/coach/resources" as never)} />
                 </View>
               </Card>
-            ) : (
-              <StateCard title={t("coach.home.emptyTitle")} body={t("coach.home.emptyBody")} />
-            )}
+            ) : null}
 
             <Card style={styles.cardGap}>
               <Text style={styles.cardTitle}>{teamSectionTitle}</Text>
               <View style={styles.buttonRow}>
-                <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/coach/team" as never)} style={styles.primaryButton}>
+                <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/coach/create-team" as never)} style={styles.primaryButton}>
                   <Text style={styles.primaryButtonText}>{teamActionLabel}</Text>
                 </TouchableOpacity>
               </View>

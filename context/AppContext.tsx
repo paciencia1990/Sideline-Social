@@ -1,10 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import i18n from "@/i18n";
 import { useAuth } from "@/context/AuthContext";
+import { resolveInitialMode, type AppMode } from "@/utils/onboardingMode";
 
 type SupportedLanguage = "en" | "es";
-type AppMode = "parent" | "coach";
 
 interface AppContextType {
   language: SupportedLanguage;
@@ -19,10 +19,6 @@ const MODE_STORAGE_KEY = "sidelineSocial.activeMode";
 
 function normalizeLanguage(language?: string): SupportedLanguage {
   return language?.startsWith("es") ? "es" : "en";
-}
-
-function normalizeMode(mode?: string | null): AppMode {
-  return mode === "coach" ? "coach" : "parent";
 }
 
 const AppContext = createContext<AppContextType>({
@@ -40,43 +36,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
     normalizeLanguage(i18n.resolvedLanguage ?? i18n.language)
   );
   const [activeMode, setActiveModeState] = useState<AppMode>("parent");
-  const [modeHydrated, setModeHydrated] = useState(false);
-  const signedOutResetComplete = useRef(false);
+  const [hydratedUserId, setHydratedUserId] = useState<string | null>();
   const userId = user?.uid ?? null;
+  const modeHydrated = !authLoading && hydratedUserId === userId;
 
   useEffect(() => {
+    if (authLoading) return;
+
     let isMounted = true;
 
-    AsyncStorage.getItem(MODE_STORAGE_KEY)
-      .then((storedMode) => {
-        if (isMounted) setActiveModeState(normalizeMode(storedMode));
-      })
-      .catch(() => {
-        if (isMounted) setActiveModeState("parent");
-      })
-      .finally(() => {
-        if (isMounted) setModeHydrated(true);
-      });
+    async function hydrateMode() {
+      if (!userId) {
+        setActiveModeState("parent");
+        await AsyncStorage.removeItem(MODE_STORAGE_KEY).catch(() => undefined);
+        if (isMounted) setHydratedUserId(null);
+        return;
+      }
 
+      const storedMode = await AsyncStorage.getItem(MODE_STORAGE_KEY).catch(() => null);
+      if (!isMounted) return;
+
+      const nextMode = resolveInitialMode(user, storedMode);
+      setActiveModeState(nextMode);
+      await AsyncStorage.setItem(MODE_STORAGE_KEY, nextMode).catch(() => undefined);
+      if (isMounted) setHydratedUserId(userId);
+    }
+
+    void hydrateMode();
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [authLoading, user, userId]);
 
-  useEffect(() => {
-    if (authLoading || !modeHydrated) return;
-
-    if (userId) {
-      signedOutResetComplete.current = false;
-      return;
-    }
-
-    if (signedOutResetComplete.current) return;
-    signedOutResetComplete.current = true;
-
-    if (activeMode !== "parent") setActiveModeState("parent");
-    AsyncStorage.removeItem(MODE_STORAGE_KEY).catch(() => undefined);
-  }, [activeMode, authLoading, modeHydrated, userId]);
   useEffect(() => {
     const handleLanguageChanged = (nextLanguage: string) => {
       setLanguageState(normalizeLanguage(nextLanguage));
