@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import i18n from "@/i18n";
 import { useAuth } from "@/context/AuthContext";
 
@@ -41,6 +41,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const [activeMode, setActiveModeState] = useState<AppMode>("parent");
   const [modeHydrated, setModeHydrated] = useState(false);
+  const signedOutResetComplete = useRef(false);
+  const userId = user?.uid ?? null;
 
   useEffect(() => {
     let isMounted = true;
@@ -62,11 +64,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (authLoading || !modeHydrated || user) return;
+    if (authLoading || !modeHydrated) return;
 
-    setActiveModeState("parent");
+    if (userId) {
+      signedOutResetComplete.current = false;
+      return;
+    }
+
+    if (signedOutResetComplete.current) return;
+    signedOutResetComplete.current = true;
+
+    if (activeMode !== "parent") setActiveModeState("parent");
     AsyncStorage.removeItem(MODE_STORAGE_KEY).catch(() => undefined);
-  }, [authLoading, modeHydrated, user]);
+  }, [activeMode, authLoading, modeHydrated, userId]);
   useEffect(() => {
     const handleLanguageChanged = (nextLanguage: string) => {
       setLanguageState(normalizeLanguage(nextLanguage));

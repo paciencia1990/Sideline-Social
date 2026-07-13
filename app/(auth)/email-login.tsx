@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { FORGOT_PASSWORD_ROUTE } from "@/constants/routes";
 import { useAuth } from "@/context/AuthContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 
@@ -48,7 +49,7 @@ export default function EmailLoginScreen() {
           <TouchableOpacity style={styles.button} onPress={handleSignIn} disabled={loading}>
             {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>Sign in</Text>}
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.push("/(auth)/forgot-password")}>
+          <TouchableOpacity onPress={() => router.push(FORGOT_PASSWORD_ROUTE as never)}>
             <Text style={styles.link}>Forgot password?</Text>
           </TouchableOpacity>
         </ScrollView>

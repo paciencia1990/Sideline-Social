@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { Animated, StyleSheet, Text, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
-import { SIGN_IN_ROUTE } from "@/constants/routes";
+import { ONBOARDING_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Typography } from "@/constants/theme";
 
 export default function SplashScreen() {
@@ -18,7 +18,7 @@ export default function SplashScreen() {
 
     const timer = setTimeout(async () => {
       const onboardingComplete = await AsyncStorage.getItem("onboardingComplete");
-      router.replace(onboardingComplete === "true" ? SIGN_IN_ROUTE : "/(auth)/onboarding");
+      router.replace(onboardingComplete === "true" ? SIGN_IN_ROUTE : ONBOARDING_ROUTE);
     }, 900);
 
     return () => clearTimeout(timer);

@@ -3,6 +3,7 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleShe
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { FORGOT_PASSWORD_SUCCESS_ROUTE } from "@/constants/routes";
 import { useAuth } from "@/context/AuthContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 
@@ -21,7 +22,7 @@ export default function ForgotPasswordScreen() {
     setLoading(true);
     try {
       await resetPassword(email);
-      router.push("/(auth)/forgot-password-success");
+      router.push(FORGOT_PASSWORD_SUCCESS_ROUTE as never);
     } catch (nextError) {
       console.warn("[ForgotPassword] reset error:", nextError);
       setError("Could not send a reset email.");

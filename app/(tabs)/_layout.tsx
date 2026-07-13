@@ -1,19 +1,21 @@
 import React, { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
-import { Tabs, router, usePathname } from "expo-router";
+import { Redirect, Tabs, router, usePathname } from "expo-router";
 import { Gamepad2, Heart, Home, MapPin, User } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { TabIcon } from "@/components/TabIcon";
-import { COACH_MODE_ROUTE, PARENT_PROFILE_ROUTE } from "@/constants/routes";
+import { COACH_MODE_ROUTE, PARENT_PROFILE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
+import { useAuth } from "@/context/AuthContext";
 
 export default function TabLayout() {
   const { t } = useTranslation();
   const pathname = usePathname();
   const { activeMode, modeHydrated } = useApp();
-  const shouldRedirectToCoach = modeHydrated && activeMode === "coach";
+  const { loading: authLoading, user } = useAuth();
+  const shouldRedirectToCoach = Boolean(user) && modeHydrated && activeMode === "coach";
 
   useEffect(() => {
     if (!shouldRedirectToCoach) return;
@@ -31,12 +33,16 @@ export default function TabLayout() {
     router.replace(COACH_MODE_ROUTE as never);
   }, [activeMode, modeHydrated, pathname, shouldRedirectToCoach]);
 
-  if (!modeHydrated) {
+  if (authLoading || !modeHydrated) {
     return (
       <View style={styles.loadingScreen}>
         <ActivityIndicator color={Colors.primary} />
       </View>
     );
+  }
+
+  if (!user) {
+    return <Redirect href={SIGN_IN_ROUTE as never} />;
   }
 
   if (shouldRedirectToCoach) {

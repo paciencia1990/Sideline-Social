@@ -27,7 +27,6 @@ import {
 } from "@expo-google-fonts/montserrat";
 import { Caveat_400Regular, Caveat_700Bold } from "@expo-google-fonts/caveat";
 
-import { AuthNavigationGuard } from "@/components/AuthNavigationGuard";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { NotificationCoordinator } from "@/components/NotificationCoordinator";
 import { AppProvider } from "@/context/AppContext";
@@ -90,7 +89,6 @@ export default function RootLayout() {
             <AuthProvider>
               <SquadProvider>
                 <AppProvider>
-                  <AuthNavigationGuard />
                   <NotificationCoordinator />
                   <Stack
                     screenOptions={{

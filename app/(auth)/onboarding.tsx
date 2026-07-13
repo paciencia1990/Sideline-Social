@@ -4,12 +4,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 
 export default function OnboardingScreen() {
   const finish = async () => {
     await AsyncStorage.setItem("onboardingComplete", "true");
-    router.replace("/(auth)/sign-in");
+    router.replace(SIGN_IN_ROUTE as never);
   };
 
   return (

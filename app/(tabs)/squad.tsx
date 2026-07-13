@@ -25,6 +25,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { SIDELINE_MAP_STYLE } from "@/constants/mapStyle";
+import { SIGN_IN_ROUTE } from "@/constants/routes";
 import {
   getCurrentLocation,
   requestLocationPermission,
@@ -99,7 +100,7 @@ export default function SquadScreen() {
 
   const handleJoin = useCallback(async (squadId: string) => {
     if (!user?.uid) {
-      router.push("/(auth)/sign-in");
+      router.push(SIGN_IN_ROUTE as never);
       return;
     }
 

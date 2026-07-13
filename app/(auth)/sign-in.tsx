@@ -12,12 +12,12 @@ export default function SignInScreen() {
   const router = useRouter();
 
   const handleEmailSignIn = useCallback(() => {
-    if (__DEV__) console.log("[AuthWelcome] Sign in with Email pressed");
+    if (__DEV__) console.info("[AuthDebug] Email login pressed");
     router.push(EMAIL_SIGN_IN_ROUTE as never);
   }, [router]);
 
   const handleCreateAccount = useCallback(() => {
-    if (__DEV__) console.log("[AuthWelcome] Create Account pressed");
+    if (__DEV__) console.info("[AuthDebug] Sign up pressed");
     router.push(SIGN_UP_ROUTE as never);
   }, [router]);
 
