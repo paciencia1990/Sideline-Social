@@ -2,12 +2,14 @@ import React, { useState } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity } from "react-native";
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { FORGOT_PASSWORD_SUCCESS_ROUTE } from "@/constants/routes";
 import { useAuth } from "@/context/AuthContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 
 export default function ForgotPasswordScreen() {
+  const { t } = useTranslation();
   const { resetPassword } = useAuth();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -16,7 +18,7 @@ export default function ForgotPasswordScreen() {
   const handleReset = async () => {
     setError("");
     if (!email.trim()) {
-      setError("Enter your email address.");
+      setError(t("auth.errors.emailRequired"));
       return;
     }
     setLoading(true);
@@ -25,7 +27,7 @@ export default function ForgotPasswordScreen() {
       router.push(FORGOT_PASSWORD_SUCCESS_ROUTE as never);
     } catch (nextError) {
       console.warn("[ForgotPassword] reset error:", nextError);
-      setError("Could not send a reset email.");
+      setError(t("auth.errors.resetSendFailed"));
     } finally {
       setLoading(false);
     }
@@ -33,17 +35,17 @@ export default function ForgotPasswordScreen() {
 
   return (
     <ScreenWrapper>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.flex}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.flex}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <ChevronLeft size={24} color={Colors.textHeading} />
           </TouchableOpacity>
-          <Text style={styles.title}>Reset password</Text>
-          <Text style={styles.body}>We will send a reset link to your email.</Text>
-          <TextInput style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+          <Text style={styles.title}>{t("auth.resetPassword")}</Text>
+          <Text style={styles.body}>{t("auth.resetPasswordSubtitle")}</Text>
+          <TextInput style={styles.input} placeholder={t("auth.email")} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
           {!!error && <Text style={styles.error}>{error}</Text>}
           <TouchableOpacity style={styles.button} onPress={handleReset} disabled={loading}>
-            {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>Send reset link</Text>}
+            {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>{t("auth.sendResetLink")}</Text>}
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>

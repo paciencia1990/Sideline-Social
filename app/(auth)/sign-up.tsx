@@ -3,18 +3,20 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleShe
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useAuth } from "@/context/AuthContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 
 export default function SignUpScreen() {
+  const { t } = useTranslation();
   const { signUp } = useAuth();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [zipCode, setZipCode] = useState("");
-  const [sport, setSport] = useState("Soccer");
+  const [sport, setSport] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -58,7 +60,7 @@ export default function SignUpScreen() {
           <TextInput style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
           <TextInput style={styles.input} placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
           <TextInput style={styles.input} placeholder="Zip code" value={zipCode} onChangeText={setZipCode} keyboardType="number-pad" />
-          <TextInput style={styles.input} placeholder="Primary sport" value={sport} onChangeText={setSport} />
+          <TextInput style={styles.input} placeholder={t("auth.selectSportOptional")} value={sport} onChangeText={setSport} />
           {!!error && <Text style={styles.error}>{error}</Text>}
           <TouchableOpacity style={styles.button} onPress={handleCreate} disabled={loading}>
             {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>Create account</Text>}

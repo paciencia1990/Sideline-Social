@@ -20,6 +20,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { getFirstName } from "@/utils/profileName";
 import {
   fetchUnreadNotificationCount,
   fetchUserFriendIds,
@@ -80,7 +81,8 @@ export default function HomeScreen() {
   const [nearestSquad, setNearestSquad] = useState<Squad | null>(null);
   const [proximityLoading, setProximityLoading] = useState(false);
 
-  const displayName = user?.displayName || user?.email?.split("@")[0] || t("profile.defaultName");
+  const firstName = getFirstName(user?.displayName);
+  const welcomeText = firstName ? t("home.welcomeNamed", { firstName }) : t("home.welcome");
 
   useEffect(() => {
     if (__DEV__) {
@@ -274,7 +276,7 @@ export default function HomeScreen() {
           <Image source={logoSource} style={styles.logo} resizeMode="contain" />
           <View style={styles.headerCopy}>
             <Text style={styles.kicker}>{t("app.name")}</Text>
-            <Text style={styles.title}>{t("home.welcome", { name: displayName })}</Text>
+            <Text style={styles.title}>{welcomeText}</Text>
             <Text style={styles.subtitle}>{t("home.subtitle")}</Text>
           </View>
           <View style={styles.notificationPill}>

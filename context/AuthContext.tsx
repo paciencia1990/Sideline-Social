@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState, ReactNode } from "react";
 import {
   User,
   createUserWithEmailAndPassword,
@@ -11,6 +11,7 @@ import {
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "@/config/firebase";
 import { unregisterCurrentDeviceNotificationToken } from "@/services/notificationService";
+import { resolveDisplayName } from "@/utils/profileName";
 
 type AppUser = {
   uid: string;
@@ -52,12 +53,11 @@ const AuthContext = createContext<AuthContextType>({
   signInWithApple: async () => {},
 });
 
-function mapUser(firebaseUser: User | null): AppUser | null {
-  if (!firebaseUser) return null;
+function mapUser(firebaseUser: User, displayName: string | null): AppUser {
   return {
     uid: firebaseUser.uid,
     email: firebaseUser.email,
-    displayName: firebaseUser.displayName,
+    displayName,
     phoneNumber: firebaseUser.phoneNumber,
     photoURL: firebaseUser.photoURL,
   };
@@ -65,26 +65,70 @@ function mapUser(firebaseUser: User | null): AppUser | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const profileLoadVersion = useRef(0);
 
   useEffect(() => {
+    let disposed = false;
+
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+      const loadVersion = ++profileLoadVersion.current;
       setFirebaseUser(nextUser);
-      setLoading(false);
+      setUser(null);
+
+      if (!nextUser) {
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      void getDoc(doc(db, "users", nextUser.uid))
+        .then((profileDoc) => resolveDisplayName(profileDoc.data(), nextUser.displayName))
+        .catch((error) => {
+          console.warn("[Auth] profile hydration unavailable:", getErrorCode(error));
+          return resolveDisplayName(null, nextUser.displayName);
+        })
+        .then((displayName) => {
+          if (
+            disposed ||
+            loadVersion !== profileLoadVersion.current ||
+            auth.currentUser?.uid !== nextUser.uid
+          ) {
+            return;
+          }
+
+          setUser(mapUser(nextUser, displayName));
+          setLoading(false);
+        });
     });
-    return unsubscribe;
+
+    return () => {
+      disposed = true;
+      profileLoadVersion.current += 1;
+      unsubscribe();
+    };
   }, []);
 
   const value = useMemo<AuthContextType>(() => ({
-    user: mapUser(firebaseUser),
+    user,
     firebaseUser,
     loading,
     signIn: async (email, password) => {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      setUser(null);
+      setLoading(true);
+      try {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      } catch (error) {
+        setLoading(false);
+        throw error;
+      }
     },
     signUp: async (email, password, profile = {}) => {
       const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      const displayName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim();
+      const firstName = profile.firstName?.trim() ?? "";
+      const lastName = profile.lastName?.trim() ?? "";
+      const displayName = [firstName, lastName].filter(Boolean).join(" ");
 
       if (displayName) {
         await updateProfile(credential.user, { displayName });
@@ -92,11 +136,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       await setDoc(doc(db, "users", credential.user.uid), {
         userId: credential.user.uid,
-        firstName: profile.firstName ?? "",
-        lastName: profile.lastName ?? "",
+        firstName,
+        lastName,
         displayName: displayName || null,
         email: email.trim(),
-        zipCode: profile.zipCode ?? "",
+        zipCode: profile.zipCode?.trim() ?? "",
         sports: profile.sports ?? [],
         phoneNumber: profile.phoneNumber ?? null,
         createdAt: serverTimestamp(),
@@ -110,15 +154,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }, { merge: true });
 
       const userDoc = await getDoc(doc(db, "users", credential.user.uid));
-      const data = userDoc.data();
+      const nextUser = mapUser(
+        credential.user,
+        resolveDisplayName(userDoc.data(), credential.user.displayName),
+      );
 
-      return {
-        uid: credential.user.uid,
-        email: credential.user.email,
-        displayName: (data?.displayName as string | null) ?? displayName ?? null,
-        phoneNumber: credential.user.phoneNumber,
-        photoURL: credential.user.photoURL,
-      };
+      profileLoadVersion.current += 1;
+      setFirebaseUser(credential.user);
+      setUser(nextUser);
+      setLoading(false);
+      return nextUser;
     },
     resetPassword: async (email) => {
       await sendPasswordResetEmail(auth, email.trim());
@@ -130,6 +175,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn("[Notifications] sign-out cleanup unavailable:", getErrorCode(error));
       }
       await firebaseSignOut(auth);
+      profileLoadVersion.current += 1;
+      setFirebaseUser(null);
+      setUser(null);
+      setLoading(false);
     },
     signInWithGoogle: async () => {
       console.warn("Google sign-in is not configured yet.");
@@ -137,7 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signInWithApple: async () => {
       console.warn("Apple sign-in is not configured yet.");
     },
-  }), [firebaseUser, loading]);
+  }), [firebaseUser, loading, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

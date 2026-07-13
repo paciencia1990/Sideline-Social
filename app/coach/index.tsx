@@ -136,7 +136,7 @@ export default function CoachHomeScreen() {
                 <Text style={styles.cardText}>{[selectedTeam.sport, selectedTeam.ageRange, selectedTeam.division].filter(Boolean).join(" - ")}</Text>
                 <View style={styles.inviteBlock}>
                   <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
-                  <Text style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
+                  <Text maxFontSizeMultiplier={1.4} style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
                 </View>
                 <View style={styles.quickGrid}>
                   <QuickAction label={t("coach.home.viewTeam")} Icon={Users} onPress={() => router.push({ pathname: "/coach/team", params: { teamId: selectedTeam.id } } as never)} />

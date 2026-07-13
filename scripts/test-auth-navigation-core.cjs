@@ -37,6 +37,11 @@ for (const routeFile of ["sign-in.tsx", "email-login.tsx", "sign-up.tsx", "_layo
   );
 }
 
+const signUp = fs.readFileSync(path.join(process.cwd(), "app", "(auth)", "sign-up.tsx"), "utf8");
+assert.ok(signUp.includes('const [sport, setSport] = useState("");'), "New accounts must start with no selected sport.");
+assert.equal(signUp.includes('useState("Soccer")'), false, "Sign-up must not default to Soccer.");
+assert.ok(signUp.includes("sports: sport.trim() ? [sport.trim()] : []"), "Blank sport input must be saved as an empty sports array.");
+
 const profile = fs.readFileSync(path.join(process.cwd(), "app", "(tabs)", "profile.tsx"), "utf8");
 const signOutIndex = profile.indexOf("await signOut();");
 const replaceIndex = profile.indexOf("router.replace(SIGN_IN_ROUTE", signOutIndex);

@@ -52,15 +52,30 @@ export default function JoinTeamScreen() {
         </View>
 
         <Card style={styles.card}>
-          <TextInput
-            autoCapitalize="characters"
-            autoCorrect={false}
-            onChangeText={(value) => setInviteCode(value.toUpperCase())}
-            placeholder={t("team.join.enterCode")}
-            placeholderTextColor={Colors.textPrimary}
-            style={styles.input}
-            value={inviteCode}
-          />
+          <View style={styles.codeInputContainer}>
+            <TextInput
+              accessibilityLabel={t("team.join.enterCode")}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxFontSizeMultiplier={1.4}
+              onChangeText={(value) => setInviteCode(value.toUpperCase())}
+              style={styles.input}
+              textAlignVertical="center"
+              value={inviteCode}
+            />
+            {!inviteCode ? (
+              <View
+                accessible={false}
+                importantForAccessibility="no-hide-descendants"
+                pointerEvents="none"
+                style={styles.placeholderLayer}
+              >
+                <Text maxFontSizeMultiplier={1.4} style={styles.inputPlaceholder}>
+                  {t("team.join.enterCode")}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           <ChildProfilePicker onChange={setSelectedChildIds} selectedIds={selectedChildIds} />
           {message ? <Text style={styles.successText}>{message}</Text> : null}
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -94,7 +109,10 @@ const styles = StyleSheet.create({
   field: { gap: Spacing.xs },
   inputLabel: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   childInput: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 48, paddingHorizontal: Spacing.md },
-  input: { ...TeamCodeTypography, backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontSize: 22, minHeight: 52, paddingHorizontal: Spacing.md },
+  codeInputContainer: { minHeight: 64, position: "relative" },
+  input: { ...TeamCodeTypography, backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontSize: 22, minHeight: 64, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm },
+  placeholderLayer: { alignItems: "center", bottom: 0, justifyContent: "center", left: 0, paddingHorizontal: Spacing.md, position: "absolute", right: 0, top: 0 },
+  inputPlaceholder: { color: Colors.textPrimary, fontFamily: Typography.bodyMedium, fontSize: 16, fontStyle: "normal", letterSpacing: 0.25, textAlign: "center" },
   primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   disabledButton: { opacity: 0.55 },

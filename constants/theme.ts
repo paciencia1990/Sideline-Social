@@ -24,8 +24,7 @@ export const Typography = {
 export const TeamCodeTypography: TextStyle = {
   fontFamily: Typography.bodyBold,
   fontStyle: 'normal',
-  fontVariant: ['tabular-nums'],
-  letterSpacing: 5,
+  letterSpacing: 3,
   textAlign: 'center',
   textTransform: 'uppercase',
 };

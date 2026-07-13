@@ -101,7 +101,7 @@ export default function CoachTeamScreen() {
               <Text style={styles.successText}>{t("coach.team.youAreCoach")}</Text>
               <View style={styles.invitePanel}>
                 <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
-                <Text style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
+                <Text maxFontSizeMultiplier={1.4} style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
               </View>
             </Card>
 

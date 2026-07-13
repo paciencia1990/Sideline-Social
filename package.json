@@ -11,6 +11,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test:auth-navigation": "node scripts/test-auth-navigation-core.cjs",
+    "test:auth-profile-ui": "node scripts/test-auth-profile-ui-core.cjs",
     "test:icebreaker": "node scripts/test-icebreaker-core.cjs",
     "test:parent-teams": "node scripts/test-parent-teams-core.cjs",
     "test:weekly-challenge": "npm --prefix functions run build && node scripts/test-weekly-challenge-core.cjs",
