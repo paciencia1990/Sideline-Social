@@ -7,7 +7,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { PARENT_PROFILE_ROUTE } from "@/constants/routes";
-import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { Colors, Radius, Shadow, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { getCurrentUserTeamMemberships, hasCoachAccess, hasTeamRole, switchActiveMode, type TeamMembership } from "@/services/teamService";
 
@@ -134,7 +134,10 @@ export default function CoachHomeScreen() {
               <Card style={styles.cardGap}>
                 <Text style={styles.cardTitle}>{selectedTeam.name}</Text>
                 <Text style={styles.cardText}>{[selectedTeam.sport, selectedTeam.ageRange, selectedTeam.division].filter(Boolean).join(" - ")}</Text>
-                <Text style={styles.inviteCode}>{t("coach.team.inviteCode")}: {selectedTeam.inviteCode}</Text>
+                <View style={styles.inviteBlock}>
+                  <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
+                  <Text style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
+                </View>
                 <View style={styles.quickGrid}>
                   <QuickAction label={t("coach.home.viewTeam")} Icon={Users} onPress={() => router.push({ pathname: "/coach/team", params: { teamId: selectedTeam.id } } as never)} />
                   <QuickAction label={t("coach.home.sendMessage")} Icon={MessageCircle} onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: selectedTeam.id } } as never)} />
@@ -195,7 +198,9 @@ const styles = StyleSheet.create({
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21, textAlign: "center" },
-  inviteCode: { color: Colors.primary, fontFamily: Typography.bodyBold, textAlign: "center" },
+  inviteBlock: { alignItems: "center", gap: 3 },
+  inviteLabel: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center", textTransform: "uppercase" },
+  inviteCode: { ...TeamCodeTypography, color: Colors.primary, fontSize: 18 },
   quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   quickAction: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.card, borderWidth: 1, flexBasis: "31%", flexGrow: 1, gap: Spacing.xs, minHeight: 86, justifyContent: "center", padding: Spacing.sm, ...Shadow.card },
   quickText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center" },

@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { ChildProfilePicker } from "@/components/ChildProfilePicker";
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { Colors, Radius, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import { joinTeamByInviteCode } from "@/services/teamService";
 
 export default function JoinTeamScreen() {
@@ -94,7 +94,7 @@ const styles = StyleSheet.create({
   field: { gap: Spacing.xs },
   inputLabel: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   childInput: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 48, paddingHorizontal: Spacing.md },
-  input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 22, letterSpacing: 4, minHeight: 52, paddingHorizontal: Spacing.md, textAlign: "center" },
+  input: { ...TeamCodeTypography, backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontSize: 22, minHeight: 52, paddingHorizontal: Spacing.md },
   primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   disabledButton: { opacity: 0.55 },

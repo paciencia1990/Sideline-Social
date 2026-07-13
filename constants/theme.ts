@@ -1,3 +1,5 @@
+import type { TextStyle } from 'react-native';
+
 export const Colors = {
   primary: '#C7463B',        // Baseball Red — buttons, CTAs, active states
   background: '#F5EFE6',     // Soft Cream — app background
@@ -17,6 +19,15 @@ export const Typography = {
   bodySemiBold: 'Montserrat_600SemiBold',
   bodyBold: 'Montserrat_700Bold',
   accent: 'Caveat_400Regular',
+};
+
+export const TeamCodeTypography: TextStyle = {
+  fontFamily: Typography.bodyBold,
+  fontStyle: 'normal',
+  fontVariant: ['tabular-nums'],
+  letterSpacing: 5,
+  textAlign: 'center',
+  textTransform: 'uppercase',
 };
 
 export const Spacing = {

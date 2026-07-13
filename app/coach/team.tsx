@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { Colors, Radius, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import {
   getCurrentUserTeamMemberships,
   getTeamMembers,
@@ -187,7 +187,7 @@ const styles = StyleSheet.create({
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
   invitePanel: { alignItems: "center", backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, padding: Spacing.md },
   inviteLabel: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, fontSize: 12, textTransform: "uppercase" },
-  inviteCode: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 26 },
+  inviteCode: { ...TeamCodeTypography, color: Colors.textHeading, fontSize: 26 },
   retryButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 42, paddingHorizontal: Spacing.lg },
   retryText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   emptyState: { alignItems: "center", gap: Spacing.xs, paddingVertical: Spacing.md },
