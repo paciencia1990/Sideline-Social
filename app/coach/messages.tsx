@@ -7,7 +7,7 @@ import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { createTeamAnnouncement, listenToTeamAnnouncements, type AnnouncementAudience, type TeamAnnouncement } from "@/services/teamMessageService";
-import { getCurrentUserTeamMemberships, hasCoachAccess, type TeamMembership } from "@/services/teamService";
+import { getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive, type TeamMembership } from "@/services/teamService";
 
 const AUDIENCES: AnnouncementAudience[] = ["parents", "staff", "all"];
 
@@ -32,7 +32,9 @@ export default function CoachMessagesScreen() {
       setError(null);
       try {
         const nextMemberships = await getCurrentUserTeamMemberships();
-        if (isMounted) setMemberships(nextMemberships);
+        if (isMounted) setMemberships(nextMemberships.filter((membership) =>
+          hasCoachAccess(membership) && isTeamActive(membership.team),
+        ));
       } catch (nextError) {
         console.warn("[CoachMessages] memberships error:", nextError);
         if (isMounted) setError(t("coach.messages.error"));
@@ -87,7 +89,7 @@ export default function CoachMessagesScreen() {
       setAllowReplies(true);
     } catch (nextError) {
       console.warn("[CoachMessages] create error:", nextError);
-      setError(nextError instanceof Error ? nextError.message : t("coach.messages.error"));
+      setError(t("coach.messages.error"));
     } finally {
       setSending(false);
     }

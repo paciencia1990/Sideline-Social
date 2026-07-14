@@ -20,7 +20,6 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
-import { getFirstName } from "@/utils/profileName";
 import {
   fetchUnreadNotificationCount,
   fetchUserFriendIds,
@@ -81,8 +80,7 @@ export default function HomeScreen() {
   const [nearestSquad, setNearestSquad] = useState<Squad | null>(null);
   const [proximityLoading, setProximityLoading] = useState(false);
 
-  const firstName = getFirstName(user?.displayName);
-  const welcomeText = firstName ? t("home.welcomeNamed", { firstName }) : t("home.welcome");
+  const safeUnreadCount = Number.isFinite(unreadCount) ? Math.max(0, unreadCount) : 0;
 
   useEffect(() => {
     if (__DEV__) {
@@ -272,16 +270,33 @@ export default function HomeScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} tintColor={Colors.primary} onRefresh={onRefresh} />}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.headerCard}>
-          <Image source={logoSource} style={styles.logo} resizeMode="contain" />
-          <View style={styles.headerCopy}>
-            <Text style={styles.kicker}>{t("app.name")}</Text>
-            <Text style={styles.title}>{welcomeText}</Text>
-            <Text style={styles.subtitle}>{t("home.subtitle")}</Text>
+        <View style={styles.brandRow}>
+          <View style={styles.brandUnit}>
+            <Image
+              accessible={false}
+              importantForAccessibility="no-hide-descendants"
+              resizeMode="contain"
+              source={logoSource}
+              style={styles.logo}
+            />
+            <Text
+              adjustsFontSizeToFit
+              maxFontSizeMultiplier={1.3}
+              minimumFontScale={0.78}
+              numberOfLines={1}
+              style={styles.brandName}
+            >
+              {t("app.name")}
+            </Text>
           </View>
-          <View style={styles.notificationPill}>
-            <Bell size={18} color={Colors.textHeading} />
-            <Text style={styles.notificationText}>{unreadCount}</Text>
+          <View
+            accessibilityLabel={t("home.notificationUnread", { count: safeUnreadCount })}
+            accessibilityLiveRegion="polite"
+            accessible
+            style={styles.notificationSummary}
+          >
+            <Bell importantForAccessibility="no" size={19} color={Colors.textHeading} />
+            <Text importantForAccessibility="no" style={styles.notificationText}>{safeUnreadCount}</Text>
           </View>
         </View>
         <MyTeamsCard
@@ -737,52 +752,47 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
     paddingBottom: Spacing.xxl,
   },
-  headerCard: {
+  brandRow: {
     alignItems: "center",
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.card,
-    gap: Spacing.md,
-    padding: Spacing.lg,
-    ...Shadow.card,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 44,
+  },
+  brandUnit: {
+    alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    gap: Spacing.sm,
+    minWidth: 0,
+    paddingRight: Spacing.sm,
   },
   logo: {
-    height: 86,
-    width: "100%",
+    flexShrink: 0,
+    height: 36,
+    // Explicit dimensions avoid Android measuring the large source bitmap at
+    // its intrinsic height inside this flex row. resizeMode="contain" keeps
+    // the exact artwork ratio within this compact box.
+    width: 36 * (1637 / 1536),
   },
-  headerCopy: {
-    alignItems: "center",
-    gap: Spacing.xs,
-  },
-  kicker: {
-    color: Colors.primary,
-    fontFamily: Typography.bodySemiBold,
-    fontSize: 13,
-    textTransform: "uppercase",
-  },
-  title: {
+  brandName: {
     color: Colors.textHeading,
     fontFamily: Typography.heading,
-    fontSize: 28,
-    textAlign: "center",
+    fontSize: 20,
+    lineHeight: 26,
+    flexShrink: 1,
   },
-  subtitle: {
-    color: Colors.textPrimary,
-    fontFamily: Typography.bodyRegular,
-    fontSize: 14,
-    lineHeight: 21,
-    textAlign: "center",
-  },
-  notificationPill: {
+  notificationSummary: {
     alignItems: "center",
-    alignSelf: "center",
     backgroundColor: Colors.background,
     borderColor: Colors.secondary,
     borderRadius: Radius.button,
     borderWidth: 1,
     flexDirection: "row",
     gap: Spacing.xs,
+    justifyContent: "center",
+    minHeight: 44,
+    minWidth: 44,
     paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs,
   },
   notificationText: {
     color: Colors.textHeading,

@@ -1,3 +1,4 @@
+const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { assertFails, assertSucceeds, initializeTestEnvironment } = require("@firebase/rules-unit-testing");
@@ -12,7 +13,11 @@ async function seed(testEnv) {
     const db = context.firestore();
     await setDoc(doc(db, "teams", "team-1"), {
       name: "Tigers", createdBy: "coach", coachIds: ["coach", "multi-role", "staff"],
-      parentIds: ["parent-a", "parent-b", "multi-role", "removed-parent"],
+      parentIds: ["parent-a", "parent-b", "multi-role", "removed-parent"], status: "active",
+    });
+    await setDoc(doc(db, "teams", "team-archived"), {
+      name: "Past Tigers", createdBy: "coach", coachIds: ["coach"], parentIds: ["parent-a"],
+      status: "archived", inviteCode: "OLD123", archivedAt: now(), archivedBy: "coach",
     });
     const members = [
       { uid: "coach", role: "coach", roles: { parent: false, coach: true, staff: false }, status: "active" },
@@ -26,6 +31,12 @@ async function seed(testEnv) {
       const data = { userId: member.uid, teamId: "team-1", displayName: member.uid, role: member.role, status: member.status, createdAt: now(), updatedAt: now() };
       if (member.roles) data.roles = member.roles;
       await setDoc(doc(db, "teams", "team-1", "members", member.uid), data);
+    }
+    for (const member of members.filter((item) => ["coach", "staff", "parent-a"].includes(item.uid))) {
+      await setDoc(doc(db, "teams", "team-archived", "members", member.uid), {
+        userId: member.uid, teamId: "team-archived", displayName: member.uid, role: member.role,
+        roles: member.roles, status: "active", createdAt: now(), updatedAt: now(),
+      });
     }
     for (const uid of ["parent-a", "parent-b", "coach", "multi-role", "staff", "outsider"]) {
       await setDoc(doc(db, "users", uid), { displayName: uid });
@@ -49,6 +60,7 @@ async function seed(testEnv) {
     await setDoc(doc(db, "teams", "team-1", "announcements", "parents-open"), announcement("parents"));
     await setDoc(doc(db, "teams", "team-1", "announcements", "staff-only"), announcement("staff"));
     await setDoc(doc(db, "teams", "team-1", "announcements", "parents-closed"), announcement("parents", false));
+    await setDoc(doc(db, "teams", "team-archived", "announcements", "preserved-update"), announcement("parents"));
     await setDoc(doc(db, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply"), {
       userId: "coach", displayName: "coach", body: "Private", replyType: "privateToCoach", createdAt: now(),
     });
@@ -73,6 +85,11 @@ async function run() {
     await assertFails(getDoc(doc(outsiderDb, "teams", "team-1")));
     await assertFails(getDoc(doc(removedDb, "teams", "team-1")));
     await assertFails(getDoc(doc(removedDb, "teams", "team-1", "announcements", "parents-open")));
+    await assertSucceeds(getDoc(doc(parentDb, "teams", "team-archived")));
+    await assertSucceeds(getDoc(doc(coachDb, "teams", "team-archived")));
+    await assertFails(getDoc(doc(parentDb, "teams", "team-archived", "announcements", "preserved-update")));
+    await assertFails(getDoc(doc(coachDb, "teams", "team-archived", "announcements", "preserved-update")));
+    await assertSucceeds(getDocs(collection(coachDb, "teams", "team-archived", "members")));
     await assertSucceeds(getDocs(collection(coachDb, "teams", "team-1", "members")));
     await assertSucceeds(getDocs(collection(staffDb, "teams", "team-1", "members")));
     await assertFails(getDocs(collection(parentDb, "teams", "team-1", "members")));
@@ -131,15 +148,28 @@ async function run() {
     await assertSucceeds(updateDoc(doc(coachDb, "teams", "team-1"), { updatedAt: now() }));
     await assertFails(updateDoc(doc(staffDb, "teams", "team-1"), { updatedAt: now() }));
     await assertFails(updateDoc(doc(coachDb, "teams", "team-1"), { createdBy: "multi-role", updatedAt: now() }));
+    await assertFails(updateDoc(doc(parentDb, "teams", "team-1"), { status: "archived", updatedAt: now() }));
+    await assertFails(updateDoc(doc(coachDb, "teams", "team-1"), { status: "archived", updatedAt: now() }));
+    await assertFails(updateDoc(doc(staffDb, "teams", "team-1"), { status: "archived", updatedAt: now() }));
+    await assertFails(deleteDoc(doc(parentDb, "teams", "team-1")));
+    await assertFails(deleteDoc(doc(coachDb, "teams", "team-1")));
 
     const newAnnouncement = { title: "New", body: "Body", createdBy: "multi-role", createdByName: "Multi", audience: "parents", allowReplies: true, createdAt: now(), updatedAt: now() };
     await assertFails(setDoc(doc(parentDb, "teams", "team-1", "announcements", "parent-created"), newAnnouncement));
     await assertSucceeds(setDoc(doc(multiDb, "teams", "team-1", "announcements", "multi-created"), newAnnouncement));
+    await assertFails(setDoc(doc(coachDb, "teams", "team-archived", "announcements", "blocked-new"), newAnnouncement));
     await assertFails(getDoc(doc(otherParentDb, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply")));
     await assertSucceeds(getDoc(doc(coachDb, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply")));
     await assertFails(getDoc(doc(parentDb, "notificationTokens", "private-token")));
 
-    console.log("Parent Teams Firestore multi-role, child-privacy, and staff-role rules tests passed.");
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const archivedDb = context.firestore();
+      assert.equal((await getDoc(doc(archivedDb, "teams", "team-archived"))).exists(), true);
+      assert.equal((await getDoc(doc(archivedDb, "teams", "team-archived", "announcements", "preserved-update"))).exists(), true);
+      assert.equal((await getDoc(doc(archivedDb, "teams", "team-archived", "members", "parent-a"))).exists(), true);
+    });
+
+    console.log("Parent Teams Firestore lifecycle, archive, multi-role, child-privacy, and staff-role rules tests passed.");
   } finally {
     await testEnv.cleanup();
   }

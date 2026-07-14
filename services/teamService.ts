@@ -14,6 +14,7 @@ import { auth, db, functions } from "@/config/firebase";
 
 export type TeamRole = "parent" | "coach" | "assistantCoach" | "teamParent";
 export type TeamMemberStatus = "active" | "pending" | "inactive" | "removed";
+export type TeamStatus = "active" | "archived";
 export type TeamRoleFlags = {
   parent: boolean;
   coach: boolean;
@@ -44,6 +45,11 @@ export type Team = {
   inviteCode: string;
   coachIds: string[];
   parentIds: string[];
+  status: TeamStatus;
+  archivedAt?: unknown;
+  archivedBy?: string | null;
+  restoredAt?: unknown;
+  restoredBy?: string | null;
   createdAt?: unknown;
   updatedAt?: unknown;
 };
@@ -89,6 +95,10 @@ export function hasTeamRole(
 
 export function hasCoachAccess(membership: Pick<TeamMembership, "roles"> | null | undefined) {
   return hasTeamRole(membership, "coach") || hasTeamRole(membership, "staff");
+}
+
+export function isTeamActive(team: Pick<Team, "status"> | null | undefined) {
+  return team?.status === "active";
 }
 
 export function canSendTeamMessages(membership: Pick<TeamMembership, "roles"> | null | undefined) {
@@ -197,12 +207,12 @@ function logMembershipLookupIssue(error: unknown, teamId?: string) {
 
 export async function getCoachTeams(): Promise<TeamMembership[]> {
   const memberships = await getCurrentUserTeamMemberships();
-  return memberships.filter(hasCoachAccess);
+  return memberships.filter((membership) => hasCoachAccess(membership) && isTeamActive(membership.team));
 }
 
 export async function getParentTeams(options: TeamLookupOptions = {}): Promise<TeamMembership[]> {
   const memberships = await getCurrentUserTeamMemberships(options);
-  return memberships.filter((membership) => hasTeamRole(membership, "parent"));
+  return memberships.filter((membership) => hasTeamRole(membership, "parent") && isTeamActive(membership.team));
 }
 
 export async function createTeam(input: TeamInput): Promise<Team> {
@@ -227,6 +237,7 @@ export async function createTeam(input: TeamInput): Promise<Team> {
     inviteCode,
     coachIds: [user.uid],
     parentIds: [],
+    status: "active",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -307,6 +318,30 @@ export async function setTeamStaffRole(teamId: string, targetUserId: string, isS
   return {
     roles: resolveTeamRoles(response.data.roles, response.data.role),
     role: readRole(response.data.role),
+  };
+}
+
+export async function leaveParentTeam(teamId: string) {
+  const callable = httpsCallable<
+    { teamId: string },
+    { roles: TeamRoleFlags; status: TeamMemberStatus }
+  >(functions, "leaveParentTeam");
+  const response = await callable({ teamId: teamId.trim() });
+  return {
+    roles: resolveTeamRoles(response.data.roles, null),
+    status: readMemberStatus(response.data.status),
+  };
+}
+
+export async function setTeamArchived(teamId: string, archived: boolean) {
+  const callable = httpsCallable<
+    { teamId: string; archived: boolean },
+    { status: TeamStatus; inviteCode: string | null }
+  >(functions, "setTeamArchived");
+  const response = await callable({ teamId: teamId.trim(), archived });
+  return {
+    status: readTeamStatus(response.data.status),
+    inviteCode: readNullableString(response.data.inviteCode),
   };
 }
 
@@ -415,6 +450,11 @@ function normalizeTeam(id: string, data: Record<string, unknown>): Team {
     inviteCode: readString(data.inviteCode),
     coachIds: readStringArray(data.coachIds),
     parentIds: readStringArray(data.parentIds),
+    status: readTeamStatus(data.status),
+    archivedAt: data.archivedAt,
+    archivedBy: readNullableString(data.archivedBy),
+    restoredAt: data.restoredAt,
+    restoredBy: readNullableString(data.restoredBy),
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };
@@ -441,6 +481,9 @@ function readMemberStatus(value: unknown): TeamMemberStatus {
     return value;
   }
   return "inactive";
+}
+function readTeamStatus(value: unknown): TeamStatus {
+  return value === "archived" ? "archived" : "active";
 }
 function readRole(value: unknown): TeamRole {
   if (value === "coach" || value === "assistantCoach" || value === "teamParent" || value === "parent") {

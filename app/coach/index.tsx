@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
-import { MessageCircle, Shield, Users, type LucideIcon } from "lucide-react-native";
+import { Archive, MessageCircle, RotateCcw, Shield, Users, type LucideIcon } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -9,7 +9,16 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { PARENT_PROFILE_ROUTE } from "@/constants/routes";
 import { Colors, Radius, Shadow, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
-import { getCurrentUserTeamMemberships, hasCoachAccess, hasTeamRole, switchActiveMode, type TeamMembership } from "@/services/teamService";
+import {
+  canManageTeamRoles,
+  getCurrentUserTeamMemberships,
+  hasCoachAccess,
+  hasTeamRole,
+  isTeamActive,
+  setTeamArchived,
+  switchActiveMode,
+  type TeamMembership,
+} from "@/services/teamService";
 
 export default function CoachHomeScreen() {
   const { t } = useTranslation();
@@ -18,10 +27,13 @@ export default function CoachHomeScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
+  const [restoringTeamId, setRestoringTeamId] = useState<string | null>(null);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
 
   const loadTeams = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setLifecycleError(null);
     try {
       setMemberships(await getCurrentUserTeamMemberships());
     } catch (nextError) {
@@ -39,8 +51,15 @@ export default function CoachHomeScreen() {
     }, [loadTeams]),
   );
 
-  const coachTeams = memberships.filter(hasCoachAccess);
-  const parentTeams = memberships.filter((membership) => hasTeamRole(membership, "parent"));
+  const coachTeams = memberships.filter((membership) => hasCoachAccess(membership) && isTeamActive(membership.team));
+  const archivedTeams = memberships.filter((membership) =>
+    hasCoachAccess(membership) &&
+    membership.team?.status === "archived" &&
+    canManageTeamRoles(membership, membership.team),
+  );
+  const parentTeams = memberships.filter((membership) =>
+    hasTeamRole(membership, "parent") && isTeamActive(membership.team),
+  );
   const selectedMembership = coachTeams[0] ?? null;
   const selectedTeam = selectedMembership?.team ?? null;
   const hasTeams = coachTeams.length > 0;
@@ -84,6 +103,34 @@ export default function CoachHomeScreen() {
       setIsSwitchingMode(false);
     }
   }, [activeMode, setActiveMode, t]);
+
+  const restoreTeam = useCallback(async (membership: TeamMembership) => {
+    if (!membership.team || restoringTeamId) return;
+    setRestoringTeamId(membership.teamId);
+    setLifecycleError(null);
+    try {
+      await setTeamArchived(membership.teamId, false);
+      await loadTeams();
+      Alert.alert(t("coach.team.restoreSuccessTitle"), t("coach.team.restoreSuccessBody"));
+    } catch (nextError) {
+      console.warn("[CoachHome] restore error:", getErrorCode(nextError));
+      setLifecycleError(t("coach.team.restoreError"));
+    } finally {
+      setRestoringTeamId(null);
+    }
+  }, [loadTeams, restoringTeamId, t]);
+
+  const confirmRestore = useCallback((membership: TeamMembership) => {
+    if (!membership.team || restoringTeamId) return;
+    Alert.alert(
+      t("coach.team.restoreTitle", { teamName: membership.team.name }),
+      t("coach.team.restoreBody"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        { text: t("coach.team.restoreTeam"), onPress: () => { void restoreTeam(membership); } },
+      ],
+    );
+  }, [restoreTeam, restoringTeamId, t]);
 
   if (!modeHydrated || activeMode !== "coach") {
     return (
@@ -146,6 +193,38 @@ export default function CoachHomeScreen() {
               </Card>
             ) : null}
 
+            {archivedTeams.length > 0 ? (
+              <Card style={styles.cardGap}>
+                <View style={styles.archivedHeader}>
+                  <Archive color={Colors.primary} size={20} />
+                  <Text style={styles.cardTitle}>{t("coach.team.archivedTeams")}</Text>
+                </View>
+                {archivedTeams.map((membership) => (
+                  <View key={membership.teamId} style={styles.archivedRow}>
+                    <View style={styles.archivedCopy}>
+                      <Text style={styles.archivedName}>{membership.team?.name}</Text>
+                      <Text style={styles.cardText}>{membership.team?.sport}</Text>
+                      <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>
+                    </View>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      disabled={Boolean(restoringTeamId)}
+                      onPress={() => confirmRestore(membership)}
+                      style={[styles.restoreButton, Boolean(restoringTeamId) && styles.disabledButton]}
+                    >
+                      {restoringTeamId === membership.teamId
+                        ? <ActivityIndicator color={Colors.surface} size="small" />
+                        : <RotateCcw color={Colors.surface} size={17} />}
+                      <Text style={styles.primaryButtonText}>
+                        {restoringTeamId === membership.teamId ? t("coach.team.restoring") : t("coach.team.restoreTeam")}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {lifecycleError ? <Text accessibilityLiveRegion="polite" style={styles.errorText}>{lifecycleError}</Text> : null}
+              </Card>
+            ) : null}
+
             <Card style={styles.cardGap}>
               <Text style={styles.cardTitle}>{teamSectionTitle}</Text>
               <View style={styles.buttonRow}>
@@ -192,6 +271,11 @@ const styles = StyleSheet.create({
   title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 31, textAlign: "center" },
   subtitle: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21, textAlign: "center" },
   cardGap: { gap: Spacing.md },
+  archivedHeader: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, justifyContent: "center" },
+  archivedRow: { alignItems: "center", borderTopColor: Colors.secondary, borderTopWidth: 1, flexDirection: "row", gap: Spacing.sm, paddingTop: Spacing.md },
+  archivedCopy: { flex: 1, gap: 2 },
+  archivedName: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 16 },
+  archivedStatus: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 11, textTransform: "uppercase" },
   modeCard: { gap: Spacing.md, borderLeftColor: Colors.accentGreen, borderLeftWidth: 4 },
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
@@ -208,6 +292,12 @@ const styles = StyleSheet.create({
   outlineButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexGrow: 1, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
   outlineButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   disabledButton: { opacity: 0.6 },
+  restoreButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, flexDirection: "row", gap: Spacing.xs, justifyContent: "center", minHeight: 42, paddingHorizontal: Spacing.md },
+  errorText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   countRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, justifyContent: "center" },
   countText: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, fontSize: 12 },
 });
+
+function getErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+}

@@ -12,7 +12,7 @@ import {
 } from "firebase/firestore";
 
 import { auth, db } from "@/config/firebase";
-import { canSendTeamMessages, resolveTeamRoles, type TeamRoleFlags } from "@/services/teamService";
+import { canSendTeamMessages, getTeamById, isTeamActive, resolveTeamRoles, type TeamRoleFlags } from "@/services/teamService";
 
 export type AnnouncementAudience = "parents" | "staff" | "all";
 export type ReplyType = "team" | "privateToCoach";
@@ -47,7 +47,15 @@ export type AnnouncementInput = {
 
 export async function createTeamAnnouncement(teamId: string, input: AnnouncementInput) {
   const user = requireUser();
-  const membership = await getCurrentMembership(teamId, user.uid);
+  const [membership, team] = await Promise.all([
+    getCurrentMembership(teamId, user.uid),
+    getTeamById(teamId),
+  ]);
+  if (!team || !isTeamActive(team)) {
+    const error = new Error("This team is no longer active.");
+    (error as { code?: string }).code = "team-archived";
+    throw error;
+  }
   if (!canSendTeamMessages(membership)) {
     throw new Error("Only team staff can send announcements.");
   }
@@ -200,6 +208,7 @@ async function getCurrentMembership(teamId: string, userId: string): Promise<{ r
     const snapshot = await getDoc(doc(db, "teams", teamId, "members", userId));
     if (!snapshot.exists()) return null;
     const data = snapshot.data();
+    if (data.status !== "active") return null;
     return {
       roles: resolveTeamRoles(data.roles, data.role),
       displayName: typeof data.displayName === "string" ? data.displayName : "",

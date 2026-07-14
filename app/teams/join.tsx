@@ -37,7 +37,9 @@ export default function JoinTeamScreen() {
       router.replace({ pathname: "/teams/[teamId]", params: { teamId: team.id } } as never);
     } catch (nextError) {
       console.warn("[JoinTeam] error:", getErrorCode(nextError));
-      setError(t("team.join.error"));
+      setError(getErrorReason(nextError) === "team-archived"
+        ? t("myTeams.teamInactive")
+        : t("team.join.error"));
     } finally {
       setLoading(false);
     }
@@ -98,6 +100,14 @@ export default function JoinTeamScreen() {
 
 function getErrorCode(error: unknown) {
   return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+}
+
+function getErrorReason(error: unknown) {
+  if (!error || typeof error !== "object" || !("details" in error)) return "";
+  const details = error.details;
+  return details && typeof details === "object" && "reason" in details && typeof details.reason === "string"
+    ? details.reason
+    : "";
 }
 
 const styles = StyleSheet.create({

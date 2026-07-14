@@ -4,6 +4,12 @@ export type TeamRoleFlags = {
   staff: boolean;
 };
 
+export type ParentLeaveResult = {
+  roles: TeamRoleFlags & Record<string, unknown>;
+  role: 'coach' | 'teamParent' | 'inactive';
+  status: 'active' | 'inactive';
+};
+
 export function resolveTeamRoleFlags(value: unknown, legacyRole?: unknown): TeamRoleFlags {
   const roles = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   return {
@@ -19,6 +25,26 @@ export function mergeParentRole(value: unknown, legacyRole?: unknown): TeamRoleF
 
 export function hasParentRole(data: Record<string, unknown> | undefined): boolean {
   return Boolean(data && resolveTeamRoleFlags(data.roles, data.role).parent);
+}
+
+export function isTeamActive(data: Record<string, unknown> | undefined): boolean {
+  return Boolean(data && (data.status === undefined || data.status === 'active'));
+}
+
+export function removeParentRole(value: unknown, legacyRole?: unknown): ParentLeaveResult {
+  const existingRoles = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const currentRoles = resolveTeamRoleFlags(value, legacyRole);
+  const roles = {
+    ...existingRoles,
+    parent: false,
+    coach: currentRoles.coach,
+    staff: currentRoles.staff,
+  };
+  if (currentRoles.coach) return { roles, role: 'coach', status: 'active' };
+  if (currentRoles.staff) return { roles, role: 'teamParent', status: 'active' };
+  return { roles, role: 'inactive', status: 'inactive' };
 }
 
 export function hasCoachAccess(data: Record<string, unknown> | undefined): boolean {

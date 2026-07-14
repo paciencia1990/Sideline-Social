@@ -165,6 +165,11 @@ service cloud.firestore {
         get(teamMemberPath(teamId, request.auth.uid)).data.status == "active";
     }
 
+    function isTeamActive(teamId) {
+      return exists(teamPath(teamId)) &&
+        (!("status" in get(teamPath(teamId)).data) || get(teamPath(teamId)).data.status == "active");
+    }
+
     function hasParentRoleData(data) {
       return (data.roles is map && data.roles.parent == true) || data.role == "parent";
     }
@@ -188,7 +193,8 @@ service cloud.firestore {
     }
 
     function isTeamCoach(teamId) {
-      return isTeamMember(teamId) &&
+      return isTeamActive(teamId) &&
+        isTeamMember(teamId) &&
         (
           hasCoachRoleData(get(teamMemberPath(teamId, request.auth.uid)).data) ||
           get(teamPath(teamId)).data.createdBy == request.auth.uid
@@ -201,7 +207,8 @@ service cloud.firestore {
     }
 
     function canReadTeamAnnouncement(teamId) {
-      return isTeamMember(teamId) &&
+      return isTeamActive(teamId) &&
+        isTeamMember(teamId) &&
         (
           isCoachStaff(teamId) ||
           (isParentTeamMember(teamId) && resource.data.audience in ["parents", "all"])
@@ -209,7 +216,8 @@ service cloud.firestore {
     }
 
     function canReadAnnouncementPath(teamId, announcementId) {
-      return isTeamMember(teamId) &&
+      return isTeamActive(teamId) &&
+        isTeamMember(teamId) &&
         exists(announcementPath(teamId, announcementId)) &&
         (
           isCoachStaff(teamId) ||
@@ -348,6 +356,7 @@ service cloud.firestore {
 
       allow create: if signedIn() &&
         request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.status == "active" &&
         request.resource.data.coachIds is list &&
         request.resource.data.coachIds.hasOnly([request.auth.uid]) &&
         request.resource.data.coachIds.hasAll([request.auth.uid]) &&
@@ -385,12 +394,13 @@ service cloud.firestore {
       match /announcements/{announcementId} {
         allow get, list: if canReadTeamAnnouncement(teamId);
 
-        allow create: if isCoachStaff(teamId) &&
+        allow create: if isTeamActive(teamId) &&
+          isCoachStaff(teamId) &&
           request.resource.data.createdBy == request.auth.uid &&
           request.resource.data.audience in ["parents", "staff", "all"] &&
           request.resource.data.allowReplies is bool;
 
-        allow update, delete: if isCoachStaff(teamId);
+        allow update, delete: if isTeamActive(teamId) && isCoachStaff(teamId);
 
         match /replies/{replyId} {
           allow get, list: if canReadTeamReply(teamId, announcementId);

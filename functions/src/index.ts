@@ -7,7 +7,7 @@
  *  1. updateActiveMemberCount — triggered on squadMemberships writes
  *  2. deactivateInactiveMembers — scheduled daily at 02:00 UTC
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import * as functions from 'firebase-functions';
@@ -23,11 +23,13 @@ import {
   allChildProfilesExist,
   canManageTeamRoles,
   hasParentRole,
+  isTeamActive,
   isEligibleStaffRoleTarget,
   legacyRoleForMergedMembership,
   mergeChildIds,
   mergeParentRole,
   normalizeChildIds,
+  removeParentRole,
   removeChildReference,
   setStaffRole,
 } from './teamMembershipCore';
@@ -36,6 +38,7 @@ admin.initializeApp();
 
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const TEAM_INVITE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 // ---------------------------------------------------------------------------
 // 1. updateActiveMemberCount
@@ -601,6 +604,8 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
     const teamId = context.params.teamId as string;
     const announcementId = context.params.announcementId as string;
     const firestore = admin.firestore();
+    const teamSnapshot = await firestore.collection('teams').doc(teamId).get();
+    if (!teamSnapshot.exists || !isTeamActive(teamSnapshot.data())) return null;
     const membersSnapshot = await firestore.collection('teams').doc(teamId).collection('members')
       .where('status', '==', 'active')
       .get();
@@ -693,6 +698,13 @@ export const joinParentTeamByInviteCode = functions.https.onCall(async (data, co
   if (teamQuery.size > 1) {
     throw new functions.https.HttpsError('failed-precondition', 'This team code is not unique. Ask the coach for a new code.');
   }
+  if (!isTeamActive(teamSnapshot.data())) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'This team is no longer active.',
+      { reason: 'team-archived' },
+    );
+  }
 
   const teamRef = teamSnapshot.ref;
   const memberRef = teamRef.collection('members').doc(uid);
@@ -701,12 +713,20 @@ export const joinParentTeamByInviteCode = functions.https.onCall(async (data, co
   const childRefs = childIds.map((childId) => userRef.collection('children').doc(childId));
 
   await firestore.runTransaction(async (transaction) => {
-    const [memberSnapshot, userSnapshot, linkSnapshot, ...childSnapshots] = await transaction.getAll(
+    const [transactionTeamSnapshot, memberSnapshot, userSnapshot, linkSnapshot, ...childSnapshots] = await transaction.getAll(
+      teamRef,
       memberRef,
       userRef,
       linkRef,
       ...childRefs,
     );
+    if (!transactionTeamSnapshot.exists || !isTeamActive(transactionTeamSnapshot.data())) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'This team is no longer active.',
+        { reason: 'team-archived' },
+      );
+    }
     if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
     if (!allChildProfilesExist(childIds, childSnapshots.map((childSnapshot) => childSnapshot.exists))) {
       throw new functions.https.HttpsError('permission-denied', 'Every selected child profile must belong to this account.');
@@ -769,6 +789,7 @@ export const joinParentTeamByInviteCode = functions.https.onCall(async (data, co
       inviteCode: team.inviteCode ?? '',
       coachIds: team.coachIds ?? [],
       parentIds: Array.from(new Set([...(team.parentIds ?? []), uid])),
+      status: team.status ?? 'active',
     },
   };
 });
@@ -808,6 +829,9 @@ export const setTeamStaffRole = functions.https.onCall(async (data, context) => 
 
     const team = teamSnapshot.data()!;
     const requester = requesterSnapshot.exists ? requesterSnapshot.data() : undefined;
+    if (!isTeamActive(team)) {
+      throw new functions.https.HttpsError('failed-precondition', 'Archived teams cannot be changed.');
+    }
     if (!canManageTeamRoles(requester, team.createdBy === uid)) {
       throw new functions.https.HttpsError('permission-denied', 'Only an active coach or team owner can manage staff roles.');
     }
@@ -858,12 +882,28 @@ export const setParentTeamChildLinks = functions.https.onCall(async (data, conte
   }
 
   const firestore = admin.firestore();
+  const teamRef = firestore.collection('teams').doc(teamId);
   const userRef = firestore.collection('users').doc(uid);
-  const memberRef = firestore.collection('teams').doc(teamId).collection('members').doc(uid);
+  const memberRef = teamRef.collection('members').doc(uid);
   const linkRef = userRef.collection('teamChildLinks').doc(teamId);
   const childRefs = childIds.map((childId) => userRef.collection('children').doc(childId));
   await firestore.runTransaction(async (transaction) => {
-    const [memberSnapshot, linkSnapshot, ...childSnapshots] = await transaction.getAll(memberRef, linkRef, ...childRefs);
+    const [teamSnapshot, memberSnapshot, linkSnapshot, ...childSnapshots] = await transaction.getAll(
+      teamRef,
+      memberRef,
+      linkRef,
+      ...childRefs,
+    );
+    if (!teamSnapshot.exists) {
+      throw new functions.https.HttpsError('not-found', 'Team not found.');
+    }
+    if (!isTeamActive(teamSnapshot.data())) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'This team is no longer active.',
+        { reason: 'team-archived' },
+      );
+    }
     const member = memberSnapshot.exists ? memberSnapshot.data() : undefined;
     if (!member || member.status !== 'active' || !hasParentRole(member)) {
       throw new functions.https.HttpsError('permission-denied', 'An active parent role is required.');
@@ -888,6 +928,154 @@ export const setParentTeamChildLinks = functions.https.onCall(async (data, conte
   });
   return { childIds };
 });
+
+export const leaveParentTeam = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to leave a team.');
+  const teamId = typeof data?.teamId === 'string' ? data.teamId.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(teamId)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid team is required.');
+  }
+
+  const firestore = admin.firestore();
+  const teamRef = firestore.collection('teams').doc(teamId);
+  const memberRef = teamRef.collection('members').doc(uid);
+  const userRef = firestore.collection('users').doc(uid);
+  const linkRef = userRef.collection('teamChildLinks').doc(teamId);
+
+  return firestore.runTransaction(async (transaction) => {
+    const [teamSnapshot, memberSnapshot, userSnapshot, linkSnapshot] = await transaction.getAll(
+      teamRef,
+      memberRef,
+      userRef,
+      linkRef,
+    );
+    if (!teamSnapshot.exists) {
+      throw new functions.https.HttpsError('not-found', 'Team not found.');
+    }
+    const member = memberSnapshot.exists ? memberSnapshot.data() : undefined;
+    if (!member || member.status !== 'active' || !hasParentRole(member)) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'The parent membership is no longer active.',
+        { reason: 'parent-membership-inactive' },
+      );
+    }
+
+    const nextMembership = removeParentRole(member.roles, member.role);
+    transaction.update(memberRef, {
+      roles: nextMembership.roles,
+      role: nextMembership.role,
+      status: nextMembership.status,
+      childId: admin.firestore.FieldValue.delete(),
+      childName: admin.firestore.FieldValue.delete(),
+      parentLeftAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    transaction.set(linkRef, {
+      teamId,
+      childIds: [],
+      status: 'inactive',
+      createdAt: linkSnapshot.exists
+        ? linkSnapshot.data()?.createdAt ?? admin.firestore.FieldValue.serverTimestamp()
+        : admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    transaction.update(teamRef, {
+      parentIds: admin.firestore.FieldValue.arrayRemove(uid),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const userUpdate: Record<string, unknown> = {
+      parentTeamIds: admin.firestore.FieldValue.arrayRemove(teamId),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (nextMembership.status === 'active') {
+      userUpdate.coachTeamIds = admin.firestore.FieldValue.arrayUnion(teamId);
+    } else if (userSnapshot.data()?.activeTeamId === teamId) {
+      userUpdate.activeTeamId = admin.firestore.FieldValue.delete();
+    }
+    transaction.set(userRef, userUpdate, { merge: true });
+
+    return {
+      roles: {
+        parent: false,
+        coach: nextMembership.roles.coach === true,
+        staff: nextMembership.roles.staff === true,
+      },
+      status: nextMembership.status,
+    };
+  });
+});
+
+export const setTeamArchived = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to manage a team.');
+  const teamId = typeof data?.teamId === 'string' ? data.teamId.trim() : '';
+  const archived = data?.archived;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(teamId) || typeof archived !== 'boolean') {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid team and archive state are required.');
+  }
+
+  const firestore = admin.firestore();
+  const teamRef = firestore.collection('teams').doc(teamId);
+  const requesterRef = teamRef.collection('members').doc(uid);
+  const replacementInviteCode = archived ? null : await generateAvailableTeamInviteCode(firestore, teamId);
+
+  return firestore.runTransaction(async (transaction) => {
+    const [teamSnapshot, requesterSnapshot] = await transaction.getAll(teamRef, requesterRef);
+    if (!teamSnapshot.exists) {
+      throw new functions.https.HttpsError('not-found', 'Team not found.');
+    }
+    const team = teamSnapshot.data()!;
+    const requester = requesterSnapshot.exists ? requesterSnapshot.data() : undefined;
+    if (!canManageTeamRoles(requester, team.createdBy === uid)) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Only an active team owner or coach can archive this team.',
+      );
+    }
+
+    const currentlyActive = isTeamActive(team);
+    if (archived && !currentlyActive) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Team is already archived.',
+        { reason: 'team-already-archived' },
+      );
+    }
+    if (!archived && currentlyActive) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Team is already active.',
+        { reason: 'team-already-active' },
+      );
+    }
+
+    if (archived) {
+      transaction.update(teamRef, {
+        status: 'archived',
+        archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+        archivedBy: uid,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } else {
+      transaction.update(teamRef, {
+        status: 'active',
+        inviteCode: replacementInviteCode,
+        restoredAt: admin.firestore.FieldValue.serverTimestamp(),
+        restoredBy: uid,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+
+    return {
+      status: archived ? 'archived' : 'active',
+      inviteCode: archived ? null : replacementInviteCode,
+    };
+  });
+});
+
 export const deleteChildProfile = functions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to manage child profiles.');
@@ -932,6 +1120,23 @@ export const deleteChildProfile = functions.https.onCall(async (data, context) =
 
   return { deleted: true };
 });
+
+async function generateAvailableTeamInviteCode(
+  firestore: FirebaseFirestore.Firestore,
+  excludedTeamId: string,
+): Promise<string> {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    let code = '';
+    for (let index = 0; index < 6; index += 1) {
+      code += TEAM_INVITE_CHARACTERS[randomInt(TEAM_INVITE_CHARACTERS.length)];
+    }
+    const matches = await firestore.collection('teams').where('inviteCode', '==', code).limit(2).get();
+    if (matches.empty || matches.docs.every((teamDocument) => teamDocument.id === excludedTeamId)) {
+      return code;
+    }
+  }
+  throw new functions.https.HttpsError('unavailable', 'A new invite code could not be generated. Please try again.');
+}
 
 function serializeWeeklyChallenge(data: FirebaseFirestore.DocumentData, nextResetKey: string) {
   const completedAt = data.completedAt instanceof admin.firestore.Timestamp

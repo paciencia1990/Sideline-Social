@@ -20,10 +20,12 @@ const {
   canManageTeamRoles,
   hasCoachAccess,
   hasParentRole,
+  isTeamActive,
   isEligibleStaffRoleTarget,
   mergeChildIds,
   mergeParentRole,
   normalizeChildIds,
+  removeParentRole,
   removeChildReference,
   resolveTeamRoleFlags,
   setStaffRole,
@@ -46,6 +48,21 @@ assert.deepEqual(resolveTeamRoleFlags(undefined, "assistantCoach"), { parent: fa
 assert.deepEqual(mergeParentRole({ coach: true, staff: false }, "coach"), { parent: true, coach: true, staff: false });
 assert.equal(hasParentRole({ roles: { parent: true, coach: true } }), true);
 assert.equal(hasCoachAccess({ roles: { parent: true, staff: true } }), true);
+assert.equal(isTeamActive({}), true);
+assert.equal(isTeamActive({ status: "active" }), true);
+assert.equal(isTeamActive({ status: "archived" }), false);
+assert.deepEqual(removeParentRole({ parent: true, coach: false, staff: false }, "parent"), {
+  roles: { parent: false, coach: false, staff: false }, role: "inactive", status: "inactive",
+});
+assert.deepEqual(removeParentRole({ parent: true, coach: true, staff: false }, "coach"), {
+  roles: { parent: false, coach: true, staff: false }, role: "coach", status: "active",
+});
+assert.deepEqual(removeParentRole({ parent: true, coach: false, staff: true }, "teamParent"), {
+  roles: { parent: false, coach: false, staff: true }, role: "teamParent", status: "active",
+});
+assert.deepEqual(removeParentRole({ parent: true, coach: false, staff: true, permission: "preserved" }, "parent").roles, {
+  parent: false, coach: false, staff: true, permission: "preserved",
+});
 assert.deepEqual(normalizeChildIds(["child-a", "child-a", "child-b"]), ["child-a", "child-b"]);
 assert.throws(() => normalizeChildIds([]));
 assert.throws(() => normalizeChildIds(["private/path"]));
@@ -111,7 +128,7 @@ assert.deepEqual(mixedLegacyGroups.map((group) => group.childName), ["Legacy Chi
 const functionsSource = fs.readFileSync(path.join(process.cwd(), "functions", "src", "index.ts"), "utf8");
 const deleteCallableSource = functionsSource.slice(
   functionsSource.indexOf("export const deleteChildProfile"),
-  functionsSource.indexOf("function serializeWeeklyChallenge"),
+  functionsSource.indexOf("async function generateAvailableTeamInviteCode"),
 );
 assert.equal(deleteCallableSource.includes("data.parentUid"), false);
 assert.equal(deleteCallableSource.includes("collection('teams')"), false);
@@ -124,6 +141,14 @@ const notificationSource = functionsSource.slice(
 assert.equal(notificationSource.includes("announcement.body"), false);
 assert.equal(notificationSource.includes("announcement.title"), false);
 assert.equal(notificationSource.includes("Open Sideline Social to view it."), true);
+assert.equal(notificationSource.includes("isTeamActive(teamSnapshot.data())"), true);
+assert.equal(notificationSource.includes("hasParentRole(member)"), true);
+const joinCallableSource = functionsSource.slice(
+  functionsSource.indexOf("export const joinParentTeamByInviteCode"),
+  functionsSource.indexOf("export const setTeamStaffRole"),
+);
+assert.equal(joinCallableSource.includes("team-archived"), true);
+assert.equal(joinCallableSource.includes("transactionTeamSnapshot"), true);
 const staffRoleCallableSource = functionsSource.slice(
   functionsSource.indexOf("export const setTeamStaffRole"),
   functionsSource.indexOf("export const setParentTeamChildLinks"),
@@ -135,6 +160,36 @@ assert.equal(staffRoleCallableSource.includes("staffRoleUpdatedAt"), true);
 assert.equal(staffRoleCallableSource.includes("team.createdBy === targetUserId"), true);
 assert.equal(staffRoleCallableSource.includes("childIds"), false);
 
+const childLinksCallableSource = functionsSource.slice(
+  functionsSource.indexOf("export const setParentTeamChildLinks"),
+  functionsSource.indexOf("export const leaveParentTeam"),
+);
+assert.equal(childLinksCallableSource.includes("isTeamActive(teamSnapshot.data())"), true);
+assert.equal(childLinksCallableSource.includes("allChildProfilesExist"), true);
+assert.equal(childLinksCallableSource.includes("hasParentRole(member)"), true);
+const leaveCallableSource = functionsSource.slice(
+  functionsSource.indexOf("export const leaveParentTeam"),
+  functionsSource.indexOf("export const setTeamArchived"),
+);
+assert.equal(leaveCallableSource.includes("context.auth?.uid"), true);
+assert.equal(leaveCallableSource.includes("data.userId"), false);
+assert.equal(leaveCallableSource.includes("removeParentRole"), true);
+assert.equal(leaveCallableSource.includes("childIds: []"), true);
+assert.equal(leaveCallableSource.includes("parentTeamIds: admin.firestore.FieldValue.arrayRemove(teamId)"), true);
+assert.equal(leaveCallableSource.includes("coachTeamIds = admin.firestore.FieldValue.arrayUnion(teamId)"), true);
+assert.equal(leaveCallableSource.includes("transaction.delete"), false);
+assert.equal(leaveCallableSource.includes("collection('children')"), false);
+const archiveCallableSource = functionsSource.slice(
+  functionsSource.indexOf("export const setTeamArchived"),
+  functionsSource.indexOf("export const deleteChildProfile"),
+);
+assert.equal(archiveCallableSource.includes("canManageTeamRoles"), true);
+assert.equal(archiveCallableSource.includes("status: 'archived'"), true);
+assert.equal(archiveCallableSource.includes("archivedAt"), true);
+assert.equal(archiveCallableSource.includes("restoredAt"), true);
+assert.equal(archiveCallableSource.includes("replacementInviteCode"), true);
+assert.equal(archiveCallableSource.includes("transaction.delete"), false);
+
 const teamServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "teamService.ts"), "utf8");
 const staffRoleClientSource = teamServiceSource.slice(
   teamServiceSource.indexOf("export async function setTeamStaffRole"),
@@ -142,6 +197,9 @@ const staffRoleClientSource = teamServiceSource.slice(
 );
 assert.equal(staffRoleClientSource.includes('functions, "setTeamStaffRole"'), true);
 assert.equal(staffRoleClientSource.includes("updateDoc"), false);
+assert.equal(teamServiceSource.includes('functions, "leaveParentTeam"'), true);
+assert.equal(teamServiceSource.includes('functions, "setTeamArchived"'), true);
+assert.equal(teamServiceSource.includes('status: "active"'), true);
 
 const rosterServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "teamRosterService.ts"), "utf8");
 assert.equal(rosterServiceSource.includes("getPersistedDisplayName"), true);
@@ -155,6 +213,21 @@ assert.equal(coachRosterSource.includes("roleStaffParent"), true);
 assert.equal(coachRosterSource.includes("updatingUserId"), true);
 assert.equal(coachRosterSource.includes("staffRoleUpdateInFlight.current"), true);
 assert.equal(coachRosterSource.includes("Alert.alert"), true);
+assert.equal(coachRosterSource.includes("archiveTeam"), true);
+assert.equal(coachRosterSource.includes("setTeamArchived"), true);
+
+const parentHubSource = fs.readFileSync(path.join(process.cwd(), "app", "teams", "[teamId]", "index.tsx"), "utf8");
+assert.equal(parentHubSource.includes("removeChildFromTeam"), true);
+assert.equal(parentHubSource.includes("manageChildren"), true);
+assert.equal(parentHubSource.includes("leaveParentTeam"), true);
+assert.equal(parentHubSource.includes('router.replace("/teams"'), true);
+assert.equal(parentHubSource.includes("Delete Team"), false);
+const manageChildrenSource = fs.readFileSync(path.join(process.cwd(), "app", "teams", "[teamId]", "children.tsx"), "utf8");
+assert.equal(manageChildrenSource.includes("ChildProfilePicker"), true);
+assert.equal(manageChildrenSource.includes("setParentTeamChildLinks(teamId, selectedChildIds)"), true);
+const coachHomeSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "index.tsx"), "utf8");
+assert.equal(coachHomeSource.includes("archivedTeams"), true);
+assert.equal(coachHomeSource.includes("confirmRestore"), true);
 
 const childServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "childService.ts"), "utf8");
 const createChildSource = childServiceSource.slice(
@@ -170,5 +243,12 @@ assert.equal((translations.match(/confirmChildrenTitle:/g) || []).length, 2);
 assert.equal((translations.match(/makeStaffTitle:/g) || []).length, 2);
 assert.equal((translations.match(/roleStaffParent:/g) || []).length, 2);
 assert.equal((translations.match(/staffRoleError:/g) || []).length, 2);
+for (const key of [
+  "manageChildren", "removeChildFromTeam", "leaveTeam", "archiveTeam", "restoreTeam",
+  "archivedTeams", "teamInactive", "membershipUpdateError", "archiveError", "restoreError",
+  "saving", "leaving", "archiving", "restoring",
+]) {
+  assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length, 2, `${key} needs English and Spanish copy.`);
+}
 
-console.log("Parent Teams multi-role, stable-child, privacy, and staff-role core tests passed.");
+console.log("Parent Teams lifecycle, multi-role, stable-child, privacy, archive, and staff-role core tests passed.");

@@ -8,8 +8,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
-import { MoreVertical } from "lucide-react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import { Archive, MoreVertical, RotateCcw } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -22,7 +22,9 @@ import {
   getTeamMembers,
   hasCoachAccess,
   hasTeamRole,
+  isTeamActive,
   isEligibleStaffRoleTarget,
+  setTeamArchived,
   setTeamStaffRole,
   type Team,
   type TeamMembership,
@@ -46,6 +48,7 @@ export default function CoachTeamScreen() {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<StaffRoleFeedback | null>(null);
+  const [lifecycleAction, setLifecycleAction] = useState<"archive" | "restore" | null>(null);
   const staffRoleUpdateInFlight = useRef(false);
 
   const loadTeam = useCallback(async () => {
@@ -127,7 +130,53 @@ export default function CoachTeamScreen() {
     [getRosterName, members],
   );
 
-  const mayManageRoles = canManageTeamRoles(currentMembership, selectedTeam);
+  const mayManageLifecycle = canManageTeamRoles(currentMembership, selectedTeam);
+  const mayManageRoles = mayManageLifecycle && isTeamActive(selectedTeam);
+
+  const changeArchivedState = useCallback(async (archived: boolean) => {
+    if (!selectedTeam || !mayManageLifecycle || lifecycleAction) return;
+    setLifecycleAction(archived ? "archive" : "restore");
+    setFeedback(null);
+    try {
+      await setTeamArchived(selectedTeam.id, archived);
+      if (archived) {
+        Alert.alert(
+          t("coach.team.archiveSuccessTitle"),
+          t("coach.team.archiveSuccessBody"),
+          [{ text: t("common.ok"), onPress: () => router.replace("/coach" as never) }],
+        );
+      } else {
+        await loadTeam();
+        Alert.alert(t("coach.team.restoreSuccessTitle"), t("coach.team.restoreSuccessBody"));
+      }
+    } catch (nextError) {
+      console.warn("[CoachTeam] lifecycle error:", getErrorCode(nextError));
+      setFeedback({
+        isError: true,
+        message: archived ? t("coach.team.archiveError") : t("coach.team.restoreError"),
+      });
+    } finally {
+      setLifecycleAction(null);
+    }
+  }, [lifecycleAction, loadTeam, mayManageLifecycle, selectedTeam, t]);
+
+  const confirmArchivedState = useCallback((archived: boolean) => {
+    if (!selectedTeam || lifecycleAction) return;
+    Alert.alert(
+      archived
+        ? t("coach.team.archiveTitle", { teamName: selectedTeam.name })
+        : t("coach.team.restoreTitle", { teamName: selectedTeam.name }),
+      archived ? t("coach.team.archiveBody") : t("coach.team.restoreBody"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: archived ? t("coach.team.archiveTeam") : t("coach.team.restoreTeam"),
+          style: archived ? "destructive" : "default",
+          onPress: () => { void changeArchivedState(archived); },
+        },
+      ],
+    );
+  }, [changeArchivedState, lifecycleAction, selectedTeam, t]);
 
   const changeStaffRole = useCallback(async (
     member: TeamMembership,
@@ -230,11 +279,40 @@ export default function CoachTeamScreen() {
               <Text style={styles.cardTitle}>{selectedTeam.name}</Text>
               <Text style={styles.cardText}>{formatTeamDetails(selectedTeam)}</Text>
               <Text style={styles.successText}>{t("coach.team.youAreCoach")}</Text>
-              <View style={styles.invitePanel}>
-                <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
-                <Text maxFontSizeMultiplier={1.4} style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
-              </View>
+              {isTeamActive(selectedTeam) ? (
+                <View style={styles.invitePanel}>
+                  <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
+                  <Text maxFontSizeMultiplier={1.4} style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
+                </View>
+              ) : <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>}
             </Card>
+
+            {mayManageLifecycle ? (
+              <Card style={styles.cardGap}>
+                <Text accessibilityRole="header" style={styles.cardTitle}>{t("coach.team.teamSettings")}</Text>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  disabled={Boolean(lifecycleAction)}
+                  onPress={() => confirmArchivedState(isTeamActive(selectedTeam))}
+                  style={isTeamActive(selectedTeam) ? styles.destructiveButton : styles.primaryButton}
+                >
+                  {lifecycleAction
+                    ? <ActivityIndicator color={Colors.surface} size="small" />
+                    : isTeamActive(selectedTeam)
+                      ? <Archive color={Colors.surface} size={18} />
+                      : <RotateCcw color={Colors.surface} size={18} />}
+                  <Text style={styles.actionText}>
+                    {lifecycleAction === "archive"
+                      ? t("coach.team.archiving")
+                      : lifecycleAction === "restore"
+                        ? t("coach.team.restoring")
+                        : isTeamActive(selectedTeam)
+                          ? t("coach.team.archiveTeam")
+                          : t("coach.team.restoreTeam")}
+                  </Text>
+                </TouchableOpacity>
+              </Card>
+            ) : null}
 
             <Card style={styles.cardGap}>
               <Text accessibilityRole="header" style={styles.cardTitle}>{t("coach.team.members")}</Text>
@@ -419,11 +497,15 @@ const styles = StyleSheet.create({
   profileError: { color: Colors.primary, fontFamily: Typography.bodyRegular, fontSize: 13, textAlign: "center" },
   feedbackText: { color: Colors.accentGreen, fontFamily: Typography.bodySemiBold, fontSize: 14, textAlign: "center" },
   successText: { color: Colors.accentGreen, fontFamily: Typography.bodyBold, textAlign: "center" },
+  archivedStatus: { color: Colors.primary, fontFamily: Typography.bodyBold, textAlign: "center", textTransform: "uppercase" },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
   invitePanel: { alignItems: "center", backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, padding: Spacing.md },
   inviteLabel: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, fontSize: 12, textTransform: "uppercase" },
   inviteCode: { ...TeamCodeTypography, color: Colors.textHeading, fontSize: 26 },
+  primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, flexDirection: "row", gap: Spacing.xs, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
+  destructiveButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, flexDirection: "row", gap: Spacing.xs, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
+  actionText: { color: Colors.surface, fontFamily: Typography.bodySemiBold },
   retryButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 42, paddingHorizontal: Spacing.lg },
   retryText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   section: { gap: Spacing.xs },
@@ -438,3 +520,7 @@ const styles = StyleSheet.create({
   actionButton: { alignItems: "center", height: 44, justifyContent: "center", width: 44 },
   actionDisabled: { opacity: 0.45 },
 });
+
+function getErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+}

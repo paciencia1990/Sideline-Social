@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { ArrowLeft, ChevronRight, Mail, Shield } from "lucide-react-native";
+import { ArrowLeft, ChevronRight, Mail, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -16,6 +16,10 @@ import {
 } from "@/services/parentTeamService";
 
 import { setParentTeamChildLinks } from "@/services/childService";
+import { hasCoachAccess, leaveParentTeam } from "@/services/teamService";
+
+type TeamAction = "remove-child" | "leave" | null;
+
 export default function ParentTeamHubScreen() {
   const { i18n, t } = useTranslation();
   const params = useLocalSearchParams<{ teamId?: string | string[] }>();
@@ -25,10 +29,13 @@ export default function ParentTeamHubScreen() {
   const [error, setError] = useState<string | null>(null);
   const [selectedChildIds, setSelectedChildIds] = useState<string[]>([]);
   const [savingChild, setSavingChild] = useState(false);
+  const [teamAction, setTeamAction] = useState<TeamAction>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
   const loadTeam = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setFeedback(null);
     try {
       const nextSummary = await getParentTeamSummary(teamId);
       setSummary(nextSummary);
@@ -59,6 +66,93 @@ export default function ParentTeamHubScreen() {
       setSavingChild(false);
     }
   }, [loadTeam, selectedChildIds, t, teamId]);
+
+  const openManageChildren = useCallback(() => {
+    router.push({ pathname: "/teams/[teamId]/children", params: { teamId } } as never);
+  }, [teamId]);
+
+  const removeOnlyChild = useCallback(async () => {
+    if (!summary || teamAction) return;
+    setTeamAction("remove-child");
+    setError(null);
+    setFeedback(null);
+    try {
+      await setParentTeamChildLinks(teamId, []);
+      await loadTeam();
+      setFeedback(t("myTeams.childRemovedSuccess"));
+    } catch (nextError) {
+      console.warn("[ParentTeamHub] remove child error:", getErrorCode(nextError));
+      setError(t("myTeams.membershipUpdateError"));
+    } finally {
+      setTeamAction(null);
+    }
+  }, [loadTeam, summary, t, teamAction, teamId]);
+
+  const confirmRemoveOnlyChild = useCallback(() => {
+    const child = summary?.children[0];
+    if (!summary || !child || teamAction) return;
+    Alert.alert(
+      t("myTeams.removeChildTitle", { childName: child.displayName, teamName: summary.team.name }),
+      t("myTeams.removeChildBody", { childName: child.displayName }),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("myTeams.removeChild"),
+          style: "destructive",
+          onPress: () => { void removeOnlyChild(); },
+        },
+      ],
+    );
+  }, [removeOnlyChild, summary, t, teamAction]);
+
+  const performLeave = useCallback(async () => {
+    if (!summary || teamAction) return;
+    setTeamAction("leave");
+    setError(null);
+    try {
+      await leaveParentTeam(teamId);
+      router.dismissAll();
+      router.replace("/teams" as never);
+    } catch (nextError) {
+      console.warn("[ParentTeamHub] leave error:", getErrorCode(nextError));
+      setError(t("myTeams.leaveError"));
+      setTeamAction(null);
+    }
+  }, [summary, t, teamAction, teamId]);
+
+  const confirmLeave = useCallback(() => {
+    if (!summary || teamAction) return;
+    Alert.alert(
+      t("myTeams.leaveTitle", { teamName: summary.team.name }),
+      hasCoachAccess(summary.membership)
+        ? t("myTeams.leaveMultiRoleBody")
+        : t("myTeams.leaveParentOnlyBody"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("myTeams.leaveTeam"),
+          style: "destructive",
+          onPress: () => { void performLeave(); },
+        },
+      ],
+    );
+  }, [performLeave, summary, t, teamAction]);
+
+  const openTeamActions = useCallback(() => {
+    if (!summary || teamAction) return;
+    const actions = summary.children.length === 1
+      ? [{ text: t("myTeams.removeChildFromTeam", { childName: summary.children[0].displayName }), onPress: confirmRemoveOnlyChild }]
+      : [{ text: t("myTeams.manageChildren"), onPress: openManageChildren }];
+    Alert.alert(
+      t("myTeams.teamActions"),
+      undefined,
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        ...actions,
+        { text: t("myTeams.leaveTeam"), style: "destructive", onPress: confirmLeave },
+      ],
+    );
+  }, [confirmLeave, confirmRemoveOnlyChild, openManageChildren, summary, t, teamAction]);
   const details = summary
     ? [summary.team.sport, summary.team.season || summary.team.division || summary.team.ageRange].filter(Boolean).join(" · ")
     : "";
@@ -74,9 +168,23 @@ export default function ParentTeamHubScreen() {
             <Text accessibilityRole="header" style={styles.title}>{summary?.team.name ?? t("myTeams.team")}</Text>
             <Text style={styles.subtitle}>{summary ? formatTeamChildren(summary, t) : t("myTeams.childNotSpecified")}</Text>
           </View>
-          <View style={styles.headerIcon}>
-            <Shield color={Colors.primary} size={22} />
-          </View>
+          {summary ? (
+            <TouchableOpacity
+              accessibilityLabel={teamAction === "remove-child"
+                ? t("myTeams.removingChild")
+                : teamAction === "leave"
+                  ? t("myTeams.leaving")
+                  : t("myTeams.teamActions")}
+              accessibilityRole="button"
+              disabled={Boolean(teamAction)}
+              onPress={openTeamActions}
+              style={styles.headerIcon}
+            >
+              {teamAction
+                ? <ActivityIndicator color={Colors.primary} size="small" />
+                : <MoreVertical color={Colors.primary} size={22} />}
+            </TouchableOpacity>
+          ) : <View style={styles.headerSpacer} />}
         </View>
 
         {loading && !summary ? (
@@ -96,6 +204,21 @@ export default function ParentTeamHubScreen() {
           </Card>
         ) : null}
 
+        {feedback ? (
+          <Card style={styles.feedbackCard}>
+            <Text accessibilityLiveRegion="polite" style={styles.feedbackText}>{feedback}</Text>
+          </Card>
+        ) : null}
+
+        {teamAction ? (
+          <Card style={styles.actionStateCard}>
+            <ActivityIndicator color={Colors.primary} size="small" />
+            <Text accessibilityLiveRegion="polite" style={styles.cardText}>
+              {teamAction === "remove-child" ? t("myTeams.removingChild") : t("myTeams.leaving")}
+            </Text>
+          </Card>
+        ) : null}
+
         {summary ? (
           <>
             <Card style={styles.teamHeaderCard}>
@@ -111,6 +234,14 @@ export default function ParentTeamHubScreen() {
                 {summary.team.division ? <Fact label={t("myTeams.division")} value={summary.team.division} /> : null}
                 <Fact label={t("myTeams.coach")} value={summary.coachName ?? t("myTeams.coachFallback")} />
               </View>
+              <TouchableOpacity
+                accessibilityRole="button"
+                disabled={Boolean(teamAction)}
+                onPress={openManageChildren}
+                style={styles.outlineButton}
+              >
+                <Text style={styles.outlineButtonText}>{t("myTeams.manageChildren")}</Text>
+              </TouchableOpacity>
             </Card>
 
             {summary.needsChildMigration ? (
@@ -234,10 +365,14 @@ const styles = StyleSheet.create({
   headerCopy: { flex: 1 },
   backButton: { alignItems: "center", backgroundColor: Colors.surface, borderRadius: 22, height: 44, justifyContent: "center", width: 44 },
   headerIcon: { alignItems: "center", backgroundColor: Colors.surface, borderRadius: 22, height: 44, justifyContent: "center", width: 44 },
+  headerSpacer: { height: 44, width: 44 },
   title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 28 },
   subtitle: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   stateCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.xl },
   errorCard: { borderLeftColor: Colors.primary, borderLeftWidth: 4 },
+  feedbackCard: { borderLeftColor: Colors.accentGreen, borderLeftWidth: 4 },
+  feedbackText: { color: Colors.accentGreen, fontFamily: Typography.bodySemiBold, textAlign: "center" },
+  actionStateCard: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, justifyContent: "center" },
   stateTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17, textAlign: "center" },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
   outlineButton: { borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm },
