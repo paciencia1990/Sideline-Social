@@ -83,6 +83,16 @@ assert.equal(home.includes('t("home.welcome'), false, "Home must not render a na
 assert.equal(home.includes('email?.split("@")'), false, "Home must never derive a greeting from email.");
 assert.ok(home.includes("styles.brandRow"), "Home must use the compact horizontal brand row.");
 assert.ok(home.includes("styles.brandUnit"), "The logo and app name must stay together as one brand unit.");
+const fixedHeaderPosition = home.indexOf('<View style={styles.fixedHeader}>');
+const scrollViewPosition = home.indexOf("<ScrollView");
+const firstHomeCardPosition = home.indexOf("<MyTeamsCard");
+assert.ok(fixedHeaderPosition >= 0 && fixedHeaderPosition < scrollViewPosition, "The approved Home header must remain outside the scrolling content.");
+assert.ok(scrollViewPosition >= 0 && scrollViewPosition < firstHomeCardPosition, "My Teams and the remaining Home sections must stay inside the ScrollView.");
+assert.ok(home.includes('style={styles.headerDivider}'), "Home must render a static divider below the header.");
+assert.ok(home.includes('height: StyleSheet.hairlineWidth'), "The fixed-header divider must use a subtle hairline.");
+assert.ok(home.includes('backgroundColor: Colors.secondary'), "The fixed-header divider must use the existing neutral border color.");
+assert.ok(home.includes('importantForAccessibility="no"'), "The decorative divider must be ignored by screen readers.");
+assert.ok(home.includes('style={styles.scrollView}'), "The Home ScrollView must fill only the area below the fixed header.");
 assert.ok(home.includes('height: 36'), "The compact Home logo must use the verified 36-pixel height.");
 assert.ok(home.includes('width: 36 * (1637 / 1536)'), "The compact Home logo must use an explicit width that preserves its exact source ratio.");
 assert.equal(home.includes('aspectRatio: 1637 / 1536'), false, "Android must not infer the logo box from the large bitmap's intrinsic dimensions.");

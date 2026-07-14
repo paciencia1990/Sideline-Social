@@ -265,11 +265,7 @@ export default function HomeScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} tintColor={Colors.primary} onRefresh={onRefresh} />}
-        showsVerticalScrollIndicator={false}
-      >
+      <View style={styles.fixedHeader}>
         <View style={styles.brandRow}>
           <View style={styles.brandUnit}>
             <Image
@@ -299,6 +295,18 @@ export default function HomeScreen() {
             <Text importantForAccessibility="no" style={styles.notificationText}>{safeUnreadCount}</Text>
           </View>
         </View>
+      </View>
+      <View
+        accessible={false}
+        importantForAccessibility="no"
+        style={styles.headerDivider}
+      />
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={<RefreshControl refreshing={refreshing} tintColor={Colors.primary} onRefresh={onRefresh} />}
+        showsVerticalScrollIndicator={false}
+        style={styles.scrollView}
+      >
         <MyTeamsCard
           error={myTeamsError}
           loading={myTeamsLoading}
@@ -747,10 +755,25 @@ function formatRelativeTime(date: Date) {
 }
 
 const styles = StyleSheet.create({
-  scroll: {
+  fixedHeader: {
+    backgroundColor: Colors.background,
+    paddingBottom: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+  },
+  headerDivider: {
+    backgroundColor: Colors.secondary,
+    height: StyleSheet.hairlineWidth,
+    width: "100%",
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
     gap: Spacing.md,
-    padding: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.xxl,
+    paddingTop: Spacing.sm,
   },
   brandRow: {
     alignItems: "center",
