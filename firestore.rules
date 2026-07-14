@@ -248,19 +248,14 @@ service cloud.firestore {
         getAfter(teamPath(teamId)).data.createdBy == request.auth.uid;
     }
 
-    function announcementAllowsReplies(teamId, announcementId) {
-      return exists(announcementPath(teamId, announcementId)) &&
-        get(announcementPath(teamId, announcementId)).data.allowReplies == true;
-    }
-
-
     // -----------------------------------------------------------------------
     // users collection
-    // Signed-in users can read profiles needed by app surfaces. Each user can
-    // create/update only their own document, including Coach Mode fields.
+    // Private account documents may contain email and authentication metadata.
+    // Cross-user social names are returned only by field-limited callables.
     // -----------------------------------------------------------------------
     match /users/{userId} {
-      allow read: if signedIn();
+      allow get: if isSelf(userId);
+      allow list: if false;
       allow create, update: if isSelf(userId);
       allow delete: if false;
 
@@ -311,6 +306,39 @@ service cloud.firestore {
     // -----------------------------------------------------------------------
     match /notificationTokens/{tokenId} {
       allow read, write: if false;
+    }
+
+    // -----------------------------------------------------------------------
+    // Private personal notification inbox
+    // Trusted Cloud Functions create immutable event details. Recipients can
+    // read only their own inbox and may update only their own read state.
+    // -----------------------------------------------------------------------
+    match /userNotifications/{userId} {
+      allow read, write: if false;
+
+      match /notifications/{notificationId} {
+        allow get, list: if isSelf(userId);
+        allow create, delete: if false;
+        allow update: if isSelf(userId) &&
+          resource.data.recipientUserId == request.auth.uid &&
+          request.resource.data.recipientUserId == resource.data.recipientUserId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["isRead", "readAt"]) &&
+          request.resource.data.isRead == true &&
+          request.resource.data.readAt is timestamp;
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Friend requests
+    // Participants may read request state. All identity, duplicate, response,
+    // and friendship mutations are enforced by authenticated callables.
+    // -----------------------------------------------------------------------
+    match /friendRequests/{requestId} {
+      allow get, list: if signedIn() && (
+        resource.data.fromUserId == request.auth.uid ||
+        resource.data.toUserId == request.auth.uid
+      );
+      allow create, update, delete: if false;
     }
 
     // -----------------------------------------------------------------------
@@ -405,25 +433,9 @@ service cloud.firestore {
         match /replies/{replyId} {
           allow get, list: if canReadTeamReply(teamId, announcementId);
 
-          allow create: if canReadAnnouncementPath(teamId, announcementId) &&
-            announcementAllowsReplies(teamId, announcementId) &&
-            request.resource.data.keys().hasOnly(["userId", "displayName", "body", "replyType", "createdAt"]) &&
-            request.resource.data.userId == request.auth.uid &&
-            request.resource.data.displayName is string &&
-            request.resource.data.displayName == get(teamMemberPath(teamId, request.auth.uid)).data.displayName &&
-            request.resource.data.body is string &&
-            request.resource.data.body.size() > 0 &&
-            request.resource.data.body.size() <= 2000 &&
-            request.resource.data.createdAt is timestamp &&
-            (
-              request.resource.data.replyType == "team" ||
-              (
-                isCoachStaff(teamId) &&
-                request.resource.data.replyType == "privateToCoach"
-              )
-            );
-
-          allow update, delete: if false;
+          // Reply identity, membership, ownership, moderation, and timestamps
+          // are enforced by authenticated callable functions using the Admin SDK.
+          allow create, update, delete: if false;
         }
 
         match /reads/{userId} {

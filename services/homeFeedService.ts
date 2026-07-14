@@ -1,19 +1,17 @@
 import {
   collection,
-  doc,
-  getDoc,
   getDocs,
   limit,
   onSnapshot,
-  orderBy,
   query,
-  serverTimestamp,
   where,
   type DocumentData,
   type QueryDocumentSnapshot,
   type Unsubscribe,
 } from "firebase/firestore";
 import { db } from "@/config/firebase";
+import { getPublicUserProfiles } from "@/services/publicProfileService";
+import { getSafeProfileName } from "@/utils/friendPrivacy";
 
 export interface SquadDetail {
   squadId: string;
@@ -30,18 +28,6 @@ export interface ConnectionPrompt {
   promptText_es: string;
   weekOf: Date;
   isActive: boolean;
-}
-
-export interface ActivityItem {
-  activityId: string;
-  type: "join_squad" | "earn_badge" | "complete_challenge" | "play_game" | "new_friend" | "create_squad";
-  userId: string;
-  displayName: string;
-  avatarUrl: string | null;
-  squadId: string | null;
-  message: string;
-  message_es: string;
-  createdAt: Date;
 }
 
 export interface LiveSquadData {
@@ -92,22 +78,6 @@ function docToSquadDetail(squadDoc: QueryDocumentSnapshot<DocumentData>): SquadD
   };
 }
 
-function docToActivity(activityDoc: QueryDocumentSnapshot<DocumentData>): ActivityItem {
-  const data = activityDoc.data();
-
-  return {
-    activityId: activityDoc.id,
-    type: (data.type as ActivityItem["type"]) ?? "join_squad",
-    userId: (data.userId as string) ?? "",
-    displayName: (data.displayName as string) ?? "",
-    avatarUrl: (data.avatarUrl as string | null) ?? null,
-    squadId: (data.squadId as string | null) ?? null,
-    message: (data.message as string) ?? "",
-    message_es: (data.message_es as string) ?? "",
-    createdAt: tsToDate(data.createdAt as FirestoreDate) ?? new Date(),
-  };
-}
-
 export async function fetchUserSquadsDetail(squadIds: string[]): Promise<SquadDetail[]> {
   if (squadIds.length === 0) return [];
 
@@ -149,95 +119,6 @@ export async function fetchConnectionPrompt(): Promise<ConnectionPrompt | null> 
   }
 }
 
-export function subscribeToActivityFeed(
-  squadIds: string[],
-  friendIds: string[],
-  callback: (activities: ActivityItem[]) => void
-): () => void {
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const squadItems = new Map<string, ActivityItem>();
-  const friendItems = new Map<string, ActivityItem>();
-  const squadChunkItemIds = new Map<number, Set<string>>();
-  const friendChunkItemIds = new Map<number, Set<string>>();
-  const unsubscribers: Unsubscribe[] = [];
-
-  function merge() {
-    const combined = new Map<string, ActivityItem>();
-    squadItems.forEach((item, id) => combined.set(id, item));
-    friendItems.forEach((item, id) => combined.set(id, item));
-
-    callback(
-      Array.from(combined.values())
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .slice(0, 30)
-    );
-  }
-
-  function replaceChunkItems(
-    target: Map<string, ActivityItem>,
-    chunkItemIds: Map<number, Set<string>>,
-    chunkIndex: number,
-    docs: QueryDocumentSnapshot<DocumentData>[]
-  ) {
-    chunkItemIds.get(chunkIndex)?.forEach((activityId) => target.delete(activityId));
-
-    const nextIds = new Set<string>();
-    docs.forEach((activityDoc) => {
-      const item = docToActivity(activityDoc);
-      target.set(item.activityId, item);
-      nextIds.add(item.activityId);
-    });
-
-    chunkItemIds.set(chunkIndex, nextIds);
-    merge();
-  }
-
-  try {
-    chunkArray(squadIds).forEach((chunk, chunkIndex) => {
-      const unsubscribe = onSnapshot(
-        query(
-          collection(db, "activity"),
-          where("squadId", "in", chunk),
-          where("createdAt", ">=", sevenDaysAgo),
-          orderBy("createdAt", "desc"),
-          limit(30)
-        ),
-        (snapshot) => replaceChunkItems(squadItems, squadChunkItemIds, chunkIndex, snapshot.docs),
-        (error) => console.warn("[HomeFeedService] squadActivity listener error:", error)
-      );
-
-      unsubscribers.push(unsubscribe);
-    });
-
-    chunkArray(friendIds).forEach((chunk, chunkIndex) => {
-      const unsubscribe = onSnapshot(
-        query(
-          collection(db, "activity"),
-          where("userId", "in", chunk),
-          where("createdAt", ">=", sevenDaysAgo),
-          orderBy("createdAt", "desc"),
-          limit(30)
-        ),
-        (snapshot) => replaceChunkItems(friendItems, friendChunkItemIds, chunkIndex, snapshot.docs),
-        (error) => console.warn("[HomeFeedService] friendActivity listener error:", error)
-      );
-
-      unsubscribers.push(unsubscribe);
-    });
-
-    if (squadIds.length === 0 && friendIds.length === 0) {
-      callback([]);
-    }
-  } catch (error) {
-    console.warn("[HomeFeedService] subscribeToActivityFeed setup error:", error);
-    callback([]);
-  }
-
-  return () => {
-    unsubscribers.forEach((unsubscribe) => unsubscribe());
-  };
-}
-
 export function subscribeLiveSquadCard(
   squadIds: string[],
   callback: (liveSquad: LiveSquadData | null) => void
@@ -276,22 +157,12 @@ export function subscribeLiveSquadCard(
 
             let memberAvatars: LiveSquadData["memberAvatars"] = [];
             try {
-              const memberDocs = await Promise.all(
-                memberIds.map((userId) => getDoc(doc(db, "users", userId)))
-              );
-
-              memberAvatars = memberDocs.flatMap((memberDoc) => {
-                if (!memberDoc.exists()) return [];
-
-                const memberData = memberDoc.data();
-                return [
-                  {
-                    userId: memberDoc.id,
-                    displayName: (memberData.displayName as string) ?? "",
-                    avatarUrl: (memberData.photoURL as string | null) ?? null,
-                  },
-                ];
-              });
+              const publicProfiles = await getPublicUserProfiles(memberIds);
+              memberAvatars = publicProfiles.map((profile) => ({
+                userId: profile.userId,
+                displayName: getSafeProfileName(profile.displayName),
+                avatarUrl: null,
+              }));
             } catch (error) {
               console.warn("[HomeFeedService] member preview lookup error:", error);
             }
@@ -320,33 +191,4 @@ export function subscribeLiveSquadCard(
   return () => {
     unsubscribers.forEach((unsubscribe) => unsubscribe());
   };
-}
-
-export async function fetchUnreadNotificationCount(userId: string): Promise<number> {
-  try {
-    const snapshot = await getDocs(
-      query(
-        collection(db, "userNotifications", userId, "notifications"),
-        where("isRead", "==", false)
-      )
-    );
-
-    return snapshot.size;
-  } catch (error) {
-    console.warn("[HomeFeedService] fetchUnreadNotificationCount error:", error);
-    return 0;
-  }
-}
-
-export async function fetchUserFriendIds(userId: string): Promise<string[]> {
-  try {
-    const userDoc = await getDoc(doc(db, "users", userId));
-    if (!userDoc.exists()) return [];
-
-    const data = userDoc.data();
-    return (data.friendIds as string[]) ?? [];
-  } catch (error) {
-    console.warn("[HomeFeedService] fetchUserFriendIds error:", error);
-    return [];
-  }
 }

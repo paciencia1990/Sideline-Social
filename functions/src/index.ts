@@ -12,6 +12,19 @@ import { createHash, randomInt } from 'node:crypto';
 import * as admin from 'firebase-admin';
 import * as functions from 'firebase-functions';
 import {
+  countMutualConnections,
+  findSharedActivity,
+  formatPublicUserName,
+  formatSuggestedConnectionName,
+  readStringArray,
+  resolvePublicProfileName,
+} from './friendSuggestionCore';
+import {
+  friendRequestIdFor,
+  normalizeFriendTargetId,
+  resolveFriendRequestSendStatus,
+} from './friendRequestCore';
+import {
   WEEKLY_CHALLENGES,
   getPreviousWeekKey,
   getWeekInfo,
@@ -21,7 +34,10 @@ import {
 import {
   activeLinkReferencesChild,
   allChildProfilesExist,
+  canAccessTeamAnnouncement,
+  canDeleteTeamAnnouncementReply,
   canManageTeamRoles,
+  hasCoachAccess,
   hasParentRole,
   isTeamActive,
   isEligibleStaffRoleTarget,
@@ -31,6 +47,7 @@ import {
   normalizeChildIds,
   removeParentRole,
   removeChildReference,
+  resolveReplyAuthorName,
   setStaffRole,
 } from './teamMembershipCore';
 
@@ -39,6 +56,109 @@ admin.initializeApp();
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const TEAM_INVITE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+type PersonalNotificationInput = {
+  recipientUserId: string;
+  eventId: string;
+  type: 'coachAnnouncement' | 'friendRequest' | 'friendRequestAccepted';
+  titleKey: string;
+  bodyKey: string;
+  params: Record<string, string | number>;
+  actorUserId?: string;
+  actorDisplayName?: string;
+  teamId?: string;
+  announcementId?: string;
+  friendRequestId?: string;
+  pushTitle: string;
+  pushBody: string;
+  pushData: Record<string, string>;
+};
+
+async function createPersonalNotificationAndPush(input: PersonalNotificationInput) {
+  if (!input.recipientUserId || !input.eventId) return false;
+  const firestore = admin.firestore();
+  const notificationRef = firestore
+    .collection('userNotifications')
+    .doc(input.recipientUserId)
+    .collection('notifications')
+    .doc(input.eventId);
+
+  const created = await firestore.runTransaction(async (transaction) => {
+    if ((await transaction.get(notificationRef)).exists) return false;
+    transaction.create(notificationRef, {
+      recipientUserId: input.recipientUserId,
+      type: input.type,
+      titleKey: input.titleKey,
+      bodyKey: input.bodyKey,
+      params: input.params,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      readAt: null,
+      isRead: false,
+      status: 'active',
+      actorUserId: input.actorUserId ?? null,
+      actorDisplayName: input.actorDisplayName ?? null,
+      teamId: input.teamId ?? null,
+      announcementId: input.announcementId ?? null,
+      friendRequestId: input.friendRequestId ?? null,
+      expiresAt: null,
+    });
+    return true;
+  });
+
+  if (!created) return false;
+  const tokenSnapshot = await firestore.collection('notificationTokens')
+    .where('uid', '==', input.recipientUserId)
+    .get();
+  if (tokenSnapshot.empty) return true;
+
+  const results = await Promise.allSettled(tokenSnapshot.docs.map(async (tokenDocument) => {
+    const token = tokenDocument.data()?.token;
+    if (typeof token !== 'string' || !token) return;
+    try {
+      await admin.messaging().send({
+        token,
+        notification: { title: input.pushTitle, body: input.pushBody },
+        data: {
+          ...input.pushData,
+          notificationId: input.eventId,
+          type: input.type,
+        },
+        android: { notification: { channelId: 'coach-updates' } },
+      });
+    } catch (error) {
+      const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
+      if (
+        code === 'messaging/registration-token-not-registered' ||
+        code === 'messaging/invalid-registration-token'
+      ) {
+        await tokenDocument.ref.delete();
+        return;
+      }
+      throw error;
+    }
+  }));
+
+  const failures = results.filter((result) => result.status === 'rejected').length;
+  if (failures > 0) {
+    console.warn('[personalNotification] push delivery failures', { type: input.type, failures });
+  }
+  return true;
+}
+
+async function getPrivateNotificationActorName(userId: unknown, fallback = 'Sideline Parent') {
+  if (typeof userId !== 'string' || !userId) return fallback;
+  const snapshot = await admin.firestore().collection('users').doc(userId).get();
+  const fullName = resolvePublicProfileName(snapshot.data());
+  const firestoreName = formatSuggestedConnectionName(fullName);
+  if (firestoreName) return firestoreName;
+  try {
+    const authUser = await admin.auth().getUser(userId);
+    const authName = resolvePublicProfileName({ displayName: authUser.displayName });
+    return formatSuggestedConnectionName(authName) || fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 1. updateActiveMemberCount
@@ -162,27 +282,181 @@ export const sendWeeklyChallengeNotification = functions.pubsub
   });
 
 // ---------------------------------------------------------------------------
+// Secure friend mutations
+// The authenticated UID is always the sender/actor. Clients provide only the
+// target or request ID and cannot write trusted request identity fields.
+// ---------------------------------------------------------------------------
+
+export const sendFriendRequest = functions.https.onCall(async (data, context) => {
+  const senderUserId = context.auth?.uid;
+  if (!senderUserId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to send a friend request.');
+
+  let targetUserId: string;
+  try {
+    targetUserId = normalizeFriendTargetId(data?.targetUserId);
+  } catch {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid target user is required.');
+  }
+  if (targetUserId === senderUserId) {
+    throw new functions.https.HttpsError('invalid-argument', 'You cannot send a friend request to yourself.');
+  }
+
+  const firestore = admin.firestore();
+  const senderRef = firestore.collection('users').doc(senderUserId);
+  const targetRef = firestore.collection('users').doc(targetUserId);
+  const requestId = friendRequestIdFor(senderUserId, targetUserId);
+  const reverseRequestId = friendRequestIdFor(targetUserId, senderUserId);
+  const outgoingRef = firestore.collection('friendRequests').doc(requestId);
+  const incomingRef = firestore.collection('friendRequests').doc(reverseRequestId);
+
+  const status = await firestore.runTransaction(async (transaction) => {
+    const senderSnapshot = await transaction.get(senderRef);
+    const targetSnapshot = await transaction.get(targetRef);
+    const outgoingSnapshot = await transaction.get(outgoingRef);
+    const incomingSnapshot = await transaction.get(incomingRef);
+    if (!senderSnapshot.exists) {
+      throw new functions.https.HttpsError('failed-precondition', 'Your profile is unavailable.');
+    }
+    if (!targetSnapshot.exists || ['deleted', 'disabled', 'removed'].includes(String(targetSnapshot.data()?.status ?? ''))) {
+      throw new functions.https.HttpsError('not-found', 'That parent is no longer available.');
+    }
+
+    const outcome = resolveFriendRequestSendStatus({
+      senderFriendIds: senderSnapshot.data()?.friendIds,
+      targetFriendIds: targetSnapshot.data()?.friendIds,
+      targetUserId,
+      senderUserId,
+      outgoingStatus: outgoingSnapshot.data()?.status,
+      incomingStatus: incomingSnapshot.data()?.status,
+    });
+    if (outcome !== 'pending') return outcome;
+
+    const senderName = formatSuggestedConnectionName(resolvePublicProfileName(senderSnapshot.data())) || 'Sideline Parent';
+    const targetName = formatSuggestedConnectionName(resolvePublicProfileName(targetSnapshot.data())) || 'Sideline Parent';
+    transaction.set(outgoingRef, {
+      fromUserId: senderUserId,
+      fromDisplayName: senderName,
+      toUserId: targetUserId,
+      toDisplayName: targetName,
+      status: 'pending',
+      createdAt: outgoingSnapshot.data()?.createdAt ?? admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return 'pending';
+  });
+
+  return { requestId, status };
+});
+
+export const respondToFriendRequest = functions.https.onCall(async (data, context) => {
+  const userId = context.auth?.uid;
+  if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to respond to a friend request.');
+  const requestId = typeof data?.requestId === 'string' ? data.requestId.trim() : '';
+  const decision = data?.decision;
+  if (!/^[A-Za-z0-9_-]{1,300}$/u.test(requestId) || (decision !== 'accepted' && decision !== 'declined')) {
+    throw new functions.https.HttpsError('invalid-argument', 'The friend request response is invalid.');
+  }
+
+  const firestore = admin.firestore();
+  const requestRef = firestore.collection('friendRequests').doc(requestId);
+  const result = await firestore.runTransaction(async (transaction) => {
+    const requestSnapshot = await transaction.get(requestRef);
+    if (!requestSnapshot.exists) throw new functions.https.HttpsError('not-found', 'This request is no longer available.');
+    const request = requestSnapshot.data() ?? {};
+    if (request.toUserId !== userId) {
+      throw new functions.https.HttpsError('permission-denied', 'Only the recipient may respond to this request.');
+    }
+    if (request.status !== 'pending') return { status: 'alreadyHandled' as const };
+
+    if (decision === 'accepted') {
+      if (typeof request.fromUserId !== 'string' || !request.fromUserId) {
+        throw new functions.https.HttpsError('failed-precondition', 'This request is invalid.');
+      }
+      const senderRef = firestore.collection('users').doc(request.fromUserId);
+      const recipientRef = firestore.collection('users').doc(userId);
+      const senderSnapshot = await transaction.get(senderRef);
+      const recipientSnapshot = await transaction.get(recipientRef);
+      if (!senderSnapshot.exists || !recipientSnapshot.exists) {
+        throw new functions.https.HttpsError('not-found', 'A friend profile is no longer available.');
+      }
+      transaction.set(senderRef, { friendIds: admin.firestore.FieldValue.arrayUnion(userId) }, { merge: true });
+      transaction.set(recipientRef, { friendIds: admin.firestore.FieldValue.arrayUnion(request.fromUserId) }, { merge: true });
+    }
+
+    transaction.update(requestRef, {
+      status: decision,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return { status: decision as 'accepted' | 'declined' };
+  });
+  return result;
+});
+
+export const removeFriendConnection = functions.https.onCall(async (data, context) => {
+  const userId = context.auth?.uid;
+  if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to remove a friend.');
+  let friendUserId: string;
+  try {
+    friendUserId = normalizeFriendTargetId(data?.friendUserId);
+  } catch {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid friend is required.');
+  }
+  if (friendUserId === userId) return { removed: false };
+
+  const firestore = admin.firestore();
+  const batch = firestore.batch();
+  batch.set(firestore.collection('users').doc(userId), {
+    friendIds: admin.firestore.FieldValue.arrayRemove(friendUserId),
+  }, { merge: true });
+  batch.set(firestore.collection('users').doc(friendUserId), {
+    friendIds: admin.firestore.FieldValue.arrayRemove(userId),
+  }, { merge: true });
+  batch.delete(firestore.collection('friendRequests').doc(friendRequestIdFor(userId, friendUserId)));
+  batch.delete(firestore.collection('friendRequests').doc(friendRequestIdFor(friendUserId, userId)));
+  await batch.commit();
+  return { removed: true };
+});
+
+// ---------------------------------------------------------------------------
 // 5. FCM Triggers
 // ---------------------------------------------------------------------------
 
 export const onFriendRequestCreated = functions.firestore
   .document('friendRequests/{requestId}')
-  .onCreate(async (snap) => {
-    const request = snap.data();
-    const db = admin.firestore();
-    const messaging = admin.messaging();
+  .onWrite(async (change) => {
+    if (!change.after.exists) return null;
+    const request = change.after.data() ?? {};
+    const previousStatus = change.before.exists ? change.before.data()?.status : null;
+    if (request.status !== 'pending' || previousStatus === 'pending') return null;
+    if (
+      typeof request.fromUserId !== 'string' ||
+      typeof request.toUserId !== 'string' ||
+      request.fromUserId === request.toUserId
+    ) return null;
 
-    const targetUserDoc = await db.collection('users').doc(request.toUserId).get();
-    const fcmToken = targetUserDoc.data()?.fcmToken;
-    if (!fcmToken) return null;
-
-    await messaging.send({
-      token: fcmToken,
-      notification: {
-        title: 'New Friend Request 👋',
-        body: `${request.fromDisplayName} wants to connect on Sideline Squad`,
-      },
-      data: { type: 'friend_request', fromUserId: request.fromUserId },
+    const senderName = await getPrivateNotificationActorName(request.fromUserId, '');
+    const eventTimestamp = typeof request.updatedAt?.toMillis === 'function'
+      ? request.updatedAt.toMillis()
+      : typeof request.createdAt?.toMillis === 'function'
+        ? request.createdAt.toMillis()
+        : 'initial';
+    await createPersonalNotificationAndPush({
+      recipientUserId: request.toUserId,
+      eventId: `friendRequest_${change.after.id}_${eventTimestamp}`,
+      type: 'friendRequest',
+      titleKey: 'notifications.types.friendRequestTitle',
+      bodyKey: senderName
+        ? 'notifications.types.friendRequestBody'
+        : 'notifications.types.friendRequestFallbackBody',
+      params: senderName ? { actorName: senderName } : {},
+      actorUserId: request.fromUserId,
+      actorDisplayName: senderName || undefined,
+      friendRequestId: change.after.id,
+      pushTitle: 'New friend request',
+      pushBody: senderName
+        ? `${senderName} wants to connect with you.`
+        : 'A Sideline parent wants to connect with you.',
+      pushData: { friendRequestId: change.after.id },
     });
     return null;
   });
@@ -194,20 +468,24 @@ export const onFriendRequestAccepted = functions.firestore
     const after = change.after.data();
     if (before.status !== 'pending' || after.status !== 'accepted') return null;
 
-    const db = admin.firestore();
-    const messaging = admin.messaging();
-
-    const requesterDoc = await db.collection('users').doc(after.fromUserId).get();
-    const fcmToken = requesterDoc.data()?.fcmToken;
-    if (!fcmToken) return null;
-
-    await messaging.send({
-      token: fcmToken,
-      notification: {
-        title: 'Friend Request Accepted! 🎉',
-        body: `${after.toDisplayName} is now your Sideline Squad friend`,
-      },
-      data: { type: 'friend_accepted', fromUserId: after.toUserId },
+    if (typeof after.fromUserId !== 'string' || typeof after.toUserId !== 'string') return null;
+    const accepterName = await getPrivateNotificationActorName(after.toUserId);
+    const acceptedTimestamp = typeof after.updatedAt?.toMillis === 'function'
+      ? after.updatedAt.toMillis()
+      : 'accepted';
+    await createPersonalNotificationAndPush({
+      recipientUserId: after.fromUserId,
+      eventId: `friendRequestAccepted_${change.after.id}_${acceptedTimestamp}`,
+      type: 'friendRequestAccepted',
+      titleKey: 'notifications.types.friendRequestAcceptedTitle',
+      bodyKey: 'notifications.types.friendRequestAcceptedBody',
+      params: { actorName: accepterName },
+      actorUserId: after.toUserId,
+      actorDisplayName: accepterName,
+      friendRequestId: change.after.id,
+      pushTitle: 'Friend request accepted',
+      pushBody: `${accepterName} accepted your friend request.`,
+      pushData: { friendRequestId: change.after.id },
     });
     return null;
   });
@@ -611,65 +889,327 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
       .get();
     if (membersSnapshot.empty) return null;
 
-    // Lock-screen copy is intentionally generic. The authenticated destination
-    // reloads the team and announcement after membership rules are rechecked.
-    const title = 'New team update';
-    const body = 'Open Sideline Social to view it.';
+    const authorUserId = typeof announcement.createdBy === 'string' ? announcement.createdBy : '';
+    const coachName = await getPrivateNotificationActorName(authorUserId, 'Coach');
+    const teamName = resolvePublicProfileName({ displayName: teamSnapshot.data()?.name }) || 'your team';
     const deliveries = await Promise.allSettled(
       membersSnapshot.docs.map(async (memberSnapshot) => {
         const member = memberSnapshot.data();
-        if (!hasParentRole(member)) return;
-        const tokenSnapshot = await firestore.collection('notificationTokens')
-          .where('uid', '==', memberSnapshot.id)
-          .get();
-        if (tokenSnapshot.empty) return;
-
-        await Promise.all(tokenSnapshot.docs.map(async (tokenDocument) => {
-          const token = tokenDocument.data()?.token;
-          if (typeof token !== 'string' || !token) return;
-
-          try {
-            await admin.messaging().send({
-              token,
-              notification: { title, body },
-              data: {
-                type: 'coach_update',
-                teamId,
-                announcementId,
-                route: '/teams/' + teamId + '/announcements/' + announcementId,
-              },
-              android: {
-                notification: {
-                  channelId: 'coach-updates',
-                },
-              },
-            });
-          } catch (error) {
-            const code = typeof error === 'object' && error && 'code' in error
-              ? String(error.code)
-              : '';
-            if (
-              code === 'messaging/registration-token-not-registered' ||
-              code === 'messaging/invalid-registration-token'
-            ) {
-              await tokenDocument.ref.delete();
-            }
-            throw error;
-          }
-        }));
+        if (!hasParentRole(member) || memberSnapshot.id === authorUserId) return;
+        await createPersonalNotificationAndPush({
+          recipientUserId: memberSnapshot.id,
+          eventId: `coachAnnouncement_${teamId}_${announcementId}`,
+          type: 'coachAnnouncement',
+          titleKey: 'notifications.types.coachAnnouncementTitle',
+          bodyKey: 'notifications.types.coachAnnouncementBody',
+          params: { actorName: coachName, teamName },
+          actorUserId: authorUserId || undefined,
+          teamId,
+          announcementId,
+          pushTitle: 'New team announcement',
+          pushBody: `${coachName} posted an update for ${teamName}.`,
+          pushData: { teamId, announcementId },
+        });
       }),
     );
 
-    const failures = deliveries.filter((delivery) => delivery.status === 'rejected');
-    if (failures.length > 0) {
+    const failures = deliveries.filter((delivery) => delivery.status === 'rejected').length;
+    if (failures > 0) {
       console.warn('[notifyParentsOfTeamAnnouncement] delivery failures', {
-        failures: failures.length,
-        teamId,
-        announcementId,
+        type: 'coachAnnouncement',
+        failures,
       });
     }
     return null;
   });
+
+// ---------------------------------------------------------------------------
+// Public social profile reads
+// Private users documents remain self-only. These callables return only the
+// minimum profile and suggestion fields needed by authenticated app surfaces.
+// ---------------------------------------------------------------------------
+
+export const getPublicUserProfiles = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication is required.');
+  }
+  const requestedCount = Array.isArray(data?.userIds) ? data.userIds.length : 0;
+  const userIds = normalizePublicProfileIds(data?.userIds);
+  if (userIds.length === 0) {
+    console.warn('[publicProfiles] resolution summary', {
+      requestedCount,
+      validIdCount: 0,
+      profileDocumentFoundCount: 0,
+      firestoreNameCount: 0,
+      authNameCount: 0,
+      nullNameCount: 0,
+      returnedProfileCount: 0,
+    });
+    return { profiles: [] };
+  }
+
+  const firestore = admin.firestore();
+  const snapshots = await firestore.getAll(
+    ...userIds.map((userId) => firestore.collection('users').doc(userId)),
+  );
+  const firestoreNamesByUserId = new Map(snapshots.map((snapshot) => [
+    snapshot.id,
+    resolvePublicProfileName(snapshot.data()),
+  ]));
+  const missingNameUserIds = snapshots
+    .filter((snapshot) => !firestoreNamesByUserId.get(snapshot.id))
+    .map((snapshot) => snapshot.id);
+  const authNamesByUserId = new Map<string, string | null>();
+  const authUserIds = new Set<string>();
+  if (missingNameUserIds.length > 0) {
+    const authUsers = await admin.auth().getUsers(missingNameUserIds.map((uid) => ({ uid })));
+    authUsers.users.forEach((authUser) => {
+      authUserIds.add(authUser.uid);
+      authNamesByUserId.set(
+        authUser.uid,
+        resolvePublicProfileName({ displayName: authUser.displayName }),
+      );
+    });
+  }
+  const resolvedProfiles = snapshots.flatMap((snapshot) => {
+      if (!snapshot.exists && !authUserIds.has(snapshot.id)) return [];
+      return [{
+        userId: snapshot.id,
+        displayName: formatPublicUserName(
+          firestoreNamesByUserId.get(snapshot.id) ?? authNamesByUserId.get(snapshot.id) ?? null,
+        ),
+      }];
+    });
+  const firestoreNameCount = Array.from(firestoreNamesByUserId.values()).filter(Boolean).length;
+  const authNameCount = Array.from(authNamesByUserId.values()).filter(Boolean).length;
+  const nullNameCount = resolvedProfiles.filter((profile) => !profile.displayName).length;
+  console.warn('[publicProfiles] resolution summary', {
+    requestedCount,
+    validIdCount: userIds.length,
+    profileDocumentFoundCount: snapshots.filter((snapshot) => snapshot.exists).length,
+    firestoreNameCount,
+    authNameCount,
+    nullNameCount,
+    returnedProfileCount: resolvedProfiles.length,
+  });
+  return {
+    profiles: resolvedProfiles,
+  };
+});
+
+export const getSuggestedConnections = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to view suggestions.');
+
+  const queryText = typeof data?.queryText === 'string' ? data.queryText.trim() : '';
+  if (queryText.length > 80) {
+    throw new functions.https.HttpsError('invalid-argument', 'Search text is too long.');
+  }
+  const normalizedQuery = queryText.toLocaleLowerCase();
+  const firestore = admin.firestore();
+  const viewerSnapshot = await firestore.collection('users').doc(uid).get();
+  if (!viewerSnapshot.exists) return { suggestions: [] };
+
+  const viewer = viewerSnapshot.data() ?? {};
+  const viewerFriendIds = readStringArray(viewer.friendIds);
+  const excludedUserIds = new Set([uid, ...viewerFriendIds]);
+  let candidateSnapshots: admin.firestore.QueryDocumentSnapshot[];
+  if (normalizedQuery) {
+    const prefixSnapshot = await firestore.collection('users')
+      .where('searchName', '>=', normalizedQuery)
+      .where('searchName', '<=', `${normalizedQuery}\uf8ff`)
+      .limit(50)
+      .get();
+    candidateSnapshots = prefixSnapshot.docs;
+    if (candidateSnapshots.length === 0) {
+      candidateSnapshots = (await firestore.collection('users').limit(100).get()).docs;
+    }
+  } else {
+    candidateSnapshots = (await firestore.collection('users').orderBy('createdAt', 'desc').limit(50).get()).docs;
+  }
+
+  const candidates = candidateSnapshots
+    .filter((snapshot) => !excludedUserIds.has(snapshot.id))
+    .map((snapshot) => ({ snapshot, profile: snapshot.data(), fullName: resolvePublicProfileName(snapshot.data()) }))
+    .filter((candidate) => !normalizedQuery || candidate.fullName?.toLocaleLowerCase().includes(normalizedQuery));
+
+  const sharedSquadNames = new Map<string, string>();
+  const viewerSquads = await firestore.collection('squads')
+    .where('memberIds', 'array-contains', uid)
+    .limit(50)
+    .get();
+  for (const squadSnapshot of viewerSquads.docs) {
+    const squad = squadSnapshot.data();
+    const squadName = typeof squad.name === 'string' ? squad.name.trim() : '';
+    if (!squadName) continue;
+    const memberIds = new Set(readStringArray(squad.memberIds));
+    candidates.forEach((candidate) => {
+      if (memberIds.has(candidate.snapshot.id) && !sharedSquadNames.has(candidate.snapshot.id)) {
+        sharedSquadNames.set(candidate.snapshot.id, squadName);
+      }
+    });
+  }
+
+  return {
+    suggestions: candidates.slice(0, 20).map(({ snapshot, profile, fullName }) => {
+      const mutualConnectionCount = countMutualConnections(viewerFriendIds, profile.friendIds);
+      return {
+        userId: snapshot.id,
+        displayName: formatSuggestedConnectionName(fullName),
+        photoURL: typeof profile.photoURL === 'string' ? profile.photoURL : null,
+        sharedSquadName: sharedSquadNames.get(snapshot.id) ?? null,
+        sharedActivity: findSharedActivity(viewer.sports, profile.sports),
+        mutualConnectionCount: mutualConnectionCount > 0 ? mutualConnectionCount : null,
+      };
+    }),
+  };
+});
+
+function normalizePublicProfileIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new functions.https.HttpsError('invalid-argument', 'User references are required.');
+  }
+  const userIds = Array.from(new Set(value.map((item) => typeof item === 'string' ? item.trim() : '')));
+  if (userIds.length > 50 || userIds.some((userId) => !/^[A-Za-z0-9_-]{1,128}$/.test(userId))) {
+    throw new functions.https.HttpsError('invalid-argument', 'User references are invalid.');
+  }
+  return userIds;
+}
+
+// ---------------------------------------------------------------------------
+// Team announcement replies
+// Reply identity and moderation stay server-owned so clients cannot spoof an
+// author, timestamp, or role-based deletion permission.
+// ---------------------------------------------------------------------------
+
+export const createTeamAnnouncementReply = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to reply.');
+
+  const teamId = readReplyPathId(data?.teamId, 'team');
+  const announcementId = readReplyPathId(data?.announcementId, 'announcement');
+  const body = typeof data?.body === 'string' ? data.body.trim() : '';
+  const replyType = data?.replyType === 'privateToCoach' ? 'privateToCoach' : 'team';
+  if (!body || body.length > 2000) {
+    throw new functions.https.HttpsError('invalid-argument', 'Reply text must be between 1 and 2,000 characters.');
+  }
+
+  const firestore = admin.firestore();
+  const teamRef = firestore.collection('teams').doc(teamId);
+  const memberRef = teamRef.collection('members').doc(uid);
+  const announcementRef = teamRef.collection('announcements').doc(announcementId);
+  const profileRef = firestore.collection('users').doc(uid);
+  const replyRef = announcementRef.collection('replies').doc();
+  let displayName = 'Team Parent';
+
+  await firestore.runTransaction(async (transaction) => {
+    const [teamSnapshot, memberSnapshot, announcementSnapshot, profileSnapshot] = await transaction.getAll(
+      teamRef,
+      memberRef,
+      announcementRef,
+      profileRef,
+    );
+    if (!teamSnapshot.exists || !isTeamActive(teamSnapshot.data())) {
+      throw new functions.https.HttpsError('failed-precondition', 'This team is no longer active.', { reason: 'team-inactive' });
+    }
+    const member = memberSnapshot.exists ? memberSnapshot.data() : undefined;
+    if (!member || member.status !== 'active') {
+      throw new functions.https.HttpsError('permission-denied', 'An active team membership is required.');
+    }
+    const announcement = announcementSnapshot.data();
+    if (!announcementSnapshot.exists || !announcement) {
+      throw new functions.https.HttpsError('not-found', 'Announcement unavailable.');
+    }
+    if (!canAccessTeamAnnouncement(member, announcement.audience)) {
+      throw new functions.https.HttpsError('permission-denied', 'This announcement is unavailable.');
+    }
+    if (announcement.allowReplies !== true) {
+      throw new functions.https.HttpsError('failed-precondition', 'Replies are closed for this announcement.');
+    }
+    if (replyType === 'privateToCoach' && !hasCoachAccess(member)) {
+      throw new functions.https.HttpsError('permission-denied', 'This reply type is unavailable.');
+    }
+
+    displayName = resolveReplyAuthorName(
+      profileSnapshot.exists ? profileSnapshot.data() : undefined,
+      member,
+      context.auth?.token?.name,
+    );
+    transaction.create(replyRef, {
+      userId: uid,
+      displayName,
+      body,
+      replyType,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  });
+
+  return {
+    reply: {
+      id: replyRef.id,
+      userId: uid,
+      displayName,
+      body,
+      replyType,
+      createdAtMillis: Date.now(),
+    },
+  };
+});
+
+export const deleteTeamAnnouncementReply = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to delete a reply.');
+
+  const teamId = readReplyPathId(data?.teamId, 'team');
+  const announcementId = readReplyPathId(data?.announcementId, 'announcement');
+  const replyId = readReplyPathId(data?.replyId, 'reply');
+  const firestore = admin.firestore();
+  const teamRef = firestore.collection('teams').doc(teamId);
+  const memberRef = teamRef.collection('members').doc(uid);
+  const announcementRef = teamRef.collection('announcements').doc(announcementId);
+  const replyRef = announcementRef.collection('replies').doc(replyId);
+  let deleted = false;
+
+  await firestore.runTransaction(async (transaction) => {
+    const [teamSnapshot, memberSnapshot, announcementSnapshot, replySnapshot] = await transaction.getAll(
+      teamRef,
+      memberRef,
+      announcementRef,
+      replyRef,
+    );
+    if (!teamSnapshot.exists || !isTeamActive(teamSnapshot.data())) {
+      throw new functions.https.HttpsError('failed-precondition', 'This team is no longer active.', { reason: 'team-inactive' });
+    }
+    const member = memberSnapshot.exists ? memberSnapshot.data() : undefined;
+    if (!member || member.status !== 'active') {
+      throw new functions.https.HttpsError('permission-denied', 'An active team membership is required.');
+    }
+    const announcement = announcementSnapshot.data();
+    if (!announcementSnapshot.exists || !announcement) {
+      throw new functions.https.HttpsError('not-found', 'Announcement unavailable.');
+    }
+    if (!canAccessTeamAnnouncement(member, announcement.audience)) {
+      throw new functions.https.HttpsError('permission-denied', 'This announcement is unavailable.');
+    }
+    if (!replySnapshot.exists) return;
+    if (!canDeleteTeamAnnouncementReply(uid, member, replySnapshot.data())) {
+      throw new functions.https.HttpsError('permission-denied', 'You cannot delete this reply.');
+    }
+
+    transaction.delete(replyRef);
+    deleted = true;
+  });
+
+  return { deleted };
+});
+
+function readReplyPathId(value: unknown, label: string): string {
+  const id = typeof value === 'string' ? value.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+    throw new functions.https.HttpsError('invalid-argument', `A valid ${label} reference is required.`);
+  }
+  return id;
+}
 // ---------------------------------------------------------------------------
 // Parent team invite joining
 // Invite codes are resolved server-side because private team rules intentionally

@@ -98,20 +98,24 @@ assert.ok(home.includes('width: 36 * (1637 / 1536)'), "The compact Home logo mus
 assert.equal(home.includes('aspectRatio: 1637 / 1536'), false, "Android must not infer the logo box from the large bitmap's intrinsic dimensions.");
 assert.ok(home.includes('minHeight: 44'), "The notification summary must retain an accessible 44-pixel target area.");
 assert.ok(home.includes('const safeUnreadCount = Number.isFinite(unreadCount)'), "Home must safely normalize unavailable notification counts.");
-assert.ok(home.includes('accessibilityLabel={t("home.notificationUnread", { count: safeUnreadCount })}'), "The bell count must have translated accessibility copy.");
+assert.ok(home.includes('t("notifications.bellUnread", { count: safeUnreadCount })'), "The bell count must have translated accessibility copy.");
+assert.ok(home.includes('onPress={() => router.push("/notifications")}'), "The Home bell must open the personal notification inbox.");
 assert.equal(home.includes('t("home.subtitle")'), false, "The unnecessary Home subtitle must be removed.");
 assert.equal(home.includes("styles.headerCard"), false, "Home must not use the oversized welcome card.");
 assert.equal(home.includes("styles.greeting"), false, "Home must not retain greeting-specific styling.");
 assert.equal(home.includes("<View style={styles.header}>"), false, "Home must not reserve a separate greeting container or gap.");
-for (const existingSection of ["MyTeamsCard", "SecondaryActions", "ChallengeCard", "IcebreakerCard", 't("home.activity")']) {
+for (const existingSection of ["MyTeamsCard", "SecondaryActions", "ChallengeCard", "IcebreakerCard"]) {
   assert.ok(home.includes(existingSection), `Home must preserve its existing ${existingSection} section.`);
 }
+assert.equal(home.includes('t("home.activity")'), false, "Community Activity must be removed from Parent Home.");
+assert.equal(home.includes("subscribeToActivityFeed"), false, "Parent Home must not retain the Community Activity listener.");
+assert.equal(home.includes("ActivityRow"), false, "Parent Home must not retain Community Activity cards.");
 
 const translations = read("i18n", "index.ts");
 assert.equal(occurrences(translations, /selectSportOptional:/g), 2, "English and Spanish need the optional sport prompt.");
 assert.equal(occurrences(translations, /welcomeNamed:/g), 0, "Home-only named greeting translations must be removed.");
-assert.equal(occurrences(translations, /notificationUnread:/g), 2, "English and Spanish need accessible notification counts.");
-assert.equal(occurrences(translations, /notificationUnread_other:/g), 2, "English and Spanish need plural notification counts.");
+assert.equal(occurrences(translations, /bellNoUnread:/g), 2, "English and Spanish need zero-unread bell labels.");
+assert.equal(occurrences(translations, /bellUnread:/g), 2, "English and Spanish need accessible notification counts.");
 assert.equal(translations.includes("welcome: 'Welcome',"), false, "The Home-only English generic greeting must be removed.");
 assert.equal(translations.includes("welcome: 'Te damos la bienvenida'"), false, "The Home-only Spanish generic greeting must be removed.");
 assert.equal(translations.includes("Your sideline circle is waiting"), false, "The removed Home subtitle must not remain in English.");

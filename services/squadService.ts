@@ -19,6 +19,8 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { db } from "@/config/firebase";
+import { getPublicUserProfiles } from "@/services/publicProfileService";
+import { getSafeProfileName } from "@/utils/friendPrivacy";
 
 export const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 export const STARTING_SOON_MS = 30 * 60 * 1000;
@@ -393,17 +395,12 @@ export async function fetchSquadDetail(squadId: string): Promise<SquadDetail | n
 
     const squad = docToSquad(squadSnap.id, squadSnap.data());
     const memberIds = squad.memberIds.slice(0, 8);
-    const memberSnaps = await Promise.all(memberIds.map((uid) => getDoc(doc(db, "users", uid))));
-    const members = memberSnaps
-      .filter((snap) => snap.exists())
-      .map((snap) => {
-        const data = snap.data() ?? {};
-        return {
-          uid: snap.id,
-          displayName: (data.displayName as string) ?? (data.firstName as string) ?? null,
-          photoURL: (data.photoURL as string) ?? null,
-        };
-      });
+    const publicProfiles = await getPublicUserProfiles(memberIds);
+    const members = publicProfiles.map((profile) => ({
+      uid: profile.userId,
+      displayName: getSafeProfileName(profile.displayName),
+      photoURL: null,
+    }));
 
     return {
       ...squad,

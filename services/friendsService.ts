@@ -1,47 +1,97 @@
 import {
-  arrayRemove,
-  arrayUnion,
   collection,
-  deleteDoc,
   doc,
   getDoc,
   getDocs,
-  limit,
-  orderBy,
+  onSnapshot,
   query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
   where,
-  writeBatch,
   type DocumentData,
   type QueryDocumentSnapshot,
+  type Unsubscribe,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
-import { auth, db } from "@/config/firebase";
+import { auth, db, functions } from "@/config/firebase";
+import {
+  getPublicUserProfiles,
+  getSuggestedConnections,
+  type SuggestedConnection,
+} from "@/services/publicProfileService";
+import {
+  deduplicateFriendUserIds,
+  getIncomingRequestSenderId,
+  getOutgoingRequestRecipientId,
+  hydrateFriendRequestProfiles,
+  inspectPublicUserProfiles,
+  type PublicFriendProfileRecord,
+  type PublicProfileInspectionCounts,
+} from "@/utils/friendRequestMapping";
+import { formatFriendRequestSenderName, formatPublicUserName, getSafeProfileName } from "@/utils/friendPrivacy";
+import { getPersistedDisplayName } from "@/utils/profileName";
 
 export type FriendRequestStatus = "pending" | "accepted" | "declined";
+export type SendFriendRequestStatus = "pending" | "alreadyPending" | "reversePending" | "alreadyFriends";
+export type RequestProfileState = "loading" | "resolved" | "unresolved";
+
+export type SendFriendRequestResult = {
+  requestId: string;
+  status: SendFriendRequestStatus;
+};
 
 export interface FriendProfile {
   id: string;
   displayName: string;
-  email: string | null;
   photoURL: string | null;
-  friendIds: string[];
 }
+
+export type SuggestedFriendProfile = FriendProfile & Pick<
+  SuggestedConnection,
+  "sharedSquadName" | "sharedActivity" | "mutualConnectionCount"
+>;
+
+type PrivateFriendProfile = FriendProfile & { friendIds: string[] };
 
 export interface FriendRequest {
   id: string;
   fromUserId: string;
   fromDisplayName: string;
+  senderDisplayName: string | null;
+  senderNameResolved: boolean;
+  senderProfileState: RequestProfileState;
   toUserId: string;
   toDisplayName: string;
+  recipientDisplayName: string | null;
+  recipientNameResolved: boolean;
+  recipientProfileState: RequestProfileState;
   status: FriendRequestStatus;
 }
 
+export type HydratedIncomingFriendRequest = FriendRequest & {
+  senderDisplayName: string | null;
+  senderNameResolved: boolean;
+};
+
+export type IncomingProfileMappingDiagnostics = PublicProfileInspectionCounts & {
+  incomingRequestCount: number;
+  incomingWithFromUserIdCount: number;
+  requestedIdCount: number;
+  returnedWithValidDisplayNameCount: number;
+  incomingIdMatchedProfileCount: number;
+  incomingIdMatchedNullNameCount: number;
+  incomingIdNotMatchedCount: number;
+  hydratedSenderNameCount: number;
+  renderedSenderNameCount: number;
+};
+
+export type FriendRequestGroups = {
+  incoming: HydratedIncomingFriendRequest[];
+  outgoing: FriendRequest[];
+  mappingDiagnostics: IncomingProfileMappingDiagnostics;
+};
+
 const USERS_COLLECTION = "users";
 const REQUESTS_COLLECTION = "friendRequests";
-const SEARCH_LIMIT = 20;
 
 function requireCurrentUserId(): string {
   const userId = auth.currentUser?.uid;
@@ -51,22 +101,11 @@ function requireCurrentUserId(): string {
   return userId;
 }
 
-function fallbackName(data: DocumentData | undefined, fallbackId: string): string {
-  const displayName = data?.displayName;
-  if (typeof displayName === "string" && displayName.trim()) return displayName.trim();
-
-  const firstName = typeof data?.firstName === "string" ? data.firstName : "";
-  const lastName = typeof data?.lastName === "string" ? data.lastName : "";
-  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
-  if (fullName) return fullName;
-
-  const email = data?.email;
-  if (typeof email === "string" && email.trim()) return email.trim();
-
-  return `Sideline Parent ${fallbackId.slice(0, 4)}`;
+function fallbackName(data: DocumentData | undefined): string {
+  return getSafeProfileName(getPersistedDisplayName(data), "Sideline Parent");
 }
 
-function docToProfile(userDoc: QueryDocumentSnapshot<DocumentData> | { id: string; data: () => DocumentData | undefined }): FriendProfile {
+function docToPrivateProfile(userDoc: { id: string; data: () => DocumentData | undefined }): PrivateFriendProfile {
   const data = userDoc.data();
   const friendIds = Array.isArray(data?.friendIds)
     ? data.friendIds.filter((id): id is string => typeof id === "string")
@@ -74,8 +113,7 @@ function docToProfile(userDoc: QueryDocumentSnapshot<DocumentData> | { id: strin
 
   return {
     id: userDoc.id,
-    displayName: fallbackName(data, userDoc.id),
-    email: typeof data?.email === "string" ? data.email : null,
+    displayName: fallbackName(data),
     photoURL: typeof data?.photoURL === "string" ? data.photoURL : null,
     friendIds,
   };
@@ -87,275 +125,394 @@ function docToRequest(requestDoc: QueryDocumentSnapshot<DocumentData>): FriendRe
   return {
     id: requestDoc.id,
     fromUserId: typeof data.fromUserId === "string" ? data.fromUserId : "",
-    fromDisplayName: typeof data.fromDisplayName === "string" ? data.fromDisplayName : "Sideline Parent",
+    fromDisplayName: formatFriendRequestSenderName(
+      typeof data.fromDisplayName === "string" ? data.fromDisplayName : null,
+      "",
+    ),
+    senderDisplayName: null,
+    senderNameResolved: false,
+    senderProfileState: "loading",
     toUserId: typeof data.toUserId === "string" ? data.toUserId : "",
-    toDisplayName: typeof data.toDisplayName === "string" ? data.toDisplayName : "Sideline Parent",
+    toDisplayName: formatFriendRequestSenderName(
+      typeof data.toDisplayName === "string" ? data.toDisplayName : null,
+      "",
+    ),
+    recipientDisplayName: null,
+    recipientNameResolved: false,
+    recipientProfileState: "loading",
     status: data.status === "accepted" || data.status === "declined" ? data.status : "pending",
   };
 }
 
-function requestIdFor(fromUserId: string, toUserId: string): string {
-  return `${fromUserId}__${toUserId}`;
-}
-
-function filterSearchResults(
-  profiles: FriendProfile[],
-  currentUserId: string,
-  currentFriendIds: Set<string>,
-  normalized: string
-): FriendProfile[] {
-  return profiles
-    .filter((profile) => profile.id !== currentUserId)
-    .filter((profile) => !currentFriendIds.has(profile.id))
-    .filter((profile) => {
-      if (!normalized) return true;
-      return `${profile.displayName} ${profile.email ?? ""}`.toLowerCase().includes(normalized);
-    });
-}
-
-async function getUserProfile(userId: string): Promise<FriendProfile | null> {
+async function getPrivateUserProfile(userId: string): Promise<PrivateFriendProfile | null> {
   const userDoc = await getDoc(doc(db, USERS_COLLECTION, userId));
   if (!userDoc.exists()) return null;
-  return docToProfile({ id: userDoc.id, data: () => userDoc.data() });
-}
-
-async function getPendingRequestBetween(userA: string, userB: string): Promise<FriendRequest | null> {
-  const outgoingId = requestIdFor(userA, userB);
-  const incomingId = requestIdFor(userB, userA);
-  const [outgoingDoc, incomingDoc] = await Promise.all([
-    getDoc(doc(db, REQUESTS_COLLECTION, outgoingId)),
-    getDoc(doc(db, REQUESTS_COLLECTION, incomingId)),
-  ]);
-
-  const outgoingData = outgoingDoc.data();
-  if (outgoingDoc.exists() && outgoingData?.status === "pending") {
-    return {
-      id: outgoingDoc.id,
-      fromUserId: (outgoingData.fromUserId as string) ?? userA,
-      fromDisplayName: (outgoingData.fromDisplayName as string) ?? "Sideline Parent",
-      toUserId: (outgoingData.toUserId as string) ?? userB,
-      toDisplayName: (outgoingData.toDisplayName as string) ?? "Sideline Parent",
-      status: "pending",
-    };
-  }
-
-  const incomingData = incomingDoc.data();
-  if (incomingDoc.exists() && incomingData?.status === "pending") {
-    return {
-      id: incomingDoc.id,
-      fromUserId: (incomingData.fromUserId as string) ?? userB,
-      fromDisplayName: (incomingData.fromDisplayName as string) ?? "Sideline Parent",
-      toUserId: (incomingData.toUserId as string) ?? userA,
-      toDisplayName: (incomingData.toDisplayName as string) ?? "Sideline Parent",
-      status: "pending",
-    };
-  }
-
-  return null;
+  return docToPrivateProfile({ id: userDoc.id, data: () => userDoc.data() });
 }
 
 export async function getCurrentUserProfile(): Promise<FriendProfile | null> {
   const userId = auth.currentUser?.uid;
   if (!userId) return null;
-  return getUserProfile(userId);
+  const profile = await getPrivateUserProfile(userId);
+  if (!profile) return null;
+  return { id: profile.id, displayName: profile.displayName, photoURL: profile.photoURL };
 }
 
-export async function searchUsers(queryText: string): Promise<FriendProfile[]> {
-  const currentUserId = auth.currentUser?.uid;
-  if (!currentUserId) return [];
-
-  const normalized = queryText.trim().toLowerCase();
-  const currentUser = await getUserProfile(currentUserId);
-  const currentFriendIds = new Set(currentUser?.friendIds ?? []);
-
+export async function searchUsers(queryText: string): Promise<SuggestedFriendProfile[]> {
+  if (!auth.currentUser?.uid) return [];
   try {
-    const usersRef = collection(db, USERS_COLLECTION);
-    const usersQuery = normalized
-      ? query(
-          usersRef,
-          where("searchName", ">=", normalized),
-          where("searchName", "<=", `${normalized}\uf8ff`),
-          limit(SEARCH_LIMIT)
-        )
-      : query(usersRef, orderBy("createdAt", "desc"), limit(SEARCH_LIMIT));
-
-    const snapshot = await getDocs(usersQuery);
-    const primaryResults = filterSearchResults(
-      snapshot.docs.map(docToProfile),
-      currentUserId,
-      currentFriendIds,
-      normalized
-    );
-
-    if (primaryResults.length > 0 || !normalized) {
-      return primaryResults;
-    }
+    const suggestions = await getSuggestedConnections(queryText);
+    return suggestions.map((profile) => ({
+      id: profile.userId,
+      displayName: getSafeProfileName(profile.displayName),
+      photoURL: profile.photoURL,
+      sharedSquadName: profile.sharedSquadName,
+      sharedActivity: profile.sharedActivity,
+      mutualConnectionCount: profile.mutualConnectionCount,
+    }));
   } catch (error) {
-    console.warn("[FriendsService] searchUsers primary query error:", error);
-  }
-
-  try {
-    const snapshot = await getDocs(query(collection(db, USERS_COLLECTION), limit(SEARCH_LIMIT)));
-    return filterSearchResults(
-      snapshot.docs.map(docToProfile),
-      currentUserId,
-      currentFriendIds,
-      normalized
-    );
-  } catch (fallbackError) {
-    console.warn("[FriendsService] searchUsers fallback query error:", fallbackError);
+    logFriendsIssue("searchUsers", error);
     return [];
   }
 }
 
 export async function getFriends(userId: string): Promise<FriendProfile[]> {
   try {
-    const profile = await getUserProfile(userId);
+    if (auth.currentUser?.uid !== userId) return [];
+    const profile = await getPrivateUserProfile(userId);
     const friendIds = profile?.friendIds ?? [];
     if (friendIds.length === 0) return [];
-
-    const friendDocs = await Promise.all(friendIds.map((friendId) => getDoc(doc(db, USERS_COLLECTION, friendId))));
-
-    return friendDocs.flatMap((friendDoc) => {
-      if (!friendDoc.exists()) return [];
-      return [docToProfile({ id: friendDoc.id, data: () => friendDoc.data() })];
-    });
+    const publicProfiles = await getPublicUserProfiles(friendIds);
+    return publicProfiles.map((friendProfile) => ({
+      id: friendProfile.userId,
+      displayName: getSafeProfileName(friendProfile.displayName),
+      photoURL: null,
+    }));
   } catch (error) {
-    console.warn("[FriendsService] getFriends error:", error);
+    logFriendsIssue("getFriends", error);
     return [];
+  }
+}
+
+export async function getFriendRequestGroups(userId: string): Promise<FriendRequestGroups> {
+  try {
+    if (auth.currentUser?.uid !== userId) return emptyFriendRequestGroups();
+    const [incomingSnapshot, outgoingSnapshot] = await Promise.all([
+      getDocs(query(
+        collection(db, REQUESTS_COLLECTION),
+        where("toUserId", "==", userId),
+        where("status", "==", "pending")
+      )),
+      getDocs(query(
+        collection(db, REQUESTS_COLLECTION),
+        where("fromUserId", "==", userId),
+        where("status", "==", "pending")
+      )),
+    ]);
+
+    const incoming = incomingSnapshot.docs
+      .map(docToRequest)
+      .filter((request) => request.fromUserId && request.toUserId);
+    const outgoing = outgoingSnapshot.docs
+      .map(docToRequest)
+      .filter((request) => request.fromUserId && request.toUserId);
+    const senderUserIds = incoming.map(getIncomingRequestSenderId);
+    const requestProfileUserIds = deduplicateFriendUserIds([
+      ...senderUserIds,
+      ...outgoing.map(getOutgoingRequestRecipientId),
+    ]);
+
+    logIncomingProfileHydration("start", {
+      requestCount: incoming.length,
+      senderCount: senderUserIds.filter(Boolean).length,
+      returnedCount: 0,
+      unresolvedCount: incoming.length,
+      hydrationCompleted: false,
+    });
+
+    try {
+      const publicProfiles = requestProfileUserIds.length > 0
+        ? await getPublicUserProfiles(requestProfileUserIds)
+        : [];
+      const inspectedProfiles = inspectPublicUserProfiles(publicProfiles);
+      const hydrated = hydrateFriendRequestGroups(
+        incoming,
+        outgoing,
+        inspectedProfiles.profilesByUserId,
+      );
+      const mappingDiagnostics = buildIncomingProfileMappingDiagnostics({
+        incoming,
+        requestedProfileUserIds: requestProfileUserIds,
+        inspectedProfiles,
+        hydratedIncoming: hydrated.incoming,
+      });
+      const unresolvedCount = hydrated.incoming.filter(
+        (request) => request.senderProfileState === "unresolved",
+      ).length;
+      logIncomingProfileHydration("success", {
+        requestCount: incoming.length,
+        senderCount: senderUserIds.filter(Boolean).length,
+        returnedCount: inspectedProfiles.counts.returnedProfileCount,
+        unresolvedCount,
+        hydrationCompleted: true,
+      });
+      return { ...hydrated, mappingDiagnostics };
+    } catch (error) {
+      const inspectedProfiles = inspectPublicUserProfiles([]);
+      const hydrated = hydrateFriendRequestGroups(incoming, outgoing, inspectedProfiles.profilesByUserId);
+      const mappingDiagnostics = buildIncomingProfileMappingDiagnostics({
+        incoming,
+        requestedProfileUserIds: requestProfileUserIds,
+        inspectedProfiles,
+        hydratedIncoming: hydrated.incoming,
+      });
+      logIncomingProfileHydration("failure", {
+        requestCount: incoming.length,
+        senderCount: senderUserIds.filter(Boolean).length,
+        returnedCount: 0,
+        unresolvedCount: hydrated.incoming.filter(
+          (request) => request.senderProfileState === "unresolved",
+        ).length,
+        hydrationCompleted: false,
+        errorCode: getErrorCode(error),
+      });
+      return { ...hydrated, mappingDiagnostics };
+    }
+  } catch (error) {
+    logFriendsIssue("getFriendRequestGroups", error);
+    return emptyFriendRequestGroups();
   }
 }
 
 export async function getIncomingFriendRequests(userId: string): Promise<FriendRequest[]> {
-  try {
-    const snapshot = await getDocs(
-      query(
-        collection(db, REQUESTS_COLLECTION),
-        where("toUserId", "==", userId),
-        where("status", "==", "pending")
-      )
-    );
-
-    return snapshot.docs.map(docToRequest).filter((request) => request.fromUserId && request.toUserId);
-  } catch (error) {
-    console.warn("[FriendsService] getIncomingFriendRequests error:", error);
-    return [];
-  }
+  return (await getFriendRequestGroups(userId)).incoming;
 }
 
 export async function getOutgoingFriendRequests(userId: string): Promise<FriendRequest[]> {
-  try {
-    const snapshot = await getDocs(
-      query(
-        collection(db, REQUESTS_COLLECTION),
-        where("fromUserId", "==", userId),
-        where("status", "==", "pending")
-      )
-    );
-
-    return snapshot.docs.map(docToRequest).filter((request) => request.fromUserId && request.toUserId);
-  } catch (error) {
-    console.warn("[FriendsService] getOutgoingFriendRequests error:", error);
-    return [];
-  }
+  return (await getFriendRequestGroups(userId)).outgoing;
 }
 
-export async function sendFriendRequest(toUserId: string): Promise<void> {
-  const fromUserId = requireCurrentUserId();
-  if (fromUserId === toUserId) {
-    throw new Error("You cannot send a friend request to yourself.");
+export function subscribeToFriendRequestChanges(
+  userId: string,
+  onChange: () => void,
+): Unsubscribe {
+  if (auth.currentUser?.uid !== userId) return () => {};
+  let initialSnapshotsRemaining = 2;
+  const handleSnapshot = () => {
+    if (initialSnapshotsRemaining > 0) {
+      initialSnapshotsRemaining -= 1;
+      return;
+    }
+    onChange();
+  };
+  const handleError = (error: unknown) => logFriendsIssue("subscribeFriendRequests", error);
+  const unsubscribeIncoming = onSnapshot(
+    query(
+      collection(db, REQUESTS_COLLECTION),
+      where("toUserId", "==", userId),
+      where("status", "==", "pending"),
+    ),
+    handleSnapshot,
+    handleError,
+  );
+  const unsubscribeOutgoing = onSnapshot(
+    query(
+      collection(db, REQUESTS_COLLECTION),
+      where("fromUserId", "==", userId),
+      where("status", "==", "pending"),
+    ),
+    handleSnapshot,
+    handleError,
+  );
+  return () => {
+    unsubscribeIncoming();
+    unsubscribeOutgoing();
+  };
+}
+
+function hydrateFriendRequestGroups(
+  incoming: FriendRequest[],
+  outgoing: FriendRequest[],
+  profilesByUserId: ReadonlyMap<string, PublicFriendProfileRecord>,
+): Pick<FriendRequestGroups, "incoming" | "outgoing"> {
+  const hydrated = hydrateFriendRequestProfiles(
+    incoming,
+    outgoing,
+    profilesByUserId,
+    formatPublicFriendName,
+  );
+  return {
+    incoming: hydrated.incoming.map((request) => ({
+      ...request,
+      senderProfileState: request.senderNameResolved ? "resolved" : "unresolved",
+    })),
+    outgoing: hydrated.outgoing.map((request) => ({
+      ...request,
+      recipientProfileState: request.recipientNameResolved ? "resolved" : "unresolved",
+    })),
+  };
+}
+
+export function formatPublicFriendName(value?: string | null): string | null {
+  return formatPublicUserName(value);
+}
+
+function buildIncomingProfileMappingDiagnostics(input: {
+  incoming: FriendRequest[];
+  requestedProfileUserIds: string[];
+  inspectedProfiles: ReturnType<typeof inspectPublicUserProfiles>;
+  hydratedIncoming: FriendRequest[];
+}): IncomingProfileMappingDiagnostics {
+  const incomingSenderIds = input.incoming.map(getIncomingRequestSenderId);
+  const incomingWithFromUserIdCount = incomingSenderIds.filter(Boolean).length;
+  const incomingIdMatchedProfileCount = incomingSenderIds.filter((senderId) => (
+    Boolean(senderId && input.inspectedProfiles.profilesByUserId.has(senderId))
+  )).length;
+  const incomingIdMatchedNullNameCount = incomingSenderIds.filter((senderId) => {
+    if (!senderId) return false;
+    const profile = input.inspectedProfiles.profilesByUserId.get(senderId);
+    return Boolean(profile && !formatPublicFriendName(profile.displayName));
+  }).length;
+
+  return {
+    ...input.inspectedProfiles.counts,
+    incomingRequestCount: input.incoming.length,
+    incomingWithFromUserIdCount,
+    requestedIdCount: input.requestedProfileUserIds.length,
+    returnedWithValidDisplayNameCount: input.inspectedProfiles.profiles.filter(
+      (profile) => Boolean(formatPublicFriendName(profile.displayName)),
+    ).length,
+    incomingIdMatchedProfileCount,
+    incomingIdMatchedNullNameCount,
+    incomingIdNotMatchedCount: input.incoming.length - incomingIdMatchedProfileCount,
+    hydratedSenderNameCount: input.hydratedIncoming.filter(
+      (request) => request.senderNameResolved && Boolean(request.senderDisplayName),
+    ).length,
+    renderedSenderNameCount: 0,
+  };
+}
+
+function emptyFriendRequestGroups(): FriendRequestGroups {
+  const inspectedProfiles = inspectPublicUserProfiles([]);
+  return {
+    incoming: [],
+    outgoing: [],
+    mappingDiagnostics: {
+      ...inspectedProfiles.counts,
+      incomingRequestCount: 0,
+      incomingWithFromUserIdCount: 0,
+      requestedIdCount: 0,
+      returnedWithValidDisplayNameCount: 0,
+      incomingIdMatchedProfileCount: 0,
+      incomingIdMatchedNullNameCount: 0,
+      incomingIdNotMatchedCount: 0,
+      hydratedSenderNameCount: 0,
+      renderedSenderNameCount: 0,
+    },
+  };
+}
+
+export async function sendFriendRequest(targetUserId: string): Promise<SendFriendRequestResult> {
+  const currentUserId = requireCurrentUserId();
+  const normalizedTargetUserId = targetUserId.trim();
+  if (!normalizedTargetUserId || currentUserId === normalizedTargetUserId) {
+    throw createFriendRequestError("friend-request/invalid-target");
   }
 
-  const [fromProfile, toProfile] = await Promise.all([
-    getUserProfile(fromUserId),
-    getUserProfile(toUserId),
-  ]);
-
-  if (!toProfile) {
-    throw new Error("That user could not be found.");
+  const callable = httpsCallable<
+    { targetUserId: string },
+    SendFriendRequestResult
+  >(functions, "sendFriendRequest");
+  try {
+    const response = await callable({ targetUserId: normalizedTargetUserId });
+    if (__DEV__) {
+      console.info("[FriendRequestDebug] operation completed", {
+        operation: "sendFriendRequest",
+        callableName: "sendFriendRequest",
+        functionsRegion: "us-central1",
+        targetUserIdPresent: true,
+        authenticated: true,
+        alreadyFriend: response.data.status === "alreadyFriends",
+        alreadyPending: response.data.status === "alreadyPending",
+        reversePending: response.data.status === "reversePending",
+      });
+    }
+    return response.data;
+  } catch (error) {
+    logFriendRequestIssue("sendFriendRequest", error, Boolean(normalizedTargetUserId));
+    throw error;
   }
-
-  if (fromProfile?.friendIds.includes(toUserId) || toProfile.friendIds.includes(fromUserId)) {
-    throw new Error("You are already friends.");
-  }
-
-  const existingRequest = await getPendingRequestBetween(fromUserId, toUserId);
-  if (existingRequest) {
-    throw new Error("A friend request is already pending.");
-  }
-
-  await setDoc(doc(db, REQUESTS_COLLECTION, requestIdFor(fromUserId, toUserId)), {
-    fromUserId,
-    fromDisplayName: fromProfile?.displayName ?? auth.currentUser?.displayName ?? "Sideline Parent",
-    toUserId,
-    toDisplayName: toProfile.displayName,
-    status: "pending",
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
 }
 
 export async function acceptFriendRequest(requestId: string): Promise<void> {
-  const currentUserId = requireCurrentUserId();
-  const requestRef = doc(db, REQUESTS_COLLECTION, requestId);
-  const requestDoc = await getDoc(requestRef);
-
-  if (!requestDoc.exists()) {
-    throw new Error("This request is no longer available.");
-  }
-
-  const request = requestDoc.data();
-  if (request.toUserId !== currentUserId) {
-    throw new Error("You can only accept requests sent to you.");
-  }
-
-  if (request.status !== "pending") {
-    throw new Error("This request has already been handled.");
-  }
-
-  const fromUserId = request.fromUserId as string;
-  const batch = writeBatch(db);
-  batch.update(requestRef, {
-    status: "accepted",
-    updatedAt: serverTimestamp(),
-  });
-  batch.set(doc(db, USERS_COLLECTION, currentUserId), { friendIds: arrayUnion(fromUserId) }, { merge: true });
-  batch.set(doc(db, USERS_COLLECTION, fromUserId), { friendIds: arrayUnion(currentUserId) }, { merge: true });
-  await batch.commit();
+  requireCurrentUserId();
+  const callable = httpsCallable<
+    { requestId: string; decision: "accepted" },
+    { status: "accepted" | "alreadyHandled" }
+  >(functions, "respondToFriendRequest");
+  await callable({ requestId, decision: "accepted" });
 }
 
 export async function declineFriendRequest(requestId: string): Promise<void> {
-  const currentUserId = requireCurrentUserId();
-  const requestRef = doc(db, REQUESTS_COLLECTION, requestId);
-  const requestDoc = await getDoc(requestRef);
-  const request = requestDoc.data();
-
-  if (!requestDoc.exists() || request?.toUserId !== currentUserId || request.status !== "pending") {
-    return;
-  }
-
-  await updateDoc(requestRef, {
-    status: "declined",
-    updatedAt: serverTimestamp(),
-  });
+  requireCurrentUserId();
+  const callable = httpsCallable<
+    { requestId: string; decision: "declined" },
+    { status: "declined" | "alreadyHandled" }
+  >(functions, "respondToFriendRequest");
+  await callable({ requestId, decision: "declined" });
 }
 
 export async function removeFriend(friendUserId: string): Promise<void> {
-  const currentUserId = requireCurrentUserId();
-  if (currentUserId === friendUserId) return;
-
-  const batch = writeBatch(db);
-  batch.set(doc(db, USERS_COLLECTION, currentUserId), { friendIds: arrayRemove(friendUserId) }, { merge: true });
-  batch.set(doc(db, USERS_COLLECTION, friendUserId), { friendIds: arrayRemove(currentUserId) }, { merge: true });
-
-  const outgoingRequestId = requestIdFor(currentUserId, friendUserId);
-  const incomingRequestId = requestIdFor(friendUserId, currentUserId);
-  batch.delete(doc(db, REQUESTS_COLLECTION, outgoingRequestId));
-  batch.delete(doc(db, REQUESTS_COLLECTION, incomingRequestId));
-
-  await batch.commit();
+  requireCurrentUserId();
+  const callable = httpsCallable<
+    { friendUserId: string },
+    { removed: boolean }
+  >(functions, "removeFriendConnection");
+  await callable({ friendUserId });
 }
 
-export async function deleteDeclinedFriendRequest(requestId: string): Promise<void> {
-  await deleteDoc(doc(db, REQUESTS_COLLECTION, requestId));
+function logFriendsIssue(operation: string, error: unknown) {
+  if (!__DEV__) return;
+  console.info("[FriendsService] operation failed", { operation, code: getErrorCode(error) });
+}
+
+function logIncomingProfileHydration(
+  phase: "start" | "success" | "failure",
+  details: {
+    requestCount: number;
+    senderCount: number;
+    returnedCount: number;
+    unresolvedCount: number;
+    hydrationCompleted: boolean;
+    errorCode?: string;
+  },
+) {
+  if (!__DEV__) return;
+  console.info(`[friends] incoming-profile-${phase}`, {
+    operation: "incoming-profile-hydration",
+    ...details,
+  });
+}
+
+function logFriendRequestIssue(operation: string, error: unknown, targetUserIdPresent: boolean) {
+  if (!__DEV__) return;
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+  console.info("[FriendRequestDebug] operation failed", {
+    operation,
+    code,
+    callableName: "sendFriendRequest",
+    functionsRegion: "us-central1",
+    targetUserIdPresent,
+    authenticated: Boolean(auth.currentUser),
+  });
+}
+
+function createFriendRequestError(code: string) {
+  const error = new Error("Friend request is unavailable.") as Error & { code: string };
+  error.code = code;
+  return error;
+}
+
+function getErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
 }

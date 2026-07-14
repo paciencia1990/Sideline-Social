@@ -29,6 +29,7 @@ import {
   type Team,
   type TeamMembership,
 } from "@/services/teamService";
+import { formatPublicUserName } from "@/utils/friendPrivacy";
 
 export type ParentTeamAnnouncement = TeamAnnouncement & {
   createdAtDate: Date | null;
@@ -240,7 +241,7 @@ async function resolveCoachName(team: Team): Promise<string | null> {
   for (const coachId of team.coachIds) {
     const memberSnapshot = await getDoc(doc(db, "teams", team.id, "members", coachId));
     if (!memberSnapshot.exists()) continue;
-    const displayName = readString(memberSnapshot.data().displayName);
+    const displayName = formatPublicUserName(readString(memberSnapshot.data().displayName));
     if (displayName) return displayName;
   }
   return null;
@@ -252,7 +253,7 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): Paren
     title: readString(data.title) ?? "",
     body: readString(data.body) ?? "",
     createdBy: readString(data.createdBy) ?? "",
-    createdByName: readString(data.createdByName) ?? "",
+    createdByName: formatPublicUserName(readString(data.createdByName)) ?? "",
     audience: data.audience === "staff" || data.audience === "all" ? data.audience : "parents",
     allowReplies: data.allowReplies !== false,
     createdAt: data.createdAt,

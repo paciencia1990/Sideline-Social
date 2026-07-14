@@ -53,6 +53,44 @@ export function hasCoachAccess(data: Record<string, unknown> | undefined): boole
   return roles.coach || roles.staff;
 }
 
+export function canAccessTeamAnnouncement(
+  data: Record<string, unknown> | undefined,
+  audience: unknown,
+): boolean {
+  if (!data || data.status !== 'active') return false;
+  if (hasCoachAccess(data)) return true;
+  return hasParentRole(data) && (audience === 'parents' || audience === 'all');
+}
+
+export function canDeleteTeamAnnouncementReply(
+  uid: string,
+  member: Record<string, unknown> | undefined,
+  reply: Record<string, unknown> | undefined,
+): boolean {
+  if (!uid || !member || member.status !== 'active' || !reply) return false;
+  return reply.userId === uid || hasCoachAccess(member);
+}
+
+export function isSafeAccountDisplayName(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 80 &&
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized);
+}
+
+export function resolveReplyAuthorName(
+  profile: Record<string, unknown> | undefined,
+  member: Record<string, unknown> | undefined,
+  authName: unknown,
+): string {
+  const firstAndLastName = [profile?.firstName, profile?.lastName]
+    .filter(isSafeAccountDisplayName)
+    .join(' ')
+    .trim();
+  const candidates = [profile?.displayName, firstAndLastName, member?.displayName, authName];
+  return candidates.find(isSafeAccountDisplayName)?.trim() || 'Team Parent';
+}
+
 export function canManageTeamRoles(
   data: Record<string, unknown> | undefined,
   isTeamOwner = false,

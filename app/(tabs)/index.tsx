@@ -21,15 +21,13 @@ import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
-  fetchUnreadNotificationCount,
-  fetchUserFriendIds,
   fetchUserSquadsDetail,
   subscribeLiveSquadCard,
-  subscribeToActivityFeed,
-  type ActivityItem,
   type LiveSquadData,
   type SquadDetail,
 } from "@/services/homeFeedService";
+import { subscribeToUnreadNotificationCount } from "@/services/notificationService";
+import { formatUnreadBadgeCount } from "@/utils/notificationCore";
 import { fetchActiveSquadSession, getGameLabel, type GameSession } from "@/services/gameService";
 import {
   getParentTeamsOverview,
@@ -59,7 +57,6 @@ export default function HomeScreen() {
   const { i18n, t } = useTranslation();
   const { user } = useAuth();
   const { appConfig, mySquadIds } = useSquad();
-  const activityUnsubscribe = useRef<(() => void) | null>(null);
   const liveSquadUnsubscribe = useRef<(() => void) | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -68,7 +65,6 @@ export default function HomeScreen() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [squads, setSquads] = useState<SquadDetail[]>([]);
   const [liveSquad, setLiveSquad] = useState<LiveSquadData | null>(null);
-  const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [myTeamsOverview, setMyTeamsOverview] = useState<ParentTeamsOverview | null>(null);
   const [myTeamsLoading, setMyTeamsLoading] = useState(true);
   const [myTeamsError, setMyTeamsError] = useState<string | null>(null);
@@ -81,6 +77,7 @@ export default function HomeScreen() {
   const [proximityLoading, setProximityLoading] = useState(false);
 
   const safeUnreadCount = Number.isFinite(unreadCount) ? Math.max(0, unreadCount) : 0;
+  const unreadBadge = formatUnreadBadgeCount(safeUnreadCount);
 
   useEffect(() => {
     if (__DEV__) {
@@ -160,14 +157,11 @@ export default function HomeScreen() {
     setChallengeError(null);
     const userId = user?.uid;
 
-    activityUnsubscribe.current?.();
     liveSquadUnsubscribe.current?.();
-    activityUnsubscribe.current = null;
     liveSquadUnsubscribe.current = null;
 
     try {
-      const [friendIds, squadDetails, challengeResult, notificationCount, session] = await Promise.all([
-        userId ? fetchUserFriendIds(userId) : Promise.resolve([]),
+      const [squadDetails, challengeResult, session] = await Promise.all([
         fetchUserSquadsDetail(mySquadIds),
         userId
           ? getCurrentWeeklyChallenge()
@@ -177,21 +171,13 @@ export default function HomeScreen() {
                 return { challenge: null, failed: true };
               })
           : Promise.resolve({ challenge: null, failed: false }),
-        userId ? fetchUnreadNotificationCount(userId) : Promise.resolve(0),
         mySquadIds[0] ? fetchActiveSquadSession(mySquadIds[0]) : Promise.resolve(null),
       ]);
-
-      const feedUserIds = userId ? Array.from(new Set([userId, ...friendIds])) : friendIds;
 
       setSquads(squadDetails);
       setActiveChallenge(challengeResult.challenge);
       setChallengeError(challengeResult.failed ? t("home.challengeError") : null);
-      setUnreadCount(notificationCount);
       setActiveSession(session);
-
-      activityUnsubscribe.current = subscribeToActivityFeed(mySquadIds, feedUserIds, (items) => {
-        setActivity(items.slice(0, 4));
-      });
 
       liveSquadUnsubscribe.current = subscribeLiveSquadCard(mySquadIds, setLiveSquad);
     } catch (nextError) {
@@ -199,7 +185,6 @@ export default function HomeScreen() {
       setError(t("home.errorBody"));
       setActiveChallenge(null);
       setChallengeError(t("home.challengeError"));
-      setActivity([]);
       setLiveSquad(null);
     } finally {
       setIsLoading(false);
@@ -211,7 +196,6 @@ export default function HomeScreen() {
     void loadHome();
 
     return () => {
-      activityUnsubscribe.current?.();
       liveSquadUnsubscribe.current?.();
     };
   }, [loadHome]);
@@ -223,6 +207,13 @@ export default function HomeScreen() {
   useFocusEffect(useCallback(() => {
     void loadMyTeams();
   }, [loadMyTeams]));
+  useFocusEffect(useCallback(() => {
+    if (!user?.uid) {
+      setUnreadCount(0);
+      return;
+    }
+    return subscribeToUnreadNotificationCount(user.uid, setUnreadCount);
+  }, [user?.uid]));
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     void loadHome();
@@ -285,15 +276,21 @@ export default function HomeScreen() {
               {t("app.name")}
             </Text>
           </View>
-          <View
-            accessibilityLabel={t("home.notificationUnread", { count: safeUnreadCount })}
+          <TouchableOpacity
+            accessibilityLabel={safeUnreadCount > 0
+              ? t("notifications.bellUnread", { count: safeUnreadCount })
+              : t("notifications.bellNoUnread")}
             accessibilityLiveRegion="polite"
-            accessible
+            accessibilityRole="button"
+            activeOpacity={0.82}
+            onPress={() => router.push("/notifications")}
             style={styles.notificationSummary}
           >
             <Bell importantForAccessibility="no" size={19} color={Colors.textHeading} />
-            <Text importantForAccessibility="no" style={styles.notificationText}>{safeUnreadCount}</Text>
-          </View>
+            {safeUnreadCount > 0 ? (
+              <Text importantForAccessibility="no" style={styles.notificationText}>{unreadBadge}</Text>
+            ) : null}
+          </TouchableOpacity>
         </View>
       </View>
       <View
@@ -361,19 +358,6 @@ export default function HomeScreen() {
             />
 
             <IcebreakerCard />
-
-            <SectionTitle title={t("home.activity")} />
-            {activity.length > 0 ? (
-              <View style={styles.activityList}>
-                {activity.map((item) => <ActivityRow key={item.activityId} item={item} language={i18n.language} />)}
-              </View>
-            ) : (
-              <StateCard
-                icon={<Star size={28} color={Colors.accentGold} />}
-                title={t("home.emptyFeedTitle")}
-                body={t("home.emptyFeedSubtitle")}
-              />
-            )}
           </>
         )}
       </ScrollView>
@@ -677,22 +661,6 @@ function ChallengeCard({
     </Card>
   );
 }
-function ActivityRow({ item, language }: { item: ActivityItem; language: string }) {
-  const message = language === "es" ? item.message_es || item.message : item.message;
-
-  return (
-    <Card style={styles.activityCard}>
-      <View style={styles.activityAvatar}>
-        <Text style={styles.activityInitial}>{getInitial(item.displayName)}</Text>
-      </View>
-      <View style={styles.cardCopy}>
-        <Text style={styles.activityMessage}>{message}</Text>
-        <Text style={styles.activityTime}>{formatRelativeTime(item.createdAt)}</Text>
-      </View>
-    </Card>
-  );
-}
-
 function SectionTitle({ title }: { title: string }) {
   return <Text style={styles.sectionTitle}>{title}</Text>;
 }
@@ -739,19 +707,6 @@ function formatHomeTeamLabel(summary: ParentTeamSummary, childFallback: string) 
   const childNames = getTeamChildNames(summary);
   const childLabel = childNames.length > 0 ? childNames.join(", ") : childFallback;
   return `${childLabel} - ${summary.team.name}`;
-}
-
-function getInitial(name: string) {
-  return name.trim()[0]?.toUpperCase() || "S";
-}
-
-function formatRelativeTime(date: Date) {
-  const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
 }
 
 const styles = StyleSheet.create({
@@ -1104,38 +1059,6 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontFamily: Typography.bodySemiBold,
     fontSize: 14,
-  },
-  activityList: {
-    gap: Spacing.sm,
-  },
-  activityCard: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: Spacing.sm,
-  },
-  activityAvatar: {
-    alignItems: "center",
-    backgroundColor: Colors.secondary,
-    borderRadius: 20,
-    height: 40,
-    justifyContent: "center",
-    width: 40,
-  },
-  activityInitial: {
-    color: Colors.textHeading,
-    fontFamily: Typography.bodyBold,
-    fontSize: 14,
-  },
-  activityMessage: {
-    color: Colors.textHeading,
-    fontFamily: Typography.bodyRegular,
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  activityTime: {
-    color: Colors.textPrimary,
-    fontFamily: Typography.bodyRegular,
-    fontSize: 11,
   },
   stateCard: {
     alignItems: "center",

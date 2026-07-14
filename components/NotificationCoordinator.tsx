@@ -6,7 +6,8 @@ import * as Notifications from "expo-notifications";
 import { useAuth } from "@/context/AuthContext";
 import i18n from "@/i18n";
 import {
-  getCoachUpdateRouteFromNotificationData,
+  getNotificationOpenTargetFromData,
+  markNotificationRead,
   registerDeviceNotificationToken,
 } from "@/services/notificationService";
 
@@ -46,13 +47,17 @@ export function NotificationCoordinator() {
       if (!response) return;
       const identifier = response.notification.request.identifier;
       if (handledResponses.current.has(identifier)) return;
-      const route = getCoachUpdateRouteFromNotificationData(response.notification.request.content.data);
-      if (!route) return;
+      const target = getNotificationOpenTargetFromData(response.notification.request.content.data);
+      if (!target) return;
 
       handledResponses.current.add(identifier);
+      if (target.notificationId) {
+        markNotificationRead(user.uid, target.notificationId)
+          .catch((error) => console.warn("[Notifications] mark push read error:", getErrorCode(error)));
+      }
       Notifications.clearLastNotificationResponseAsync()
         .catch((error) => console.warn("[Notifications] clear response error:", getErrorCode(error)));
-      router.push(route as never);
+      router.push(target.route as never);
     };
 
     const subscription = Notifications.addNotificationResponseReceivedListener(openResponse);

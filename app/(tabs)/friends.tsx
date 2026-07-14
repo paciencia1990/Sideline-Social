@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import { Check, Heart, MessageCircle, Search, UserMinus, UserPlus, Users, X } from "lucide-react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -23,24 +23,22 @@ import {
   declineFriendRequest,
   getCurrentUserProfile,
   getFriends,
-  getIncomingFriendRequests,
-  getOutgoingFriendRequests,
+  getFriendRequestGroups,
   searchUsers,
   sendFriendRequest,
+  subscribeToFriendRequestChanges,
   removeFriend,
   type FriendProfile,
   type FriendRequest,
+  type HydratedIncomingFriendRequest,
+  type IncomingProfileMappingDiagnostics,
+  type SuggestedFriendProfile,
 } from "@/services/friendsService";
 import { getOrCreateDirectChat } from "@/services/chatService";
-
-function getInitials(name: string) {
-  return name
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("") || "SS";
-}
+import {
+  formatSuggestedConnectionName,
+  getFriendNameInitials,
+} from "@/utils/friendPrivacy";
 
 function SectionTitle({ title, count }: { title: string; count?: number }) {
   return (
@@ -64,7 +62,7 @@ function EmptyState({ title, body }: { title: string; body: string }) {
 function Avatar({ name }: { name: string }) {
   return (
     <View style={styles.avatar}>
-      <Text style={styles.avatarText}>{getInitials(name)}</Text>
+      <Text style={styles.avatarText}>{getFriendNameInitials(name)}</Text>
     </View>
   );
 }
@@ -99,7 +97,6 @@ function FriendRow({
       <Avatar name={profile.displayName} />
       <View style={styles.personText}>
         <Text style={styles.personName}>{profile.displayName}</Text>
-        {profile.email ? <Text style={styles.personMeta}>{profile.email}</Text> : null}
       </View>
       <View style={styles.rowActions}>
         {onSecondaryAction && secondaryActionIcon ? (
@@ -129,33 +126,96 @@ function FriendRow({
   );
 }
 
+function SuggestedConnectionRow({
+  profile,
+  pending,
+  busy,
+  error,
+  onAdd,
+}: {
+  profile: SuggestedFriendProfile;
+  pending: boolean;
+  busy: boolean;
+  error?: string | null;
+  onAdd: () => void;
+}) {
+  const { t } = useTranslation();
+  const displayName = formatSuggestedConnectionName(profile.displayName, t("friends.sidelineParent"));
+  const context = profile.sharedSquadName || profile.sharedActivity || t("friends.suggestedParentContext");
+
+  return (
+    <Card style={styles.personCard}>
+      <Avatar name={displayName} />
+      <View style={styles.personText}>
+        <Text style={styles.personName}>{displayName}</Text>
+        <Text style={styles.personMeta}>{context}</Text>
+        {typeof profile.mutualConnectionCount === "number" && profile.mutualConnectionCount > 0 ? (
+          <Text style={styles.mutualConnections}>
+            {t("friends.mutualConnections", { count: profile.mutualConnectionCount })}
+          </Text>
+        ) : null}
+        {error ? <Text accessibilityLiveRegion="polite" style={styles.inlineActionError}>{error}</Text> : null}
+      </View>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={busy
+          ? t("friends.sendingFriendRequestTo", { name: displayName })
+          : pending
+            ? t("friends.friendRequestSent")
+            : t("friends.sendFriendRequestTo", { name: displayName })}
+        accessibilityState={{ busy, disabled: busy || pending || !profile.id }}
+        activeOpacity={0.82}
+        disabled={busy || pending || !profile.id}
+        hitSlop={4}
+        onPress={onAdd}
+        style={[styles.iconButton, (pending || !profile.id) && styles.disabledButton]}
+      >
+        {busy ? <ActivityIndicator color={Colors.surface} size="small" /> : <UserPlus size={18} color={Colors.surface} />}
+      </TouchableOpacity>
+    </Card>
+  );
+}
+
 function RequestRow({
   request,
   onAccept,
   onDecline,
   busyAction,
-  metaText,
 }: {
-  request: FriendRequest;
+  request: HydratedIncomingFriendRequest;
   onAccept: () => void;
   onDecline: () => void;
   busyAction: string | null;
-  metaText: string;
 }) {
+  const { t } = useTranslation();
   const acceptBusy = busyAction === `accept:${request.id}`;
   const declineBusy = busyAction === `decline:${request.id}`;
+  const visibleSenderName = request.senderProfileState === "loading"
+    ? t("friends.loadingParentName")
+    : request.senderDisplayName || t("friends.sidelineParent");
 
   return (
     <Card style={styles.personCard}>
-      <Avatar name={request.fromDisplayName} />
+      <Avatar name={visibleSenderName} />
       <View style={styles.personText}>
-        <Text style={styles.personName}>{request.fromDisplayName}</Text>
-        <Text style={styles.personMeta}>{metaText}</Text>
+        <Text
+          accessibilityLabel={t("friends.friendRequestFrom", { name: visibleSenderName })}
+          style={styles.personName}
+        >
+          {visibleSenderName}
+        </Text>
+        <Text
+          accessibilityLabel={t("friends.friendRequestBody", { name: visibleSenderName })}
+          style={styles.personMeta}
+        >
+          {t("friends.requestMeta")}
+        </Text>
       </View>
       <View style={styles.requestActions}>
         <TouchableOpacity
           accessibilityRole="button"
-          accessibilityLabel="Accept request"
+          accessibilityLabel={t("friends.acceptFriendRequestFrom", { name: visibleSenderName })}
+          accessibilityState={{ disabled: acceptBusy || declineBusy }}
           activeOpacity={0.82}
           disabled={acceptBusy || declineBusy}
           onPress={onAccept}
@@ -165,7 +225,8 @@ function RequestRow({
         </TouchableOpacity>
         <TouchableOpacity
           accessibilityRole="button"
-          accessibilityLabel="Decline request"
+          accessibilityLabel={t("friends.declineFriendRequestFrom", { name: visibleSenderName })}
+          accessibilityState={{ disabled: acceptBusy || declineBusy }}
           activeOpacity={0.82}
           disabled={acceptBusy || declineBusy}
           onPress={onDecline}
@@ -183,15 +244,20 @@ export default function FriendsScreen() {
   const { user, loading: authLoading } = useAuth();
   const [currentProfile, setCurrentProfile] = useState<FriendProfile | null>(null);
   const [friends, setFriends] = useState<FriendProfile[]>([]);
-  const [incomingRequests, setIncomingRequests] = useState<FriendRequest[]>([]);
+  const [incomingRequests, setIncomingRequests] = useState<HydratedIncomingFriendRequest[]>([]);
   const [outgoingRequests, setOutgoingRequests] = useState<FriendRequest[]>([]);
-  const [suggestedUsers, setSuggestedUsers] = useState<FriendProfile[]>([]);
+  const [incomingMappingDiagnostics, setIncomingMappingDiagnostics] = useState<
+    IncomingProfileMappingDiagnostics | null
+  >(null);
+  const [suggestedUsers, setSuggestedUsers] = useState<SuggestedFriendProfile[]>([]);
   const [searchText, setSearchText] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searching, setSearching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ actionId: string; message: string } | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const actionsInFlight = useRef(new Set<string>());
 
   const outgoingUserIds = useMemo(
     () => new Set(outgoingRequests.map((request) => request.toUserId)),
@@ -204,41 +270,57 @@ export default function FriendsScreen() {
       setFriends([]);
       setIncomingRequests([]);
       setOutgoingRequests([]);
+      setIncomingMappingDiagnostics(null);
       setSuggestedUsers([]);
       setLoading(false);
       return;
     }
 
-    setError(null);
+    setLoadError(null);
     try {
       const profile = await getCurrentUserProfile();
       setCurrentProfile(profile);
 
-      const [nextFriends, nextIncoming, nextOutgoing, nextSuggested] = await Promise.all([
+      const [nextFriends, nextRequestGroups, nextSuggested] = await Promise.all([
         getFriends(user.uid),
-        getIncomingFriendRequests(user.uid),
-        getOutgoingFriendRequests(user.uid),
+        getFriendRequestGroups(user.uid),
         searchUsers(""),
       ]);
 
       setFriends(nextFriends);
-      setIncomingRequests(nextIncoming);
-      setOutgoingRequests(nextOutgoing);
+      setIncomingRequests(nextRequestGroups.incoming);
+      setOutgoingRequests(nextRequestGroups.outgoing);
+      setIncomingMappingDiagnostics(nextRequestGroups.mappingDiagnostics);
       setSuggestedUsers(nextSuggested);
     } catch (nextError) {
-      console.warn("[FriendsScreen] load error:", nextError);
-      setError(t("friends.errorBody"));
+      logFriendsScreenIssue("loadFriends", nextError);
+      setLoadError(t("friends.errorBody"));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }, [t, user]);
 
+  useFocusEffect(useCallback(() => {
+    if (!authLoading) void loadFriends();
+  }, [authLoading, loadFriends]));
+
   useEffect(() => {
-    if (authLoading) return;
-    setLoading(true);
-    void loadFriends();
-  }, [authLoading, loadFriends]);
+    if (!user?.uid) return;
+    return subscribeToFriendRequestChanges(user.uid, () => void loadFriends());
+  }, [loadFriends, user?.uid]);
+
+  useEffect(() => {
+    if (!__DEV__ || !incomingMappingDiagnostics) return;
+    const renderedSenderNameCount = incomingRequests.filter(
+      (request) => request.senderNameResolved && Boolean(request.senderDisplayName),
+    ).length;
+    console.info("[friends] incoming-profile-mapping", {
+      operation: "incoming-profile-mapping",
+      ...incomingMappingDiagnostics,
+      renderedSenderNameCount,
+    });
+  }, [incomingMappingDiagnostics, incomingRequests]);
 
   useEffect(() => {
     if (!user) return;
@@ -256,16 +338,23 @@ export default function FriendsScreen() {
   }, [searchText, user]);
 
   const runAction = useCallback(
-    async (actionId: string, action: () => Promise<void>) => {
+    async (actionId: string, action: () => Promise<void>, failureMessage = t("friends.errorBody")) => {
+      if (actionsInFlight.current.has(actionId)) return;
+      actionsInFlight.current.add(actionId);
       setBusyAction(actionId);
-      setError(null);
+      setActionError((current) => current?.actionId === actionId ? null : current);
       try {
         await action();
         await loadFriends();
+        setActionError((current) => current?.actionId === actionId ? null : current);
       } catch (nextError) {
-        const message = nextError instanceof Error ? nextError.message : t("friends.errorBody");
-        setError(message);
+        logFriendsScreenIssue(actionId, nextError);
+        if (getFriendsErrorCode(nextError) === "friend-request/reverse-pending") {
+          await loadFriends();
+        }
+        setActionError({ actionId, message: mapFriendActionError(nextError, failureMessage, t) });
       } finally {
+        actionsInFlight.current.delete(actionId);
         setBusyAction(null);
       }
     },
@@ -289,13 +378,13 @@ export default function FriendsScreen() {
   const openDirectChat = useCallback(
     async (friend: FriendProfile) => {
       setBusyAction(`chat:${friend.id}`);
-      setError(null);
+      setActionError(null);
       try {
         const chatId = await getOrCreateDirectChat(friend.id, friend.displayName);
         router.push({ pathname: "/(social)/chat/[chatId]", params: { chatId } });
       } catch (nextError) {
         const message = nextError instanceof Error ? nextError.message : t("friends.errorBody");
-        setError(message);
+        setActionError({ actionId: `chat:${friend.id}`, message });
       } finally {
         setBusyAction(null);
       }
@@ -355,13 +444,20 @@ export default function FriendsScreen() {
           </TouchableOpacity>
         </View>
 
-        {error ? (
+        {loadError ? (
           <Card style={styles.errorCard}>
             <Text style={styles.errorTitle}>{t("friends.errorTitle")}</Text>
-            <Text style={styles.errorBody}>{error}</Text>
+            <Text style={styles.errorBody}>{loadError}</Text>
             <TouchableOpacity accessibilityRole="button" activeOpacity={0.82} onPress={onRefresh} style={styles.retryButton}>
               <Text style={styles.retryText}>{t("friends.retry")}</Text>
             </TouchableOpacity>
+          </Card>
+        ) : null}
+
+        {actionError && !actionError.actionId.startsWith("add:") ? (
+          <Card style={styles.errorCard}>
+            <Text style={styles.errorTitle}>{t("friends.actionErrorTitle")}</Text>
+            <Text style={styles.errorBody}>{actionError.message}</Text>
           </Card>
         ) : null}
 
@@ -372,7 +468,6 @@ export default function FriendsScreen() {
               key={request.id}
               request={request}
               busyAction={busyAction}
-              metaText={t("friends.requestMeta")}
               onAccept={() => void runAction(`accept:${request.id}`, () => acceptFriendRequest(request.id))}
               onDecline={() => void runAction(`decline:${request.id}`, () => declineFriendRequest(request.id))}
             />
@@ -384,15 +479,20 @@ export default function FriendsScreen() {
         {outgoingRequests.length > 0 ? (
           <>
             <SectionTitle title={t("friends.outgoing")} count={outgoingRequests.length} />
-            {outgoingRequests.map((request) => (
-              <Card key={request.id} style={styles.personCard}>
-                <Avatar name={request.toDisplayName} />
-                <View style={styles.personText}>
-                  <Text style={styles.personName}>{request.toDisplayName}</Text>
-                  <Text style={styles.personMeta}>{t("friends.pending")}</Text>
-                </View>
-              </Card>
-            ))}
+            {outgoingRequests.map((request) => {
+              const recipientName = request.recipientProfileState === "loading"
+                ? t("friends.loadingParentName")
+                : request.recipientDisplayName || t("friends.sidelineParent");
+              return (
+                <Card key={request.id} style={styles.personCard}>
+                  <Avatar name={recipientName} />
+                  <View style={styles.personText}>
+                    <Text style={styles.personName}>{recipientName}</Text>
+                    <Text style={styles.personMeta}>{t("friends.pending")}</Text>
+                  </View>
+                </Card>
+              );
+            })}
           </>
         ) : null}
 
@@ -436,14 +536,22 @@ export default function FriendsScreen() {
           suggestedUsers.map((profile) => {
             const pending = outgoingUserIds.has(profile.id);
             return (
-              <FriendRow
+              <SuggestedConnectionRow
                 key={profile.id}
                 profile={profile}
-                actionLabel={pending ? t("friends.pending") : t("friends.addFriend")}
-                actionIcon={<UserPlus size={18} color={Colors.surface} />}
                 busy={busyAction === `add:${profile.id}`}
-                disabled={pending}
-                onAction={() => void runAction(`add:${profile.id}`, () => sendFriendRequest(profile.id))}
+                error={actionError?.actionId === `add:${profile.id}` ? actionError.message : null}
+                pending={pending}
+                onAdd={() => void runAction(
+                  `add:${profile.id}`,
+                  async () => {
+                    const result = await sendFriendRequest(profile.id);
+                    if (result.status === "reversePending") {
+                      throw createFriendsActionError("friend-request/reverse-pending");
+                    }
+                  },
+                  t("friends.friendRequestError"),
+                )}
               />
             );
           })
@@ -548,6 +656,19 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     fontFamily: Typography.bodyRegular,
     fontSize: 12,
+    lineHeight: 17,
+  },
+  inlineActionError: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyMedium,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  mutualConnections: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyMedium,
+    fontSize: 12,
+    lineHeight: 17,
   },
   iconButton: {
     alignItems: "center",
@@ -664,3 +785,37 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 });
+
+function logFriendsScreenIssue(operation: string, error: unknown) {
+  if (!__DEV__) return;
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+  console.info("[FriendsScreen] operation failed", { operation, code });
+}
+
+function getFriendsErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+}
+
+function mapFriendActionError(
+  error: unknown,
+  fallback: string,
+  t: ReturnType<typeof useTranslation>["t"],
+) {
+  const code = getFriendsErrorCode(error);
+  if (code === "friend-request/reverse-pending") return t("friends.friendRequestReversePending");
+  if (code === "friend-request/already-friends") return t("friends.friendRequestAlreadyConnected");
+  if (code === "functions/already-exists") return t("friends.friendRequestAlreadySent");
+  if (code === "functions/not-found" || code === "friend-request/invalid-target") {
+    return t("friends.friendRequestUnavailable");
+  }
+  if (code === "functions/unavailable" || code === "firestore/unavailable" || code === "auth/network-request-failed") {
+    return t("friends.friendRequestNetworkError");
+  }
+  return fallback;
+}
+
+function createFriendsActionError(code: string) {
+  const error = new Error("Friend request needs attention.") as Error & { code: string };
+  error.code = code;
+  return error;
+}

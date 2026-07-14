@@ -17,6 +17,8 @@ const { groupTeamsByChild, summarizeTeamUpdates } = loadTypeScript("utils/parent
 const {
   activeLinkReferencesChild,
   allChildProfilesExist,
+  canAccessTeamAnnouncement,
+  canDeleteTeamAnnouncementReply,
   canManageTeamRoles,
   hasCoachAccess,
   hasParentRole,
@@ -27,6 +29,7 @@ const {
   normalizeChildIds,
   removeParentRole,
   removeChildReference,
+  resolveReplyAuthorName,
   resolveTeamRoleFlags,
   setStaffRole,
 } = loadTypeScript("functions/src/teamMembershipCore.ts");
@@ -81,6 +84,22 @@ assert.equal(canManageTeamRoles({ status: "removed", roles: { coach: true } }), 
 assert.equal(isEligibleStaffRoleTarget({ status: "active", roles: { parent: true, coach: false, staff: false } }), true);
 assert.equal(isEligibleStaffRoleTarget({ status: "active", roles: { parent: true, coach: true, staff: false } }), false);
 assert.equal(isEligibleStaffRoleTarget({ status: "removed", roles: { parent: true, coach: false, staff: false } }), false);
+const activeParent = { status: "active", roles: { parent: true, coach: false, staff: false } };
+const activeCoach = { status: "active", roles: { parent: false, coach: true, staff: false } };
+const activeStaff = { status: "active", roles: { parent: false, coach: false, staff: true } };
+assert.equal(canAccessTeamAnnouncement(activeParent, "parents"), true);
+assert.equal(canAccessTeamAnnouncement(activeParent, "all"), true);
+assert.equal(canAccessTeamAnnouncement(activeParent, "staff"), false);
+assert.equal(canAccessTeamAnnouncement(activeStaff, "staff"), true);
+assert.equal(canDeleteTeamAnnouncementReply("parent-a", activeParent, { userId: "parent-a" }), true);
+assert.equal(canDeleteTeamAnnouncementReply("parent-a", activeParent, { userId: "parent-b" }), false);
+assert.equal(canDeleteTeamAnnouncementReply("coach", activeCoach, { userId: "parent-a" }), true);
+assert.equal(canDeleteTeamAnnouncementReply("staff", activeStaff, { userId: "parent-a" }), true);
+assert.equal(canDeleteTeamAnnouncementReply("coach", { ...activeCoach, status: "removed" }, { userId: "parent-a" }), false);
+assert.equal(canDeleteTeamAnnouncementReply("coach", undefined, { userId: "parent-a" }), false);
+assert.equal(resolveReplyAuthorName({ displayName: "Saved Parent" }, activeParent, "Auth Parent"), "Saved Parent");
+assert.equal(resolveReplyAuthorName({ displayName: "parent@example.com", firstName: "Saved", lastName: "Parent" }, activeParent, "Auth Parent"), "Saved Parent");
+assert.equal(resolveReplyAuthorName({ displayName: "parent@example.com" }, { ...activeParent, displayName: "legacy@example.com" }, "auth@example.com"), "Team Parent");
 assert.deepEqual(
   setStaffRole({ parent: true, coach: false, staff: false, customRole: "preserved" }, "parent", true),
   { parent: true, coach: false, staff: true, customRole: "preserved" },
@@ -126,6 +145,26 @@ assert.equal(mixedLegacyGroups.length, 2);
 assert.deepEqual(mixedLegacyGroups.map((group) => group.childName), ["Legacy Child", "New Child"]);
 
 const functionsSource = fs.readFileSync(path.join(process.cwd(), "functions", "src", "index.ts"), "utf8");
+const createReplyCallableSource = functionsSource.slice(
+  functionsSource.indexOf("export const createTeamAnnouncementReply"),
+  functionsSource.indexOf("export const deleteTeamAnnouncementReply"),
+);
+const deleteReplyCallableSource = functionsSource.slice(
+  functionsSource.indexOf("export const deleteTeamAnnouncementReply"),
+  functionsSource.indexOf("function readReplyPathId"),
+);
+assert.equal(createReplyCallableSource.includes("context.auth?.uid"), true);
+assert.equal(createReplyCallableSource.includes("data?.userId"), false);
+assert.equal(createReplyCallableSource.includes("profileRef"), true);
+assert.equal(createReplyCallableSource.includes("resolveReplyAuthorName"), true);
+assert.equal(createReplyCallableSource.includes("FieldValue.serverTimestamp()"), true);
+assert.equal(createReplyCallableSource.includes("announcement.allowReplies !== true"), true);
+assert.equal(deleteReplyCallableSource.includes("context.auth?.uid"), true);
+assert.equal(deleteReplyCallableSource.includes("data?.userId"), false);
+assert.equal(deleteReplyCallableSource.includes("canDeleteTeamAnnouncementReply(uid, member"), true);
+assert.equal(deleteReplyCallableSource.includes("memberRef = teamRef.collection('members').doc(uid)"), true);
+assert.equal(deleteReplyCallableSource.includes("transaction.delete(replyRef)"), true);
+assert.equal(deleteReplyCallableSource.includes("transaction.delete(announcementRef)"), false);
 const deleteCallableSource = functionsSource.slice(
   functionsSource.indexOf("export const deleteChildProfile"),
   functionsSource.indexOf("async function generateAvailableTeamInviteCode"),
@@ -140,7 +179,9 @@ const notificationSource = functionsSource.slice(
 );
 assert.equal(notificationSource.includes("announcement.body"), false);
 assert.equal(notificationSource.includes("announcement.title"), false);
-assert.equal(notificationSource.includes("Open Sideline Social to view it."), true);
+assert.equal(notificationSource.includes("createPersonalNotificationAndPush"), true);
+assert.equal(notificationSource.includes("notifications.types.coachAnnouncementTitle"), true);
+assert.equal(notificationSource.includes("memberSnapshot.id === authorUserId"), true);
 assert.equal(notificationSource.includes("isTeamActive(teamSnapshot.data())"), true);
 assert.equal(notificationSource.includes("hasParentRole(member)"), true);
 const joinCallableSource = functionsSource.slice(
@@ -202,10 +243,25 @@ assert.equal(teamServiceSource.includes('functions, "setTeamArchived"'), true);
 assert.equal(teamServiceSource.includes('status: "active"'), true);
 
 const rosterServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "teamRosterService.ts"), "utf8");
-assert.equal(rosterServiceSource.includes("getPersistedDisplayName"), true);
-assert.equal(rosterServiceSource.includes("documentId()"), true);
+const replyServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "teamMessageService.ts"), "utf8");
+const quickReplySource = fs.readFileSync(path.join(process.cwd(), "constants", "teamReplies.ts"), "utf8");
+const parentAnnouncementSource = fs.readFileSync(path.join(process.cwd(), "app", "teams", "[teamId]", "announcements", "[announcementId].tsx"), "utf8");
+const coachAnnouncementSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "messages", "[announcementId].tsx"), "utf8");
+assert.equal(rosterServiceSource.includes("getPublicUserProfiles"), true);
+assert.equal(rosterServiceSource.includes("documentId()"), false);
 assert.equal(rosterServiceSource.includes("looksLikeEmailAddress"), true);
 assert.equal(rosterServiceSource.includes('.split("@")'), false);
+assert.deepEqual(loadTypeScript("constants/teamReplies.ts").QUICK_REPLY_IDS, ["attending", "notAttending", "canHelp", "stillNeeded"]);
+assert.equal(quickReplySource.includes("quickReplyIce"), false);
+assert.equal(replyServiceSource.includes('functions, "createTeamAnnouncementReply"'), true);
+assert.equal(replyServiceSource.includes('functions, "deleteTeamAnnouncementReply"'), true);
+assert.equal(replyServiceSource.includes('.split("@")'), false);
+assert.equal(parentAnnouncementSource.includes("QUICK_REPLY_IDS.map"), true);
+assert.equal(coachAnnouncementSource.includes("QUICK_REPLY_IDS.map"), true);
+assert.equal(parentAnnouncementSource.includes("announcement.allowReplies ?"), true);
+assert.equal(parentAnnouncementSource.includes("reply.userId === auth.currentUser?.uid"), true);
+assert.equal(coachAnnouncementSource.includes("canModerateReplies"), true);
+assert.equal(coachAnnouncementSource.includes("reply.userId === auth.currentUser?.uid"), true);
 
 const coachRosterSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "team.tsx"), "utf8");
 assert.equal(coachRosterSource.includes("member.displayName"), false);
@@ -238,6 +294,15 @@ assert.equal(createChildSource.includes("normalizedName"), false);
 assert.equal(createChildSource.includes("doc(collection(db, \"users\", user.uid, \"children\"))"), true);
 
 const translations = fs.readFileSync(path.join(process.cwd(), "i18n", "index.ts"), "utf8");
+assert.equal(translations.includes("I’ll bring ice"), false);
+assert.equal(translations.includes("Puedo traer hielo"), false);
+assert.equal((translations.match(/attending:/g) || []).length, 2);
+assert.equal((translations.match(/notAttending:/g) || []).length, 2);
+assert.equal((translations.match(/stillNeeded:/g) || []).length, 2);
+assert.equal(translations.includes("We’ll be there"), true);
+assert.equal(translations.includes("Can’t make it"), true);
+assert.equal(translations.includes("What is still needed?"), true);
+assert.equal(translations.includes("¿Qué hace falta todavía?"), true);
 assert.equal((translations.match(/selectChildren:/g) || []).length, 2);
 assert.equal((translations.match(/confirmChildrenTitle:/g) || []).length, 2);
 assert.equal((translations.match(/makeStaffTitle:/g) || []).length, 2);

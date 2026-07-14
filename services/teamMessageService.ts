@@ -10,9 +10,12 @@ import {
   where,
   type Unsubscribe,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
-import { auth, db } from "@/config/firebase";
+import { auth, db, functions } from "@/config/firebase";
+import { getTeamRosterProfiles } from "@/services/teamRosterService";
 import { canSendTeamMessages, getTeamById, isTeamActive, resolveTeamRoles, type TeamRoleFlags } from "@/services/teamService";
+import { formatPublicUserName } from "@/utils/friendPrivacy";
 
 export type AnnouncementAudience = "parents" | "staff" | "all";
 export type ReplyType = "team" | "privateToCoach";
@@ -66,7 +69,7 @@ export async function createTeamAnnouncement(teamId: string, input: Announcement
     audience: input.audience,
     allowReplies: input.allowReplies,
     createdBy: user.uid,
-    createdByName: membership?.displayName || resolveDisplayName(),
+    createdByName: resolveSafeDisplayName(membership?.displayName, resolveDisplayName()),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -128,17 +131,27 @@ export function listenToAnnouncementReplies(
     collection(db, "teams", teamId, "announcements", announcementId, "replies"),
     orderBy("createdAt", "asc"),
   );
-  return onSnapshot(
+  let disposed = false;
+  let resolutionVersion = 0;
+  const unsubscribe = onSnapshot(
     repliesQuery,
     (snapshot) => {
-      callback(snapshot.docs.map((replyDoc) => normalizeReply(replyDoc.id, replyDoc.data())));
+      const version = ++resolutionVersion;
+      const nextReplies = snapshot.docs.map((replyDoc) => normalizeReply(replyDoc.id, replyDoc.data()));
+      void resolveReplyDisplayNames(nextReplies).then((resolvedReplies) => {
+        if (!disposed && version === resolutionVersion) callback(resolvedReplies);
+      });
     },
     (error) => {
-      console.warn("[TeamMessageService] listen replies error:", error);
+      logMessageServiceIssue("listenReplies", error);
       callback([]);
       onError?.(error);
     },
   );
+  return () => {
+    disposed = true;
+    unsubscribe();
+  };
 }
 
 export function listenToParentAnnouncementReplies(
@@ -156,21 +169,29 @@ export function listenToParentAnnouncementReplies(
     collection(db, "teams", teamId, "announcements", announcementId, "replies"),
     where("replyType", "==", "team"),
   );
-  return onSnapshot(
+  let disposed = false;
+  let resolutionVersion = 0;
+  const unsubscribe = onSnapshot(
     repliesQuery,
     (snapshot) => {
-      callback(
-        snapshot.docs
-          .map((replyDoc) => normalizeReply(replyDoc.id, replyDoc.data()))
-          .sort((first, second) => readMillis(first.createdAt) - readMillis(second.createdAt)),
-      );
+      const version = ++resolutionVersion;
+      const nextReplies = snapshot.docs
+        .map((replyDoc) => normalizeReply(replyDoc.id, replyDoc.data()))
+        .sort((first, second) => readMillis(first.createdAt) - readMillis(second.createdAt));
+      void resolveReplyDisplayNames(nextReplies).then((resolvedReplies) => {
+        if (!disposed && version === resolutionVersion) callback(resolvedReplies);
+      });
     },
     (error) => {
-      console.warn("[TeamMessageService] listen parent replies error:", error);
+      logMessageServiceIssue("listenParentReplies", error);
       callback([]);
       onError?.(error);
     },
   );
+  return () => {
+    disposed = true;
+    unsubscribe();
+  };
 }
 export async function replyToAnnouncement(
   teamId: string,
@@ -178,29 +199,30 @@ export async function replyToAnnouncement(
   body: string,
   replyType: ReplyType = "team",
 ) {
-  const user = requireUser();
-  const [membership, announcement] = await Promise.all([
-    getCurrentMembership(teamId, user.uid),
-    getTeamAnnouncement(teamId, announcementId),
-  ]);
+  requireUser();
+  const submitReply = httpsCallable<
+    { teamId: string; announcementId: string; body: string; replyType: ReplyType },
+    { reply: { id: string; userId: string; displayName: string; body: string; replyType: ReplyType; createdAtMillis: number } }
+  >(functions, "createTeamAnnouncementReply");
+  const response = await submitReply({ teamId, announcementId, body: body.trim(), replyType });
+  return {
+    ...response.data.reply,
+    createdAt: new Date(response.data.reply.createdAtMillis),
+  } satisfies AnnouncementReply;
+}
 
-  if (!membership) {
-    throw new Error("Join this team before replying.");
-  }
-  if (!announcement) {
-    throw new Error("Announcement could not be found.");
-  }
-  if (!announcement.allowReplies) {
-    throw new Error("Replies are closed for this announcement.");
-  }
-
-  await addDoc(collection(db, "teams", teamId, "announcements", announcementId, "replies"), {
-    userId: user.uid,
-    displayName: membership.displayName || resolveDisplayName(),
-    body: body.trim(),
-    replyType,
-    createdAt: serverTimestamp(),
-  });
+export async function deleteAnnouncementReply(
+  teamId: string,
+  announcementId: string,
+  replyId: string,
+) {
+  requireUser();
+  const deleteReply = httpsCallable<
+    { teamId: string; announcementId: string; replyId: string },
+    { deleted: boolean }
+  >(functions, "deleteTeamAnnouncementReply");
+  const response = await deleteReply({ teamId, announcementId, replyId });
+  return response.data.deleted;
 }
 
 async function getCurrentMembership(teamId: string, userId: string): Promise<{ roles: TeamRoleFlags; displayName: string } | null> {
@@ -229,7 +251,7 @@ function requireUser() {
 
 function resolveDisplayName() {
   const user = auth.currentUser;
-  return user?.displayName?.trim() || user?.email?.split("@")[0]?.trim() || "Sideline Parent";
+  return formatPublicUserName(user?.displayName) ?? "Team Parent";
 }
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamAnnouncement {
@@ -238,7 +260,7 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamA
     title: readString(data.title),
     body: readString(data.body),
     createdBy: readString(data.createdBy),
-    createdByName: readString(data.createdByName, "Coach"),
+    createdByName: formatPublicUserName(readString(data.createdByName)) ?? "Coach",
     audience: readAudience(data.audience),
     allowReplies: data.allowReplies !== false,
     createdAt: data.createdAt,
@@ -250,11 +272,45 @@ function normalizeReply(id: string, data: Record<string, unknown>): Announcement
   return {
     id,
     userId: readString(data.userId),
-    displayName: readString(data.displayName, "Sideline Parent"),
+    displayName: formatPublicUserName(readString(data.displayName)) ?? "",
     body: readString(data.body),
     replyType: data.replyType === "privateToCoach" ? "privateToCoach" : "team",
     createdAt: data.createdAt,
   };
+}
+
+async function resolveReplyDisplayNames(replies: AnnouncementReply[]) {
+  if (replies.length === 0) return replies;
+  try {
+    const profiles = await getTeamRosterProfiles(replies.map((reply) => reply.userId));
+    return replies.map((reply) => ({
+      ...reply,
+      displayName: resolveSafeDisplayName(profiles[reply.userId], reply.displayName, ""),
+    }));
+  } catch (error) {
+    logMessageServiceIssue("resolveReplyNames", error);
+    return replies.map((reply) => ({
+      ...reply,
+      displayName: resolveSafeDisplayName(reply.displayName, ""),
+    }));
+  }
+}
+
+function resolveSafeDisplayName(...candidates: (string | null | undefined)[]) {
+  for (const candidate of candidates) {
+    const publicName = formatPublicUserName(candidate);
+    if (publicName) return publicName;
+  }
+  return "";
+}
+
+function readErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+}
+
+function logMessageServiceIssue(operation: string, error: unknown) {
+  if (!__DEV__) return;
+  console.info("[TeamMessageService] operation failed", { operation, code: readErrorCode(error) });
 }
 
 

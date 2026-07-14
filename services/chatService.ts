@@ -17,6 +17,8 @@ import {
 } from "firebase/firestore";
 
 import { auth, db } from "@/config/firebase";
+import { getPublicUserProfiles } from "@/services/publicProfileService";
+import { formatPublicUserName } from "@/utils/friendPrivacy";
 
 export type ChatType = "direct" | "squad";
 
@@ -46,7 +48,6 @@ export interface ChatMessage {
 type FirestoreDate = Date | number | Timestamp | { toDate?: () => Date; toMillis?: () => number } | null | undefined;
 
 const CHATS_COLLECTION = "chats";
-const USERS_COLLECTION = "users";
 const MESSAGE_LIMIT = 100;
 
 function requireCurrentUserId(): string {
@@ -74,31 +75,22 @@ function squadChatIdFor(squadId: string): string {
   return `squad_${squadId}`;
 }
 
-function fallbackName(data: DocumentData | undefined, fallbackId: string): string {
-  const displayName = data?.displayName;
-  if (typeof displayName === "string" && displayName.trim()) return displayName.trim();
-
-  const firstName = typeof data?.firstName === "string" ? data.firstName : "";
-  const lastName = typeof data?.lastName === "string" ? data.lastName : "";
-  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
-  if (fullName) return fullName;
-
-  const email = data?.email;
-  if (typeof email === "string" && email.trim()) return email.trim();
-
-  return `Sideline Parent ${fallbackId.slice(0, 4)}`;
-}
-
 async function getUserDisplayName(userId: string, providedName?: string): Promise<string> {
-  if (providedName?.trim()) return providedName.trim();
-  if (auth.currentUser?.uid === userId && auth.currentUser.displayName) return auth.currentUser.displayName;
+  const safeProvidedName = formatPublicUserName(providedName);
+  if (safeProvidedName) return safeProvidedName;
+  if (auth.currentUser?.uid === userId) {
+    return formatPublicUserName(auth.currentUser.displayName) ?? "Sideline Parent";
+  }
 
   try {
-    const userDoc = await getDoc(doc(db, USERS_COLLECTION, userId));
-    return userDoc.exists() ? fallbackName(userDoc.data(), userId) : `Sideline Parent ${userId.slice(0, 4)}`;
+    const profiles = await getPublicUserProfiles([userId]);
+    return profiles[0]?.displayName ?? "Sideline Parent";
   } catch (error) {
-    console.warn("[ChatService] getUserDisplayName error:", error);
-    return `Sideline Parent ${userId.slice(0, 4)}`;
+    if (__DEV__) {
+      const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+      console.info("[ChatService] public profile unavailable", { code });
+    }
+    return "Sideline Parent";
   }
 }
 
@@ -108,7 +100,10 @@ function docToChat(chatDoc: QueryDocumentSnapshot<DocumentData> | { id: string; 
     ? data.participantIds.filter((id): id is string => typeof id === "string")
     : [];
   const participantNames = typeof data.participantNames === "object" && data.participantNames
-    ? (data.participantNames as Record<string, string>)
+    ? Object.fromEntries(Object.entries(data.participantNames as Record<string, unknown>).map(([userId, name]) => [
+        userId,
+        formatPublicUserName(typeof name === "string" ? name : null) ?? "Sideline Parent",
+      ]))
     : {};
 
   return {
@@ -133,7 +128,8 @@ function docToMessage(messageDoc: QueryDocumentSnapshot<DocumentData>): ChatMess
     id: messageDoc.id,
     text: typeof data.text === "string" ? data.text : "",
     senderId: typeof data.senderId === "string" ? data.senderId : "",
-    senderName: typeof data.senderName === "string" ? data.senderName : "Sideline Parent",
+    senderName: formatPublicUserName(typeof data.senderName === "string" ? data.senderName : null)
+      ?? "Sideline Parent",
     createdAt: toDate(data.createdAt as FirestoreDate),
     system: data.system === true,
   };
@@ -146,7 +142,7 @@ export function getChatDisplayTitle(chat: ChatSummary, currentUserId: string): s
   const otherUserId = chat.participantIds.find((participantId) => participantId !== currentUserId);
   if (!otherUserId) return "Direct Message";
 
-  return chat.participantNames[otherUserId] || `Sideline Parent ${otherUserId.slice(0, 4)}`;
+  return formatPublicUserName(chat.participantNames[otherUserId]) ?? "Sideline Parent";
 }
 
 export async function getOrCreateDirectChat(otherUserId: string, otherUserName?: string): Promise<string> {
@@ -284,7 +280,8 @@ export async function sendMessage(chatId: string, text: string): Promise<void> {
     throw new Error("You do not have access to this chat.");
   }
 
-  const senderName = chat.participantNames[senderId] || await getUserDisplayName(senderId);
+  const senderName = formatPublicUserName(chat.participantNames[senderId])
+    ?? await getUserDisplayName(senderId);
   const messageRef = doc(collection(db, CHATS_COLLECTION, chatId, "messages"));
   const batch = writeBatch(db);
 

@@ -64,6 +64,12 @@ async function seed(testEnv) {
     await setDoc(doc(db, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply"), {
       userId: "coach", displayName: "coach", body: "Private", replyType: "privateToCoach", createdAt: now(),
     });
+    await setDoc(doc(db, "teams", "team-1", "announcements", "parents-open", "replies", "parent-a-own"), {
+      userId: "parent-a", displayName: "Parent A", body: "We will be there", replyType: "team", createdAt: now(),
+    });
+    await setDoc(doc(db, "teams", "team-1", "announcements", "parents-open", "replies", "parent-b-other"), {
+      userId: "parent-b", displayName: "Parent B", body: "I can help", replyType: "team", createdAt: now(),
+    });
   });
 }
 
@@ -85,6 +91,9 @@ async function run() {
     await assertFails(getDoc(doc(outsiderDb, "teams", "team-1")));
     await assertFails(getDoc(doc(removedDb, "teams", "team-1")));
     await assertFails(getDoc(doc(removedDb, "teams", "team-1", "announcements", "parents-open")));
+    await assertSucceeds(getDoc(doc(parentDb, "users", "parent-a")));
+    await assertFails(getDoc(doc(parentDb, "users", "parent-b")));
+    await assertFails(getDocs(collection(parentDb, "users")));
     await assertSucceeds(getDoc(doc(parentDb, "teams", "team-archived")));
     await assertSucceeds(getDoc(doc(coachDb, "teams", "team-archived")));
     await assertFails(getDoc(doc(parentDb, "teams", "team-archived", "announcements", "preserved-update")));
@@ -160,6 +169,16 @@ async function run() {
     await assertFails(setDoc(doc(coachDb, "teams", "team-archived", "announcements", "blocked-new"), newAnnouncement));
     await assertFails(getDoc(doc(otherParentDb, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply")));
     await assertSucceeds(getDoc(doc(coachDb, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply")));
+    const directReply = { userId: "parent-a", displayName: "Parent A", body: "Direct write", replyType: "team", createdAt: now() };
+    await assertFails(setDoc(doc(parentDb, "teams", "team-1", "announcements", "parents-open", "replies", "direct-parent"), directReply));
+    await assertFails(setDoc(doc(coachDb, "teams", "team-1", "announcements", "parents-open", "replies", "direct-coach"), { ...directReply, userId: "coach", displayName: "Coach" }));
+    // Reply mutations are callable-only so clients cannot bypass author or
+    // same-team moderation checks, even when deleting their own document.
+    await assertFails(deleteDoc(doc(parentDb, "teams", "team-1", "announcements", "parents-open", "replies", "parent-a-own")));
+    await assertFails(deleteDoc(doc(parentDb, "teams", "team-1", "announcements", "parents-open", "replies", "parent-b-other")));
+    await assertFails(deleteDoc(doc(coachDb, "teams", "team-1", "announcements", "parents-open", "replies", "parent-b-other")));
+    await assertFails(deleteDoc(doc(staffDb, "teams", "team-1", "announcements", "parents-open", "replies", "parent-b-other")));
+    await assertFails(deleteDoc(doc(removedDb, "teams", "team-1", "announcements", "parents-open", "replies", "parent-a-own")));
     await assertFails(getDoc(doc(parentDb, "notificationTokens", "private-token")));
 
     await testEnv.withSecurityRulesDisabled(async (context) => {

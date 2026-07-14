@@ -1,11 +1,13 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { ArrowLeft, MessageCircle } from "lucide-react-native";
+import { ArrowLeft, MessageCircle, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { auth } from "@/config/firebase";
+import { QUICK_REPLY_IDS, QUICK_REPLY_TRANSLATION_KEYS, type QuickReplyId } from "@/constants/teamReplies";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import {
   getParentTeamSummary,
@@ -14,6 +16,7 @@ import {
   type ParentTeamSummary,
 } from "@/services/parentTeamService";
 import {
+  deleteAnnouncementReply,
   getTeamAnnouncement,
   listenToParentAnnouncementReplies,
   replyToAnnouncement,
@@ -35,7 +38,11 @@ export default function ParentAnnouncementScreen() {
   const [replyBody, setReplyBody] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [sendingQuickReplyId, setSendingQuickReplyId] = useState<QuickReplyId | null>(null);
+  const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const replySubmissionInFlight = useRef(false);
+  const replyDeletionInFlight = useRef(false);
 
   const loadAnnouncement = useCallback(async () => {
     setLoading(true);
@@ -79,26 +86,82 @@ export default function ParentAnnouncementScreen() {
       announcementId,
       setReplies,
       (replyError) => {
-        console.warn("[ParentAnnouncement] replies error:", replyError);
+        logOperationError("listenReplies", replyError);
         setError(t("myTeams.repliesLoadError"));
       },
     );
   }, [announcementId, t, teamId]);
 
   const sendReply = useCallback(async () => {
-    if (!replyBody.trim() || !announcement?.allowReplies) return;
+    if (!replyBody.trim() || !announcement?.allowReplies || replySubmissionInFlight.current) return;
+    replySubmissionInFlight.current = true;
     setSending(true);
     setError(null);
     try {
-      await replyToAnnouncement(teamId, announcementId, replyBody.trim(), "team");
+      const reply = await replyToAnnouncement(teamId, announcementId, replyBody.trim(), "team");
+      setReplies((current) => appendReply(current, reply));
       setReplyBody("");
     } catch (nextError) {
-      console.warn("[ParentAnnouncement] reply error:", nextError);
+      logOperationError("createReply", nextError);
       setError(t("myTeams.replyError"));
     } finally {
+      replySubmissionInFlight.current = false;
       setSending(false);
     }
   }, [announcement?.allowReplies, announcementId, replyBody, t, teamId]);
+
+  const sendQuickReply = useCallback(async (quickReplyId: QuickReplyId) => {
+    if (!announcement?.allowReplies || replySubmissionInFlight.current) return;
+    replySubmissionInFlight.current = true;
+    setSendingQuickReplyId(quickReplyId);
+    setError(null);
+    try {
+      const reply = await replyToAnnouncement(
+        teamId,
+        announcementId,
+        t(QUICK_REPLY_TRANSLATION_KEYS[quickReplyId]),
+        "team",
+      );
+      setReplies((current) => appendReply(current, reply));
+    } catch (nextError) {
+      logOperationError("createQuickReply", nextError);
+      setError(t("myTeams.replyError"));
+    } finally {
+      replySubmissionInFlight.current = false;
+      setSendingQuickReplyId(null);
+    }
+  }, [announcement?.allowReplies, announcementId, t, teamId]);
+
+  const confirmDeleteReply = useCallback((reply: AnnouncementReply) => {
+    if (reply.userId !== auth.currentUser?.uid || replyDeletionInFlight.current) return;
+    Alert.alert(
+      t("teamReplies.deleteOwnTitle"),
+      t("teamReplies.deleteOwnBody"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("teamReplies.delete"),
+          style: "destructive",
+          onPress: () => {
+            if (replyDeletionInFlight.current) return;
+            replyDeletionInFlight.current = true;
+            setDeletingReplyId(reply.id);
+            setError(null);
+            void deleteAnnouncementReply(teamId, announcementId, reply.id)
+              .then(() => setReplies((current) => current.filter((item) => item.id !== reply.id)))
+              .catch((nextError) => {
+                logOperationError("deleteReply", nextError);
+                setError(t("teamReplies.deleteError"));
+              })
+              .finally(() => {
+                replyDeletionInFlight.current = false;
+                setDeletingReplyId(null);
+              });
+          },
+        },
+      ],
+    );
+  }, [announcementId, t, teamId]);
 
   const childNames = summary ? getTeamChildNames(summary) : [];
   const childName = childNames.length === 0
@@ -158,8 +221,24 @@ export default function ParentAnnouncementScreen() {
               {replies.map((reply) => (
                 <View key={reply.id} style={styles.replyRow}>
                   <View style={styles.replyTopRow}>
-                    <Text style={styles.replyName}>{reply.displayName}</Text>
-                    <Text style={styles.replyTime}>{formatDateTime(reply.createdAt, i18n.language)}</Text>
+                    <View style={styles.replyAuthorCopy}>
+                      <Text style={styles.replyName}>{reply.displayName || t("teamReplies.teamParentFallback")}</Text>
+                      <Text style={styles.replyTime}>{formatDateTime(reply.createdAt, i18n.language)}</Text>
+                    </View>
+                    {reply.userId === auth.currentUser?.uid ? (
+                      <TouchableOpacity
+                        accessibilityLabel={t("teamReplies.deleteMenuOwn")}
+                        accessibilityRole="button"
+                        accessibilityState={{ busy: deletingReplyId === reply.id, disabled: Boolean(deletingReplyId) }}
+                        disabled={Boolean(deletingReplyId)}
+                        onPress={() => confirmDeleteReply(reply)}
+                        style={styles.replyMenuButton}
+                      >
+                        {deletingReplyId === reply.id
+                          ? <ActivityIndicator color={Colors.primary} size="small" />
+                          : <MoreVertical color={Colors.primary} size={20} />}
+                      </TouchableOpacity>
+                    ) : null}
                   </View>
                   <Text style={styles.replyBody}>{reply.body}</Text>
                 </View>
@@ -169,6 +248,27 @@ export default function ParentAnnouncementScreen() {
             {announcement.allowReplies ? (
               <Card style={styles.composerCard}>
                 <Text style={styles.sectionTitle}>{t("myTeams.addReply")}</Text>
+                <View style={styles.quickGrid}>
+                  {QUICK_REPLY_IDS.map((quickReplyId) => {
+                    const selected = sendingQuickReplyId === quickReplyId;
+                    const disabled = sending || Boolean(sendingQuickReplyId);
+                    return (
+                      <TouchableOpacity
+                        key={quickReplyId}
+                        accessibilityRole="button"
+                        accessibilityState={{ busy: selected, disabled }}
+                        activeOpacity={0.86}
+                        disabled={disabled}
+                        onPress={() => void sendQuickReply(quickReplyId)}
+                        style={[styles.quickButton, disabled && styles.disabledButton]}
+                      >
+                        {selected
+                          ? <ActivityIndicator color={Colors.primary} size="small" />
+                          : <Text style={styles.quickButtonText}>{t(QUICK_REPLY_TRANSLATION_KEYS[quickReplyId])}</Text>}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
                 <TextInput
                   accessibilityLabel={t("myTeams.replyPlaceholder")}
                   multiline
@@ -180,9 +280,10 @@ export default function ParentAnnouncementScreen() {
                 />
                 <TouchableOpacity
                   accessibilityRole="button"
-                  disabled={sending || !replyBody.trim()}
+                  accessibilityState={{ busy: sending, disabled: sending || Boolean(sendingQuickReplyId) || !replyBody.trim() }}
+                  disabled={sending || Boolean(sendingQuickReplyId) || !replyBody.trim()}
                   onPress={sendReply}
-                  style={[styles.primaryButton, (sending || !replyBody.trim()) && styles.disabledButton]}
+                  style={[styles.primaryButton, (sending || Boolean(sendingQuickReplyId) || !replyBody.trim()) && styles.disabledButton]}
                 >
                   {sending
                     ? <ActivityIndicator color={Colors.surface} />
@@ -219,6 +320,16 @@ function normalizeParam(value?: string | string[]) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
+function appendReply(replies: AnnouncementReply[], reply: AnnouncementReply) {
+  return replies.some((item) => item.id === reply.id) ? replies : [...replies, reply];
+}
+
+function logOperationError(operation: string, error: unknown) {
+  if (!__DEV__) return;
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+  console.info("[ParentAnnouncement] operation failed", { operation, code });
+}
+
 const styles = StyleSheet.create({
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
   headerRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
@@ -241,11 +352,16 @@ const styles = StyleSheet.create({
   repliesHeader: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
   sectionTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17 },
   replyRow: { backgroundColor: Colors.background, borderRadius: Radius.sm, gap: 4, padding: Spacing.sm },
-  replyTopRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: Spacing.sm },
+  replyTopRow: { alignItems: "flex-start", flexDirection: "row", justifyContent: "space-between", gap: Spacing.sm },
+  replyAuthorCopy: { flex: 1, gap: 2 },
   replyName: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 13 },
   replyTime: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 10 },
+  replyMenuButton: { alignItems: "center", justifyContent: "center", minHeight: 44, minWidth: 44, marginRight: -Spacing.sm, marginTop: -Spacing.sm },
   replyBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20 },
   composerCard: { gap: Spacing.sm },
+  quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  quickButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexBasis: "46%", flexGrow: 1, justifyContent: "center", minHeight: 48, minWidth: 120, paddingHorizontal: Spacing.sm, paddingVertical: Spacing.sm },
+  quickButtonText: { color: Colors.primary, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 14, lineHeight: 19, textAlign: "center" },
   input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 90, padding: Spacing.md, textAlignVertical: "top" },
   primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold },

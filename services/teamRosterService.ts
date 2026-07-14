@@ -1,7 +1,5 @@
-import { collection, documentId, getDocs, query, where } from "firebase/firestore";
-
-import { db } from "@/config/firebase";
-import { getPersistedDisplayName } from "@/utils/profileName";
+import { getPublicUserProfiles } from "@/services/publicProfileService";
+import { looksLikeEmailAddress as isEmailAddress } from "@/utils/friendPrivacy";
 
 const PROFILE_QUERY_CHUNK_SIZE = 10;
 
@@ -13,26 +11,17 @@ export async function getTeamRosterProfiles(userIds: string[]) {
 
   for (let index = 0; index < uniqueUserIds.length; index += PROFILE_QUERY_CHUNK_SIZE) {
     const userIdChunk = uniqueUserIds.slice(index, index + PROFILE_QUERY_CHUNK_SIZE);
-    const snapshot = await getDocs(query(
-      collection(db, "users"),
-      where(documentId(), "in", userIdChunk),
-    ));
-    snapshot.docs.forEach((profileDocument) => {
-      const profile = profileDocument.data();
-      const persistedName = getPersistedDisplayName(profile);
-      const firstAndLastName = getPersistedDisplayName({
-        firstName: profile.firstName,
-        lastName: profile.lastName,
-      });
-      profiles[profileDocument.id] = !looksLikeEmailAddress(persistedName)
-        ? persistedName
-        : (!looksLikeEmailAddress(firstAndLastName) ? firstAndLastName : null);
+    const publicProfiles = await getPublicUserProfiles(userIdChunk);
+    publicProfiles.forEach((profile) => {
+      profiles[profile.userId] = !looksLikeEmailAddress(profile.displayName)
+        ? profile.displayName
+        : null;
     });
   }
 
   return profiles;
 }
 
-function looksLikeEmailAddress(value: string | null) {
-  return Boolean(value && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value));
+export function looksLikeEmailAddress(value: string | null) {
+  return isEmailAddress(value);
 }

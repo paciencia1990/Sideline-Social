@@ -11,6 +11,7 @@ import {
 import { httpsCallable } from "firebase/functions";
 
 import { auth, db, functions } from "@/config/firebase";
+import { formatPublicUserName } from "@/utils/friendPrivacy";
 
 export type TeamRole = "parent" | "coach" | "assistantCoach" | "teamParent";
 export type TeamMemberStatus = "active" | "pending" | "inactive" | "removed";
@@ -413,7 +414,7 @@ function logCreateTeamDiagnostics(event: "commit-error" | "commit-start", detail
 
 function resolveDisplayName() {
   const user = auth.currentUser;
-  return user?.displayName?.trim() || user?.email?.split("@")[0]?.trim() || "Sideline Parent";
+  return formatPublicUserName(user?.displayName) ?? "Sideline Parent";
 }
 
 function generateInviteCode() {
