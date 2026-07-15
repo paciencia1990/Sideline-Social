@@ -428,7 +428,11 @@ service cloud.firestore {
           request.resource.data.audience in ["parents", "staff", "all"] &&
           request.resource.data.allowReplies is bool;
 
-        allow update, delete: if isTeamActive(teamId) && isCoachStaff(teamId);
+        allow update: if isTeamActive(teamId) && isCoachStaff(teamId);
+
+        // Announcement deletion recursively removes protected descendants and
+        // notification inbox entries through deleteTeamAnnouncement only.
+        allow delete: if false;
 
         match /replies/{replyId} {
           allow get, list: if canReadTeamReply(teamId, announcementId);

@@ -287,33 +287,6 @@ export default function CoachTeamScreen() {
               ) : <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>}
             </Card>
 
-            {mayManageLifecycle ? (
-              <Card style={styles.cardGap}>
-                <Text accessibilityRole="header" style={styles.cardTitle}>{t("coach.team.teamSettings")}</Text>
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  disabled={Boolean(lifecycleAction)}
-                  onPress={() => confirmArchivedState(isTeamActive(selectedTeam))}
-                  style={isTeamActive(selectedTeam) ? styles.destructiveButton : styles.primaryButton}
-                >
-                  {lifecycleAction
-                    ? <ActivityIndicator color={Colors.surface} size="small" />
-                    : isTeamActive(selectedTeam)
-                      ? <Archive color={Colors.surface} size={18} />
-                      : <RotateCcw color={Colors.surface} size={18} />}
-                  <Text style={styles.actionText}>
-                    {lifecycleAction === "archive"
-                      ? t("coach.team.archiving")
-                      : lifecycleAction === "restore"
-                        ? t("coach.team.restoring")
-                        : isTeamActive(selectedTeam)
-                          ? t("coach.team.archiveTeam")
-                          : t("coach.team.restoreTeam")}
-                  </Text>
-                </TouchableOpacity>
-              </Card>
-            ) : null}
-
             <Card style={styles.cardGap}>
               <Text accessibilityRole="header" style={styles.cardTitle}>{t("coach.team.members")}</Text>
 
@@ -373,6 +346,37 @@ export default function CoachTeamScreen() {
                 </>
               ) : null}
             </Card>
+
+            {mayManageLifecycle ? (
+              <Card style={styles.cardGap}>
+                <Text accessibilityRole="header" style={styles.cardTitle}>{t("coach.team.teamSettings")}</Text>
+                <TouchableOpacity
+                  accessibilityLabel={isTeamActive(selectedTeam)
+                    ? t("coach.team.archiveTeam")
+                    : t("coach.team.restoreTeam")}
+                  accessibilityRole="button"
+                  accessibilityState={{ busy: Boolean(lifecycleAction), disabled: Boolean(lifecycleAction) }}
+                  disabled={Boolean(lifecycleAction)}
+                  onPress={() => confirmArchivedState(isTeamActive(selectedTeam))}
+                  style={isTeamActive(selectedTeam) ? styles.destructiveButton : styles.primaryButton}
+                >
+                  {lifecycleAction
+                    ? <ActivityIndicator color={Colors.surface} size="small" />
+                    : isTeamActive(selectedTeam)
+                      ? <Archive color={Colors.surface} size={18} />
+                      : <RotateCcw color={Colors.surface} size={18} />}
+                  <Text style={styles.actionText}>
+                    {lifecycleAction === "archive"
+                      ? t("coach.team.archiving")
+                      : lifecycleAction === "restore"
+                        ? t("coach.team.restoring")
+                        : isTeamActive(selectedTeam)
+                          ? t("coach.team.archiveTeam")
+                          : t("coach.team.restoreTeam")}
+                  </Text>
+                </TouchableOpacity>
+              </Card>
+            ) : null}
           </>
         ) : null}
       </ScrollView>
@@ -488,7 +492,7 @@ function normalizeParam(value?: string | string[]) {
 }
 
 const styles = StyleSheet.create({
-  content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
+  content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl + Spacing.lg },
   cardGap: { gap: Spacing.md },
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
   centerInline: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.md },

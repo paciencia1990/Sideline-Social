@@ -179,6 +179,13 @@ async function run() {
     await assertFails(deleteDoc(doc(coachDb, "teams", "team-1", "announcements", "parents-open", "replies", "parent-b-other")));
     await assertFails(deleteDoc(doc(staffDb, "teams", "team-1", "announcements", "parents-open", "replies", "parent-b-other")));
     await assertFails(deleteDoc(doc(removedDb, "teams", "team-1", "announcements", "parents-open", "replies", "parent-a-own")));
+    // Announcement deletion is callable-only so direct clients cannot orphan
+    // replies or reads, including active coaches and staff.
+    await assertFails(deleteDoc(doc(parentDb, "teams", "team-1", "announcements", "parents-open")));
+    await assertFails(deleteDoc(doc(coachDb, "teams", "team-1", "announcements", "parents-open")));
+    await assertFails(deleteDoc(doc(staffDb, "teams", "team-1", "announcements", "parents-open")));
+    await assertFails(deleteDoc(doc(multiDb, "teams", "team-1", "announcements", "parents-open")));
+    await assertFails(deleteDoc(doc(outsiderDb, "teams", "team-1", "announcements", "parents-open")));
     await assertFails(getDoc(doc(parentDb, "notificationTokens", "private-token")));
 
     await testEnv.withSecurityRulesDisabled(async (context) => {

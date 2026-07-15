@@ -71,6 +71,10 @@ export function canDeleteTeamAnnouncementReply(
   return reply.userId === uid || hasCoachAccess(member);
 }
 
+export function canManageTeamAnnouncements(data: Record<string, unknown> | undefined): boolean {
+  return Boolean(data && data.status === 'active' && hasCoachAccess(data));
+}
+
 export function isSafeAccountDisplayName(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   const normalized = value.trim();

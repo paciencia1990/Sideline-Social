@@ -25,6 +25,10 @@ import {
   resolveFriendRequestSendStatus,
 } from './friendRequestCore';
 import {
+  deleteTeamAnnouncementData,
+  type TeamAnnouncementDeletionStatus,
+} from './teamAnnouncementDeletionCore';
+import {
   WEEKLY_CHALLENGES,
   getPreviousWeekKey,
   getWeekInfo,
@@ -36,6 +40,7 @@ import {
   allChildProfilesExist,
   canAccessTeamAnnouncement,
   canDeleteTeamAnnouncementReply,
+  canManageTeamAnnouncements,
   canManageTeamRoles,
   hasCoachAccess,
   hasParentRole,
@@ -1075,6 +1080,59 @@ function normalizePublicProfileIds(value: unknown): string[] {
   }
   return userIds;
 }
+
+// ---------------------------------------------------------------------------
+// Team announcement deletion
+// The callable owns authorization and recursive cleanup so a client cannot
+// leave reply/read descendants behind or delete an announcement for another
+// team. Active staff retain their existing announcement-management permission.
+// ---------------------------------------------------------------------------
+
+export const deleteTeamAnnouncement = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to delete an announcement.');
+
+  const teamId = readReplyPathId(data?.teamId, 'team');
+  const announcementId = readReplyPathId(data?.announcementId, 'announcement');
+  const firestore = admin.firestore();
+  const teamRef = firestore.collection('teams').doc(teamId);
+  const memberRef = teamRef.collection('members').doc(uid);
+  const announcementRef = teamRef.collection('announcements').doc(announcementId);
+  let status: TeamAnnouncementDeletionStatus = 'alreadyDeleted';
+
+  await firestore.runTransaction(async (transaction) => {
+    const [teamSnapshot, memberSnapshot, announcementSnapshot] = await transaction.getAll(
+      teamRef,
+      memberRef,
+      announcementRef,
+    );
+    if (!teamSnapshot.exists) {
+      throw new functions.https.HttpsError('not-found', 'Team unavailable.');
+    }
+    if (!isTeamActive(teamSnapshot.data())) {
+      throw new functions.https.HttpsError('failed-precondition', 'This team is no longer active.', { reason: 'team-inactive' });
+    }
+    const member = memberSnapshot.exists ? memberSnapshot.data() : undefined;
+    if (!canManageTeamAnnouncements(member)) {
+      throw new functions.https.HttpsError('permission-denied', 'Announcement management access is required.');
+    }
+    if (!announcementSnapshot.exists) return;
+
+    transaction.delete(announcementRef);
+    status = 'deleted';
+  });
+
+  // Membership documents are retained when access changes, so this list also
+  // reaches announcement inbox entries belonging to former team members.
+  const memberSnapshot = await teamRef.collection('members').get();
+  await deleteTeamAnnouncementData(
+    firestore,
+    announcementRef,
+    memberSnapshot.docs.map((memberDocument) => memberDocument.id),
+  );
+
+  return { status };
+});
 
 // ---------------------------------------------------------------------------
 // Team announcement replies

@@ -19,6 +19,7 @@ import {
   deleteAnnouncementReply,
   getTeamAnnouncement,
   listenToParentAnnouncementReplies,
+  listenToTeamAnnouncement,
   replyToAnnouncement,
   type AnnouncementReply,
   type TeamAnnouncement,
@@ -55,7 +56,7 @@ export default function ParentAnnouncementScreen() {
       if (!nextAnnouncement) {
         setSummary(nextSummary);
         setAnnouncement(null);
-        setError(t("myTeams.announcementMissing"));
+        setError(t("myTeams.announcementUnavailable"));
         return;
       }
       setSummary(nextSummary);
@@ -81,6 +82,26 @@ export default function ParentAnnouncementScreen() {
 
   useEffect(() => {
     if (!teamId || !announcementId) return () => {};
+    return listenToTeamAnnouncement(
+      teamId,
+      announcementId,
+      (nextAnnouncement) => {
+        setAnnouncement(nextAnnouncement);
+        if (!nextAnnouncement) {
+          setReplies([]);
+          setError(t("myTeams.announcementUnavailable"));
+        }
+      },
+      () => setError(t("myTeams.announcementLoadError")),
+    );
+  }, [announcementId, t, teamId]);
+
+  useEffect(() => {
+    if (!announcement?.id) {
+      setReplies([]);
+      return () => {};
+    }
+    if (!teamId || !announcementId) return () => {};
     return listenToParentAnnouncementReplies(
       teamId,
       announcementId,
@@ -90,7 +111,7 @@ export default function ParentAnnouncementScreen() {
         setError(t("myTeams.repliesLoadError"));
       },
     );
-  }, [announcementId, t, teamId]);
+  }, [announcement?.id, announcementId, t, teamId]);
 
   const sendReply = useCallback(async () => {
     if (!replyBody.trim() || !announcement?.allowReplies || replySubmissionInFlight.current) return;

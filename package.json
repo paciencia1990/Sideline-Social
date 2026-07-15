@@ -19,6 +19,7 @@
     "test:friend-requests": "node scripts/test-friend-request-core.cjs",
     "test:public-profile-authorization": "node scripts/test-public-profile-authorization-core.cjs",
     "test:notifications": "node scripts/test-notification-core.cjs",
+    "test:firestore:announcement-deletion": "npm --prefix functions run build && firebase.cmd emulators:exec --only firestore \"node scripts/test-announcement-deletion-firestore.cjs\"",
     "test:parent-teams": "node scripts/test-parent-teams-core.cjs",
     "test:weekly-challenge": "npm --prefix functions run build && node scripts/test-weekly-challenge-core.cjs",
     "test:firestore:parent-teams-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-parent-teams-firestore-rules.cjs\"",

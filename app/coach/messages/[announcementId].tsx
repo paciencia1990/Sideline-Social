@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
@@ -11,13 +11,20 @@ import { QUICK_REPLY_IDS, QUICK_REPLY_TRANSLATION_KEYS, type QuickReplyId } from
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import {
   deleteAnnouncementReply,
+  deleteTeamAnnouncement,
   getTeamAnnouncement,
   listenToAnnouncementReplies,
+  listenToTeamAnnouncement,
   replyToAnnouncement,
   type AnnouncementReply,
   type TeamAnnouncement,
 } from "@/services/teamMessageService";
-import { getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive } from "@/services/teamService";
+import {
+  canManageTeamAnnouncements,
+  getCurrentUserTeamMemberships,
+  hasCoachAccess,
+  isTeamActive,
+} from "@/services/teamService";
 
 export default function AnnouncementThreadScreen() {
   const { t } = useTranslation();
@@ -32,9 +39,12 @@ export default function AnnouncementThreadScreen() {
   const [sendingQuickReplyId, setSendingQuickReplyId] = useState<QuickReplyId | null>(null);
   const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
   const [canModerateReplies, setCanModerateReplies] = useState(false);
+  const [canDeleteAnnouncement, setCanDeleteAnnouncement] = useState(false);
+  const [deletingAnnouncement, setDeletingAnnouncement] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
   const replyDeletionInFlight = useRef(false);
+  const announcementDeletionInFlight = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -52,6 +62,7 @@ export default function AnnouncementThreadScreen() {
           setCanModerateReplies(Boolean(
             membership?.status === "active" && hasCoachAccess(membership) && isTeamActive(membership.team),
           ));
+          setCanDeleteAnnouncement(canManageTeamAnnouncements(membership, membership?.team));
         }
       } catch (nextError) {
         console.warn("[AnnouncementThread] load error:", nextError);
@@ -67,13 +78,30 @@ export default function AnnouncementThreadScreen() {
   }, [announcementId, teamId, t]);
 
   useEffect(() => {
+    if (!teamId || !announcementId) return () => {};
+    return listenToTeamAnnouncement(
+      teamId,
+      announcementId,
+      (nextAnnouncement) => {
+        setAnnouncement(nextAnnouncement);
+        if (!nextAnnouncement) setReplies([]);
+      },
+      () => setError(t("coach.messages.error")),
+    );
+  }, [announcementId, t, teamId]);
+
+  useEffect(() => {
+    if (!announcement?.id) {
+      setReplies([]);
+      return () => {};
+    }
     return listenToAnnouncementReplies(
       teamId,
       announcementId,
       setReplies,
       () => setError(t("coach.messages.replyError")),
     );
-  }, [announcementId, teamId, t]);
+  }, [announcement?.id, announcementId, teamId, t]);
 
   const submitReply = useCallback(
     async (body: string, quickReplyId?: QuickReplyId) => {
@@ -130,6 +158,70 @@ export default function AnnouncementThreadScreen() {
     );
   }, [announcementId, canModerateReplies, t, teamId]);
 
+  const navigateBackToMessages = useCallback(() => {
+    if (router.canGoBack()) router.back();
+    else router.replace({ pathname: "/coach/messages", params: { teamId } } as never);
+  }, [teamId]);
+
+  const performDeleteAnnouncement = useCallback(async () => {
+    if (!announcement || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
+    announcementDeletionInFlight.current = true;
+    setDeletingAnnouncement(true);
+    setError(null);
+    try {
+      await deleteTeamAnnouncement(teamId, announcementId);
+      setAnnouncement(null);
+      setReplies([]);
+      Alert.alert(
+        t("coach.messages.deleteSuccess"),
+        undefined,
+        [{ text: t("common.ok"), onPress: navigateBackToMessages }],
+      );
+    } catch (nextError) {
+      logAnnouncementDeleteError(nextError, {
+        teamId,
+        announcementId,
+        authorized: canDeleteAnnouncement,
+      });
+      setError(t("coach.messages.deleteError"));
+    } finally {
+      announcementDeletionInFlight.current = false;
+      setDeletingAnnouncement(false);
+    }
+  }, [announcement, announcementId, canDeleteAnnouncement, navigateBackToMessages, t, teamId]);
+
+  const confirmDeleteAnnouncement = useCallback(() => {
+    if (!announcement || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
+    Alert.alert(
+      t("coach.messages.deleteAnnouncementTitle"),
+      t("coach.messages.deleteAnnouncementBody"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("coach.messages.delete"),
+          style: "destructive",
+          onPress: () => { void performDeleteAnnouncement(); },
+        },
+      ],
+    );
+  }, [announcement, canDeleteAnnouncement, performDeleteAnnouncement, t]);
+
+  const openAnnouncementActions = useCallback(() => {
+    if (!announcement || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
+    Alert.alert(
+      t("coach.messages.announcementActions"),
+      undefined,
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("coach.messages.deleteAnnouncement"),
+          style: "destructive",
+          onPress: confirmDeleteAnnouncement,
+        },
+      ],
+    );
+  }, [announcement, canDeleteAnnouncement, confirmDeleteAnnouncement, t]);
+
   return (
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -153,13 +245,32 @@ export default function AnnouncementThreadScreen() {
 
         {announcement ? (
           <Card style={styles.cardGap}>
-            <Text style={styles.cardTitle}>{announcement.title}</Text>
+            <View style={styles.announcementHeader}>
+              <Text style={styles.announcementTitle}>{announcement.title}</Text>
+              {canDeleteAnnouncement ? (
+                <TouchableOpacity
+                  accessibilityLabel={deletingAnnouncement
+                    ? t("coach.messages.deletingAnnouncement")
+                    : t("coach.messages.deleteAnnouncement")}
+                  accessibilityRole="button"
+                  accessibilityState={{ busy: deletingAnnouncement, disabled: deletingAnnouncement }}
+                  disabled={deletingAnnouncement}
+                  hitSlop={8}
+                  onPress={openAnnouncementActions}
+                  style={styles.announcementMenuButton}
+                >
+                  {deletingAnnouncement
+                    ? <ActivityIndicator color={Colors.primary} size="small" />
+                    : <MoreVertical color={Colors.primary} size={22} />}
+                </TouchableOpacity>
+              ) : null}
+            </View>
             <Text style={styles.cardText}>{announcement.body}</Text>
             <Text style={styles.metaText}>{announcement.createdByName}</Text>
           </Card>
         ) : !loading ? (
           <Card style={styles.centerCard}>
-            <Text style={styles.cardTitle}>{t("coach.messages.missingTitle")}</Text>
+            <Text style={styles.cardTitle}>{t("coach.messages.announcementUnavailable")}</Text>
             <Text style={styles.cardText}>{t("coach.messages.missingBody")}</Text>
           </Card>
         ) : null}
@@ -246,6 +357,23 @@ function logOperationError(operation: string, error: unknown) {
   console.info("[AnnouncementThread] operation failed", { operation, code });
 }
 
+function logAnnouncementDeleteError(
+  error: unknown,
+  context: { teamId: string; announcementId: string; authorized: boolean },
+) {
+  if (!__DEV__) return;
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+  console.info("[AnnouncementThread] delete failed", {
+    operation: "deleteAnnouncement",
+    code,
+    callableName: "deleteTeamAnnouncement",
+    functionRegion: "us-central1",
+    hasTeamId: Boolean(context.teamId),
+    hasAnnouncementId: Boolean(context.announcementId),
+    authorizedCoachOrStaff: context.authorized,
+  });
+}
+
 const styles = StyleSheet.create({
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
   header: { alignItems: "center", gap: Spacing.xs },
@@ -256,6 +384,9 @@ const styles = StyleSheet.create({
   errorCard: { borderLeftColor: Colors.primary, borderLeftWidth: 4 },
   errorText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
+  announcementHeader: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
+  announcementTitle: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
+  announcementMenuButton: { alignItems: "center", justifyContent: "center", minHeight: 44, minWidth: 44 },
   cardText: { color: Colors.textHeading, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 22, textAlign: "center" },
   metaText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   replyRow: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, gap: 3, padding: Spacing.md },

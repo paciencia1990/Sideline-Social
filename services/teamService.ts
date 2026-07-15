@@ -106,6 +106,13 @@ export function canSendTeamMessages(membership: Pick<TeamMembership, "roles"> | 
   return hasCoachAccess(membership);
 }
 
+export function canManageTeamAnnouncements(
+  membership: Pick<TeamMembership, "roles" | "status"> | null | undefined,
+  team: Pick<Team, "status"> | null | undefined,
+) {
+  return membership?.status === "active" && isTeamActive(team) && hasCoachAccess(membership);
+}
+
 export function canManageTeamRoles(
   membership: Pick<TeamMembership, "roles" | "status" | "userId"> | null | undefined,
   team?: Pick<Team, "createdBy"> | null,

@@ -19,6 +19,7 @@ const {
   allChildProfilesExist,
   canAccessTeamAnnouncement,
   canDeleteTeamAnnouncementReply,
+  canManageTeamAnnouncements,
   canManageTeamRoles,
   hasCoachAccess,
   hasParentRole,
@@ -97,6 +98,11 @@ assert.equal(canDeleteTeamAnnouncementReply("coach", activeCoach, { userId: "par
 assert.equal(canDeleteTeamAnnouncementReply("staff", activeStaff, { userId: "parent-a" }), true);
 assert.equal(canDeleteTeamAnnouncementReply("coach", { ...activeCoach, status: "removed" }, { userId: "parent-a" }), false);
 assert.equal(canDeleteTeamAnnouncementReply("coach", undefined, { userId: "parent-a" }), false);
+assert.equal(canManageTeamAnnouncements(activeCoach), true);
+assert.equal(canManageTeamAnnouncements(activeStaff), true);
+assert.equal(canManageTeamAnnouncements(activeParent), false);
+assert.equal(canManageTeamAnnouncements({ ...activeCoach, status: "removed" }), false);
+assert.equal(canManageTeamAnnouncements(undefined), false);
 assert.equal(resolveReplyAuthorName({ displayName: "Saved Parent" }, activeParent, "Auth Parent"), "Saved Parent");
 assert.equal(resolveReplyAuthorName({ displayName: "parent@example.com", firstName: "Saved", lastName: "Parent" }, activeParent, "Auth Parent"), "Saved Parent");
 assert.equal(resolveReplyAuthorName({ displayName: "parent@example.com" }, { ...activeParent, displayName: "legacy@example.com" }, "auth@example.com"), "Team Parent");
@@ -153,6 +159,10 @@ const deleteReplyCallableSource = functionsSource.slice(
   functionsSource.indexOf("export const deleteTeamAnnouncementReply"),
   functionsSource.indexOf("function readReplyPathId"),
 );
+const deleteAnnouncementCallableSource = functionsSource.slice(
+  functionsSource.indexOf("export const deleteTeamAnnouncement ="),
+  functionsSource.indexOf("export const createTeamAnnouncementReply"),
+);
 assert.equal(createReplyCallableSource.includes("context.auth?.uid"), true);
 assert.equal(createReplyCallableSource.includes("data?.userId"), false);
 assert.equal(createReplyCallableSource.includes("profileRef"), true);
@@ -165,6 +175,14 @@ assert.equal(deleteReplyCallableSource.includes("canDeleteTeamAnnouncementReply(
 assert.equal(deleteReplyCallableSource.includes("memberRef = teamRef.collection('members').doc(uid)"), true);
 assert.equal(deleteReplyCallableSource.includes("transaction.delete(replyRef)"), true);
 assert.equal(deleteReplyCallableSource.includes("transaction.delete(announcementRef)"), false);
+assert.equal(deleteAnnouncementCallableSource.includes("context.auth?.uid"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("data?.coachId"), false);
+assert.equal(deleteAnnouncementCallableSource.includes("memberRef = teamRef.collection('members').doc(uid)"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("canManageTeamAnnouncements(member)"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("transaction.delete(announcementRef)"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("deleteTeamAnnouncementData"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("status = 'deleted'"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("return { status }"), true);
 const deleteCallableSource = functionsSource.slice(
   functionsSource.indexOf("export const deleteChildProfile"),
   functionsSource.indexOf("async function generateAvailableTeamInviteCode"),
@@ -247,6 +265,8 @@ const replyServiceSource = fs.readFileSync(path.join(process.cwd(), "services", 
 const quickReplySource = fs.readFileSync(path.join(process.cwd(), "constants", "teamReplies.ts"), "utf8");
 const parentAnnouncementSource = fs.readFileSync(path.join(process.cwd(), "app", "teams", "[teamId]", "announcements", "[announcementId].tsx"), "utf8");
 const coachAnnouncementSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "messages", "[announcementId].tsx"), "utf8");
+const coachAnnouncementListSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "messages.tsx"), "utf8");
+const parentTeamServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "parentTeamService.ts"), "utf8");
 assert.equal(rosterServiceSource.includes("getPublicUserProfiles"), true);
 assert.equal(rosterServiceSource.includes("documentId()"), false);
 assert.equal(rosterServiceSource.includes("looksLikeEmailAddress"), true);
@@ -255,6 +275,8 @@ assert.deepEqual(loadTypeScript("constants/teamReplies.ts").QUICK_REPLY_IDS, ["a
 assert.equal(quickReplySource.includes("quickReplyIce"), false);
 assert.equal(replyServiceSource.includes('functions, "createTeamAnnouncementReply"'), true);
 assert.equal(replyServiceSource.includes('functions, "deleteTeamAnnouncementReply"'), true);
+assert.equal(replyServiceSource.includes('functions, "deleteTeamAnnouncement"'), true);
+assert.equal(replyServiceSource.includes("listenToTeamAnnouncement"), true);
 assert.equal(replyServiceSource.includes('.split("@")'), false);
 assert.equal(parentAnnouncementSource.includes("QUICK_REPLY_IDS.map"), true);
 assert.equal(coachAnnouncementSource.includes("QUICK_REPLY_IDS.map"), true);
@@ -262,6 +284,13 @@ assert.equal(parentAnnouncementSource.includes("announcement.allowReplies ?"), t
 assert.equal(parentAnnouncementSource.includes("reply.userId === auth.currentUser?.uid"), true);
 assert.equal(coachAnnouncementSource.includes("canModerateReplies"), true);
 assert.equal(coachAnnouncementSource.includes("reply.userId === auth.currentUser?.uid"), true);
+assert.equal(coachAnnouncementSource.includes("canManageTeamAnnouncements"), true);
+assert.equal(coachAnnouncementSource.includes("deleteTeamAnnouncement(teamId, announcementId)"), true);
+assert.equal(coachAnnouncementSource.includes("announcementDeletionInFlight.current"), true);
+assert.equal(coachAnnouncementSource.includes('t("coach.messages.deleteAnnouncement")'), true);
+assert.equal(parentAnnouncementSource.includes("listenToTeamAnnouncement"), true);
+assert.equal(coachAnnouncementListSource.includes("listenToTeamAnnouncements"), true);
+assert.equal(parentTeamServiceSource.includes("latestAnnouncement: announcements[0] ?? null"), true);
 
 const coachRosterSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "team.tsx"), "utf8");
 assert.equal(coachRosterSource.includes("member.displayName"), false);
@@ -271,6 +300,13 @@ assert.equal(coachRosterSource.includes("staffRoleUpdateInFlight.current"), true
 assert.equal(coachRosterSource.includes("Alert.alert"), true);
 assert.equal(coachRosterSource.includes("archiveTeam"), true);
 assert.equal(coachRosterSource.includes("setTeamArchived"), true);
+const parentsSectionIndex = coachRosterSource.indexOf('title={t("coach.team.parents")}');
+const parentEmptyStateIndex = coachRosterSource.indexOf('t("coach.team.noParentsBody")');
+const teamSettingsIndex = coachRosterSource.indexOf('t("coach.team.teamSettings")');
+assert.equal(parentsSectionIndex > -1, true);
+assert.equal(teamSettingsIndex > parentsSectionIndex, true);
+assert.equal(teamSettingsIndex > parentEmptyStateIndex, true);
+assert.equal(coachRosterSource.includes("position: \"absolute\""), false);
 
 const parentHubSource = fs.readFileSync(path.join(process.cwd(), "app", "teams", "[teamId]", "index.tsx"), "utf8");
 assert.equal(parentHubSource.includes("removeChildFromTeam"), true);
@@ -311,9 +347,17 @@ assert.equal((translations.match(/staffRoleError:/g) || []).length, 2);
 for (const key of [
   "manageChildren", "removeChildFromTeam", "leaveTeam", "archiveTeam", "restoreTeam",
   "archivedTeams", "teamInactive", "membershipUpdateError", "archiveError", "restoreError",
-  "saving", "leaving", "archiving", "restoring",
+  "saving", "leaving", "archiving", "restoring", "deleteAnnouncement",
+  "deleteAnnouncementTitle", "deleteAnnouncementBody", "deletingAnnouncement",
+  "deleteSuccess", "announcementActions",
 ]) {
   assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length, 2, `${key} needs English and Spanish copy.`);
 }
+assert.equal((translations.match(/announcementUnavailable:/g) || []).length, 4);
+assert.equal((translations.match(/deleteError:/g) || []).length, 4);
+assert.equal(translations.includes("Delete announcement?"), true);
+assert.equal(translations.includes("This announcement and its replies will be permanently removed from the team."), true);
+assert.equal(translations.includes("¿Eliminar anuncio?"), true);
+assert.equal(translations.includes("Este anuncio y sus respuestas se eliminarán permanentemente del equipo."), true);
 
 console.log("Parent Teams lifecycle, multi-role, stable-child, privacy, archive, and staff-role core tests passed.");

@@ -116,6 +116,28 @@ export async function getTeamAnnouncement(
   }
 }
 
+export function listenToTeamAnnouncement(
+  teamId: string,
+  announcementId: string,
+  callback: (announcement: TeamAnnouncement | null) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  if (!teamId || !announcementId) {
+    callback(null);
+    return () => {};
+  }
+
+  return onSnapshot(
+    doc(db, "teams", teamId, "announcements", announcementId),
+    (snapshot) => callback(snapshot.exists() ? normalizeAnnouncement(snapshot.id, snapshot.data()) : null),
+    (error) => {
+      logMessageServiceIssue("listenAnnouncement", error);
+      callback(null);
+      onError?.(error);
+    },
+  );
+}
+
 export function listenToAnnouncementReplies(
   teamId: string,
   announcementId: string,
@@ -223,6 +245,16 @@ export async function deleteAnnouncementReply(
   >(functions, "deleteTeamAnnouncementReply");
   const response = await deleteReply({ teamId, announcementId, replyId });
   return response.data.deleted;
+}
+
+export async function deleteTeamAnnouncement(teamId: string, announcementId: string) {
+  requireUser();
+  const deleteAnnouncement = httpsCallable<
+    { teamId: string; announcementId: string },
+    { status: "deleted" | "alreadyDeleted" }
+  >(functions, "deleteTeamAnnouncement");
+  const response = await deleteAnnouncement({ teamId, announcementId });
+  return response.data.status;
 }
 
 async function getCurrentMembership(teamId: string, userId: string): Promise<{ roles: TeamRoleFlags; displayName: string } | null> {
