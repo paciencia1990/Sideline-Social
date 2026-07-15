@@ -2,316 +2,423 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
-  setDoc,
+  startAfter,
+  Timestamp,
   where,
-  writeBatch,
   type DocumentData,
   type QueryDocumentSnapshot,
-  type Timestamp,
   type Unsubscribe,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
-import { auth, db } from "@/config/firebase";
-import { getPublicUserProfiles } from "@/services/publicProfileService";
+import { auth, db, functions } from "@/config/firebase";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
+export { mapFriendChatError, type FriendChatUiError } from "@/utils/friendChatError";
 
-export type ChatType = "direct" | "squad";
+export const MAX_CHAT_PARTICIPANTS = 10;
+export const CHAT_MESSAGE_LIMIT = 500;
+export const CHAT_INITIAL_MESSAGE_LIMIT = 50;
+export const CHAT_EARLIER_PAGE_SIZE = 25;
+export const CHAT_LIST_LIMIT = 25;
+export const CHAT_LIST_MAX = 100;
 
-export interface ChatSummary {
-  chatId: string;
-  type: ChatType;
-  participantIds: string[];
-  participantNames: Record<string, string>;
-  squadId: string | null;
-  title: string | null;
-  lastMessageText: string;
-  lastMessageAt: Date | null;
-  lastMessageSenderId: string | null;
+export type FriendConversationType = "direct" | "group";
+export type FriendConversationMemberStatus = "invited" | "active" | "declined" | "left" | "removed";
+export type FriendConversationMemberRole = "owner" | "admin" | "member";
+
+export type FriendConversationMember = {
+  userId: string;
+  status: FriendConversationMemberStatus;
+  role: FriendConversationMemberRole;
+  displayNameSnapshot: string;
+  invitedBy: string | null;
+  invitationId: string | null;
+  invitedAt: Date | null;
+  joinedAt: Date | null;
+  lastReadAt: Date | null;
+  muted: boolean;
+};
+
+export type FriendConversation = {
+  conversationId: string;
+  conversationType: FriendConversationType;
+  groupName: string | null;
+  ownerUserId: string | null;
+  adminUserIds: string[];
+  activeParticipantIds: string[];
+  invitedParticipantIds: string[];
+  participantNameSnapshots: Record<string, string>;
+  activeParticipantCount: number;
+  invitedParticipantCount: number;
+  createdBy: string;
   createdAt: Date | null;
   updatedAt: Date | null;
-}
+  lastMessageAt: Date | null;
+  lastMessageId: string | null;
+  lastMessagePreview: string | null;
+  lastMessageRemoved: boolean;
+  lastSenderId: string | null;
+  status: "active" | "archived";
+};
 
-export interface ChatMessage {
-  id: string;
+export type FriendConversationListItem = FriendConversation & {
+  ownMember: FriendConversationMember;
+  unread: boolean;
+};
+
+export type FriendChatMessage = {
+  messageId: string;
+  conversationId: string;
+  messageType: "text" | "system";
+  senderUserId: string | null;
+  senderDisplayName: string | null;
   text: string;
-  senderId: string;
-  senderName: string;
   createdAt: Date | null;
-  system: boolean;
+  createdAtTimestamp: Timestamp | null;
+  status: "active" | "removed";
+  clientMessageId: string | null;
+};
+
+export type ConversationAccess = {
+  conversation: FriendConversation;
+  member: FriendConversationMember;
+  blockedUserIds: string[];
+  directFriendshipActive: boolean;
+};
+
+type FirestoreDate = Date | Timestamp | { toDate?: () => Date } | null | undefined;
+let activeConversationId: string | null = null;
+
+function currentUserId() {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw createChatError("chat/unauthenticated");
+  return uid;
 }
 
-type FirestoreDate = Date | number | Timestamp | { toDate?: () => Date; toMillis?: () => number } | null | undefined;
-
-const CHATS_COLLECTION = "chats";
-const MESSAGE_LIMIT = 100;
-
-function requireCurrentUserId(): string {
-  const userId = auth.currentUser?.uid;
-  if (!userId) {
-    throw new Error("You need to sign in to use chat.");
-  }
-  return userId;
-}
-
-function toDate(value: FirestoreDate): Date | null {
-  if (!value) return null;
+function toDate(value: FirestoreDate) {
   if (value instanceof Date) return value;
-  if (typeof value === "number") return new Date(value);
-  if (typeof value.toDate === "function") return value.toDate();
-  if (typeof value.toMillis === "function") return new Date(value.toMillis());
-  return null;
+  return typeof value?.toDate === "function" ? value.toDate() : null;
 }
 
-function directChatIdFor(userA: string, userB: string): string {
-  return `direct_${[userA, userB].sort().join("_")}`;
+function ids(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function squadChatIdFor(squadId: string): string {
-  return `squad_${squadId}`;
+function safeName(value: unknown) {
+  return formatPublicUserName(typeof value === "string" ? value : null) ?? "";
 }
 
-async function getUserDisplayName(userId: string, providedName?: string): Promise<string> {
-  const safeProvidedName = formatPublicUserName(providedName);
-  if (safeProvidedName) return safeProvidedName;
-  if (auth.currentUser?.uid === userId) {
-    return formatPublicUserName(auth.currentUser.displayName) ?? "Sideline Parent";
-  }
-
-  try {
-    const profiles = await getPublicUserProfiles([userId]);
-    return profiles[0]?.displayName ?? "Sideline Parent";
-  } catch (error) {
-    if (__DEV__) {
-      const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
-      console.info("[ChatService] public profile unavailable", { code });
-    }
-    return "Sideline Parent";
-  }
-}
-
-function docToChat(chatDoc: QueryDocumentSnapshot<DocumentData> | { id: string; data: () => DocumentData | undefined }): ChatSummary {
-  const data = chatDoc.data() ?? {};
-  const participantIds = Array.isArray(data.participantIds)
-    ? data.participantIds.filter((id): id is string => typeof id === "string")
-    : [];
-  const participantNames = typeof data.participantNames === "object" && data.participantNames
-    ? Object.fromEntries(Object.entries(data.participantNames as Record<string, unknown>).map(([userId, name]) => [
-        userId,
-        formatPublicUserName(typeof name === "string" ? name : null) ?? "Sideline Parent",
-      ]))
+function toConversation(document: { id: string; data: () => DocumentData | undefined }): FriendConversation {
+  const data = document.data() ?? {};
+  const names = typeof data.participantNameSnapshots === "object" && data.participantNameSnapshots
+    ? Object.fromEntries(Object.entries(data.participantNameSnapshots as Record<string, unknown>)
+      .map(([userId, name]) => [userId, safeName(name)]))
     : {};
-
   return {
-    chatId: chatDoc.id,
-    type: data.type === "squad" ? "squad" : "direct",
-    participantIds,
-    participantNames,
-    squadId: typeof data.squadId === "string" ? data.squadId : null,
-    title: typeof data.title === "string" ? data.title : null,
-    lastMessageText: typeof data.lastMessageText === "string" ? data.lastMessageText : "",
-    lastMessageAt: toDate(data.lastMessageAt as FirestoreDate),
-    lastMessageSenderId: typeof data.lastMessageSenderId === "string" ? data.lastMessageSenderId : null,
+    conversationId: document.id,
+    conversationType: data.conversationType === "group" ? "group" : "direct",
+    groupName: typeof data.groupName === "string" && data.groupName.trim() ? data.groupName.trim() : null,
+    ownerUserId: typeof data.ownerUserId === "string" ? data.ownerUserId : null,
+    adminUserIds: ids(data.adminUserIds),
+    activeParticipantIds: ids(data.activeParticipantIds),
+    invitedParticipantIds: ids(data.invitedParticipantIds),
+    participantNameSnapshots: names,
+    activeParticipantCount: Number.isFinite(data.activeParticipantCount) ? data.activeParticipantCount : ids(data.activeParticipantIds).length,
+    invitedParticipantCount: Number.isFinite(data.invitedParticipantCount) ? data.invitedParticipantCount : ids(data.invitedParticipantIds).length,
+    createdBy: typeof data.createdBy === "string" ? data.createdBy : "",
     createdAt: toDate(data.createdAt as FirestoreDate),
     updatedAt: toDate(data.updatedAt as FirestoreDate),
+    lastMessageAt: toDate(data.lastMessageAt as FirestoreDate),
+    lastMessageId: typeof data.lastMessageId === "string" ? data.lastMessageId : null,
+    lastMessagePreview: typeof data.lastMessagePreview === "string" ? data.lastMessagePreview : null,
+    lastMessageRemoved: data.lastMessageRemoved === true,
+    lastSenderId: typeof data.lastSenderId === "string" ? data.lastSenderId : null,
+    status: data.status === "archived" ? "archived" : "active",
   };
 }
 
-function docToMessage(messageDoc: QueryDocumentSnapshot<DocumentData>): ChatMessage {
-  const data = messageDoc.data();
-
+function toMember(document: { id: string; data: () => DocumentData | undefined }): FriendConversationMember {
+  const data = document.data() ?? {};
+  const statusValues: FriendConversationMemberStatus[] = ["invited", "active", "declined", "left", "removed"];
+  const roleValues: FriendConversationMemberRole[] = ["owner", "admin", "member"];
   return {
-    id: messageDoc.id,
-    text: typeof data.text === "string" ? data.text : "",
-    senderId: typeof data.senderId === "string" ? data.senderId : "",
-    senderName: formatPublicUserName(typeof data.senderName === "string" ? data.senderName : null)
-      ?? "Sideline Parent",
-    createdAt: toDate(data.createdAt as FirestoreDate),
-    system: data.system === true,
+    userId: document.id,
+    status: statusValues.includes(data.status) ? data.status : "removed",
+    role: roleValues.includes(data.role) ? data.role : "member",
+    displayNameSnapshot: safeName(data.displayNameSnapshot),
+    invitedBy: typeof data.invitedBy === "string" ? data.invitedBy : null,
+    invitationId: typeof data.invitationId === "string" ? data.invitationId : null,
+    invitedAt: toDate(data.invitedAt as FirestoreDate),
+    joinedAt: toDate(data.joinedAt as FirestoreDate),
+    lastReadAt: toDate(data.lastReadAt as FirestoreDate),
+    muted: data.muted === true,
   };
 }
 
-export function getChatDisplayTitle(chat: ChatSummary, currentUserId: string): string {
-  if (chat.title?.trim()) return chat.title.trim();
-  if (chat.type === "squad") return "Squad Chat";
-
-  const otherUserId = chat.participantIds.find((participantId) => participantId !== currentUserId);
-  if (!otherUserId) return "Direct Message";
-
-  return formatPublicUserName(chat.participantNames[otherUserId]) ?? "Sideline Parent";
+function toMessage(document: QueryDocumentSnapshot<DocumentData>): FriendChatMessage {
+  const data = document.data();
+  return {
+    messageId: document.id,
+    conversationId: typeof data.conversationId === "string" ? data.conversationId : "",
+    messageType: data.messageType === "system" ? "system" : "text",
+    senderUserId: typeof data.senderUserId === "string" ? data.senderUserId : null,
+    senderDisplayName: safeName(data.senderDisplayName) || null,
+    text: typeof data.text === "string" ? data.text : "",
+    createdAt: toDate(data.createdAt as FirestoreDate),
+    createdAtTimestamp: data.createdAt && typeof data.createdAt.toDate === "function" ? data.createdAt as Timestamp : null,
+    status: data.status === "removed" ? "removed" : "active",
+    clientMessageId: typeof data.clientMessageId === "string" ? data.clientMessageId : null,
+  };
 }
 
-export async function getOrCreateDirectChat(otherUserId: string, otherUserName?: string): Promise<string> {
-  const currentUserId = requireCurrentUserId();
-  if (currentUserId === otherUserId) {
-    throw new Error("You cannot start a chat with yourself.");
-  }
+export function getConversationDisplayTitle(conversation: FriendConversation, currentUid: string, fallback: string) {
+  if (conversation.groupName) return conversation.groupName;
+  const participantIds = conversation.conversationType === "direct"
+    ? conversation.activeParticipantIds.filter((id) => id !== currentUid)
+    : conversation.activeParticipantIds;
+  const names = participantIds.map((id) => conversation.participantNameSnapshots[id]).filter(Boolean);
+  return names.slice(0, 3).join(", ") || fallback;
+}
 
-  const chatId = directChatIdFor(currentUserId, otherUserId);
-  const chatRef = doc(db, CHATS_COLLECTION, chatId);
-  const existingChat = await getDoc(chatRef);
-  if (existingChat.exists()) return chatId;
+export function isConversationUnread(conversation: FriendConversation, member: FriendConversationMember, uid: string) {
+  return Boolean(
+    conversation.lastMessageAt && conversation.lastSenderId !== uid &&
+    (!member.lastReadAt || conversation.lastMessageAt.getTime() > member.lastReadAt.getTime()),
+  );
+}
 
-  const [currentUserName, resolvedOtherName] = await Promise.all([
-    getUserDisplayName(currentUserId),
-    getUserDisplayName(otherUserId, otherUserName),
+async function loadOwnMember(conversationId: string, uid: string) {
+  const snapshot = await getDoc(doc(db, "friendConversations", conversationId, "members", uid));
+  return snapshot.exists() ? toMember({ id: snapshot.id, data: () => snapshot.data() }) : null;
+}
+
+export function subscribeToFriendConversations(
+  uid: string,
+  onNext: (items: FriendConversationListItem[]) => void,
+  onError: (error: unknown) => void,
+  resultLimit = CHAT_LIST_LIMIT,
+): Unsubscribe {
+  let generation = 0;
+  return onSnapshot(
+    query(
+      collection(db, "friendConversations"),
+      where("activeParticipantIds", "array-contains", uid),
+      orderBy("lastMessageAt", "desc"),
+      limit(Math.min(CHAT_LIST_MAX, Math.max(CHAT_LIST_LIMIT, resultLimit))),
+    ),
+    async (snapshot) => {
+      const currentGeneration = ++generation;
+      try {
+        const conversations = snapshot.docs.map((item) => toConversation({ id: item.id, data: () => item.data() }));
+        const members = await Promise.all(conversations.map((item) => loadOwnMember(item.conversationId, uid)));
+        if (currentGeneration !== generation) return;
+        onNext(conversations.flatMap((conversation, index) => {
+          const ownMember = members[index];
+          return ownMember?.status === "active"
+            ? [{ ...conversation, ownMember, unread: isConversationUnread(conversation, ownMember, uid) }]
+            : [];
+        }));
+      } catch (error) { onError(error); }
+    },
+    onError,
+  );
+}
+
+export function subscribeToFriendChatInvitations(
+  uid: string,
+  onNext: (items: FriendConversation[]) => void,
+  onError: (error: unknown) => void,
+): Unsubscribe {
+  return onSnapshot(
+    query(
+      collection(db, "friendConversations"),
+      where("invitedParticipantIds", "array-contains", uid),
+      orderBy("updatedAt", "desc"),
+      limit(CHAT_LIST_LIMIT),
+    ),
+    (snapshot) => onNext(snapshot.docs.map((item) => toConversation({ id: item.id, data: () => item.data() }))),
+    onError,
+  );
+}
+
+export function subscribeToUnreadFriendConversationCount(uid: string, onNext: (count: number) => void) {
+  return subscribeToFriendConversations(uid, (items) => onNext(items.filter((item) => item.unread).length), () => onNext(0));
+}
+
+export async function getFriendConversationAccess(conversationId: string): Promise<ConversationAccess | null> {
+  const uid = currentUserId();
+  const [conversationSnapshot, memberSnapshot, blockedUserIds] = await Promise.all([
+    getDoc(doc(db, "friendConversations", conversationId)),
+    getDoc(doc(db, "friendConversations", conversationId, "members", uid)),
+    getBlockedFriendChatUserIds(),
   ]);
-
-  await setDoc(chatRef, {
-    type: "direct",
-    participantIds: [currentUserId, otherUserId].sort(),
-    participantNames: {
-      [currentUserId]: currentUserName,
-      [otherUserId]: resolvedOtherName,
-    },
-    squadId: null,
-    title: null,
-    lastMessageText: "",
-    lastMessageAt: null,
-    lastMessageSenderId: null,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  return chatId;
+  if (!conversationSnapshot.exists() || !memberSnapshot.exists()) return null;
+  const conversation = toConversation({ id: conversationSnapshot.id, data: () => conversationSnapshot.data() });
+  const member = toMember({ id: memberSnapshot.id, data: () => memberSnapshot.data() });
+  const directFriendId = conversation.conversationType === "direct"
+    ? conversation.activeParticipantIds.find((id) => id !== uid)
+    : null;
+  let directFriendshipActive = true;
+  if (directFriendId) {
+    const userSnapshot = await getDoc(doc(db, "users", uid));
+    directFriendshipActive = ids(userSnapshot.data()?.friendIds).includes(directFriendId) && !blockedUserIds.includes(directFriendId);
+  }
+  return { conversation, member, blockedUserIds, directFriendshipActive };
 }
 
-export async function getOrCreateSquadChat(
-  squadId: string,
-  squadName?: string,
-  participantIds: string[] = []
-): Promise<string> {
-  const currentUserId = requireCurrentUserId();
-  const chatId = squadChatIdFor(squadId);
-  const chatRef = doc(db, CHATS_COLLECTION, chatId);
-  const existingChat = await getDoc(chatRef);
-  if (existingChat.exists()) return chatId;
-
-  const uniqueParticipantIds = Array.from(new Set([currentUserId, ...participantIds].filter(Boolean)));
-  const currentUserName = await getUserDisplayName(currentUserId);
-
-  await setDoc(chatRef, {
-    type: "squad",
-    participantIds: uniqueParticipantIds,
-    participantNames: { [currentUserId]: currentUserName },
-    squadId,
-    title: squadName?.trim() ? `${squadName.trim()} Chat` : "Squad Chat",
-    lastMessageText: "",
-    lastMessageAt: null,
-    lastMessageSenderId: null,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  return chatId;
+export async function getFriendConversationMembers(conversationId: string) {
+  const snapshot = await getDocs(query(
+    collection(db, "friendConversations", conversationId, "memberProfiles"),
+    where("status", "==", "active"),
+    limit(MAX_CHAT_PARTICIPANTS),
+  ));
+  return snapshot.docs.map((item) => toMember({ id: item.id, data: () => item.data() }));
 }
 
-export function listenToUserChats(
-  userId: string,
-  callback: (chats: ChatSummary[]) => void,
-  onError?: (error: Error) => void
-): Unsubscribe {
-  const chatsQuery = query(collection(db, CHATS_COLLECTION), where("participantIds", "array-contains", userId));
-
+export function listenToFriendChatMessages(
+  conversationId: string,
+  uid: string,
+  blockedUserIds: string[],
+  onNext: (messages: FriendChatMessage[]) => void,
+  onError: (error: unknown) => void,
+) {
+  const blocked = new Set(blockedUserIds);
   return onSnapshot(
-    chatsQuery,
-    (snapshot) => {
-      const chats = snapshot.docs
-        .map(docToChat)
-        .sort((a, b) => (b.lastMessageAt?.getTime() ?? b.updatedAt?.getTime() ?? 0) - (a.lastMessageAt?.getTime() ?? a.updatedAt?.getTime() ?? 0));
-      callback(chats);
-    },
-    (error) => {
-      console.warn("[ChatService] listenToUserChats error:", error);
-      onError?.(error);
-    }
+    query(
+      collection(db, "friendConversations", conversationId, "messages"),
+      where("visibleToUserIds", "array-contains", uid),
+      orderBy("createdAt", "desc"),
+      limit(CHAT_INITIAL_MESSAGE_LIMIT),
+    ),
+    (snapshot) => onNext(snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse()),
+    onError,
   );
 }
 
-export function listenToChatMessages(
-  chatId: string,
-  callback: (messages: ChatMessage[]) => void,
-  onError?: (error: Error) => void
-): Unsubscribe {
-  const messagesQuery = query(
-    collection(db, CHATS_COLLECTION, chatId, "messages"),
-    orderBy("createdAt", "asc"),
-    limit(MESSAGE_LIMIT)
+export async function loadEarlierFriendChatMessages(
+  conversationId: string,
+  uid: string,
+  before: Timestamp,
+  blockedUserIds: string[],
+) {
+  const snapshot = await getDocs(query(
+    collection(db, "friendConversations", conversationId, "messages"),
+    where("visibleToUserIds", "array-contains", uid),
+    orderBy("createdAt", "desc"),
+    startAfter(before),
+    limit(CHAT_EARLIER_PAGE_SIZE),
+  ));
+  const blocked = new Set(blockedUserIds);
+  return {
+    messages: snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse(),
+    hasMore: snapshot.size === CHAT_EARLIER_PAGE_SIZE,
+  };
+}
+
+export function setActiveFriendConversation(conversationId: string | null) {
+  activeConversationId = conversationId;
+}
+
+export function isViewingFriendConversation(data: unknown) {
+  const conversationId = data && typeof data === "object" && "conversationId" in data && typeof data.conversationId === "string"
+    ? data.conversationId
+    : null;
+  return Boolean(conversationId && activeConversationId === conversationId);
+}
+
+export async function createOrOpenDirectConversation(friendUserId: string) {
+  return call<{ friendUserId: string }, { conversationId: string; status: "created" | "existing" }>(
+    "createOrOpenDirectConversation", { friendUserId },
   );
+}
 
-  return onSnapshot(
-    messagesQuery,
-    (snapshot) => callback(snapshot.docs.map(docToMessage)),
-    (error) => {
-      console.warn("[ChatService] listenToChatMessages error:", error);
-      onError?.(error);
-    }
+export async function createFriendGroupConversation(friendUserIds: string[], groupName: string | null) {
+  return call<{ friendUserIds: string[]; groupName: string | null }, { conversationId: string; invitedCount: number }>(
+    "createFriendGroupConversation", { friendUserIds, groupName },
   );
 }
 
-export async function getChatById(chatId: string): Promise<ChatSummary | null> {
-  try {
-    const chatDoc = await getDoc(doc(db, CHATS_COLLECTION, chatId));
-    if (!chatDoc.exists()) return null;
-    return docToChat({ id: chatDoc.id, data: () => chatDoc.data() });
-  } catch (error) {
-    console.warn("[ChatService] getChatById error:", error);
-    return null;
-  }
+export async function respondToFriendGroupInvitation(conversationId: string, response: "accept" | "decline") {
+  return call("respondToFriendGroupInvitation", { conversationId, response });
 }
 
-export async function sendMessage(chatId: string, text: string): Promise<void> {
-  const senderId = requireCurrentUserId();
-  const trimmedText = text.trim();
-  if (!trimmedText) return;
-
-  const chatRef = doc(db, CHATS_COLLECTION, chatId);
-  const chatDoc = await getDoc(chatRef);
-  if (!chatDoc.exists()) {
-    throw new Error("This chat is no longer available.");
-  }
-
-  const chat = docToChat({ id: chatDoc.id, data: () => chatDoc.data() });
-  if (!chat.participantIds.includes(senderId)) {
-    throw new Error("You do not have access to this chat.");
-  }
-
-  const senderName = formatPublicUserName(chat.participantNames[senderId])
-    ?? await getUserDisplayName(senderId);
-  const messageRef = doc(collection(db, CHATS_COLLECTION, chatId, "messages"));
-  const batch = writeBatch(db);
-
-  batch.set(messageRef, {
-    text: trimmedText,
-    senderId,
-    senderName,
-    createdAt: serverTimestamp(),
-    system: false,
-  });
-  batch.set(chatRef, {
-    lastMessageText: trimmedText,
-    lastMessageAt: serverTimestamp(),
-    lastMessageSenderId: senderId,
-    updatedAt: serverTimestamp(),
-    participantNames: {
-      ...chat.participantNames,
-      [senderId]: senderName,
-    },
-  }, { merge: true });
-
-  await batch.commit();
+export async function inviteFriendsToGroupConversation(conversationId: string, friendUserIds: string[]) {
+  return call("inviteFriendsToGroupConversation", { conversationId, friendUserIds });
 }
 
-export async function markChatRead(chatId: string): Promise<void> {
-  const userId = auth.currentUser?.uid;
-  if (!userId) return;
+export async function renameFriendGroupConversation(conversationId: string, groupName: string | null) {
+  return call("renameFriendGroupConversation", { conversationId, groupName });
+}
 
-  await setDoc(doc(db, CHATS_COLLECTION, chatId, "reads", userId), {
-    userId,
-    readAt: serverTimestamp(),
-  }, { merge: true });
+export async function setFriendGroupAdminRole(conversationId: string, memberUserId: string, makeAdmin: boolean) {
+  return call("setFriendGroupAdminRole", { conversationId, memberUserId, makeAdmin });
+}
+
+export async function transferFriendGroupOwnership(conversationId: string, memberUserId: string) {
+  return call("transferFriendGroupOwnership", { conversationId, memberUserId });
+}
+
+export async function removeFriendGroupMember(conversationId: string, memberUserId: string) {
+  return call("removeFriendGroupMember", { conversationId, memberUserId });
+}
+
+export async function leaveFriendConversation(conversationId: string) {
+  return call("leaveFriendConversation", { conversationId });
+}
+
+export async function setFriendConversationMuted(conversationId: string, muted: boolean) {
+  return call<{ conversationId: string; muted: boolean }, { muted: boolean }>("setFriendConversationMuted", { conversationId, muted });
+}
+
+export async function markFriendConversationRead(conversationId: string) {
+  return call("markFriendConversationRead", { conversationId });
+}
+
+export async function sendFriendChatMessage(conversationId: string, text: string, clientMessageId: string) {
+  return call<
+    { conversationId: string; text: string; clientMessageId: string },
+    { messageId: string; status: "sent" | "alreadySent"; createdAt: string }
+  >("sendFriendChatMessage", { conversationId, text, clientMessageId });
+}
+
+export async function removeOwnFriendChatMessage(conversationId: string, messageId: string) {
+  return call("removeOwnFriendChatMessage", { conversationId, messageId });
+}
+
+export async function blockFriendChatUser(blockedUserId: string) {
+  return call("blockFriendChatUser", { blockedUserId });
+}
+
+export async function getBlockedFriendChatUserIds() {
+  const result = await call<Record<string, never>, { blockedUserIds: string[] }>("getBlockedFriendChatUserIds", {});
+  return ids(result.blockedUserIds);
+}
+
+export async function reportFriendChatUser(conversationId: string, reportedUserId: string) {
+  return call("reportFriendChatUser", { conversationId, reportedUserId });
+}
+
+export async function reportFriendChatMessage(conversationId: string, messageId: string) {
+  return call("reportFriendChatMessage", { conversationId, messageId });
+}
+
+export function createChatClientMessageId() {
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+}
+
+async function call<Input, Output = Record<string, unknown>>(name: string, input: Input) {
+  currentUserId();
+  const callable = httpsCallable<Input, Output>(functions, name);
+  return (await callable(input)).data;
+}
+
+function createChatError(code: string) {
+  const error = new Error("Chat requires authentication.") as Error & { code: string };
+  error.code = code;
+  return error;
 }

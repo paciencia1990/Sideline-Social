@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
@@ -11,6 +11,7 @@ import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { getCurrentUserTeamMemberships, hasCoachAccess, switchActiveMode } from "@/services/teamService";
+import { getPublicUserProfiles, updatePublicUserProfile } from "@/services/publicProfileService";
 import { flattenStyle } from "@/utils/flatten-style";
 
 const LANGUAGE_OPTIONS = [
@@ -21,12 +22,16 @@ const LANGUAGE_OPTIONS = [
 export default function ProfileScreen() {
   const { t } = useTranslation();
   const { activeMode, language, modeHydrated, setActiveMode, setLanguage } = useApp();
-  const { loading: authLoading, user, signOut } = useAuth();
+  const { loading: authLoading, refreshProfile, user, signOut } = useAuth();
   const [hasCoachRole, setHasCoachRole] = useState(false);
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [isSavingName, setIsSavingName] = useState(false);
+  const [nameStatus, setNameStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const isParentMode = activeMode === "parent";
 
   useEffect(() => {
@@ -42,6 +47,47 @@ export default function ProfileScreen() {
       isMounted = false;
     };
   }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    let active = true;
+    void getPublicUserProfiles([user.uid]).then(([profile]) => {
+      if (!active) return;
+      if (profile?.firstName && profile?.lastName) {
+        setFirstName(profile.firstName);
+        setLastName(profile.lastName);
+        return;
+      }
+      const parts = (user.displayName ?? "").trim().split(/\s+/u).filter(Boolean);
+      setFirstName(parts[0] ?? "");
+      setLastName(parts.slice(1).join(" "));
+    }).catch(() => {
+      if (!active) return;
+      const parts = (user.displayName ?? "").trim().split(/\s+/u).filter(Boolean);
+      setFirstName(parts[0] ?? "");
+      setLastName(parts.slice(1).join(" "));
+    });
+    return () => { active = false; };
+  }, [user?.displayName, user?.uid]);
+
+  const handleSaveName = useCallback(async () => {
+    if (isSavingName) return;
+    if (!firstName.trim() || !lastName.trim()) {
+      setNameStatus({ type: "error", text: t("profile.nameRequired") });
+      return;
+    }
+    setIsSavingName(true);
+    setNameStatus(null);
+    try {
+      await updatePublicUserProfile({ firstName: firstName.trim(), lastName: lastName.trim() });
+      await refreshProfile();
+      setNameStatus({ type: "success", text: t("profile.nameSaved") });
+    } catch {
+      setNameStatus({ type: "error", text: t("profile.nameSaveError") });
+    } finally {
+      setIsSavingName(false);
+    }
+  }, [firstName, isSavingName, lastName, refreshProfile, t]);
 
   const handleSignOut = useCallback(async () => {
     if (isSigningOut) return;
@@ -117,6 +163,40 @@ export default function ProfileScreen() {
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>{t("profile.settingsTitle")}</Text>
         </View>
+
+        <Card style={styles.languageCard}>
+          <View style={styles.languageCopy}>
+            <Text style={styles.cardTitle}>{t("profile.publicIdentityTitle")}</Text>
+            <Text style={styles.cardText}>{t("profile.publicIdentityDescription")}</Text>
+          </View>
+          <Text style={styles.inputLabel}>{t("profile.firstName")}</Text>
+          <TextInput
+            autoCapitalize="words"
+            autoComplete="given-name"
+            onChangeText={setFirstName}
+            style={styles.input}
+            value={firstName}
+          />
+          <Text style={styles.inputLabel}>{t("profile.lastName")}</Text>
+          <TextInput
+            autoCapitalize="words"
+            autoComplete="family-name"
+            onChangeText={setLastName}
+            style={styles.input}
+            value={lastName}
+          />
+          <PrimaryButton
+            disabled={isSavingName}
+            loading={isSavingName}
+            onPress={handleSaveName}
+            title={t("profile.saveName")}
+          />
+          {nameStatus ? (
+            <Text accessibilityLiveRegion="polite" style={nameStatus.type === "error" ? styles.modeError : styles.nameSuccess}>
+              {nameStatus.text}
+            </Text>
+          ) : null}
+        </Card>
 
         <Card style={styles.languageCard}>
           <View style={styles.languageCopy}>
@@ -224,6 +304,26 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodyRegular,
     color: Colors.textPrimary,
     lineHeight: 20,
+  },
+  inputLabel: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 14,
+  },
+  input: {
+    backgroundColor: Colors.surface,
+    borderColor: Colors.secondary,
+    borderRadius: Radius.button,
+    borderWidth: 1,
+    color: Colors.textHeading,
+    fontFamily: Typography.bodyRegular,
+    fontSize: 16,
+    minHeight: 48,
+    paddingHorizontal: Spacing.md,
+  },
+  nameSuccess: {
+    color: Colors.accentGreen,
+    fontFamily: Typography.bodySemiBold,
   },
   languageToggle: {
     flexDirection: "row",

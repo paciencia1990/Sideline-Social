@@ -33,6 +33,14 @@ export function formatPublicUserName(value?: string | null): string | null {
   return lastInitial ? `${firstName} ${lastInitial}.` : firstName;
 }
 
+export function formatFullPublicName(value?: string | null): string | null {
+  const safeName = getSafeProfileName(value, "");
+  if (!safeName) return null;
+  const normalized = safeName.replace(/\s+/gu, " ").trim();
+  if (FRIEND_REQUEST_NEUTRAL_NAMES.has(normalized.toLocaleLowerCase())) return null;
+  return normalized;
+}
+
 export function formatSuggestedConnectionName(
   value?: string | null,
   fallback = "Sideline Parent",

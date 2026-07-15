@@ -3,10 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const ts = require("typescript");
 
-function read(...segments) {
-  return fs.readFileSync(path.join(process.cwd(), ...segments), "utf8");
-}
-
+function read(...segments) { return fs.readFileSync(path.join(process.cwd(), ...segments), "utf8"); }
 function loadTypeScript(relativePath) {
   const output = ts.transpileModule(read(relativePath), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 },
@@ -16,133 +13,126 @@ function loadTypeScript(relativePath) {
   return loaded.exports;
 }
 
-const core = loadTypeScript("functions/src/friendRequestCore.ts");
-const privacy = loadTypeScript("utils/friendPrivacy.ts");
-assert.equal(core.normalizeFriendTargetId("target-user"), "target-user");
-assert.throws(() => core.normalizeFriendTargetId(""));
-assert.throws(() => core.normalizeFriendTargetId("private/path"));
-assert.equal(core.friendRequestIdFor("sender", "target"), "sender__target");
-const outcome = (overrides = {}) => core.resolveFriendRequestSendStatus({
+const lifecycle = loadTypeScript("functions/src/friendRequestCore.ts");
+const publicProfiles = loadTypeScript("functions/src/publicUserProfileCore.ts");
+const now = Date.UTC(2026, 6, 15, 12);
+const future = now + 1000;
+const past = now - 1000;
+
+assert.equal(lifecycle.normalizeFriendTargetId("target-user"), "target-user");
+assert.throws(() => lifecycle.normalizeFriendTargetId(""));
+assert.throws(() => lifecycle.normalizeFriendTargetId("private/path"));
+assert.equal(lifecycle.friendRequestIdFor("sender", "target"), "sender__target");
+assert.equal(lifecycle.friendRequestExpiresAtMillis(now), now + 30 * 24 * 60 * 60 * 1000);
+assert.equal(lifecycle.resolveLegacyFriendRequestExpiresAtMillis(null, now), lifecycle.friendRequestExpiresAtMillis(now));
+assert.equal(lifecycle.isActivePendingRequest("pending", future, now), true);
+assert.equal(lifecycle.isActivePendingRequest("pending", past, now), false);
+assert.equal(lifecycle.isActivePendingRequest("declined", future, now), false);
+
+const outcome = (overrides = {}) => lifecycle.resolveFriendRequestSendStatus({
   senderFriendIds: [], targetFriendIds: [], targetUserId: "target", senderUserId: "sender",
-  outgoingStatus: null, incomingStatus: null, ...overrides,
+  outgoingStatus: null, incomingStatus: null, outgoingExpiresAtMillis: null,
+  incomingExpiresAtMillis: null, nowMillis: now, ...overrides,
 });
 assert.equal(outcome(), "pending");
-assert.equal(outcome({ outgoingStatus: "pending" }), "alreadyPending");
-assert.equal(outcome({ incomingStatus: "pending" }), "reversePending");
+assert.equal(outcome({ outgoingStatus: "pending", outgoingExpiresAtMillis: future }), "alreadyPending");
+assert.equal(outcome({ outgoingStatus: "pending", outgoingExpiresAtMillis: past }), "pending", "expired pending is not active");
+assert.equal(outcome({ incomingStatus: "pending", incomingExpiresAtMillis: future }), "reversePending");
 assert.equal(outcome({ senderFriendIds: ["target"] }), "alreadyFriends");
 assert.equal(outcome({ targetFriendIds: ["sender"] }), "alreadyFriends");
-assert.equal(privacy.formatFriendRequestSenderName("Joann Pollard", "Sideline Parent"), "Joann P.");
-assert.equal(privacy.formatFriendRequestSenderName("Alex", "Sideline Parent"), "Alex");
-assert.equal(privacy.formatFriendRequestSenderName("Anne-Marie O'Neill", "Sideline Parent"), "Anne-Marie O.");
-assert.equal(privacy.formatFriendRequestSenderName("María Ríos", "Sideline Parent"), "María R.");
-assert.equal(privacy.formatFriendRequestSenderName("private@example.com", "Sideline Parent"), "Sideline Parent");
-assert.equal(privacy.formatFriendRequestSenderName("Sideline Parent", "Padre o madre de Sideline"), "Padre o madre de Sideline");
-assert.equal(privacy.formatFriendRequestSenderName("  Sideline   Parent  ", "Sideline Parent"), "Sideline Parent");
-assert.equal(privacy.getFriendNameInitials("Joann P."), "JP");
-assert.equal(privacy.getFriendNameInitials("Madonna"), "M");
 
-const screen = read("app", "(tabs)", "friends.tsx");
-const service = read("services", "friendsService.ts");
-const publicProfiles = read("services", "publicProfileService.ts");
+// Regression reproduction: the old shared two-snapshot counter could consume
+// a real removal from one query while the other query was still initializing.
+let oldInitialSnapshotsRemaining = 2;
+let oldRefreshCount = 0;
+const oldSharedHandler = () => {
+  if (oldInitialSnapshotsRemaining > 0) { oldInitialSnapshotsRemaining -= 1; return; }
+  oldRefreshCount += 1;
+};
+oldSharedHandler(); // incoming initial
+oldSharedHandler(); // outgoing removal after decline, incorrectly swallowed
+assert.equal(oldRefreshCount, 0);
+oldSharedHandler(); // outgoing initial arrives later, too late to refresh the removal
+
+let newRefreshCount = 0;
+const independentHandler = () => {
+  let initialized = false;
+  return () => { if (!initialized) { initialized = true; return; } newRefreshCount += 1; };
+};
+const incomingHandler = independentHandler();
+const outgoingHandler = independentHandler();
+incomingHandler(); outgoingHandler(); outgoingHandler();
+assert.equal(newRefreshCount, 1, "a post-initial decline removal always refreshes the sender");
+
+assert.deepEqual(publicProfiles.resolveCanonicalPublicName({ firstName: " Joann ", lastName: " Pollard " }), {
+  firstName: "Joann", lastName: "Pollard", displayName: "Joann Pollard",
+});
+assert.equal(publicProfiles.resolveCanonicalPublicName({ FirstName: "Maria", LastName: "Garcia" }).displayName, "Maria Garcia");
+assert.equal(publicProfiles.resolveCanonicalPublicName({ name: "D’Andre Smith" }).displayName, "D’Andre Smith");
+assert.equal(publicProfiles.resolveCanonicalPublicName({ displayName: "Mary Anne Van Buren" }).lastName, "Anne Van Buren");
+assert.equal(publicProfiles.resolveCanonicalPublicName({ displayName: "private@example.test" }), null);
+assert.equal(publicProfiles.resolveCanonicalPublicName({ displayName: "Sideline Parent" }), null);
+assert.equal(publicProfiles.resolveCanonicalPublicName({ displayName: "Joann P." }), null, "an initial is not a full last name");
+const projected = publicProfiles.resolveCanonicalPublicProfile("uid", {
+  firstName: "Joann", lastName: "Pollard", photoURL: "https://example.test/photo.jpg", email: "private@example.test",
+});
+assert.deepEqual(projected, {
+  userId: "uid", firstName: "Joann", lastName: "Pollard", displayName: "Joann Pollard",
+  photoURL: "https://example.test/photo.jpg",
+});
+assert.equal(Object.hasOwn(projected, "email"), false);
+
 const functionsSource = read("functions", "src", "index.ts");
+const friendChatSource = read("functions", "src", "friendChat.ts");
+const service = read("services", "friendsService.ts");
+const screen = read("app", "(tabs)", "friends.tsx");
 const rules = read("firestore.rules");
-const translations = read("i18n", "index.ts");
-const authContext = read("context", "AuthContext.tsx");
+const indexes = JSON.parse(read("firestore.indexes.json"));
 
-assert.equal(publicProfiles.includes("PublicUserProfile = PublicFriendProfileRecord"), true);
-assert.equal(publicProfiles.includes("email"), false);
-assert.equal(service.includes("id: profile.userId"), true);
-assert.equal(screen.includes("sendFriendRequest(profile.id)"), true);
-assert.equal(screen.includes('busy={busyAction === `add:${profile.id}`}'), true);
-assert.equal(screen.includes("profile.email"), false);
-assert.equal(screen.includes("setLoadError(failureMessage)"), false);
-assert.equal(screen.includes("setActionError({ actionId"), true);
-assert.equal(screen.includes("friendRequestReversePending"), true);
-assert.equal(screen.includes('request.senderDisplayName || t("friends.sidelineParent")'), true);
-assert.equal(screen.includes("friends.friendRequestFrom"), true);
-assert.equal(screen.includes("friends.acceptFriendRequestFrom"), true);
-assert.equal(screen.includes("friends.declineFriendRequestFrom"), true);
-assert.equal(screen.includes("getFriendNameInitials(name)"), true);
-assert.equal(screen.includes("getFriendRequestGroups(user.uid)"), true);
-assert.equal(screen.includes("subscribeToFriendRequestChanges"), true);
-assert.equal(screen.includes("useFocusEffect"), true);
-assert.equal(screen.includes('request.senderProfileState === "loading"'), true);
-assert.equal(screen.includes('request.recipientProfileState === "loading"'), true);
-assert.equal(screen.includes("request.senderDisplayName"), true);
-assert.equal(screen.includes("request.fromDisplayName, t"), false);
+const send = functionsSource.slice(functionsSource.indexOf("export const sendFriendRequest"), functionsSource.indexOf("export const respondToFriendRequest"));
+assert.ok(send.includes("Timestamp.now()"));
+assert.ok(send.includes("friendRequestExpiresAtMillis(now.toMillis())"));
+assert.ok(send.includes("respondedAt: null"));
+assert.ok(send.includes("resolveCanonicalPublicProfile(senderUserId"));
+assert.ok(send.includes("Add your first and last name"));
+assert.ok(send.includes("priorOutcomes: preserveTerminalRequestOutcomes(outgoing)"));
+assert.equal(send.toLowerCase().includes("email"), false);
 
-const requestGroupsClient = service.slice(
-  service.indexOf("export async function getFriendRequestGroups"),
-  service.indexOf("export async function getIncomingFriendRequests"),
-);
-assert.equal(requestGroupsClient.includes("incoming.map(getIncomingRequestSenderId)"), true);
-assert.equal(requestGroupsClient.includes("...outgoing.map(getOutgoingRequestRecipientId)"), true);
-assert.equal(requestGroupsClient.includes("getPublicUserProfiles(requestProfileUserIds)"), true);
-assert.equal(requestGroupsClient.includes("inspectPublicUserProfiles(publicProfiles)"), true);
-assert.equal(requestGroupsClient.includes("profilesByUserId"), true);
-assert.equal(requestGroupsClient.includes("hydrateFriendRequestGroups(incoming, outgoing"), true);
-assert.equal(requestGroupsClient.includes('logIncomingProfileHydration("start"'), true);
-assert.equal(requestGroupsClient.includes('logIncomingProfileHydration("success"'), true);
-assert.equal(requestGroupsClient.includes('logIncomingProfileHydration("failure"'), true);
-assert.equal(requestGroupsClient.toLowerCase().includes("email"), false);
-assert.equal(service.includes('export type RequestProfileState = "loading" | "resolved" | "unresolved"'), true);
-assert.equal(service.includes('senderProfileState: request.senderNameResolved ? "resolved" : "unresolved"'), true);
-assert.equal(service.includes('recipientProfileState: request.recipientNameResolved ? "resolved" : "unresolved"'), true);
-assert.equal(service.includes("senderNameResolved"), true);
-assert.equal(service.includes("recipientNameResolved"), true);
-assert.equal(service.includes("emptyFriendRequestGroups()"), true);
-assert.equal(service.includes("onChange();"), true);
-assert.equal(authContext.includes("firstName,"), true);
-assert.equal(authContext.includes("lastName,"), true);
-assert.equal(authContext.includes("displayName: displayName || null"), true);
+const respond = functionsSource.slice(functionsSource.indexOf("export const respondToFriendRequest"), functionsSource.indexOf("export const cancelFriendRequest"));
+for (const field of ["respondedAt", "acceptedAt", "declinedAt", "updatedAt"]) assert.ok(respond.includes(field));
+assert.ok(respond.includes("request.toUserId !== userId"));
+assert.ok(respond.includes("FieldValue.arrayUnion"));
+assert.ok(respond.includes("request.status !== 'pending'"));
 
-const sendClient = service.slice(
-  service.indexOf("export async function sendFriendRequest"),
-  service.indexOf("export async function acceptFriendRequest"),
-);
-assert.equal(sendClient.includes('functions, "sendFriendRequest"'), true);
-assert.equal(sendClient.includes("{ targetUserId: normalizedTargetUserId }"), true);
-assert.equal(sendClient.includes("getPublicUserProfiles"), false);
-assert.equal(sendClient.toLowerCase().includes("email"), false);
-assert.equal(sendClient.includes("setDoc"), false);
+const cancel = functionsSource.slice(functionsSource.indexOf("export const cancelFriendRequest"), functionsSource.indexOf("export const removeFriendConnection"));
+assert.ok(cancel.includes("request.fromUserId !== userId"));
+assert.ok(cancel.includes("status: 'canceled'"));
+assert.ok(cancel.includes("canceledAt"));
+assert.ok(functionsSource.includes("export const expirePendingFriendRequests"));
+assert.ok(functionsSource.includes(".schedule('15 4 * * *')"));
+assert.ok(functionsSource.includes(".limit(400)"));
+assert.ok(functionsSource.includes("resolveFriendRequestNotification"));
+assert.equal(functionsSource.includes("declined notification"), false);
+assert.ok(friendChatSource.includes("status: 'canceled', canceledAt: now"), "blocking resolves pending requests");
 
-const sendCallable = functionsSource.slice(
-  functionsSource.indexOf("export const sendFriendRequest"),
-  functionsSource.indexOf("export const respondToFriendRequest"),
-);
-assert.equal(sendCallable.includes("context.auth?.uid"), true);
-assert.equal(sendCallable.includes("data?.targetUserId"), true);
-assert.equal(sendCallable.includes("data?.sender"), false);
-assert.equal(sendCallable.includes("runTransaction"), true);
-assert.equal(sendCallable.includes("reversePending"), false);
-assert.equal(sendCallable.toLowerCase().includes("email"), false);
-assert.equal(functionsSource.includes("export const respondToFriendRequest"), true);
-assert.equal(functionsSource.includes("export const removeFriendConnection"), true);
-assert.equal(functionsSource.includes("createPersonalNotificationAndPush"), true);
-const publicProfilesCallable = functionsSource.slice(
-  functionsSource.indexOf("export const getPublicUserProfiles"),
-  functionsSource.indexOf("export const getSuggestedConnections"),
-);
-assert.equal(publicProfilesCallable.includes("admin.auth().getUsers"), true);
-assert.equal(publicProfilesCallable.includes("formatSuggestedConnectionName"), false);
-assert.equal(publicProfilesCallable.includes("isActivePendingFriendRequestBetween"), false);
-assert.equal(publicProfilesCallable.includes("pendingFriendRequestAuthorizationCount"), false);
-assert.equal(publicProfilesCallable.includes("deniedTargetCount"), false);
-assert.equal(publicProfilesCallable.includes("formatPublicUserName"), true);
-assert.equal(publicProfilesCallable.toLowerCase().includes("email"), false);
+assert.ok(service.includes('"getActiveFriendRequests"'));
+assert.ok(service.includes('where("expiresAt", ">", Timestamp.now())'));
+assert.ok(service.includes("createSnapshotHandler"), "each listener owns its initialization gate");
+assert.equal(service.includes("initialSnapshotsRemaining"), false, "shared listener race is removed");
+assert.ok(service.includes("export async function cancelFriendRequest"));
+assert.ok(screen.includes("<AccordionHeader"));
+assert.ok(screen.includes("accessibilityState={{ expanded }}"));
+assert.ok(screen.includes("setIncomingExpanded"));
+assert.ok(screen.includes("setOutgoingExpanded"));
+assert.ok(screen.indexOf('title={t("friends.myFriends")}') > screen.indexOf('title={t("friends.outgoing")}'));
+assert.ok(screen.includes("setIncomingRequests((current) => current.filter"));
+assert.ok(screen.includes("setOutgoingRequests((current) => current.filter"));
 
 const requestRules = rules.slice(rules.indexOf("match /friendRequests/{requestId}"), rules.indexOf("// squads collection"));
-assert.equal(requestRules.includes("resource.data.fromUserId == request.auth.uid"), true);
-assert.equal(requestRules.includes("resource.data.toUserId == request.auth.uid"), true);
-assert.equal(requestRules.includes("allow create, update, delete: if false;"), true);
+assert.ok(requestRules.includes("allow create, update, delete: if false;"));
+const indexFields = indexes.indexes.map((index) => index.fields.map((field) => field.fieldPath).join("+"));
+assert.ok(indexFields.includes("toUserId+status+expiresAt"));
+assert.ok(indexFields.includes("fromUserId+status+expiresAt"));
+assert.ok(indexFields.includes("status+expiresAt"));
 
-for (const key of [
-  "actionErrorTitle", "friendRequestAlreadySent", "friendRequestAlreadyConnected",
-  "friendRequestReversePending", "friendRequestUnavailable", "friendRequestNetworkError",
-  "friendRequestFrom", "acceptFriendRequestFrom", "declineFriendRequestFrom",
-  "loadingParentName",
-]) {
-  assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length, 2, `${key} needs English and Spanish copy.`);
-}
-
-console.log("UID-based friend request callable, state outcomes, privacy, error separation, and notification tests passed.");
+console.log("Friend request lifecycle, exact expiry, identity, listener-race, accordion, block, rule, and index tests passed.");

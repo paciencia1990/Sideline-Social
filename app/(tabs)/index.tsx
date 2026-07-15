@@ -33,6 +33,7 @@ import {
   subscribeToUnreadNotificationCount,
 } from "@/services/notificationService";
 import { formatUnreadBadgeCount } from "@/utils/notificationCore";
+import { subscribeToUnreadFriendConversationCount } from "@/services/chatService";
 import { fetchActiveSquadSession, getGameLabel, type GameSession } from "@/services/gameService";
 import {
   getParentTeamsOverview,
@@ -67,6 +68,7 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [squads, setSquads] = useState<SquadDetail[]>([]);
   const [liveSquad, setLiveSquad] = useState<LiveSquadData | null>(null);
   const [myTeamsOverview, setMyTeamsOverview] = useState<ParentTeamsOverview | null>(null);
@@ -232,6 +234,13 @@ export default function HomeScreen() {
     }
     return subscribeToUnreadNotificationCount(user.uid, setUnreadCount);
   }, [user?.uid]));
+  useFocusEffect(useCallback(() => {
+    if (!user?.uid) {
+      setUnreadChatCount(0);
+      return;
+    }
+    return subscribeToUnreadFriendConversationCount(user.uid, setUnreadChatCount);
+  }, [user?.uid]));
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     void retryPendingNotificationAcknowledgements();
@@ -369,7 +378,7 @@ export default function HomeScreen() {
             <SquadSelector />
             {!liveSquad && squads.length > 0 ? <SquadSummaryCard squad={currentSquad} squadCount={squads.length} /> : null}
 
-            <SecondaryActions />
+            <SecondaryActions unreadChatCount={unreadChatCount} />
 
             <ChallengeCard
               challenge={activeChallenge}
@@ -473,16 +482,16 @@ function MyTeamsCard({
     </TouchableOpacity>
   );
 }
-function SecondaryActions() {
+function SecondaryActions({ unreadChatCount }: { unreadChatCount: number }) {
   const { t } = useTranslation();
   const actions = [
-    { label: t("home.chat"), Icon: MessageCircle, route: "/(social)/chat" },
-    { label: t("home.leaderboard"), Icon: Trophy, route: "/leaderboard" },
+    { label: t("home.chat"), Icon: MessageCircle, route: "/(social)/chat", badge: unreadChatCount },
+    { label: t("home.leaderboard"), Icon: Trophy, route: "/leaderboard", badge: 0 },
   ];
 
   return (
     <View style={styles.secondaryActionRow}>
-      {actions.map(({ Icon, label, route }) => (
+      {actions.map(({ Icon, label, route, badge }) => (
         <TouchableOpacity
           key={label}
           accessibilityLabel={label}
@@ -492,6 +501,7 @@ function SecondaryActions() {
           style={styles.secondaryActionCard}
         >
           <Icon size={21} color={Colors.primary} />
+          {badge > 0 ? <View accessibilityLabel={t("chat.unreadCount", { count: badge })} style={styles.chatBadge}><Text style={styles.chatBadgeText}>{badge > 99 ? "99+" : badge}</Text></View> : null}
           <Text style={styles.secondaryActionText}>{label}</Text>
         </TouchableOpacity>
       ))}
@@ -588,11 +598,11 @@ function LiveSquadCard({ squad }: { squad: LiveSquadData }) {
       <Text style={styles.cardText}>{t("home.parentsActiveNow", { count: squad.activeMemberCount })}</Text>
       <TouchableOpacity
         activeOpacity={0.86}
-        onPress={() => router.push({ pathname: "/(social)/squad-chat", params: { squadId: squad.squadId } })}
+        onPress={() => router.push("/(social)/chat")}
         style={styles.primaryInlineButton}
       >
         <MessageCircle size={16} color={Colors.surface} />
-        <Text style={styles.primaryInlineText}>{t("home.joinChat")}</Text>
+        <Text style={styles.primaryInlineText}>{t("home.chat")}</Text>
       </TouchableOpacity>
     </Card>
   );
@@ -906,6 +916,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     textAlign: "center",
+  },
+  chatBadge: {
+    alignItems: "center",
+    backgroundColor: Colors.primary,
+    borderRadius: 10,
+    minWidth: 20,
+    paddingHorizontal: 5,
+    position: "absolute",
+    right: 12,
+    top: 8,
+  },
+  chatBadgeText: {
+    color: Colors.surface,
+    fontFamily: Typography.bodyBold,
+    fontSize: 10,
   },
   activeGameCard: {
     alignItems: "center",

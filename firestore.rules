@@ -28,6 +28,22 @@ service cloud.firestore {
     function teamMemberPath(teamId, userId) {
       return /databases/$(database)/documents/teams/$(teamId)/members/$(userId);
     }
+
+    function friendConversationMemberPath(conversationId, userId) {
+      return /databases/$(database)/documents/friendConversations/$(conversationId)/members/$(userId);
+    }
+
+    function isActiveFriendConversationMember(conversationId) {
+      return signedIn() &&
+        exists(friendConversationMemberPath(conversationId, request.auth.uid)) &&
+        get(friendConversationMemberPath(conversationId, request.auth.uid)).data.status == "active";
+    }
+
+    function isInvitedFriendConversationMember(conversationId) {
+      return signedIn() &&
+        exists(friendConversationMemberPath(conversationId, request.auth.uid)) &&
+        get(friendConversationMemberPath(conversationId, request.auth.uid)).data.status == "invited";
+    }
     function sessionPath(sessionId) {
       return /databases/$(database)/documents/sessions/$(sessionId);
     }
@@ -322,6 +338,14 @@ service cloud.firestore {
       }
     }
 
+    // Minimal authenticated identity projection. Documents contain only the
+    // canonical public name/photo fields produced by trusted server code.
+    match /publicUserProfiles/{userId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
     // -----------------------------------------------------------------------
     // notificationTokens collection
     // Device tokens contain private delivery credentials and are managed only
@@ -343,6 +367,52 @@ service cloud.firestore {
         allow get, list: if isSelf(userId);
         allow create, update, delete: if false;
       }
+    }
+
+    // -----------------------------------------------------------------------
+    // Private friend Chat
+    // Conversation, membership, message, moderation, and read-state writes
+    // are callable-only. List queries must constrain the authenticated UID in
+    // the relevant active/invited participant projection.
+    // -----------------------------------------------------------------------
+    match /friendConversations/{conversationId} {
+      allow get, list: if signedIn() && (
+        request.auth.uid in resource.data.activeParticipantIds ||
+        request.auth.uid in resource.data.invitedParticipantIds
+      );
+      allow create, update, delete: if false;
+
+      match /members/{userId} {
+        allow get: if signedIn() && userId == request.auth.uid;
+        allow list: if false;
+        allow create, update, delete: if false;
+      }
+
+      match /memberProfiles/{userId} {
+        allow get, list: if signedIn() && (
+          (isActiveFriendConversationMember(conversationId) && resource.data.status == "active") ||
+          userId == request.auth.uid ||
+          (isInvitedFriendConversationMember(conversationId) && resource.data.status == "active")
+        );
+        allow create, update, delete: if false;
+      }
+
+      match /messages/{messageId} {
+        allow get, list: if isActiveFriendConversationMember(conversationId) &&
+          request.auth.uid in resource.data.visibleToUserIds;
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /userBlocks/{blockerUserId} {
+      allow read, write: if false;
+      match /blockedUsers/{blockedUserId} {
+        allow read, write: if false;
+      }
+    }
+
+    match /chatModerationReports/{reportId} {
+      allow read, write: if false;
     }
 
     // -----------------------------------------------------------------------

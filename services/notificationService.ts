@@ -36,13 +36,14 @@ export type AppNotification = {
   isRead: boolean;
   dismissedAt: Date | null;
   hasDismissedAtField: boolean;
-  dismissReason: "opened" | "clearAll" | null;
+  dismissReason: "opened" | "clearAll" | "resolved" | null;
   status: "active" | "dismissed";
   actorUserId: string | null;
   actorDisplayName: string | null;
   teamId: string | null;
   announcementId: string | null;
   friendRequestId: string | null;
+  conversationId: string | null;
   expiresAt: Date | null;
 };
 
@@ -95,13 +96,16 @@ function toNotification(snapshot: QueryDocumentSnapshot<DocumentData>): AppNotif
     isRead: data.isRead === true,
     dismissedAt: toDate(data.dismissedAt as FirestoreDate),
     hasDismissedAtField: Object.prototype.hasOwnProperty.call(data, "dismissedAt"),
-    dismissReason: data.dismissReason === "opened" || data.dismissReason === "clearAll" ? data.dismissReason : null,
+    dismissReason: data.dismissReason === "opened" || data.dismissReason === "clearAll" || data.dismissReason === "resolved"
+      ? data.dismissReason
+      : null,
     status: data.status === "dismissed" ? "dismissed" : "active",
     actorUserId: typeof data.actorUserId === "string" ? data.actorUserId : null,
     actorDisplayName,
     teamId: typeof data.teamId === "string" ? data.teamId : null,
     announcementId: typeof data.announcementId === "string" ? data.announcementId : null,
     friendRequestId: typeof data.friendRequestId === "string" ? data.friendRequestId : null,
+    conversationId: typeof data.conversationId === "string" ? data.conversationId : null,
     expiresAt: toDate(data.expiresAt as FirestoreDate),
   };
 }

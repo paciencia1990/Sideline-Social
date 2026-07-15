@@ -2,12 +2,12 @@ import {
   collection,
   doc,
   getDoc,
-  getDocs,
+  limit,
   onSnapshot,
   query,
+  Timestamp,
   where,
   type DocumentData,
-  type QueryDocumentSnapshot,
   type Unsubscribe,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
@@ -27,10 +27,10 @@ import {
   type PublicFriendProfileRecord,
   type PublicProfileInspectionCounts,
 } from "@/utils/friendRequestMapping";
-import { formatFriendRequestSenderName, formatPublicUserName, getSafeProfileName } from "@/utils/friendPrivacy";
+import { formatFullPublicName, getSafeProfileName } from "@/utils/friendPrivacy";
 import { getPersistedDisplayName } from "@/utils/profileName";
 
-export type FriendRequestStatus = "pending" | "accepted" | "declined";
+export type FriendRequestStatus = "pending" | "accepted" | "declined" | "canceled" | "expired";
 export type SendFriendRequestStatus = "pending" | "alreadyPending" | "reversePending" | "alreadyFriends";
 export type RequestProfileState = "loading" | "resolved" | "unresolved";
 
@@ -43,6 +43,7 @@ export interface FriendProfile {
   id: string;
   displayName: string;
   photoURL: string | null;
+  hasValidPublicIdentity?: boolean;
 }
 
 export type SuggestedFriendProfile = FriendProfile & Pick<
@@ -56,15 +57,21 @@ export interface FriendRequest {
   id: string;
   fromUserId: string;
   fromDisplayName: string;
+  fromPhotoURL: string | null;
   senderDisplayName: string | null;
+  senderPhotoURL: string | null;
   senderNameResolved: boolean;
   senderProfileState: RequestProfileState;
   toUserId: string;
   toDisplayName: string;
+  toPhotoURL: string | null;
   recipientDisplayName: string | null;
+  recipientPhotoURL: string | null;
   recipientNameResolved: boolean;
   recipientProfileState: RequestProfileState;
   status: FriendRequestStatus;
+  createdAt: Date;
+  expiresAt: Date;
 }
 
 export type HydratedIncomingFriendRequest = FriendRequest & {
@@ -115,32 +122,52 @@ function docToPrivateProfile(userDoc: { id: string; data: () => DocumentData | u
     id: userDoc.id,
     displayName: fallbackName(data),
     photoURL: typeof data?.photoURL === "string" ? data.photoURL : null,
+    hasValidPublicIdentity: Boolean(formatFullPublicName(getPersistedDisplayName(data))?.split(/\s+/u)[1]),
     friendIds,
   };
 }
 
-function docToRequest(requestDoc: QueryDocumentSnapshot<DocumentData>): FriendRequest {
-  const data = requestDoc.data();
+function toDate(value: unknown): Date {
+  if (value instanceof Date) return value;
+  return value && typeof value === "object" && "toDate" in value && typeof value.toDate === "function"
+    ? value.toDate()
+    : new Date(0);
+}
+
+function dataToRequest(value: unknown): FriendRequest | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  const id = typeof data.id === "string" ? data.id : "";
+  const fromUserId = typeof data.fromUserId === "string" ? data.fromUserId : "";
+  const toUserId = typeof data.toUserId === "string" ? data.toUserId : "";
+  if (!id || !fromUserId || !toUserId) return null;
+  const status: FriendRequestStatus = ["accepted", "declined", "canceled", "expired"].includes(String(data.status))
+    ? data.status as FriendRequestStatus
+    : "pending";
 
   return {
-    id: requestDoc.id,
-    fromUserId: typeof data.fromUserId === "string" ? data.fromUserId : "",
-    fromDisplayName: formatFriendRequestSenderName(
+    id,
+    fromUserId,
+    fromDisplayName: formatFullPublicName(
       typeof data.fromDisplayName === "string" ? data.fromDisplayName : null,
-      "",
-    ),
+    ) ?? "",
+    fromPhotoURL: typeof data.fromPhotoURL === "string" ? data.fromPhotoURL : null,
     senderDisplayName: null,
+    senderPhotoURL: null,
     senderNameResolved: false,
     senderProfileState: "loading",
-    toUserId: typeof data.toUserId === "string" ? data.toUserId : "",
-    toDisplayName: formatFriendRequestSenderName(
+    toUserId,
+    toDisplayName: formatFullPublicName(
       typeof data.toDisplayName === "string" ? data.toDisplayName : null,
-      "",
-    ),
+    ) ?? "",
+    toPhotoURL: typeof data.toPhotoURL === "string" ? data.toPhotoURL : null,
     recipientDisplayName: null,
+    recipientPhotoURL: null,
     recipientNameResolved: false,
     recipientProfileState: "loading",
-    status: data.status === "accepted" || data.status === "declined" ? data.status : "pending",
+    status,
+    createdAt: toDate(data.createdAt),
+    expiresAt: toDate(data.expiresAt),
   };
 }
 
@@ -164,7 +191,7 @@ export async function searchUsers(queryText: string): Promise<SuggestedFriendPro
     const suggestions = await getSuggestedConnections(queryText);
     return suggestions.map((profile) => ({
       id: profile.userId,
-      displayName: getSafeProfileName(profile.displayName),
+      displayName: formatFullPublicName(profile.displayName) ?? "",
       photoURL: profile.photoURL,
       sharedSquadName: profile.sharedSquadName,
       sharedActivity: profile.sharedActivity,
@@ -185,8 +212,8 @@ export async function getFriends(userId: string): Promise<FriendProfile[]> {
     const publicProfiles = await getPublicUserProfiles(friendIds);
     return publicProfiles.map((friendProfile) => ({
       id: friendProfile.userId,
-      displayName: getSafeProfileName(friendProfile.displayName),
-      photoURL: null,
+      displayName: formatFullPublicName(friendProfile.displayName) ?? "",
+      photoURL: friendProfile.photoURL ?? null,
     }));
   } catch (error) {
     logFriendsIssue("getFriends", error);
@@ -197,25 +224,17 @@ export async function getFriends(userId: string): Promise<FriendProfile[]> {
 export async function getFriendRequestGroups(userId: string): Promise<FriendRequestGroups> {
   try {
     if (auth.currentUser?.uid !== userId) return emptyFriendRequestGroups();
-    const [incomingSnapshot, outgoingSnapshot] = await Promise.all([
-      getDocs(query(
-        collection(db, REQUESTS_COLLECTION),
-        where("toUserId", "==", userId),
-        where("status", "==", "pending")
-      )),
-      getDocs(query(
-        collection(db, REQUESTS_COLLECTION),
-        where("fromUserId", "==", userId),
-        where("status", "==", "pending")
-      )),
-    ]);
-
-    const incoming = incomingSnapshot.docs
-      .map(docToRequest)
-      .filter((request) => request.fromUserId && request.toUserId);
-    const outgoing = outgoingSnapshot.docs
-      .map(docToRequest)
-      .filter((request) => request.fromUserId && request.toUserId);
+    const loadRequests = httpsCallable<Record<string, never>, { incoming: unknown; outgoing: unknown }>(
+      functions,
+      "getActiveFriendRequests",
+    );
+    const response = await loadRequests({});
+    const incoming = (Array.isArray(response.data.incoming) ? response.data.incoming : [])
+      .map(dataToRequest)
+      .filter((request): request is FriendRequest => Boolean(request));
+    const outgoing = (Array.isArray(response.data.outgoing) ? response.data.outgoing : [])
+      .map(dataToRequest)
+      .filter((request): request is FriendRequest => Boolean(request));
     const senderUserIds = incoming.map(getIncomingRequestSenderId);
     const requestProfileUserIds = deduplicateFriendUserIds([
       ...senderUserIds,
@@ -232,7 +251,7 @@ export async function getFriendRequestGroups(userId: string): Promise<FriendRequ
 
     try {
       const publicProfiles = requestProfileUserIds.length > 0
-        ? await getPublicUserProfiles(requestProfileUserIds)
+        ? await loadPublicProfilesWithRetry(requestProfileUserIds)
         : [];
       const inspectedProfiles = inspectPublicUserProfiles(publicProfiles);
       const hydrated = hydrateFriendRequestGroups(
@@ -297,13 +316,15 @@ export function subscribeToFriendRequestChanges(
   onChange: () => void,
 ): Unsubscribe {
   if (auth.currentUser?.uid !== userId) return () => {};
-  let initialSnapshotsRemaining = 2;
-  const handleSnapshot = () => {
-    if (initialSnapshotsRemaining > 0) {
-      initialSnapshotsRemaining -= 1;
-      return;
-    }
-    onChange();
+  const createSnapshotHandler = () => {
+    let initialized = false;
+    return () => {
+      if (!initialized) {
+        initialized = true;
+        return;
+      }
+      onChange();
+    };
   };
   const handleError = (error: unknown) => logFriendsIssue("subscribeFriendRequests", error);
   const unsubscribeIncoming = onSnapshot(
@@ -311,8 +332,10 @@ export function subscribeToFriendRequestChanges(
       collection(db, REQUESTS_COLLECTION),
       where("toUserId", "==", userId),
       where("status", "==", "pending"),
+      where("expiresAt", ">", Timestamp.now()),
+      limit(100),
     ),
-    handleSnapshot,
+    createSnapshotHandler(),
     handleError,
   );
   const unsubscribeOutgoing = onSnapshot(
@@ -320,13 +343,21 @@ export function subscribeToFriendRequestChanges(
       collection(db, REQUESTS_COLLECTION),
       where("fromUserId", "==", userId),
       where("status", "==", "pending"),
+      where("expiresAt", ">", Timestamp.now()),
+      limit(100),
     ),
-    handleSnapshot,
+    createSnapshotHandler(),
     handleError,
+  );
+  const unsubscribeFriendship = onSnapshot(
+    doc(db, USERS_COLLECTION, userId),
+    createSnapshotHandler(),
+    (error) => logFriendsIssue("subscribeFriendships", error),
   );
   return () => {
     unsubscribeIncoming();
     unsubscribeOutgoing();
+    unsubscribeFriendship();
   };
 }
 
@@ -354,7 +385,16 @@ function hydrateFriendRequestGroups(
 }
 
 export function formatPublicFriendName(value?: string | null): string | null {
-  return formatPublicUserName(value);
+  return formatFullPublicName(value);
+}
+
+async function loadPublicProfilesWithRetry(userIds: string[]) {
+  try {
+    return await getPublicUserProfiles(userIds);
+  } catch (firstError) {
+    logFriendsIssue("getPublicUserProfilesRetry", firstError);
+    return getPublicUserProfiles(userIds);
+  }
 }
 
 function buildIncomingProfileMappingDiagnostics(input: {
@@ -448,18 +488,34 @@ export async function acceptFriendRequest(requestId: string): Promise<void> {
   requireCurrentUserId();
   const callable = httpsCallable<
     { requestId: string; decision: "accepted" },
-    { status: "accepted" | "alreadyHandled" }
+    { status: "accepted" | "expired" | "canceled" | "alreadyHandled" }
   >(functions, "respondToFriendRequest");
-  await callable({ requestId, decision: "accepted" });
+  const response = await callable({ requestId, decision: "accepted" });
+  if (response.data.status === "expired" || response.data.status === "canceled") {
+    throw createFriendRequestError("friend-request/no-longer-available");
+  }
 }
 
 export async function declineFriendRequest(requestId: string): Promise<void> {
   requireCurrentUserId();
   const callable = httpsCallable<
     { requestId: string; decision: "declined" },
-    { status: "declined" | "alreadyHandled" }
+    { status: "declined" | "expired" | "alreadyHandled" }
   >(functions, "respondToFriendRequest");
-  await callable({ requestId, decision: "declined" });
+  const response = await callable({ requestId, decision: "declined" });
+  if (response.data.status === "expired") throw createFriendRequestError("friend-request/no-longer-available");
+}
+
+export async function cancelFriendRequest(requestId: string): Promise<void> {
+  requireCurrentUserId();
+  const callable = httpsCallable<
+    { requestId: string },
+    { status: "canceled" | "expired" | "alreadyHandled" | "notFound" }
+  >(functions, "cancelFriendRequest");
+  const response = await callable({ requestId });
+  if (response.data.status === "expired" || response.data.status === "notFound") {
+    throw createFriendRequestError("friend-request/no-longer-available");
+  }
 }
 
 export async function removeFriend(friendUserId: string): Promise<void> {

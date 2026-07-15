@@ -73,10 +73,6 @@ export default function SquadDetailScreen() {
     );
   }, [squadId, user, leaveSquad, t]);
 
-  const handleOpenChat = useCallback(() => {
-    router.push(`/(social)/squad-chat?squadId=${squadId}`);
-  }, [squadId]);
-
   const handleJoin = useCallback(async () => {
     if (!squadId) return;
     setJoining(true);
@@ -216,11 +212,9 @@ export default function SquadDetailScreen() {
 
         {/* Actions */}
         <View style={styles.actionsSection}>
-          {isMember ? (
-            <PrimaryButton title={t('squad.detailChat')} onPress={handleOpenChat} style={styles.chatBtn} />
-          ) : (
+          {!isMember ? (
             <PrimaryButton loading={joining} title={t('squad.joinThisSquad')} onPress={() => void handleJoin()} style={styles.chatBtn} />
-          )}
+          ) : null}
 
           {isMember && (
             <TouchableOpacity style={styles.leaveBtn} onPress={handleLeave} disabled={leaving}>

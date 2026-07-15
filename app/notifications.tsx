@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { ArrowLeft, Bell, CheckCheck, Megaphone, UserCheck, UserPlus } from "lucide-react-native";
+import { ArrowLeft, Bell, CheckCheck, Megaphone, UserCheck, UserPlus, Users } from "lucide-react-native";
 import { router, useFocusEffect } from "expo-router";
 import { useTranslation } from "react-i18next";
 
@@ -214,6 +214,7 @@ function NotificationRow({
 function getTypeIcon(type: AppNotification["type"]) {
   if (type === "coachAnnouncement") return <Megaphone color={Colors.primary} size={20} />;
   if (type === "friendRequestAccepted") return <UserCheck color={Colors.accentGreen} size={20} />;
+  if (type === "chatGroupInvitation") return <Users color={Colors.primary} size={20} />;
   return <UserPlus color={Colors.primary} size={20} />;
 }
 

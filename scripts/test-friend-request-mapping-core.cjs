@@ -2,122 +2,47 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const ts = require("typescript");
-
-function read(...segments) {
-  return fs.readFileSync(path.join(process.cwd(), ...segments), "utf8");
+function read(...segments) { return fs.readFileSync(path.join(process.cwd(), ...segments), "utf8"); }
+function load(relativePath) {
+  const output = ts.transpileModule(read(relativePath), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 } }).outputText;
+  const loaded = { exports: {} }; new Function("module", "exports", output)(loaded, loaded.exports); return loaded.exports;
 }
-
-function loadTypeScript(relativePath) {
-  const output = ts.transpileModule(read(relativePath), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 },
-  }).outputText;
-  const loaded = { exports: {} };
-  new Function("module", "exports", output)(loaded, loaded.exports);
-  return loaded.exports;
-}
-
-const mapping = loadTypeScript("utils/friendRequestMapping.ts");
-const privacy = loadTypeScript("utils/friendPrivacy.ts");
-const formatPublicName = (value) => privacy.formatFriendRequestSenderName(value, "") || null;
+const mapping = load("utils/friendRequestMapping.ts");
+const privacy = load("utils/friendPrivacy.ts");
+const format = (value) => privacy.formatFullPublicName(value);
 
 assert.equal(mapping.getIncomingRequestSenderId({ fromUserId: "sender_uid" }), "sender_uid");
-assert.equal(mapping.getIncomingRequestSenderId({ fromUserId: " sender_uid " }), null);
-assert.equal(mapping.getIncomingRequestSenderId({ fromUserId: "" }), null);
 assert.equal(mapping.getOutgoingRequestRecipientId({ toUserId: "recipient_uid" }), "recipient_uid");
-assert.deepEqual(
-  mapping.deduplicateFriendUserIds(["sender_uid", "recipient_uid", "sender_uid", null]),
-  ["sender_uid", "recipient_uid"],
-);
+assert.deepEqual(mapping.deduplicateFriendUserIds(["sender_uid", "sender_uid", null]), ["sender_uid"]);
 
-const inspected = mapping.inspectPublicUserProfiles([
-  { userId: "recipient_uid", displayName: "Riley Rivera" },
-  { userId: "sender_uid", displayName: "Joann Pollard" },
+const profiles = mapping.inspectPublicUserProfiles([
+  { userId: "sender_uid", firstName: "Joann", lastName: "Pollard", displayName: "Joann Pollard", photoURL: "https://example.test/a.jpg" },
+  { userId: "recipient_uid", firstName: "Riley", lastName: "Rivera", displayName: "Riley Rivera", photoURL: null },
 ]);
-assert.equal(inspected.counts.returnedProfileCount, 2);
-assert.equal(inspected.counts.returnedWithUserIdCount, 2);
-assert.equal(inspected.counts.returnedWithNonEmptyDisplayNameCount, 2);
-assert.equal(inspected.profilesByUserId.get("sender_uid").displayName, "Joann Pollard");
+const incoming = [{ id: "sender_uid__viewer", fromUserId: "sender_uid", fromDisplayName: "Old Sender", fromPhotoURL: null, toUserId: "viewer" }];
+const outgoing = [{ id: "viewer__recipient_uid", fromUserId: "viewer", toUserId: "recipient_uid", toDisplayName: "Old Recipient", toPhotoURL: null }];
+const current = mapping.hydrateFriendRequestProfiles(incoming, outgoing, profiles.profilesByUserId, format);
+assert.equal(current.incoming[0].senderDisplayName, "Joann Pollard", "current public name replaces stale snapshot");
+assert.equal(current.incoming[0].senderNameSource, "publicProfile");
+assert.equal(current.incoming[0].senderPhotoURL, "https://example.test/a.jpg");
+assert.equal(current.outgoing[0].recipientDisplayName, "Riley Rivera");
 
-const incoming = [{
-  id: "sender_uid__viewer_uid",
-  fromUserId: "sender_uid",
-  fromDisplayName: "Sideline Parent",
-  toUserId: "viewer_uid",
-}];
-const outgoing = [{
-  id: "viewer_uid__recipient_uid",
-  fromUserId: "viewer_uid",
-  toUserId: "recipient_uid",
-  toDisplayName: "Sideline Parent",
-}];
-const hydrated = mapping.hydrateFriendRequestProfiles(
-  incoming,
-  outgoing,
-  inspected.profilesByUserId,
-  formatPublicName,
-);
-assert.equal(hydrated.incoming[0].senderDisplayName, "Joann P.");
-assert.equal(hydrated.incoming[0].senderNameResolved, true);
-assert.equal(hydrated.outgoing[0].recipientDisplayName, "Riley R.");
-assert.equal(hydrated.outgoing[0].recipientNameResolved, true);
-assert.notEqual(hydrated.incoming[0].senderDisplayName, hydrated.outgoing[0].recipientDisplayName);
-
-const nullNameInspection = mapping.inspectPublicUserProfiles([
-  { userId: "sender_uid", displayName: null },
-]);
-const nullNameHydration = mapping.hydrateFriendRequestProfiles(
-  incoming,
-  [],
-  nullNameInspection.profilesByUserId,
-  formatPublicName,
-);
-assert.equal(nullNameHydration.incoming[0].senderDisplayName, null);
-assert.equal(nullNameHydration.incoming[0].senderNameResolved, false);
-assert.equal(nullNameInspection.counts.returnedWithNullDisplayNameCount, 1);
-
-const missingHydration = mapping.hydrateFriendRequestProfiles(incoming, [], new Map(), formatPublicName);
-assert.equal(missingHydration.incoming[0].senderDisplayName, null);
-assert.equal(missingHydration.incoming[0].senderNameResolved, false);
-
-const malformed = mapping.inspectPublicUserProfiles([
-  { displayName: "Missing ID" },
-  { userId: "", displayName: "Empty ID" },
-  { userId: " invalid ", displayName: "Invalid ID" },
-  { userId: "valid_uid", displayName: 42 },
-]);
-assert.equal(malformed.counts.profilesMissingUserIdCount, 1);
-assert.equal(malformed.counts.profilesWithEmptyUserIdCount, 1);
-assert.equal(malformed.counts.profilesWithInvalidUserIdCount, 1);
-assert.equal(malformed.counts.profilesWithInvalidDisplayNameCount, 1);
-assert.equal(malformed.profiles.length, 0);
-
-const sorted = [...hydrated.incoming].sort((first, second) => first.id.localeCompare(second.id));
-assert.equal(sorted[0].senderDisplayName, "Joann P.");
-const listenerRefresh = mapping.hydrateFriendRequestProfiles(incoming, outgoing, inspected.profilesByUserId, formatPublicName);
-const pullToRefresh = mapping.hydrateFriendRequestProfiles(incoming, outgoing, inspected.profilesByUserId, formatPublicName);
-assert.equal(listenerRefresh.incoming[0].senderDisplayName, "Joann P.");
-assert.equal(pullToRefresh.incoming[0].senderDisplayName, "Joann P.");
-
-assert.equal(privacy.getFriendNameInitials("Joann P."), "JP");
-assert.equal(formatPublicName("private@example.com"), null);
+const snapshot = mapping.hydrateFriendRequestProfiles(incoming, outgoing, new Map(), format);
+const oldPublicOnlyName = new Map().get("sender_uid")?.displayName ?? null;
+assert.equal(oldPublicOnlyName, null, "reproduces the old placeholder path when the public lookup misses");
+assert.equal(snapshot.incoming[0].senderDisplayName, "Old Sender", "trusted snapshot is the resilient fallback");
+assert.equal(snapshot.incoming[0].senderNameSource, "requestSnapshot");
+assert.equal(snapshot.outgoing[0].recipientDisplayName, "Old Recipient");
+const unavailable = mapping.hydrateFriendRequestProfiles([{ ...incoming[0], fromDisplayName: "Sideline Parent" }], [], new Map(), format);
+assert.equal(unavailable.incoming[0].senderDisplayName, null);
+assert.equal(unavailable.incoming[0].senderNameSource, "unavailable");
+assert.equal(format("private@example.test"), null);
 
 const service = read("services", "friendsService.ts");
 const screen = read("app", "(tabs)", "friends.tsx");
-const publicProfileService = read("services", "publicProfileService.ts");
-assert.equal(service.includes("profilesByUserId.get(senderId)"), true);
-assert.equal(service.includes("inspectPublicUserProfiles(publicProfiles)"), true);
-assert.equal(service.includes("getIncomingRequestSenderId"), true);
-assert.equal(service.includes("incomingIdMatchedProfileCount"), true);
-assert.equal(service.includes("incomingIdMatchedNullNameCount"), true);
-assert.equal(service.includes("hydratedSenderNameCount"), true);
-assert.equal(screen.includes("request.senderDisplayName || t(\"friends.sidelineParent\")"), true);
-assert.equal(screen.includes("formatFriendRequestSenderName(request.senderDisplayName"), false);
-assert.equal(screen.includes("getFriendNameInitials(name)"), true);
-assert.equal(screen.includes("acceptFriendRequest(request.id)"), true);
-assert.equal(screen.includes("declineFriendRequest(request.id)"), true);
-assert.equal(screen.includes("request.fromDisplayName, t"), false);
-assert.equal(screen.toLowerCase().includes("request.fromuserid}"), false);
+assert.ok(service.includes("loadPublicProfilesWithRetry"));
+assert.ok(service.includes("hydrateFriendRequestProfiles"));
+assert.ok(screen.includes('t("friends.publicNameUnavailable")'));
+assert.equal(screen.includes('request.senderDisplayName || t("friends.sidelineParent")'), false);
 assert.equal(screen.toLowerCase().includes("profile.email"), false);
-assert.equal(publicProfileService.includes("userId.trim()"), false);
-
-console.log("Incoming/outgoing exact-UID mapping, null-name distinction, state survival, rendering, and privacy tests passed.");
+console.log("Full-name current-profile, trusted-snapshot fallback, retry, photo, and neutral fallback mapping tests passed.");

@@ -2,6 +2,7 @@ export const APP_NOTIFICATION_TYPES = [
   "coachAnnouncement",
   "friendRequest",
   "friendRequestAccepted",
+  "chatGroupInvitation",
 ] as const;
 
 export type AppNotificationType = (typeof APP_NOTIFICATION_TYPES)[number];
@@ -10,6 +11,8 @@ export type NotificationNavigationData = {
   type?: unknown;
   teamId?: unknown;
   announcementId?: unknown;
+  conversationId?: unknown;
+  conversationType?: unknown;
 };
 
 export type UnreadNotificationLike = {
@@ -44,6 +47,16 @@ export function getNotificationDestination(data: NotificationNavigationData): st
     data.type === "friend_accepted"
   ) {
     return "/(tabs)/friends";
+  }
+
+  if (data.type === "chatGroupInvitation") {
+    if (!isValidRouteId(data.conversationId)) return null;
+    return `/(social)/chat/invitation/${encodeURIComponent(data.conversationId)}`;
+  }
+
+  if (data.type === "friendChatMessage") {
+    if (!isValidRouteId(data.conversationId)) return null;
+    return `/(social)/chat/${encodeURIComponent(data.conversationId)}`;
   }
 
   return null;

@@ -23,6 +23,9 @@ assert.equal(core.getNotificationDestination({ type: "coach_update", teamId: "te
 assert.equal(core.getNotificationDestination({ type: "coachAnnouncement", teamId: "bad/path", announcementId: "update-1" }), null);
 assert.equal(core.getNotificationDestination({ type: "friendRequest" }), "/(tabs)/friends");
 assert.equal(core.getNotificationDestination({ type: "friendRequestAccepted" }), "/(tabs)/friends");
+assert.equal(core.getNotificationDestination({ type: "chatGroupInvitation", conversationId: "group-1" }), "/(social)/chat/invitation/group-1");
+assert.equal(core.getNotificationDestination({ type: "friendChatMessage", conversationId: "direct-1" }), "/(social)/chat/direct-1");
+assert.equal(core.getNotificationDestination({ type: "chatGroupInvitation", conversationId: "bad/path" }), null);
 assert.equal(core.getNotificationDestination({ type: "unknown" }), null);
 assert.equal(core.normalizeNotificationId("friendRequest_request-1"), "friendRequest_request-1");
 assert.equal(core.normalizeNotificationId("bad/path"), null);
@@ -137,7 +140,11 @@ assert.equal(friendCreated.includes("`${senderName} wants to connect with you.`"
 assert.equal(friendCreated.includes("A Sideline parent wants to connect with you."), true);
 assert.equal(friendCreated.includes("actorDisplayName: senderName || undefined"), true);
 assert.equal(actorNameResolver.includes("admin.auth().getUser(userId)"), true);
-assert.equal(actorNameResolver.includes("formatSuggestedConnectionName(authName)"), true);
+assert.equal(actorNameResolver.includes("resolveCanonicalPublicName"), true);
+assert.equal(functionsSource.includes("dismissReason: 'resolved'"), false);
+const requestNotificationResolver = read("functions", "src", "friendRequestNotifications.ts");
+assert.equal(requestNotificationResolver.includes("dismissReason: 'resolved'"), true);
+assert.equal(requestNotificationResolver.includes("status: 'dismissed'"), true);
 assert.equal(actorNameResolver.toLowerCase().includes("email"), false);
 assert.equal(teamAnnouncement.includes("memberSnapshot.id === authorUserId"), true);
 
@@ -145,7 +152,7 @@ for (const key of [
   "allCaughtUp", "clearAll", "clearing", "clearedTitle", "clearedBody", "clearAllError",
   "opened", "unableToUpdate", "dismissalRetry", "bellNoUnread", "bellUnread",
   "coachAnnouncementTitle", "friendRequestTitle", "friendRequestAcceptedTitle",
-  "friendRequestFallbackBody",
+  "friendRequestFallbackBody", "chatGroupInvitationTitle", "chatGroupInvitationBody", "chatGroupInvitationUnnamedBody",
 ]) {
   assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length, 2, `${key} needs English and Spanish copy.`);
 }

@@ -1,6 +1,9 @@
 export type PublicFriendProfileRecord = {
   userId: string;
   displayName: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  photoURL?: string | null;
 };
 
 export type PublicProfileInspectionCounts = {
@@ -14,8 +17,8 @@ export type PublicProfileInspectionCounts = {
   profilesWithInvalidDisplayNameCount: number;
 };
 
-type IncomingRequestIdentity = { fromUserId?: unknown };
-type OutgoingRequestIdentity = { toUserId?: unknown };
+type IncomingRequestIdentity = { fromUserId?: unknown; fromDisplayName?: unknown; fromPhotoURL?: unknown };
+type OutgoingRequestIdentity = { toUserId?: unknown; toDisplayName?: unknown; toPhotoURL?: unknown };
 
 const FIREBASE_UID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
 
@@ -86,7 +89,13 @@ export function inspectPublicUserProfiles(value: unknown): {
       counts.returnedWithNonEmptyDisplayNameCount += 1;
     }
 
-    profiles.push({ userId, displayName: record.displayName });
+    profiles.push({
+      userId,
+      displayName: record.displayName,
+      firstName: typeof record.firstName === "string" ? record.firstName : null,
+      lastName: typeof record.lastName === "string" ? record.lastName : null,
+      photoURL: typeof record.photoURL === "string" ? record.photoURL : null,
+    });
   });
 
   return {
@@ -109,21 +118,29 @@ export function hydrateFriendRequestProfiles<
     incoming: incoming.map((request) => {
       const senderId = getIncomingRequestSenderId(request);
       const profile = senderId ? profilesByUserId.get(senderId) : undefined;
-      const senderDisplayName = profile ? formatPublicName(profile.displayName) : null;
+      const currentName = profile ? formatPublicName(profile.displayName) : null;
+      const snapshotName = formatPublicName(typeof request.fromDisplayName === "string" ? request.fromDisplayName : null);
+      const senderDisplayName = currentName ?? snapshotName;
       return {
         ...request,
         senderDisplayName,
+        senderPhotoURL: profile?.photoURL ?? (typeof request.fromPhotoURL === "string" ? request.fromPhotoURL : null),
         senderNameResolved: Boolean(senderDisplayName),
+        senderNameSource: currentName ? "publicProfile" : snapshotName ? "requestSnapshot" : "unavailable",
       };
     }),
     outgoing: outgoing.map((request) => {
       const recipientId = getOutgoingRequestRecipientId(request);
       const profile = recipientId ? profilesByUserId.get(recipientId) : undefined;
-      const recipientDisplayName = profile ? formatPublicName(profile.displayName) : null;
+      const currentName = profile ? formatPublicName(profile.displayName) : null;
+      const snapshotName = formatPublicName(typeof request.toDisplayName === "string" ? request.toDisplayName : null);
+      const recipientDisplayName = currentName ?? snapshotName;
       return {
         ...request,
         recipientDisplayName,
+        recipientPhotoURL: profile?.photoURL ?? (typeof request.toPhotoURL === "string" ? request.toPhotoURL : null),
         recipientNameResolved: Boolean(recipientDisplayName),
+        recipientNameSource: currentName ? "publicProfile" : snapshotName ? "requestSnapshot" : "unavailable",
       };
     }),
   };

@@ -5,6 +5,7 @@ import * as Notifications from "expo-notifications";
 
 import { useAuth } from "@/context/AuthContext";
 import i18n from "@/i18n";
+import { isViewingFriendConversation } from "@/services/chatService";
 import {
   getNotificationOpenTargetFromData,
   registerDeviceNotificationToken,
@@ -12,11 +13,14 @@ import {
 } from "@/services/notificationService";
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: false,
-    shouldSetBadge: true,
-    shouldShowAlert: true,
-  }),
+  handleNotification: async (notification) => {
+    const shouldShowAlert = !isViewingFriendConversation(notification.request.content.data);
+    return {
+      shouldPlaySound: false,
+      shouldSetBadge: shouldShowAlert,
+      shouldShowAlert,
+    };
+  },
 });
 
 export function NotificationCoordinator() {
@@ -86,6 +90,10 @@ async function registerDeviceToken() {
     if (Platform.OS === "android") {
       await Notifications.setNotificationChannelAsync("coach-updates", {
         name: i18n.t("myTeams.coachUpdates"),
+        importance: Notifications.AndroidImportance.HIGH,
+      });
+      await Notifications.setNotificationChannelAsync("chat-messages", {
+        name: i18n.t("chat.title"),
         importance: Notifications.AndroidImportance.HIGH,
       });
     }

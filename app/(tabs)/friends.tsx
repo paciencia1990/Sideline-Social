@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Alert,
+  AppState,
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -10,7 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { Check, Heart, MessageCircle, Search, UserMinus, UserPlus, Users, X } from "lucide-react-native";
+import { Check, ChevronDown, Heart, MessageCircle, Search, UserMinus, UserPlus, Users, X } from "lucide-react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
@@ -20,6 +22,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
   acceptFriendRequest,
+  cancelFriendRequest,
   declineFriendRequest,
   getCurrentUserProfile,
   getFriends,
@@ -31,15 +34,11 @@ import {
   type FriendProfile,
   type FriendRequest,
   type HydratedIncomingFriendRequest,
-  type IncomingProfileMappingDiagnostics,
   type SuggestedFriendProfile,
 } from "@/services/friendsService";
-import { getOrCreateDirectChat } from "@/services/chatService";
+import { createOrOpenDirectConversation } from "@/services/chatService";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
-import {
-  formatSuggestedConnectionName,
-  getFriendNameInitials,
-} from "@/utils/friendPrivacy";
+import { formatFullPublicName, getFriendNameInitials } from "@/utils/friendPrivacy";
 
 function SectionTitle({ title, count }: { title: string; count?: number }) {
   return (
@@ -47,6 +46,39 @@ function SectionTitle({ title, count }: { title: string; count?: number }) {
       <Text style={styles.sectionTitle}>{title}</Text>
       {typeof count === "number" ? <Text style={styles.sectionCount}>{count}</Text> : null}
     </View>
+  );
+}
+
+function AccordionHeader({
+  title,
+  count,
+  expanded,
+  onPress,
+}: {
+  title: string;
+  count: number;
+  expanded: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      accessibilityLabel={`${title} (${count})`}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
+      activeOpacity={0.82}
+      disabled={count === 0}
+      onPress={onPress}
+      style={[styles.accordionHeader, count === 0 && styles.accordionHeaderEmpty]}
+    >
+      <Text style={styles.accordionTitle}>{title} ({count})</Text>
+      <ChevronDown
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        color={Colors.textHeading}
+        size={20}
+        style={{ transform: [{ rotate: expanded ? "180deg" : "0deg" }] }}
+      />
+    </TouchableOpacity>
   );
 }
 
@@ -60,10 +92,12 @@ function EmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-function Avatar({ name }: { name: string }) {
+function Avatar({ name, photoURL }: { name: string; photoURL?: string | null }) {
   return (
-    <View style={styles.avatar}>
-      <Text style={styles.avatarText}>{getFriendNameInitials(name)}</Text>
+    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.avatar}>
+      {photoURL ? <Image source={{ uri: photoURL }} style={styles.avatarImage} /> : (
+        <Text style={styles.avatarText}>{getFriendNameInitials(name)}</Text>
+      )}
     </View>
   );
 }
@@ -95,7 +129,7 @@ function FriendRow({
 }) {
   return (
     <Card style={styles.personCard}>
-      <Avatar name={profile.displayName} />
+      <Avatar name={profile.displayName} photoURL={profile.photoURL} />
       <View style={styles.personText}>
         <Text style={styles.personName}>{profile.displayName}</Text>
       </View>
@@ -141,12 +175,12 @@ function SuggestedConnectionRow({
   onAdd: () => void;
 }) {
   const { t } = useTranslation();
-  const displayName = formatSuggestedConnectionName(profile.displayName, t("friends.sidelineParent"));
+  const displayName = formatFullPublicName(profile.displayName) ?? t("friends.publicNameUnavailable");
   const context = profile.sharedSquadName || profile.sharedActivity || t("friends.suggestedParentContext");
 
   return (
     <Card style={styles.personCard}>
-      <Avatar name={displayName} />
+      <Avatar name={displayName} photoURL={profile.photoURL} />
       <View style={styles.personText}>
         <Text style={styles.personName}>{displayName}</Text>
         <Text style={styles.personMeta}>{context}</Text>
@@ -193,11 +227,11 @@ function RequestRow({
   const declineBusy = busyAction === `decline:${request.id}`;
   const visibleSenderName = request.senderProfileState === "loading"
     ? t("friends.loadingParentName")
-    : request.senderDisplayName || t("friends.sidelineParent");
+    : request.senderDisplayName || t("friends.publicNameUnavailable");
 
   return (
     <Card style={styles.personCard}>
-      <Avatar name={visibleSenderName} />
+      <Avatar name={visibleSenderName} photoURL={request.senderPhotoURL} />
       <View style={styles.personText}>
         <Text
           accessibilityLabel={t("friends.friendRequestFrom", { name: visibleSenderName })}
@@ -251,9 +285,8 @@ export default function FriendsScreen() {
   const [friends, setFriends] = useState<FriendProfile[]>([]);
   const [incomingRequests, setIncomingRequests] = useState<HydratedIncomingFriendRequest[]>([]);
   const [outgoingRequests, setOutgoingRequests] = useState<FriendRequest[]>([]);
-  const [incomingMappingDiagnostics, setIncomingMappingDiagnostics] = useState<
-    IncomingProfileMappingDiagnostics | null
-  >(null);
+  const [incomingExpanded, setIncomingExpanded] = useState(false);
+  const [outgoingExpanded, setOutgoingExpanded] = useState(false);
   const [suggestedUsers, setSuggestedUsers] = useState<SuggestedFriendProfile[]>([]);
   const [searchText, setSearchText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -264,6 +297,8 @@ export default function FriendsScreen() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const actionsInFlight = useRef(new Set<string>());
   const acknowledgedNotificationIds = useRef(new Set<string>());
+  const incomingExpansionInitialized = useRef(false);
+  const previousIncomingCount = useRef(0);
 
   const outgoingUserIds = useMemo(
     () => new Set(outgoingRequests.map((request) => request.toUserId)),
@@ -276,7 +311,6 @@ export default function FriendsScreen() {
       setFriends([]);
       setIncomingRequests([]);
       setOutgoingRequests([]);
-      setIncomingMappingDiagnostics(null);
       setSuggestedUsers([]);
       setLoading(false);
       return;
@@ -296,7 +330,6 @@ export default function FriendsScreen() {
       setFriends(nextFriends);
       setIncomingRequests(nextRequestGroups.incoming);
       setOutgoingRequests(nextRequestGroups.outgoing);
-      setIncomingMappingDiagnostics(nextRequestGroups.mappingDiagnostics);
       setSuggestedUsers(nextSuggested);
       if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
         acknowledgedNotificationIds.current.add(notificationId);
@@ -321,16 +354,29 @@ export default function FriendsScreen() {
   }, [loadFriends, user?.uid]);
 
   useEffect(() => {
-    if (!__DEV__ || !incomingMappingDiagnostics) return;
-    const renderedSenderNameCount = incomingRequests.filter(
-      (request) => request.senderNameResolved && Boolean(request.senderDisplayName),
-    ).length;
-    console.info("[friends] incoming-profile-mapping", {
-      operation: "incoming-profile-mapping",
-      ...incomingMappingDiagnostics,
-      renderedSenderNameCount,
+    if (loading) return;
+    if (!incomingExpansionInitialized.current) {
+      incomingExpansionInitialized.current = true;
+      setIncomingExpanded(incomingRequests.length > 0);
+    } else if (incomingRequests.length === 0) {
+      setIncomingExpanded(false);
+    } else if (previousIncomingCount.current === 0) {
+      setIncomingExpanded(true);
+    }
+    previousIncomingCount.current = incomingRequests.length;
+  }, [incomingRequests.length, loading]);
+
+  useEffect(() => {
+    if (outgoingRequests.length === 0) setOutgoingExpanded(false);
+  }, [outgoingRequests.length]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") void loadFriends();
     });
-  }, [incomingMappingDiagnostics, incomingRequests]);
+    return () => subscription.remove();
+  }, [loadFriends, user?.uid]);
 
   useEffect(() => {
     if (!user) return;
@@ -359,7 +405,7 @@ export default function FriendsScreen() {
         setActionError((current) => current?.actionId === actionId ? null : current);
       } catch (nextError) {
         logFriendsScreenIssue(actionId, nextError);
-        if (getFriendsErrorCode(nextError) === "friend-request/reverse-pending") {
+        if (["friend-request/reverse-pending", "friend-request/no-longer-available"].includes(getFriendsErrorCode(nextError))) {
           await loadFriends();
         }
         setActionError({ actionId, message: mapFriendActionError(nextError, failureMessage, t) });
@@ -385,13 +431,32 @@ export default function FriendsScreen() {
     [runAction, t]
   );
 
+  const confirmCancelRequest = useCallback((request: FriendRequest) => {
+    const recipientName = request.recipientDisplayName || t("friends.publicNameUnavailable");
+    Alert.alert(t("friends.cancelRequest"), t("friends.cancelRequestConfirm"), [
+      { text: t("friends.cancel"), style: "cancel" },
+      {
+        text: t("friends.cancelRequest"),
+        style: "destructive",
+        onPress: () => void runAction(
+          `cancel:${request.id}`,
+          async () => {
+            await cancelFriendRequest(request.id);
+            setOutgoingRequests((current) => current.filter((item) => item.id !== request.id));
+          },
+          t("friends.cancelRequestError", { name: recipientName }),
+        ),
+      },
+    ]);
+  }, [runAction, t]);
+
   const openDirectChat = useCallback(
     async (friend: FriendProfile) => {
       setBusyAction(`chat:${friend.id}`);
       setActionError(null);
       try {
-        const chatId = await getOrCreateDirectChat(friend.id, friend.displayName);
-        router.push({ pathname: "/(social)/chat/[chatId]", params: { chatId } });
+        const result = await createOrOpenDirectConversation(friend.id);
+        router.push({ pathname: "/(social)/chat/[chatId]", params: { chatId: result.conversationId } });
       } catch (nextError) {
         const message = nextError instanceof Error ? nextError.message : t("friends.errorBody");
         setActionError({ actionId: `chat:${friend.id}`, message });
@@ -471,35 +536,85 @@ export default function FriendsScreen() {
           </Card>
         ) : null}
 
-        <SectionTitle title={t("friends.requests")} count={incomingRequests.length} />
-        {incomingRequests.length > 0 ? (
+        {currentProfile?.hasValidPublicIdentity === false ? (
+          <Card style={styles.identityCard}>
+            <Text style={styles.errorTitle}>{t("friends.addNameBeforeSending")}</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              activeOpacity={0.82}
+              onPress={() => router.push("/(tabs)/profile")}
+              style={styles.retryButton}
+            >
+              <Text style={styles.retryText}>{t("friends.editProfile")}</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : null}
+
+        <AccordionHeader
+          title={t("friends.requests")}
+          count={incomingRequests.length}
+          expanded={incomingExpanded && incomingRequests.length > 0}
+          onPress={() => setIncomingExpanded((current) => !current)}
+        />
+        {incomingExpanded && incomingRequests.length > 0 ? (
           incomingRequests.map((request) => (
             <RequestRow
               key={request.id}
               request={request}
               busyAction={busyAction}
-              onAccept={() => void runAction(`accept:${request.id}`, () => acceptFriendRequest(request.id))}
-              onDecline={() => void runAction(`decline:${request.id}`, () => declineFriendRequest(request.id))}
+              onAccept={() => void runAction(
+                `accept:${request.id}`,
+                async () => {
+                  await acceptFriendRequest(request.id);
+                  setIncomingRequests((current) => current.filter((item) => item.id !== request.id));
+                },
+                t("friends.acceptRequestError"),
+              )}
+              onDecline={() => void runAction(
+                `decline:${request.id}`,
+                async () => {
+                  await declineFriendRequest(request.id);
+                  setIncomingRequests((current) => current.filter((item) => item.id !== request.id));
+                },
+                t("friends.declineRequestError"),
+              )}
             />
           ))
-        ) : (
-          <EmptyState title={t("friends.noRequestsTitle")} body={t("friends.noRequestsBody")} />
-        )}
+        ) : null}
 
-        {outgoingRequests.length > 0 ? (
+        <AccordionHeader
+          title={t("friends.outgoing")}
+          count={outgoingRequests.length}
+          expanded={outgoingExpanded && outgoingRequests.length > 0}
+          onPress={() => setOutgoingExpanded((current) => !current)}
+        />
+        {outgoingExpanded && outgoingRequests.length > 0 ? (
           <>
-            <SectionTitle title={t("friends.outgoing")} count={outgoingRequests.length} />
             {outgoingRequests.map((request) => {
               const recipientName = request.recipientProfileState === "loading"
                 ? t("friends.loadingParentName")
-                : request.recipientDisplayName || t("friends.sidelineParent");
+                : request.recipientDisplayName || t("friends.publicNameUnavailable");
               return (
                 <Card key={request.id} style={styles.personCard}>
-                  <Avatar name={recipientName} />
+                  <Avatar name={recipientName} photoURL={request.recipientPhotoURL} />
                   <View style={styles.personText}>
                     <Text style={styles.personName}>{recipientName}</Text>
-                    <Text style={styles.personMeta}>{t("friends.pending")}</Text>
+                    <Text style={styles.personMeta}>
+                      {t("friends.sentTime", { time: formatSentAge(request.createdAt, t) })}
+                    </Text>
                   </View>
+                  <TouchableOpacity
+                    accessibilityLabel={t("friends.cancelRequestFor", { name: recipientName })}
+                    accessibilityRole="button"
+                    activeOpacity={0.82}
+                    disabled={busyAction === `cancel:${request.id}`}
+                    onPress={() => confirmCancelRequest(request)}
+                    style={[styles.cancelRequestButton, busyAction === `cancel:${request.id}` && styles.disabledButton]}
+                  >
+                    {busyAction === `cancel:${request.id}` ? (
+                      <ActivityIndicator color={Colors.primary} size="small" />
+                    ) : <Text style={styles.cancelRequestText}>{t("friends.cancelRequest")}</Text>}
+                  </TouchableOpacity>
                 </Card>
               );
             })}
@@ -508,21 +623,27 @@ export default function FriendsScreen() {
 
         <SectionTitle title={t("friends.myFriends")} count={friends.length} />
         {friends.length > 0 ? (
-          friends.map((friend) => (
-            <FriendRow
-              key={friend.id}
-              profile={friend}
+          friends.map((friend) => {
+            const visibleFriend = {
+              ...friend,
+              displayName: friend.displayName || t("friends.publicNameUnavailable"),
+            };
+            return (
+              <FriendRow
+              key={visibleFriend.id}
+              profile={visibleFriend}
               actionLabel={t("friends.remove")}
               actionIcon={<UserMinus size={18} color={Colors.surface} />}
               danger
-              busy={busyAction === `remove:${friend.id}`}
-              onAction={() => confirmRemove(friend)}
+              busy={busyAction === `remove:${visibleFriend.id}`}
+              onAction={() => confirmRemove(visibleFriend)}
               secondaryActionLabel={t("chat.startConversation")}
               secondaryActionIcon={<MessageCircle size={18} color={Colors.surface} />}
-              secondaryBusy={busyAction === `chat:${friend.id}`}
-              onSecondaryAction={() => void openDirectChat(friend)}
+              secondaryBusy={busyAction === `chat:${visibleFriend.id}`}
+              onSecondaryAction={() => void openDirectChat(visibleFriend)}
             />
-          ))
+            );
+          })
         ) : (
           <EmptyState title={t("friends.emptyTitle")} body={t("friends.emptyBody")} />
         )}
@@ -625,6 +746,29 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: Spacing.xs,
   },
+  accordionHeader: {
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderColor: Colors.secondary,
+    borderRadius: Radius.card,
+    borderWidth: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 48,
+    paddingHorizontal: Spacing.md,
+    ...Shadow.card,
+  },
+  accordionHeaderEmpty: {
+    minHeight: 42,
+    opacity: 0.72,
+  },
+  accordionTitle: {
+    color: Colors.textHeading,
+    flex: 1,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 16,
+    paddingRight: Spacing.sm,
+  },
   sectionTitle: {
     color: Colors.textHeading,
     fontFamily: Typography.bodySemiBold,
@@ -652,6 +796,11 @@ const styles = StyleSheet.create({
     color: Colors.textHeading,
     fontFamily: Typography.bodySemiBold,
     fontSize: 14,
+  },
+  avatarImage: {
+    borderRadius: 22,
+    height: 44,
+    width: 44,
   },
   personText: {
     flex: 1,
@@ -713,6 +862,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: Spacing.xs,
   },
+  cancelRequestButton: {
+    alignItems: "center",
+    borderColor: Colors.primary,
+    borderRadius: Radius.button,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 40,
+    maxWidth: 126,
+    paddingHorizontal: Spacing.sm,
+  },
+  cancelRequestText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 12,
+    textAlign: "center",
+  },
   emptyCard: {
     alignItems: "center",
     gap: Spacing.xs,
@@ -752,6 +917,11 @@ const styles = StyleSheet.create({
   },
   errorCard: {
     borderColor: Colors.primary,
+    borderWidth: 1,
+    gap: Spacing.sm,
+  },
+  identityCard: {
+    borderColor: Colors.secondary,
     borderWidth: 1,
     gap: Spacing.sm,
   },
@@ -796,6 +966,16 @@ const styles = StyleSheet.create({
   },
 });
 
+function formatSentAge(
+  createdAt: Date,
+  t: ReturnType<typeof useTranslation>["t"],
+) {
+  const elapsedDays = Math.max(0, Math.floor((Date.now() - createdAt.getTime()) / (24 * 60 * 60 * 1000)));
+  return elapsedDays === 0
+    ? t("friends.sentToday")
+    : t("friends.sentDaysAgo", { count: elapsedDays });
+}
+
 function logFriendsScreenIssue(operation: string, error: unknown) {
   if (!__DEV__) return;
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
@@ -818,6 +998,9 @@ function mapFriendActionError(
   if (code === "functions/not-found" || code === "friend-request/invalid-target") {
     return t("friends.friendRequestUnavailable");
   }
+  if (code === "friend-request/no-longer-available") return t("friends.requestNoLongerAvailable");
+  if (code === "functions/failed-precondition") return t("friends.addNameBeforeSending");
+  if (code === "functions/permission-denied") return t("friends.requestNoLongerAvailable");
   if (code === "functions/unavailable" || code === "firestore/unavailable" || code === "auth/network-request-failed") {
     return t("friends.friendRequestNetworkError");
   }

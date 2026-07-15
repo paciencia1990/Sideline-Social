@@ -9,7 +9,8 @@ const now = () => Timestamp.now();
 
 async function seed(testEnv) {
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    await setDoc(doc(context.firestore(), "friendRequests", "sender__recipient"), {
+    const db = context.firestore();
+    await setDoc(doc(db, "friendRequests", "sender__recipient"), {
       fromUserId: "sender",
       fromDisplayName: "Sam S.",
       toUserId: "recipient",
@@ -17,6 +18,12 @@ async function seed(testEnv) {
       status: "pending",
       createdAt: now(),
       updatedAt: now(),
+      expiresAt: Timestamp.fromMillis(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      respondedAt: null, acceptedAt: null, declinedAt: null, canceledAt: null, expiredAt: null,
+    });
+    await setDoc(doc(db, "publicUserProfiles", "sender"), {
+      userId: "sender", firstName: "Sam", lastName: "Sender", displayName: "Sam Sender",
+      photoURL: null, updatedAt: now(),
     });
   });
 }
@@ -45,7 +52,16 @@ async function run() {
     await assertFails(setDoc(doc(senderDb, "friendRequests", "injected"), injectedRequest));
     await assertFails(setDoc(doc(outsiderDb, "friendRequests", "impersonated"), { ...injectedRequest, fromUserId: "sender" }));
     await assertFails(updateDoc(requestRef(recipientDb), { status: "accepted", updatedAt: now() }));
+    await assertFails(updateDoc(requestRef(senderDb), { expiresAt: Timestamp.fromMillis(Date.now() + 60 * 24 * 60 * 60 * 1000) }));
     await assertFails(deleteDoc(requestRef(senderDb)));
+
+    await assertSucceeds(getDoc(doc(recipientDb, "publicUserProfiles", "sender")));
+    await assertFails(getDocs(collection(recipientDb, "publicUserProfiles")));
+    await assertFails(setDoc(doc(recipientDb, "publicUserProfiles", "recipient"), {
+      userId: "recipient", firstName: "Riley", lastName: "Recipient", displayName: "Riley Recipient",
+      photoURL: null, updatedAt: now(),
+    }));
+    await assertFails(updateDoc(doc(senderDb, "publicUserProfiles", "sender"), { displayName: "Spoofed Name" }));
 
     console.log("Friend request participant-read and callable-only mutation rules tests passed.");
   } finally {

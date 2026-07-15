@@ -23,9 +23,20 @@ import {
 } from './friendSuggestionCore';
 import {
   friendRequestIdFor,
+  friendRequestExpiresAtMillis,
+  isActivePendingRequest,
   normalizeFriendTargetId,
+  resolveLegacyFriendRequestExpiresAtMillis,
   resolveFriendRequestSendStatus,
 } from './friendRequestCore';
+import {
+  friendRequestNotificationId,
+  resolveFriendRequestNotification,
+} from './friendRequestNotifications';
+import {
+  resolveCanonicalPublicName,
+  resolveCanonicalPublicProfile,
+} from './publicUserProfileCore';
 import {
   deleteTeamAnnouncementData,
   type TeamAnnouncementDeletionStatus,
@@ -97,6 +108,25 @@ export {
   cleanupExpiredUserNotifications,
   clearUserNotifications,
 } from './userNotificationDismissal';
+export {
+  blockFriendChatUser,
+  createFriendGroupConversation,
+  createOrOpenDirectConversation,
+  getBlockedFriendChatUserIds,
+  inviteFriendsToGroupConversation,
+  leaveFriendConversation,
+  markFriendConversationRead,
+  removeFriendGroupMember,
+  removeOwnFriendChatMessage,
+  renameFriendGroupConversation,
+  reportFriendChatMessage,
+  reportFriendChatUser,
+  respondToFriendGroupInvitation,
+  sendFriendChatMessage,
+  setFriendConversationMuted,
+  setFriendGroupAdminRole,
+  transferFriendGroupOwnership,
+} from './friendChat';
 
 admin.initializeApp();
 
@@ -134,7 +164,14 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
     .doc(input.eventId);
 
   const created = await firestore.runTransaction(async (transaction) => {
-    if ((await transaction.get(notificationRef)).exists) return false;
+    const notificationSnapshot = await transaction.get(notificationRef);
+    if (notificationSnapshot.exists) return false;
+    if (input.type === 'friendRequest' && input.friendRequestId) {
+      const requestSnapshot = await transaction.get(
+        firestore.collection('friendRequests').doc(input.friendRequestId),
+      );
+      if (!requestSnapshot.exists || requestSnapshot.data()?.status !== 'pending') return false;
+    }
     transaction.create(notificationRef, {
       recipientUserId: input.recipientUserId,
       type: input.type,
@@ -200,13 +237,11 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
 async function getPrivateNotificationActorName(userId: unknown, fallback = 'Sideline Parent') {
   if (typeof userId !== 'string' || !userId) return fallback;
   const snapshot = await admin.firestore().collection('users').doc(userId).get();
-  const fullName = resolvePublicProfileName(snapshot.data());
-  const firestoreName = formatSuggestedConnectionName(fullName);
+  const firestoreName = resolveCanonicalPublicName(snapshot.data())?.displayName;
   if (firestoreName) return firestoreName;
   try {
     const authUser = await admin.auth().getUser(userId);
-    const authName = resolvePublicProfileName({ displayName: authUser.displayName });
-    return formatSuggestedConnectionName(authName) || fallback;
+    return resolveCanonicalPublicName({ displayName: authUser.displayName })?.displayName || fallback;
   } catch {
     return fallback;
   }
@@ -913,6 +948,142 @@ export const sendWeeklyChallengeNotification = functions.pubsub
 // target or request ID and cannot write trusted request identity fields.
 // ---------------------------------------------------------------------------
 
+const FRIEND_REQUEST_PAGE_SIZE = 100;
+
+function timestampMillis(value: unknown): number | null {
+  return value && typeof value === 'object' && 'toMillis' in value && typeof value.toMillis === 'function'
+    ? value.toMillis()
+    : null;
+}
+
+function requestExpiresAtMillis(request: Record<string, unknown>) {
+  return resolveLegacyFriendRequestExpiresAtMillis(
+    timestampMillis(request.expiresAt),
+    timestampMillis(request.createdAt),
+  );
+}
+
+function preserveTerminalRequestOutcomes(request: Record<string, unknown>) {
+  const previous = Array.isArray(request.priorOutcomes)
+    ? request.priorOutcomes.filter((item) => item && typeof item === 'object').slice(-19)
+    : [];
+  if (!['accepted', 'declined', 'canceled', 'expired'].includes(String(request.status ?? ''))) return previous;
+  return [...previous, {
+    status: request.status,
+    createdAt: request.createdAt ?? null,
+    expiresAt: request.expiresAt ?? null,
+    respondedAt: request.respondedAt ?? null,
+    acceptedAt: request.acceptedAt ?? null,
+    declinedAt: request.declinedAt ?? null,
+    canceledAt: request.canceledAt ?? null,
+    expiredAt: request.expiredAt ?? null,
+  }];
+}
+
+async function readBlockedRelationshipIds(userId: string) {
+  const firestore = admin.firestore();
+  const [outgoing, incoming] = await Promise.all([
+    firestore.collection('userBlocks').doc(userId).collection('blockedUsers').limit(500).get(),
+    firestore.collectionGroup('blockedUsers').where('blockedUserId', '==', userId).limit(500).get(),
+  ]);
+  return new Set([
+    ...outgoing.docs.filter((document) => document.data()?.status !== 'inactive').map((document) => document.id),
+    ...incoming.docs
+      .filter((document) => document.data()?.status !== 'inactive')
+      .map((document) => String(document.data()?.blockerUserId ?? document.ref.parent.parent?.id ?? ''))
+      .filter(Boolean),
+  ]);
+}
+
+function publicFriendRequest(document: admin.firestore.QueryDocumentSnapshot, expiresAtMillis: number) {
+  const request = document.data();
+  return {
+    id: document.id,
+    fromUserId: request.fromUserId,
+    fromDisplayName: request.fromDisplayName ?? request.senderDisplayNameSnapshot ?? null,
+    fromPhotoURL: request.fromPhotoURL ?? request.senderPhotoUrlSnapshot ?? null,
+    toUserId: request.toUserId,
+    toDisplayName: request.toDisplayName ?? request.recipientDisplayNameSnapshot ?? null,
+    toPhotoURL: request.toPhotoURL ?? request.recipientPhotoUrlSnapshot ?? null,
+    status: request.status,
+    createdAt: request.createdAt ?? null,
+    updatedAt: request.updatedAt ?? null,
+    expiresAt: Timestamp.fromMillis(expiresAtMillis),
+  };
+}
+
+export const getActiveFriendRequests = functions.https.onCall(async (_data, context) => {
+  const userId = context.auth?.uid;
+  if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to view friend requests.');
+  const firestore = admin.firestore();
+  const now = Timestamp.now();
+  const [incomingSnapshot, outgoingSnapshot, blockedUserIds] = await Promise.all([
+    firestore.collection('friendRequests')
+      .where('toUserId', '==', userId)
+      .where('status', '==', 'pending')
+      .limit(FRIEND_REQUEST_PAGE_SIZE)
+      .get(),
+    firestore.collection('friendRequests')
+      .where('fromUserId', '==', userId)
+      .where('status', '==', 'pending')
+      .limit(FRIEND_REQUEST_PAGE_SIZE)
+      .get(),
+    readBlockedRelationshipIds(userId),
+  ]);
+
+  const active: { direction: 'incoming' | 'outgoing'; document: admin.firestore.QueryDocumentSnapshot; expiresAt: number }[] = [];
+  const expired: admin.firestore.QueryDocumentSnapshot[] = [];
+  const needsExpiryProjection: { document: admin.firestore.QueryDocumentSnapshot; expiresAt: number }[] = [];
+  const inspect = (direction: 'incoming' | 'outgoing', documents: admin.firestore.QueryDocumentSnapshot[]) => {
+    documents.forEach((document) => {
+      const request = document.data();
+      const otherUserId = direction === 'incoming' ? request.fromUserId : request.toUserId;
+      if (typeof otherUserId !== 'string' || blockedUserIds.has(otherUserId)) return;
+      const expiresAt = requestExpiresAtMillis(request);
+      if (expiresAt === null || expiresAt <= now.toMillis()) {
+        expired.push(document);
+        return;
+      }
+      if (timestampMillis(request.expiresAt) === null) {
+        needsExpiryProjection.push({ document, expiresAt });
+      }
+      active.push({ direction, document, expiresAt });
+    });
+  };
+  inspect('incoming', incomingSnapshot.docs);
+  inspect('outgoing', outgoingSnapshot.docs);
+
+  if (expired.length > 0 || needsExpiryProjection.length > 0) {
+    const batch = firestore.batch();
+    needsExpiryProjection.forEach(({ document, expiresAt }) => batch.update(document.ref, {
+      expiresAt: Timestamp.fromMillis(expiresAt),
+      updatedAt: now,
+    }));
+    expired.forEach((document) => batch.update(document.ref, {
+      status: 'expired',
+      expiresAt: Timestamp.fromMillis(requestExpiresAtMillis(document.data()) ?? now.toMillis()),
+      expiredAt: now,
+      updatedAt: now,
+    }));
+    await batch.commit();
+    await Promise.allSettled(expired.map((document) => resolveFriendRequestNotification(
+      String(document.data()?.toUserId ?? ''),
+      document.id,
+      typeof document.data()?.notificationId === 'string' ? document.data().notificationId : null,
+    )));
+  }
+
+  const byNewest = (left: typeof active[number], right: typeof active[number]) => (
+    (timestampMillis(right.document.data()?.createdAt) ?? 0) - (timestampMillis(left.document.data()?.createdAt) ?? 0)
+  );
+  return {
+    incoming: active.filter((item) => item.direction === 'incoming').sort(byNewest)
+      .map((item) => publicFriendRequest(item.document, item.expiresAt)),
+    outgoing: active.filter((item) => item.direction === 'outgoing').sort(byNewest)
+      .map((item) => publicFriendRequest(item.document, item.expiresAt)),
+  };
+});
+
 export const sendFriendRequest = functions.https.onCall(async (data, context) => {
   const senderUserId = context.auth?.uid;
   if (!senderUserId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to send a friend request.');
@@ -934,51 +1105,109 @@ export const sendFriendRequest = functions.https.onCall(async (data, context) =>
   const reverseRequestId = friendRequestIdFor(targetUserId, senderUserId);
   const outgoingRef = firestore.collection('friendRequests').doc(requestId);
   const incomingRef = firestore.collection('friendRequests').doc(reverseRequestId);
+  const senderBlockRef = firestore.collection('userBlocks').doc(senderUserId).collection('blockedUsers').doc(targetUserId);
+  const targetBlockRef = firestore.collection('userBlocks').doc(targetUserId).collection('blockedUsers').doc(senderUserId);
 
-  const status = await firestore.runTransaction(async (transaction) => {
-    const senderSnapshot = await transaction.get(senderRef);
-    const targetSnapshot = await transaction.get(targetRef);
-    const outgoingSnapshot = await transaction.get(outgoingRef);
-    const incomingSnapshot = await transaction.get(incomingRef);
+  const result = await firestore.runTransaction(async (transaction) => {
+    const [senderSnapshot, targetSnapshot, outgoingSnapshot, incomingSnapshot, senderBlock, targetBlock] = await Promise.all([
+      transaction.get(senderRef), transaction.get(targetRef), transaction.get(outgoingRef), transaction.get(incomingRef),
+      transaction.get(senderBlockRef), transaction.get(targetBlockRef),
+    ]);
     if (!senderSnapshot.exists) {
       throw new functions.https.HttpsError('failed-precondition', 'Your profile is unavailable.');
     }
     if (!targetSnapshot.exists || ['deleted', 'disabled', 'removed'].includes(String(targetSnapshot.data()?.status ?? ''))) {
       throw new functions.https.HttpsError('not-found', 'That parent is no longer available.');
     }
+    if (senderBlock.exists || targetBlock.exists) {
+      throw new functions.https.HttpsError('permission-denied', 'This connection is unavailable.');
+    }
 
+    const now = Timestamp.now();
+    const outgoing = outgoingSnapshot.data() ?? {};
+    const incoming = incomingSnapshot.data() ?? {};
     const outcome = resolveFriendRequestSendStatus({
       senderFriendIds: senderSnapshot.data()?.friendIds,
       targetFriendIds: targetSnapshot.data()?.friendIds,
       targetUserId,
       senderUserId,
-      outgoingStatus: outgoingSnapshot.data()?.status,
-      incomingStatus: incomingSnapshot.data()?.status,
+      outgoingStatus: outgoing.status,
+      incomingStatus: incoming.status,
+      outgoingExpiresAtMillis: requestExpiresAtMillis(outgoing),
+      incomingExpiresAtMillis: requestExpiresAtMillis(incoming),
+      nowMillis: now.toMillis(),
     });
-    if (outcome !== 'pending') return outcome;
+    if (outcome !== 'pending') return { status: outcome, expiredReverseRequest: null };
 
-    const senderName = formatSuggestedConnectionName(resolvePublicProfileName(senderSnapshot.data())) || 'Sideline Parent';
-    const targetName = formatSuggestedConnectionName(resolvePublicProfileName(targetSnapshot.data())) || 'Sideline Parent';
+    const senderProfile = resolveCanonicalPublicProfile(senderUserId, senderSnapshot.data());
+    if (!senderProfile) {
+      throw new functions.https.HttpsError('failed-precondition', 'Add your first and last name before sending friend requests.');
+    }
+    const targetProfile = resolveCanonicalPublicProfile(targetUserId, targetSnapshot.data());
+    if (!targetProfile) {
+      throw new functions.https.HttpsError('failed-precondition', 'That parent does not have a public name yet.');
+    }
+
+    let expiredReverseRequest: { recipientUserId: string; requestId: string; notificationId: string | null } | null = null;
+    const incomingExpiresAt = requestExpiresAtMillis(incoming);
+    if (incoming.status === 'pending' && !isActivePendingRequest(incoming.status, incomingExpiresAt, now.toMillis())) {
+      transaction.update(incomingRef, {
+        status: 'expired',
+        expiresAt: Timestamp.fromMillis(incomingExpiresAt ?? now.toMillis()),
+        expiredAt: now,
+        updatedAt: now,
+      });
+      expiredReverseRequest = {
+        recipientUserId: senderUserId,
+        requestId: reverseRequestId,
+        notificationId: typeof incoming.notificationId === 'string' ? incoming.notificationId : null,
+      };
+    }
+
+    const expiresAt = Timestamp.fromMillis(friendRequestExpiresAtMillis(now.toMillis()));
+    const notificationId = friendRequestNotificationId(requestId, now.toMillis());
     transaction.set(outgoingRef, {
       fromUserId: senderUserId,
-      fromDisplayName: senderName,
+      fromDisplayName: senderProfile.displayName,
+      fromPhotoURL: senderProfile.photoURL,
       toUserId: targetUserId,
-      toDisplayName: targetName,
+      toDisplayName: targetProfile.displayName,
+      toPhotoURL: targetProfile.photoURL,
       status: 'pending',
-      createdAt: outgoingSnapshot.data()?.createdAt ?? FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
+      createdAt: now,
+      updatedAt: now,
+      expiresAt,
+      respondedAt: null,
+      acceptedAt: null,
+      declinedAt: null,
+      canceledAt: null,
+      expiredAt: null,
+      notificationId,
+      attemptNumber: Number.isInteger(outgoing.attemptNumber) ? Number(outgoing.attemptNumber) + 1 : 1,
+      priorOutcomes: preserveTerminalRequestOutcomes(outgoing),
     });
-    return 'pending';
+    return { status: 'pending' as const, expiredReverseRequest };
   });
 
-  return { requestId, status };
+  if (result.expiredReverseRequest) {
+    await resolveFriendRequestNotification(
+      result.expiredReverseRequest.recipientUserId,
+      result.expiredReverseRequest.requestId,
+      result.expiredReverseRequest.notificationId,
+    );
+  }
+  return { requestId, status: result.status };
 });
 
 export const respondToFriendRequest = functions.https.onCall(async (data, context) => {
   const userId = context.auth?.uid;
   if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to respond to a friend request.');
   const requestId = typeof data?.requestId === 'string' ? data.requestId.trim() : '';
-  const decision = data?.decision;
+  const decision = data?.decision === 'accepted' || data?.response === 'accept'
+    ? 'accepted'
+    : data?.decision === 'declined' || data?.response === 'decline'
+      ? 'declined'
+      : null;
   if (!/^[A-Za-z0-9_-]{1,300}$/u.test(requestId) || (decision !== 'accepted' && decision !== 'declined')) {
     throw new functions.https.HttpsError('invalid-argument', 'The friend request response is invalid.');
   }
@@ -992,7 +1221,24 @@ export const respondToFriendRequest = functions.https.onCall(async (data, contex
     if (request.toUserId !== userId) {
       throw new functions.https.HttpsError('permission-denied', 'Only the recipient may respond to this request.');
     }
-    if (request.status !== 'pending') return { status: 'alreadyHandled' as const };
+    if (request.status !== 'pending') {
+      if (request.status === decision) {
+        return { status: decision, alreadyHandled: true, recipientUserId: userId, notificationId: request.notificationId ?? null };
+      }
+      return { status: 'alreadyHandled' as const, alreadyHandled: true, recipientUserId: userId, notificationId: request.notificationId ?? null };
+    }
+
+    const now = Timestamp.now();
+    const expiresAt = requestExpiresAtMillis(request);
+    if (expiresAt === null || expiresAt <= now.toMillis()) {
+      transaction.update(requestRef, {
+        status: 'expired',
+        expiresAt: Timestamp.fromMillis(expiresAt ?? now.toMillis()),
+        expiredAt: now,
+        updatedAt: now,
+      });
+      return { status: 'expired' as const, alreadyHandled: false, recipientUserId: userId, notificationId: request.notificationId ?? null };
+    }
 
     if (decision === 'accepted') {
       if (typeof request.fromUserId !== 'string' || !request.fromUserId) {
@@ -1000,10 +1246,18 @@ export const respondToFriendRequest = functions.https.onCall(async (data, contex
       }
       const senderRef = firestore.collection('users').doc(request.fromUserId);
       const recipientRef = firestore.collection('users').doc(userId);
-      const senderSnapshot = await transaction.get(senderRef);
-      const recipientSnapshot = await transaction.get(recipientRef);
+      const senderBlockRef = firestore.collection('userBlocks').doc(request.fromUserId).collection('blockedUsers').doc(userId);
+      const recipientBlockRef = firestore.collection('userBlocks').doc(userId).collection('blockedUsers').doc(request.fromUserId);
+      const [senderSnapshot, recipientSnapshot, senderBlock, recipientBlock] = await Promise.all([
+        transaction.get(senderRef), transaction.get(recipientRef),
+        transaction.get(senderBlockRef), transaction.get(recipientBlockRef),
+      ]);
       if (!senderSnapshot.exists || !recipientSnapshot.exists) {
         throw new functions.https.HttpsError('not-found', 'A friend profile is no longer available.');
+      }
+      if (senderBlock.exists || recipientBlock.exists) {
+        transaction.update(requestRef, { status: 'canceled', canceledAt: now, updatedAt: now });
+        return { status: 'canceled' as const, alreadyHandled: false, recipientUserId: userId, notificationId: request.notificationId ?? null };
       }
       transaction.set(senderRef, { friendIds: FieldValue.arrayUnion(userId) }, { merge: true });
       transaction.set(recipientRef, { friendIds: FieldValue.arrayUnion(request.fromUserId) }, { merge: true });
@@ -1011,11 +1265,56 @@ export const respondToFriendRequest = functions.https.onCall(async (data, contex
 
     transaction.update(requestRef, {
       status: decision,
-      updatedAt: FieldValue.serverTimestamp(),
+      expiresAt: Timestamp.fromMillis(expiresAt),
+      respondedAt: now,
+      acceptedAt: decision === 'accepted' ? now : request.acceptedAt ?? null,
+      declinedAt: decision === 'declined' ? now : request.declinedAt ?? null,
+      updatedAt: now,
     });
-    return { status: decision as 'accepted' | 'declined' };
+    return { status: decision, alreadyHandled: false, recipientUserId: userId, notificationId: request.notificationId ?? null };
   });
-  return result;
+  await resolveFriendRequestNotification(result.recipientUserId, requestId, result.notificationId);
+  return { status: result.status, alreadyHandled: result.alreadyHandled };
+});
+
+export const cancelFriendRequest = functions.https.onCall(async (data, context) => {
+  const userId = context.auth?.uid;
+  if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to cancel a friend request.');
+  const requestId = typeof data?.requestId === 'string' ? data.requestId.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,300}$/u.test(requestId)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid friend request is required.');
+  }
+  const requestRef = admin.firestore().collection('friendRequests').doc(requestId);
+  const result = await admin.firestore().runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(requestRef);
+    if (!snapshot.exists) return { status: 'notFound' as const, recipientUserId: '', notificationId: null };
+    const request = snapshot.data() ?? {};
+    if (request.fromUserId !== userId) {
+      throw new functions.https.HttpsError('permission-denied', 'Only the sender may cancel this request.');
+    }
+    if (request.status !== 'pending') {
+      return {
+        status: request.status === 'canceled' ? 'canceled' as const : 'alreadyHandled' as const,
+        recipientUserId: String(request.toUserId ?? ''),
+        notificationId: typeof request.notificationId === 'string' ? request.notificationId : null,
+      };
+    }
+    const now = Timestamp.now();
+    const expiresAt = requestExpiresAtMillis(request);
+    const expired = expiresAt === null || expiresAt <= now.toMillis();
+    transaction.update(requestRef, expired ? {
+      status: 'expired', expiresAt: Timestamp.fromMillis(expiresAt ?? now.toMillis()), expiredAt: now, updatedAt: now,
+    } : {
+      status: 'canceled', expiresAt: Timestamp.fromMillis(expiresAt), canceledAt: now, updatedAt: now,
+    });
+    return {
+      status: expired ? 'expired' as const : 'canceled' as const,
+      recipientUserId: String(request.toUserId ?? ''),
+      notificationId: typeof request.notificationId === 'string' ? request.notificationId : null,
+    };
+  });
+  await resolveFriendRequestNotification(result.recipientUserId, requestId, result.notificationId);
+  return { status: result.status };
 });
 
 export const removeFriendConnection = functions.https.onCall(async (data, context) => {
@@ -1030,18 +1329,70 @@ export const removeFriendConnection = functions.https.onCall(async (data, contex
   if (friendUserId === userId) return { removed: false };
 
   const firestore = admin.firestore();
-  const batch = firestore.batch();
-  batch.set(firestore.collection('users').doc(userId), {
-    friendIds: FieldValue.arrayRemove(friendUserId),
-  }, { merge: true });
-  batch.set(firestore.collection('users').doc(friendUserId), {
-    friendIds: FieldValue.arrayRemove(userId),
-  }, { merge: true });
-  batch.delete(firestore.collection('friendRequests').doc(friendRequestIdFor(userId, friendUserId)));
-  batch.delete(firestore.collection('friendRequests').doc(friendRequestIdFor(friendUserId, userId)));
-  await batch.commit();
+  const requestRefs = [
+    firestore.collection('friendRequests').doc(friendRequestIdFor(userId, friendUserId)),
+    firestore.collection('friendRequests').doc(friendRequestIdFor(friendUserId, userId)),
+  ];
+  const resolvedNotifications = await firestore.runTransaction(async (transaction) => {
+    const requests = await Promise.all(requestRefs.map((reference) => transaction.get(reference)));
+    const now = Timestamp.now();
+    transaction.set(firestore.collection('users').doc(userId), {
+      friendIds: FieldValue.arrayRemove(friendUserId),
+    }, { merge: true });
+    transaction.set(firestore.collection('users').doc(friendUserId), {
+      friendIds: FieldValue.arrayRemove(userId),
+    }, { merge: true });
+    const notifications: { recipientUserId: string; requestId: string; notificationId: string | null }[] = [];
+    requests.forEach((snapshot) => {
+      if (!snapshot.exists || !['pending', 'accepted'].includes(String(snapshot.data()?.status ?? ''))) return;
+      transaction.update(snapshot.ref, { status: 'canceled', canceledAt: now, updatedAt: now });
+      notifications.push({
+        recipientUserId: String(snapshot.data()?.toUserId ?? ''),
+        requestId: snapshot.id,
+        notificationId: typeof snapshot.data()?.notificationId === 'string' ? snapshot.data()?.notificationId : null,
+      });
+    });
+    return notifications;
+  });
+  await Promise.allSettled(resolvedNotifications.map((item) => resolveFriendRequestNotification(
+    item.recipientUserId, item.requestId, item.notificationId,
+  )));
   return { removed: true };
 });
+
+export const expirePendingFriendRequests = functions.region('us-central1').pubsub
+  .schedule('15 4 * * *')
+  .timeZone('Etc/UTC')
+  .onRun(async () => {
+    const firestore = admin.firestore();
+    let expiredCount = 0;
+    let pageCount = 0;
+    while (true) {
+      const now = Timestamp.now();
+      const page = await firestore.collection('friendRequests')
+        .where('status', '==', 'pending')
+        .where('expiresAt', '<=', now)
+        .orderBy('expiresAt')
+        .limit(400)
+        .get();
+      if (page.empty) break;
+      const batch = firestore.batch();
+      page.docs.forEach((document) => batch.update(document.ref, {
+        status: 'expired', expiredAt: now, updatedAt: now,
+      }));
+      await batch.commit();
+      await Promise.allSettled(page.docs.map((document) => resolveFriendRequestNotification(
+        String(document.data()?.toUserId ?? ''),
+        document.id,
+        typeof document.data()?.notificationId === 'string' ? document.data().notificationId : null,
+      )));
+      expiredCount += page.size;
+      pageCount += 1;
+      if (page.size < 400) break;
+    }
+    console.info('[expirePendingFriendRequests] completed', { expiredCount, pageCount });
+    return { expiredCount, pageCount };
+  });
 
 // ---------------------------------------------------------------------------
 // 5. FCM Triggers
@@ -1061,14 +1412,15 @@ export const onFriendRequestCreated = functions.firestore
     ) return null;
 
     const senderName = await getPrivateNotificationActorName(request.fromUserId, '');
-    const eventTimestamp = typeof request.updatedAt?.toMillis === 'function'
-      ? request.updatedAt.toMillis()
-      : typeof request.createdAt?.toMillis === 'function'
-        ? request.createdAt.toMillis()
-        : 'initial';
+    const eventTimestamp = typeof request.createdAt?.toMillis === 'function'
+      ? request.createdAt.toMillis()
+      : 'initial';
+    const eventId = typeof request.notificationId === 'string'
+      ? request.notificationId
+      : friendRequestNotificationId(change.after.id, eventTimestamp);
     await createPersonalNotificationAndPush({
       recipientUserId: request.toUserId,
-      eventId: `friendRequest_${change.after.id}_${eventTimestamp}`,
+      eventId,
       type: 'friendRequest',
       titleKey: 'notifications.types.friendRequestTitle',
       bodyKey: senderName
@@ -1691,67 +2043,140 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
 // minimum profile and suggestion fields needed by authenticated app surfaces.
 // ---------------------------------------------------------------------------
 
+export const syncPublicUserProfile = functions.firestore
+  .document('users/{userId}')
+  .onWrite(async (change, context) => {
+    const publicRef = admin.firestore().collection('publicUserProfiles').doc(context.params.userId);
+    if (!change.after.exists) {
+      await publicRef.delete();
+      return null;
+    }
+    const profile = resolveCanonicalPublicProfile(context.params.userId, change.after.data());
+    if (!profile) {
+      await publicRef.delete();
+      return null;
+    }
+    await publicRef.set({ ...profile, updatedAt: FieldValue.serverTimestamp() });
+    return null;
+  });
+
+export const updatePublicUserProfile = functions.https.onCall(async (data, context) => {
+  const userId = context.auth?.uid;
+  if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to update your profile.');
+  const firstName = typeof data?.firstName === 'string' ? data.firstName : '';
+  const lastName = typeof data?.lastName === 'string' ? data.lastName : '';
+  const requestedPhotoURL = data?.photoURL;
+  const firestore = admin.firestore();
+  const privateRef = firestore.collection('users').doc(userId);
+  const publicRef = firestore.collection('publicUserProfiles').doc(userId);
+  const profile = await firestore.runTransaction(async (transaction) => {
+    const privateSnapshot = await transaction.get(privateRef);
+    if (!privateSnapshot.exists) throw new functions.https.HttpsError('not-found', 'Your profile is unavailable.');
+    const existing = privateSnapshot.data() ?? {};
+    const photoURL = requestedPhotoURL === undefined
+      ? existing.photoURL ?? existing.photoUrl ?? null
+      : requestedPhotoURL;
+    if (photoURL !== null && (typeof photoURL !== 'string' || photoURL.length > 2048 || !/^https:\/\//u.test(photoURL))) {
+      throw new functions.https.HttpsError('invalid-argument', 'The profile photo is invalid.');
+    }
+    const next = resolveCanonicalPublicProfile(userId, { firstName, lastName, photoURL });
+    if (!next) {
+      throw new functions.https.HttpsError('invalid-argument', 'A valid first and last name are required.');
+    }
+    const now = Timestamp.now();
+    transaction.set(privateRef, {
+      firstName: next.firstName,
+      lastName: next.lastName,
+      displayName: next.displayName,
+      photoURL: next.photoURL,
+      updatedAt: now,
+    }, { merge: true });
+    transaction.set(publicRef, { ...next, updatedAt: now });
+    return next;
+  });
+  try {
+    await admin.auth().updateUser(userId, { displayName: profile.displayName, photoURL: profile.photoURL ?? undefined });
+  } catch (error) {
+    console.warn('[updatePublicUserProfile] auth projection unavailable', {
+      code: typeof error === 'object' && error && 'code' in error ? String(error.code) : 'unknown',
+    });
+  }
+  return { profile };
+});
+
 export const getPublicUserProfiles = functions.https.onCall(async (data, context) => {
   if (!context.auth?.uid) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication is required.');
   }
   const requestedCount = Array.isArray(data?.userIds) ? data.userIds.length : 0;
   const userIds = normalizePublicProfileIds(data?.userIds);
-  if (userIds.length === 0) {
-    console.warn('[publicProfiles] resolution summary', {
-      requestedCount,
-      validIdCount: 0,
-      profileDocumentFoundCount: 0,
-      firestoreNameCount: 0,
-      authNameCount: 0,
-      nullNameCount: 0,
-      returnedProfileCount: 0,
-    });
-    return { profiles: [] };
-  }
+  if (userIds.length === 0) return { profiles: [] };
 
   const firestore = admin.firestore();
-  const snapshots = await firestore.getAll(
-    ...userIds.map((userId) => firestore.collection('users').doc(userId)),
+  const publicSnapshots = await firestore.getAll(
+    ...userIds.map((userId) => firestore.collection('publicUserProfiles').doc(userId)),
   );
-  const firestoreNamesByUserId = new Map(snapshots.map((snapshot) => [
-    snapshot.id,
-    resolvePublicProfileName(snapshot.data()),
-  ]));
-  const missingNameUserIds = snapshots
-    .filter((snapshot) => !firestoreNamesByUserId.get(snapshot.id))
-    .map((snapshot) => snapshot.id);
-  const authNamesByUserId = new Map<string, string | null>();
-  const authUserIds = new Set<string>();
-  if (missingNameUserIds.length > 0) {
-    const authUsers = await admin.auth().getUsers(missingNameUserIds.map((uid) => ({ uid })));
+  const resolved = new Map<string, ReturnType<typeof resolveCanonicalPublicProfile>>();
+  let projectionNameCount = 0;
+  publicSnapshots.forEach((snapshot) => {
+    const profile = resolveCanonicalPublicProfile(snapshot.id, snapshot.data());
+    if (profile) {
+      projectionNameCount += 1;
+      resolved.set(snapshot.id, profile);
+    }
+  });
+
+  const fallbackIds = userIds.filter((userId) => !resolved.has(userId));
+  const privateSnapshots = fallbackIds.length > 0
+    ? await firestore.getAll(...fallbackIds.map((userId) => firestore.collection('users').doc(userId)))
+    : [];
+  const existingUserIds = new Set(privateSnapshots.filter((snapshot) => snapshot.exists).map((snapshot) => snapshot.id));
+  privateSnapshots.forEach((snapshot) => {
+    const profile = resolveCanonicalPublicProfile(snapshot.id, snapshot.data());
+    if (profile) resolved.set(snapshot.id, profile);
+  });
+
+  const authFallbackIds = fallbackIds.filter((userId) => !resolved.has(userId));
+  if (authFallbackIds.length > 0) {
+    const authUsers = await admin.auth().getUsers(authFallbackIds.map((uid) => ({ uid })));
     authUsers.users.forEach((authUser) => {
-      authUserIds.add(authUser.uid);
-      authNamesByUserId.set(
-        authUser.uid,
-        resolvePublicProfileName({ displayName: authUser.displayName }),
-      );
+      existingUserIds.add(authUser.uid);
+      const profile = resolveCanonicalPublicProfile(authUser.uid, undefined, authUser.displayName);
+      if (profile) resolved.set(authUser.uid, profile);
     });
   }
-  const resolvedProfiles = snapshots.flatMap((snapshot) => {
-      if (!snapshot.exists && !authUserIds.has(snapshot.id)) return [];
-      return [{
-        userId: snapshot.id,
-        displayName: formatPublicUserName(
-          firestoreNamesByUserId.get(snapshot.id) ?? authNamesByUserId.get(snapshot.id) ?? null,
-        ),
-      }];
-    });
-  const firestoreNameCount = Array.from(firestoreNamesByUserId.values()).filter(Boolean).length;
-  const authNameCount = Array.from(authNamesByUserId.values()).filter(Boolean).length;
-  const nullNameCount = resolvedProfiles.filter((profile) => !profile.displayName).length;
+
+  const selfHealingProfiles = fallbackIds
+    .map((userId) => resolved.get(userId))
+    .filter((profile): profile is NonNullable<typeof profile> => Boolean(profile));
+  await Promise.allSettled(selfHealingProfiles.map((profile) => firestore
+    .collection('publicUserProfiles')
+    .doc(profile.userId)
+    .set({ ...profile, updatedAt: FieldValue.serverTimestamp() })));
+
+  const resolvedProfiles: {
+    userId: string;
+    firstName: string | null;
+    lastName: string | null;
+    displayName: string | null;
+    photoURL: string | null;
+  }[] = [];
+  userIds.forEach((userId) => {
+    const profile = resolved.get(userId);
+    if (profile) {
+      resolvedProfiles.push(profile);
+      return;
+    }
+    if (existingUserIds.has(userId)) {
+      resolvedProfiles.push({ userId, firstName: null, lastName: null, displayName: null, photoURL: null });
+    }
+  });
   console.warn('[publicProfiles] resolution summary', {
     requestedCount,
     validIdCount: userIds.length,
-    profileDocumentFoundCount: snapshots.filter((snapshot) => snapshot.exists).length,
-    firestoreNameCount,
-    authNameCount,
-    nullNameCount,
+    projectionNameCount,
+    serverFallbackCount: selfHealingProfiles.length,
+    unresolvedCount: resolvedProfiles.filter((profile) => !profile.displayName).length,
     returnedProfileCount: resolvedProfiles.length,
   });
   return {
@@ -1774,7 +2199,8 @@ export const getSuggestedConnections = functions.https.onCall(async (data, conte
 
   const viewer = viewerSnapshot.data() ?? {};
   const viewerFriendIds = readStringArray(viewer.friendIds);
-  const excludedUserIds = new Set([uid, ...viewerFriendIds]);
+  const blockedUserIds = await readBlockedRelationshipIds(uid);
+  const excludedUserIds = new Set([uid, ...viewerFriendIds, ...blockedUserIds]);
   let candidateSnapshots: admin.firestore.QueryDocumentSnapshot[];
   if (normalizedQuery) {
     const prefixSnapshot = await firestore.collection('users')
@@ -1792,8 +2218,13 @@ export const getSuggestedConnections = functions.https.onCall(async (data, conte
 
   const candidates = candidateSnapshots
     .filter((snapshot) => !excludedUserIds.has(snapshot.id))
-    .map((snapshot) => ({ snapshot, profile: snapshot.data(), fullName: resolvePublicProfileName(snapshot.data()) }))
-    .filter((candidate) => !normalizedQuery || candidate.fullName?.toLocaleLowerCase().includes(normalizedQuery));
+    .map((snapshot) => ({
+      snapshot,
+      profile: snapshot.data(),
+      publicProfile: resolveCanonicalPublicProfile(snapshot.id, snapshot.data()),
+    }))
+    .filter((candidate) => Boolean(candidate.publicProfile))
+    .filter((candidate) => !normalizedQuery || candidate.publicProfile?.displayName.toLocaleLowerCase().includes(normalizedQuery));
 
   const sharedSquadNames = new Map<string, string>();
   const viewerSquads = await firestore.collection('squads')
@@ -1813,12 +2244,12 @@ export const getSuggestedConnections = functions.https.onCall(async (data, conte
   }
 
   return {
-    suggestions: candidates.slice(0, 20).map(({ snapshot, profile, fullName }) => {
+    suggestions: candidates.slice(0, 20).map(({ snapshot, profile, publicProfile }) => {
       const mutualConnectionCount = countMutualConnections(viewerFriendIds, profile.friendIds);
       return {
         userId: snapshot.id,
-        displayName: formatSuggestedConnectionName(fullName),
-        photoURL: typeof profile.photoURL === 'string' ? profile.photoURL : null,
+        displayName: publicProfile?.displayName ?? null,
+        photoURL: publicProfile?.photoURL ?? null,
         sharedSquadName: sharedSquadNames.get(snapshot.id) ?? null,
         sharedActivity: findSharedActivity(viewer.sports, profile.sports),
         mutualConnectionCount: mutualConnectionCount > 0 ? mutualConnectionCount : null,
