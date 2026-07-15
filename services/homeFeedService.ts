@@ -12,12 +12,15 @@ import {
 import { db } from "@/config/firebase";
 import { getPublicUserProfiles } from "@/services/publicProfileService";
 import { getSafeProfileName } from "@/utils/friendPrivacy";
+import { normalizeSquadSportId, type SquadSportId } from "@/constants/sports";
 
 export interface SquadDetail {
   squadId: string;
   name: string;
   sport: string;
   venueName: string;
+  sportId: SquadSportId;
+  sportDisplayName: string;
   activeMemberCount: number;
   lastActivityAt: Date | null;
 }
@@ -34,6 +37,8 @@ export interface LiveSquadData {
   squadId: string;
   name: string;
   venueName: string;
+  sportId: SquadSportId;
+  sportDisplayName: string;
   activeMemberCount: number;
   memberAvatars: { userId: string; displayName: string; avatarUrl: string | null }[];
 }
@@ -70,9 +75,11 @@ function docToSquadDetail(squadDoc: QueryDocumentSnapshot<DocumentData>): SquadD
 
   return {
     squadId: squadDoc.id,
-    name: (data.name as string) ?? "",
-    sport: (data.sport as string) ?? "",
-    venueName: (data.venueName as string) ?? "",
+    name: (data.venueName as string) ?? (data.name as string) ?? "",
+    sport: (data.sportDisplayName as string) ?? (data.sport as string) ?? "Other",
+    venueName: (data.venueName as string) ?? (data.name as string) ?? "",
+    sportId: normalizeSquadSportId(data.sportId ?? data.sport),
+    sportDisplayName: (data.sportDisplayName as string) ?? (data.sport as string) ?? "Other",
     activeMemberCount: (data.activeMemberCount as number) ?? 0,
     lastActivityAt: tsToDate(data.lastActivityAt as FirestoreDate),
   };
@@ -169,8 +176,10 @@ export function subscribeLiveSquadCard(
 
             allSquads.set(squadDoc.id, {
               squadId: squadDoc.id,
-              name: (data.name as string) ?? "",
-              venueName: (data.venueName as string) ?? "",
+              name: (data.venueName as string) ?? (data.name as string) ?? "",
+              venueName: (data.venueName as string) ?? (data.name as string) ?? "",
+              sportId: normalizeSquadSportId(data.sportId ?? data.sport),
+              sportDisplayName: (data.sportDisplayName as string) ?? (data.sport as string) ?? "Other",
               activeMemberCount: (data.activeMemberCount as number) ?? 0,
               memberAvatars,
             });

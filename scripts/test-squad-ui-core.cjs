@@ -1,0 +1,31 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const read = (file) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
+const squadScreen = read("app/(tabs)/squad.tsx");
+const home = read("app/(tabs)/index.tsx");
+const games = read("app/(tabs)/games.tsx");
+const identity = read("components/SquadIdentity.tsx");
+const selector = read("components/SquadSelector.tsx");
+const service = read("services/squadService.ts");
+const functions = read("functions/src/index.ts");
+const nearbyCallable = functions.slice(functions.indexOf("export const findNearbyVenueSportSquads"), functions.indexOf("export const searchVenueSportSquads"));
+const presenceCleanup = functions.slice(functions.indexOf("export const deactivateInactiveMembers"), functions.indexOf("export const awardGameStars"));
+
+assert.match(identity, /venueName[\s\S]*sportName/, "venue and sport must be rendered as separate text lines");
+assert.match(selector, /SquadIdentity/, "selector must use the shared two-line identity");
+assert.match(home, /SquadIdentity/, "Home cards must use the shared two-line identity");
+assert.match(games, /selectedSquadId/, "Games must use the explicit selected Squad");
+assert.doesNotMatch(`${home}\n${games}`, /mySquadIds\s*\[\s*0\s*\]/, "active flows must not depend on array order");
+assert.match(squadScreen, /Alert\.alert\([\s\S]*locationDisclosure[\s\S]*requestLocationPermission/, "the explanation must precede the system request");
+assert.match(squadScreen, /searchByVenue/, "manual venue search must remain available");
+assert.doesNotMatch(squadScreen, /useEffect\([\s\S]{0,300}requestLocationPermission/, "permission must not be requested on mount");
+assert.doesNotMatch(`${service}\n${squadScreen}\n${home}`, /updateUserLocation/, "parent coordinates must not be persisted");
+assert.doesNotMatch(`${service}\n${squadScreen}`, /startLocationUpdatesAsync|watchPositionAsync|requestBackgroundPermissionsAsync|startGeofencingAsync/, "continuous/background tracking must not be introduced");
+assert.doesNotMatch(nearbyCallable, /joinVenueSportSquad|memberIds|userId|child|email/i, "nearby search must not join or expose private membership/profile data");
+assert.match(functions, /membershipStatus:\s*'active'/);
+assert.match(functions, /presenceStatus:\s*'away'/);
+assert.doesNotMatch(presenceCleanup, /membershipStatus:\s*'left'|isActive:\s*false/, "presence expiration must never end durable membership");
+assert.doesNotMatch(functions, /sidelineStars[\s\S]{0,300}joinVenueSportSquad/, "Squad join must not award Stars");
+console.log("Squad UI, location, selection, and privacy source tests passed.");

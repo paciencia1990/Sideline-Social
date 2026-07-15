@@ -7,13 +7,13 @@ import LobbyBase from "@/components/LobbyBase";
 import { useGameLobby } from "@/hooks/useGameLobby";
 
 export default function BombDefusalLobby() {
-  const { players, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const { sessionId, players, toggleReady, startGame, showCountdown, setShowCountdown } =
     useGameLobby("bomb-defusal");
 
   const handleComplete = useCallback(() => {
     setShowCountdown(false);
-    router.replace("/games/bomb-defusal/play" as never);
-  }, [setShowCountdown]);
+    router.replace({ pathname: "/games/bomb-defusal/play", params: sessionId ? { sessionId } : {} } as never);
+  }, [sessionId, setShowCountdown]);
 
   return (
     <View style={styles.container}>

@@ -7,13 +7,13 @@ import LobbyBase from "@/components/LobbyBase";
 import { useGameLobby } from "@/hooks/useGameLobby";
 
 export default function TriviaBlitzLobby() {
-  const { players, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const { sessionId, players, toggleReady, startGame, showCountdown, setShowCountdown } =
     useGameLobby("trivia-blitz");
 
   const handleComplete = useCallback(() => {
     setShowCountdown(false);
-    router.replace({ pathname: "/games/trivia-blitz/play", params: { start: "1" } } as never);
-  }, [setShowCountdown]);
+    router.replace({ pathname: "/games/trivia-blitz/play", params: { start: "1", ...(sessionId ? { sessionId } : {}) } } as never);
+  }, [sessionId, setShowCountdown]);
 
   return (
     <View style={styles.container}>

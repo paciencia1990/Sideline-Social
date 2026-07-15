@@ -17,6 +17,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/squads/$(squadId);
     }
 
+    function squadMembershipPath(squadId, userId) {
+      return /databases/$(database)/documents/squadMemberships/$(squadId + "__" + userId);
+    }
+
     function teamPath(teamId) {
       return /databases/$(database)/documents/teams/$(teamId);
     }
@@ -112,7 +116,7 @@ service cloud.firestore {
     function isTriviaGameCreate(sessionId, gameId) {
       return gameId == "triviaBlitz" &&
         isSessionHost(sessionId) &&
-        request.resource.data.keys().hasOnly(["status", "turnIndex", "questionIndex", "teamStreak", "totalPoints", "correctAnswers", "totalPlayers", "selectedQuestions", "allReady", "currentSelection", "selectionRevealed", "hostPlayerId", "sessionCode", "createdAt", "updatedAt"]) &&
+        request.resource.data.keys().hasOnly(["status", "turnIndex", "questionIndex", "teamStreak", "totalPoints", "correctAnswers", "answeredQuestions", "totalPlayers", "selectedQuestions", "allReady", "currentSelection", "selectionRevealed", "hostPlayerId", "sessionCode", "createdAt", "updatedAt"]) &&
         request.resource.data.hostPlayerId == request.auth.uid &&
         request.resource.data.sessionCode == sessionId &&
         request.resource.data.status == "lobby" &&
@@ -121,6 +125,7 @@ service cloud.firestore {
         request.resource.data.teamStreak == 0 &&
         request.resource.data.totalPoints == 0 &&
         request.resource.data.correctAnswers == 0 &&
+        request.resource.data.answeredQuestions == 0 &&
         request.resource.data.totalPlayers == 1 &&
         request.resource.data.selectedQuestions is list &&
         request.resource.data.selectedQuestions.size() > 0 &&
@@ -137,7 +142,7 @@ service cloud.firestore {
     function isTriviaHostGameUpdate(sessionId) {
       return isSessionHost(sessionId) &&
         keepsTriviaGameIdentity() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "turnIndex", "questionIndex", "teamStreak", "totalPoints", "correctAnswers", "totalPlayers", "selectedQuestions", "allReady", "currentSelection", "selectionRevealed", "updatedAt"]);
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "turnIndex", "questionIndex", "teamStreak", "totalPoints", "correctAnswers", "answeredQuestions", "totalPlayers", "selectedQuestions", "allReady", "currentSelection", "selectionRevealed", "updatedAt"]);
     }
 
     function isTriviaAnswerSubmission(sessionId) {
@@ -156,7 +161,16 @@ service cloud.firestore {
     function isSquadMember(squadId) {
       return signedIn() &&
         exists(squadPath(squadId)) &&
-        request.auth.uid in get(squadPath(squadId)).data.memberIds;
+        (
+          (
+            exists(squadMembershipPath(squadId, request.auth.uid)) &&
+            get(squadMembershipPath(squadId, request.auth.uid)).data.membershipStatus == "active"
+          ) ||
+          (
+            get(squadPath(squadId)).data.memberIds is list &&
+            request.auth.uid in get(squadPath(squadId)).data.memberIds
+          )
+        );
     }
 
     function isTeamMember(teamId) {
@@ -256,7 +270,16 @@ service cloud.firestore {
     match /users/{userId} {
       allow get: if isSelf(userId);
       allow list: if false;
-      allow create, update: if isSelf(userId);
+      allow create: if isSelf(userId) &&
+        (!("sidelineStars" in request.resource.data) || request.resource.data.sidelineStars == 0) &&
+        (!("squadIds" in request.resource.data) || (
+          request.resource.data.squadIds is list && request.resource.data.squadIds.size() == 0
+        )) &&
+        (!("selectedSquadId" in request.resource.data) || request.resource.data.selectedSquadId == null);
+      allow update: if isSelf(userId) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          "squadIds", "selectedSquadId", "sidelineStars"
+        ]);
       allow delete: if false;
 
       match /children/{childId} {
@@ -310,21 +333,15 @@ service cloud.firestore {
 
     // -----------------------------------------------------------------------
     // Private personal notification inbox
-    // Trusted Cloud Functions create immutable event details. Recipients can
-    // read only their own inbox and may update only their own read state.
+    // Trusted Cloud Functions create notifications and own all read/dismiss
+    // mutations. Recipients can read only their own inbox.
     // -----------------------------------------------------------------------
     match /userNotifications/{userId} {
       allow read, write: if false;
 
       match /notifications/{notificationId} {
         allow get, list: if isSelf(userId);
-        allow create, delete: if false;
-        allow update: if isSelf(userId) &&
-          resource.data.recipientUserId == request.auth.uid &&
-          request.resource.data.recipientUserId == resource.data.recipientUserId &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["isRead", "readAt"]) &&
-          request.resource.data.isRead == true &&
-          request.resource.data.readAt is timestamp;
+        allow create, update, delete: if false;
       }
     }
 
@@ -348,30 +365,43 @@ service cloud.firestore {
     // -----------------------------------------------------------------------
     match /squads/{squadId} {
       allow read: if signedIn();
-      allow create: if signedIn();
-      allow update: if signedIn() && (
-        isSquadMember(squadId) ||
-        request.auth.uid == resource.data.createdBy
-      );
-      allow delete: if signedIn() &&
-        request.auth.uid == resource.data.createdBy;
+      // Canonical identity, membership projections, and counts are managed by
+      // trusted callable functions so concurrent clients cannot create a
+      // duplicate venue-and-sport Squad or modify another membership.
+      allow create, update, delete: if false;
+
+      match /seasons/{seasonId} {
+        // The field-limited season and leaderboard callables are the only
+        // client read path, so internal creator/closure audit UIDs stay private.
+        allow read, create, update, delete: if false;
+
+        match /memberTotals/{userId} {
+          // Seasonal leaderboard rows are privacy-filtered by the callable.
+          allow read, create, update, delete: if false;
+
+          match /contributions/{rewardId} {
+            allow read, create, update, delete: if false;
+          }
+        }
+      }
     }
 
     // -----------------------------------------------------------------------
     // squadMemberships collection
-    // Users can read/write only their own memberships. Cloud Functions use the
-    // Admin SDK and bypass these rules.
+    // Users can read only their own memberships. Cloud Functions use the
+    // Admin SDK and bypass these rules for every mutation.
     // -----------------------------------------------------------------------
     match /squadMemberships/{membershipId} {
-      allow read: if signedIn() && (
-        resource.data.userId == request.auth.uid ||
-        isSquadMember(resource.data.squadId)
-      );
-      allow create: if signedIn() &&
-        request.resource.data.userId == request.auth.uid;
-      allow update: if signedIn() &&
-        resource.data.userId == request.auth.uid;
-      allow delete: if false;
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      // Durable membership and expiring presence are both server-managed.
+      allow create, update, delete: if false;
+    }
+
+    // Minimal canonical terminal records for locally played rewarded games.
+    // Clients cannot read participant IDs/results or forge completion. The
+    // authenticated reward callables use the Admin SDK for all access.
+    match /gameRewardSessions/{sessionId} {
+      allow read, create, update, delete: if false;
     }
 
     // -----------------------------------------------------------------------

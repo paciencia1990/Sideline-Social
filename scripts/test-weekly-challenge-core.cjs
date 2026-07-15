@@ -48,6 +48,7 @@ function run() {
   assert.equal(getPreviousWeekKey("2026-01-05"), "2025-12-29", "previous week handles year boundaries");
   assert.equal(resolveTimeZone("Not/A_Timezone", undefined), DEFAULT_TIME_ZONE, "invalid timezone falls back");
   assert.equal(resolveTimeZone("America/Chicago"), "America/Chicago", "valid stored timezone is retained");
+  assert.ok(WEEKLY_CHALLENGES.every((challenge) => challenge.points === 5), "all challenge difficulty levels award exactly five Stars");
 
   console.log("Weekly Challenge core tests passed.");
 }

@@ -8,7 +8,7 @@ import { SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 
-import { getPendingNotificationOpenTarget, markNotificationRead } from "@/services/notificationService";
+import { getPendingNotificationOpenTarget } from "@/services/notificationService";
 LogBox.ignoreAllLogs(false);
 
 export default function Index() {
@@ -28,12 +28,6 @@ export default function Index() {
           const pendingTarget = await getPendingNotificationOpenTarget();
           if (!mounted) return;
           if (pendingTarget) {
-            if (pendingTarget.notificationId) {
-              await markNotificationRead(user.uid, pendingTarget.notificationId).catch((error) => {
-                console.warn("[Notifications] initial mark read error:", getErrorCode(error));
-              });
-            }
-            if (!mounted) return;
             router.replace(pendingTarget.route as never);
             return;
           }

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { router, usePathname } from "expo-router";
 import * as Notifications from "expo-notifications";
 
@@ -7,8 +7,8 @@ import { useAuth } from "@/context/AuthContext";
 import i18n from "@/i18n";
 import {
   getNotificationOpenTargetFromData,
-  markNotificationRead,
   registerDeviceNotificationToken,
+  retryPendingNotificationAcknowledgements,
 } from "@/services/notificationService";
 
 Notifications.setNotificationHandler({
@@ -23,9 +23,19 @@ export function NotificationCoordinator() {
   const { user } = useAuth();
   const pathname = usePathname();
   const handledResponses = useRef(new Set<string>());
+  const lastResponseOpenAt = useRef(0);
 
   useEffect(() => {
     handledResponses.current.clear();
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    void retryPendingNotificationAcknowledgements();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void retryPendingNotificationAcknowledgements();
+    });
+    return () => subscription.remove();
   }, [user?.uid]);
 
   useEffect(() => {
@@ -42,19 +52,23 @@ export function NotificationCoordinator() {
     // The root index owns cold-start notification routing. Waiting until it
     // leaves "/" prevents the normal signed-in redirect from winning a race.
     if (!user?.uid || pathname === "/") return;
+    void retryPendingNotificationAcknowledgements();
 
     const openResponse = (response: Notifications.NotificationResponse | null) => {
       if (!response) return;
+      const openedAt = Date.now();
+      if (openedAt - lastResponseOpenAt.current < 750) {
+        void Notifications.clearLastNotificationResponseAsync();
+        return;
+      }
       const identifier = response.notification.request.identifier;
       if (handledResponses.current.has(identifier)) return;
       const target = getNotificationOpenTargetFromData(response.notification.request.content.data);
       if (!target) return;
 
       handledResponses.current.add(identifier);
-      if (target.notificationId) {
-        markNotificationRead(user.uid, target.notificationId)
-          .catch((error) => console.warn("[Notifications] mark push read error:", getErrorCode(error)));
-      }
+      lastResponseOpenAt.current = openedAt;
+      void retryPendingNotificationAcknowledgements();
       Notifications.clearLastNotificationResponseAsync()
         .catch((error) => console.warn("[Notifications] clear response error:", getErrorCode(error)));
       router.push(target.route as never);

@@ -11,42 +11,31 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, router, Stack } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { MoreVertical, MapPin, Users } from 'lucide-react-native';
+import { MoreVertical, Users } from 'lucide-react-native';
 
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { PrimaryButton } from '@/components/PrimaryButton';
+import { SquadIdentity } from '@/components/SquadIdentity';
+import { SquadSeasonManager } from '@/components/SquadSeasonManager';
 import { useSquad } from '@/context/SquadContext';
 import { useAuth } from '@/context/AuthContext';
 import { fetchSquadDetail, SquadDetail, getSquadStatus } from '@/services/squadService';
-
-const SPORT_EMOJI: Record<string, string> = {
-  Soccer: '⚽',
-  Baseball: '⚾',
-  Basketball: '🏀',
-  Football: '🏈',
-  Lacrosse: '🥍',
-  Swimming: '🏊',
-  Dance: '💃',
-  Gymnastics: '🤸',
-  Tennis: '🎾',
-  TrackAndField: '🏃',
-  Volleyball: '🏐',
-  Other: '🏅',
-};
+import { getSquadSportOption, getSquadSportTranslationKey } from '@/constants/sports';
 
 export default function SquadDetailScreen() {
   const { t } = useTranslation();
   const { squadId } = useLocalSearchParams<{ squadId: string }>();
   const { user } = useAuth();
-  const { leaveSquad, mySquadIds } = useSquad();
+  const { joinSquad, leaveSquad, mySquadIds } = useSquad();
 
   const [squadDetail, setSquadDetail] = useState<SquadDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [leaving, setLeaving] = useState(false);
+  const [joining, setJoining] = useState(false);
 
   const isMember = mySquadIds.includes(squadId ?? '');
-  const emoji = SPORT_EMOJI[squadDetail?.sport ?? ''] ?? '🏅';
+  const emoji = getSquadSportOption(squadDetail?.sportId).emoji;
 
   useEffect(() => {
     if (!squadId) return;
@@ -88,6 +77,18 @@ export default function SquadDetailScreen() {
     router.push(`/(social)/squad-chat?squadId=${squadId}`);
   }, [squadId]);
 
+  const handleJoin = useCallback(async () => {
+    if (!squadId) return;
+    setJoining(true);
+    try {
+      await joinSquad(squadId);
+    } catch {
+      Alert.alert(t('squad.joinErrorTitle'), t('squad.errorJoining'));
+    } finally {
+      setJoining(false);
+    }
+  }, [joinSquad, squadId, t]);
+
   if (loading) {
     return (
       <ScreenWrapper>
@@ -126,7 +127,7 @@ export default function SquadDetailScreen() {
     <ScreenWrapper>
       <Stack.Screen
         options={{
-          title: squadDetail.name,
+          title: squadDetail.venueName,
           headerRight: isMember
             ? () => (
                 <TouchableOpacity
@@ -149,12 +150,12 @@ export default function SquadDetailScreen() {
         {/* Hero header */}
         <View style={styles.heroCard}>
           <Text style={styles.heroEmoji}>{emoji}</Text>
-          <Text style={styles.heroName}>{squadDetail.name}</Text>
-
-          <View style={styles.heroMeta}>
-            <MapPin size={14} color={Colors.textPrimary} />
-            <Text style={styles.heroMetaText}>{squadDetail.venueName}</Text>
-          </View>
+          <SquadIdentity
+            venueName={squadDetail.venueName}
+            sportId={squadDetail.sportId}
+            sportDisplayName={squadDetail.sportDisplayName}
+            style={styles.heroIdentity}
+          />
 
           <View style={[styles.statusPill, { backgroundColor: statusColor }]}>
             <Text style={styles.statusText}>{statusLabel}</Text>
@@ -165,17 +166,17 @@ export default function SquadDetailScreen() {
         <View style={styles.statsRow}>
           <View style={styles.statItem}>
             <Users size={20} color={Colors.primary} />
-            <Text style={styles.statValue}>{squadDetail.memberIds.length}</Text>
+            <Text style={styles.statValue}>{squadDetail.memberCount}</Text>
             <Text style={styles.statLabel}>{t('squad.members')}</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statItem}>
             <Text style={styles.statValue}>{squadDetail.activeMemberCount}</Text>
-            <Text style={styles.statLabel}>Active Now</Text>
+            <Text style={styles.statLabel}>{t('squad.activeNow')}</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statItem}>
-            <Text style={styles.statValue}>{squadDetail.sport}</Text>
+            <Text style={styles.statValue}>{t(getSquadSportTranslationKey(squadDetail.sportId))}</Text>
             <Text style={styles.statLabel}>{t('squad.sport')}</Text>
           </View>
         </View>
@@ -211,13 +212,15 @@ export default function SquadDetailScreen() {
           </View>
         )}
 
+        {isMember ? <SquadSeasonManager squadId={squadDetail.squadId} /> : null}
+
         {/* Actions */}
         <View style={styles.actionsSection}>
-          <PrimaryButton
-            title={t('squad.detailChat')}
-            onPress={handleOpenChat}
-            style={styles.chatBtn}
-          />
+          {isMember ? (
+            <PrimaryButton title={t('squad.detailChat')} onPress={handleOpenChat} style={styles.chatBtn} />
+          ) : (
+            <PrimaryButton loading={joining} title={t('squad.joinThisSquad')} onPress={() => void handleJoin()} style={styles.chatBtn} />
+          )}
 
           {isMember && (
             <TouchableOpacity style={styles.leaveBtn} onPress={handleLeave} disabled={leaving}>
@@ -257,12 +260,7 @@ const styles = StyleSheet.create({
     fontSize: 48,
     lineHeight: 56,
   },
-  heroName: {
-    fontFamily: Typography.heading,
-    fontSize: 22,
-    color: Colors.textHeading,
-    textAlign: 'center',
-  },
+  heroIdentity: { alignItems: 'center' },
   heroMeta: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -24,15 +24,18 @@ import {
   type AnnouncementReply,
   type TeamAnnouncement,
 } from "@/services/teamMessageService";
+import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 
 export default function ParentAnnouncementScreen() {
   const { i18n, t } = useTranslation();
   const params = useLocalSearchParams<{
     teamId?: string | string[];
     announcementId?: string | string[];
+    notificationId?: string | string[];
   }>();
   const teamId = normalizeParam(params.teamId);
   const announcementId = normalizeParam(params.announcementId);
+  const notificationId = normalizeParam(params.notificationId);
   const [summary, setSummary] = useState<ParentTeamSummary | null>(null);
   const [announcement, setAnnouncement] = useState<TeamAnnouncement | null>(null);
   const [replies, setReplies] = useState<AnnouncementReply[]>([]);
@@ -44,6 +47,7 @@ export default function ParentAnnouncementScreen() {
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
   const replyDeletionInFlight = useRef(false);
+  const acknowledgedNotificationIds = useRef(new Set<string>());
 
   const loadAnnouncement = useCallback(async () => {
     setLoading(true);
@@ -61,6 +65,10 @@ export default function ParentAnnouncementScreen() {
       }
       setSummary(nextSummary);
       setAnnouncement(nextAnnouncement);
+      if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
+        acknowledgedNotificationIds.current.add(notificationId);
+        void acknowledgeNotificationAfterOpen(notificationId);
+      }
       try {
         await markTeamAnnouncementRead(teamId, announcementId);
       } catch (readError) {
@@ -74,7 +82,7 @@ export default function ParentAnnouncementScreen() {
     } finally {
       setLoading(false);
     }
-  }, [announcementId, t, teamId]);
+  }, [announcementId, notificationId, t, teamId]);
 
   useEffect(() => {
     void loadAnnouncement();

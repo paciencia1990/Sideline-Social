@@ -12,6 +12,30 @@
       "collectionGroup": "squads",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "venueGeohash", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "squads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "normalizedVenueName", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "squads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "venueSportKey", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "squads",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "memberIds", "arrayConfig": "CONTAINS" },
         { "fieldPath": "isActive", "order": "ASCENDING" }
       ]
@@ -54,8 +78,57 @@
       "collectionGroup": "squadMemberships",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "squadId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "squadMemberships",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "isActive", "order": "ASCENDING" },
         { "fieldPath": "lastActiveAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "squadMemberships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "squadId", "order": "ASCENDING" },
+        { "fieldPath": "membershipStatus", "order": "ASCENDING" },
+        { "fieldPath": "lastSeenAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "squadMemberships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "membershipStatus", "order": "ASCENDING" },
+        { "fieldPath": "lastSeenAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "squadMemberships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "squadId", "order": "ASCENDING" },
+        { "fieldPath": "membershipStatus", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "seasons",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "endAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "seasons",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "startAt", "order": "ASCENDING" }
       ]
     },
     {
@@ -107,5 +180,36 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "notifications",
+      "fieldPath": "createdAt",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
+      "collectionGroup": "notifications",
+      "fieldPath": "readAt",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
+      "collectionGroup": "notifications",
+      "fieldPath": "dismissedAt",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    }
+  ]
 }

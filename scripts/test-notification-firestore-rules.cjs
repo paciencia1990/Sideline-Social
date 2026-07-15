@@ -18,6 +18,8 @@ async function seed(testEnv) {
       createdAt: now(),
       readAt: null,
       isRead: false,
+      dismissedAt: null,
+      dismissReason: null,
       status: "active",
       actorUserId: "parent-b",
       teamId: null,
@@ -52,9 +54,12 @@ async function run() {
     await assertFails(updateDoc(doc(ownerDb, ...notificationPath), { recipientUserId: "parent-b", isRead: true, readAt: now() }));
     await assertFails(updateDoc(doc(ownerDb, ...notificationPath), { type: "gameInvitation", isRead: true, readAt: now() }));
     await assertFails(updateDoc(doc(ownerDb, ...notificationPath), { isRead: false, readAt: now() }));
-    await assertSucceeds(updateDoc(doc(ownerDb, ...notificationPath), { isRead: true, readAt: now() }));
+    await assertFails(updateDoc(doc(ownerDb, ...notificationPath), { isRead: true, readAt: now() }));
+    await assertFails(updateDoc(doc(ownerDb, ...notificationPath), {
+      isRead: true, readAt: now(), dismissedAt: now(), dismissReason: "opened",
+    }));
 
-    console.log("Notification Firestore recipient privacy and read-state rules tests passed.");
+    console.log("Notification Firestore recipient privacy and callable-only mutation rules tests passed.");
   } finally {
     await testEnv.cleanup();
   }

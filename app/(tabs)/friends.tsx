@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import { Check, Heart, MessageCircle, Search, UserMinus, UserPlus, Users, X } from "lucide-react-native";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -35,6 +35,7 @@ import {
   type SuggestedFriendProfile,
 } from "@/services/friendsService";
 import { getOrCreateDirectChat } from "@/services/chatService";
+import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import {
   formatSuggestedConnectionName,
   getFriendNameInitials,
@@ -242,6 +243,10 @@ function RequestRow({
 export default function FriendsScreen() {
   const { t } = useTranslation();
   const { user, loading: authLoading } = useAuth();
+  const params = useLocalSearchParams<{ notificationId?: string | string[] }>();
+  const notificationId = Array.isArray(params.notificationId)
+    ? params.notificationId[0] ?? ""
+    : params.notificationId ?? "";
   const [currentProfile, setCurrentProfile] = useState<FriendProfile | null>(null);
   const [friends, setFriends] = useState<FriendProfile[]>([]);
   const [incomingRequests, setIncomingRequests] = useState<HydratedIncomingFriendRequest[]>([]);
@@ -258,6 +263,7 @@ export default function FriendsScreen() {
   const [actionError, setActionError] = useState<{ actionId: string; message: string } | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const actionsInFlight = useRef(new Set<string>());
+  const acknowledgedNotificationIds = useRef(new Set<string>());
 
   const outgoingUserIds = useMemo(
     () => new Set(outgoingRequests.map((request) => request.toUserId)),
@@ -292,6 +298,10 @@ export default function FriendsScreen() {
       setOutgoingRequests(nextRequestGroups.outgoing);
       setIncomingMappingDiagnostics(nextRequestGroups.mappingDiagnostics);
       setSuggestedUsers(nextSuggested);
+      if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
+        acknowledgedNotificationIds.current.add(notificationId);
+        void acknowledgeNotificationAfterOpen(notificationId);
+      }
     } catch (nextError) {
       logFriendsScreenIssue("loadFriends", nextError);
       setLoadError(t("friends.errorBody"));
@@ -299,7 +309,7 @@ export default function FriendsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [t, user]);
+  }, [notificationId, t, user]);
 
   useFocusEffect(useCallback(() => {
     if (!authLoading) void loadFriends();

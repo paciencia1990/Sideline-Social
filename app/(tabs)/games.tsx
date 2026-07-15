@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { SquadSelector } from "@/components/SquadSelector";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
@@ -73,7 +74,7 @@ const ROUTE_BY_GAME: Record<GameType, string> = {
 
 export default function GamesScreen() {
   const { t } = useTranslation();
-  const { mySquadIds } = useSquad();
+  const { selectedSquadId } = useSquad();
   const params = useLocalSearchParams<{ join?: string }>();
   const [activeSession, setActiveSession] = useState<GameSession | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
@@ -86,21 +87,21 @@ export default function GamesScreen() {
   }, [activeSession]);
 
   const loadActiveSession = useCallback(async () => {
-    if (!mySquadIds[0]) {
+    if (!selectedSquadId) {
       setActiveSession(null);
       return;
     }
 
     setLoadingSession(true);
     try {
-      setActiveSession(await fetchActiveSquadSession(mySquadIds[0]));
+      setActiveSession(await fetchActiveSquadSession(selectedSquadId));
     } catch (error) {
       console.warn("[GamesScreen] active session error:", error);
       setActiveSession(null);
     } finally {
       setLoadingSession(false);
     }
-  }, [mySquadIds]);
+  }, [selectedSquadId]);
 
   useEffect(() => {
     void loadActiveSession();
@@ -153,6 +154,8 @@ export default function GamesScreen() {
           <Text style={styles.title}>{t("games.title")}</Text>
           <Text style={styles.subtitle}>{t("games.subtitle")}</Text>
         </View>
+
+        <SquadSelector />
 
         {loadingSession ? (
           <Card style={styles.loadingCard}>

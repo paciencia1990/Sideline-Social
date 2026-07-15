@@ -11,7 +11,6 @@ import {
 } from "firebase/firestore";
 
 import questions from "@/assets/triviaBlitz/questions.json";
-import { auth } from "@/config/firebase";
 import {
   getCurrentPlayer,
   getFirebaseErrorCode,
@@ -53,15 +52,15 @@ export function generateSessionCode() {
   return code;
 }
 
-export async function createGameSession(hostName: string) {
+export async function createGameSession(hostName: string, requestedSessionId?: string) {
   const host = await getCurrentPlayer(hostName || "Host");
-  const sessionId = generateSessionCode();
+  const sessionId = requestedSessionId ? normalizeSessionId(requestedSessionId) : generateSessionCode();
 
   try {
     await initializeFirestoreSession(sessionId, host);
     await upsertPlayer(sessionId, host, hostName || host.name, 0);
     await updateSessionAllReady(sessionId);
-    return { sessionId, playerId: host.id };
+    return { sessionId, playerId: host.id, isHost: true };
   } catch (error) {
     logTriviaFirebaseError("createGameSession", { sessionId, path: getTriviaSessionPath(sessionId) }, error);
     throw error;
@@ -97,16 +96,7 @@ export async function joinGameSession(sessionId: string, playerName: string) {
 
     if (session.status !== "lobby") {
       if (canResumeActiveGame) {
-        if (__DEV__) {
-          console.log("[TriviaBlitz:resumeExistingPlayer]", {
-            sessionId: normalizedSessionId,
-            authUid: auth.currentUser?.uid ?? null,
-            playerId: player.id,
-            gameStatus: session.status,
-            hasPlayerDoc: Boolean(existingPlayer),
-          });
-        }
-        return { sessionId: normalizedSessionId, playerId: player.id };
+        return { sessionId: normalizedSessionId, playerId: player.id, isHost: session.hostPlayerId === player.id };
       }
 
       throw new Error("This Trivia Blitz session has already started or ended.");
@@ -119,7 +109,7 @@ export async function joinGameSession(sessionId: string, playerName: string) {
       existingPlayer?.playerIndex ?? players.length,
     );
     await updateSessionAllReadyBestEffort(normalizedSessionId);
-    return { sessionId: normalizedSessionId, playerId: player.id };
+    return { sessionId: normalizedSessionId, playerId: player.id, isHost: session.hostPlayerId === player.id };
   } catch (error) {
     logTriviaFirebaseError(
       "joinGameSession",
@@ -196,7 +186,7 @@ export async function updateSessionAllReady(sessionId: string) {
 export async function initializeFirestoreSession(sessionId: string, host: PlayerIdentity) {
   const normalizedSessionId = normalizeSessionId(sessionId);
   const sessionRef = getTriviaSessionRef(normalizedSessionId);
-  const parentDebug = await createFirestoreSessionParent(normalizedSessionId, host);
+  await createFirestoreSessionParent(normalizedSessionId, host);
   const childSnapshot = await getDoc(sessionRef);
 
   const session: TriviaSession = {
@@ -206,6 +196,7 @@ export async function initializeFirestoreSession(sessionId: string, host: Player
     teamStreak: 0,
     totalPoints: 0,
     correctAnswers: 0,
+    answeredQuestions: 0,
     totalPlayers: 1,
     selectedQuestions: getRandomQuestions(),
     allReady: false,
@@ -217,53 +208,14 @@ export async function initializeFirestoreSession(sessionId: string, host: Player
     updatedAt: serverTimestamp(),
   };
 
-  if (__DEV__) {
-    console.log("[TriviaBlitz:writeMode]", {
-      sessionId: normalizedSessionId,
-      parentExistsBeforeWrite: parentDebug.parentExistsBeforeWrite,
-      childExistsBeforeWrite: childSnapshot.exists(),
-      parentOperation: parentDebug.parentOperation,
-      childOperation: childSnapshot.exists() ? "update" : "create",
-    });
-  }
-
   if (childSnapshot.exists()) {
     return normalizedSessionId;
   }
 
-  if (__DEV__) {
-    console.log("[TriviaBlitz:createChild:attempt]", {
-      sessionId: normalizedSessionId,
-      authUid: auth.currentUser?.uid ?? null,
-      parentPath: getTriviaParentSessionPath(normalizedSessionId),
-      path: getTriviaSessionPath(normalizedSessionId),
-      parentSessionExists: parentDebug.parentSessionExists,
-      parentSessionData: parentDebug.parentSessionData,
-      payload: toLoggableTriviaPayload(session),
-    });
-  }
-
   try {
     await setDoc(sessionRef, session);
-    if (__DEV__) {
-      console.log("[TriviaBlitz:createChild:success]", {
-        sessionId: normalizedSessionId,
-        authUid: auth.currentUser?.uid ?? null,
-        path: getTriviaSessionPath(normalizedSessionId),
-      });
-    }
   } catch (error) {
-    console.error("[TriviaBlitz:createChild:error]", {
-      sessionId: normalizedSessionId,
-      authUid: auth.currentUser?.uid ?? null,
-      parentPath: getTriviaParentSessionPath(normalizedSessionId),
-      path: getTriviaSessionPath(normalizedSessionId),
-      parentSessionExists: parentDebug.parentSessionExists,
-      parentSessionData: parentDebug.parentSessionData,
-      payload: toLoggableTriviaPayload(session),
-      code: getFirebaseErrorCode(error),
-      message: error instanceof Error ? error.message : "Unknown Firestore error",
-    });
+    logTriviaFirebaseError("createChild", {}, error);
     throw new Error("Trivia Blitz could not create the game session. Please try again.");
   }
 
@@ -304,6 +256,7 @@ export async function resetGameSession(sessionId: string) {
       teamStreak: 0,
       totalPoints: 0,
       correctAnswers: 0,
+      answeredQuestions: 0,
       selectedQuestions: getRandomQuestions(),
       allReady: false,
       currentSelection: null,
@@ -379,33 +332,10 @@ async function createFirestoreSessionParent(sessionId: string, host: PlayerIdent
     updatedAt: serverTimestamp(),
   };
 
-  if (__DEV__) {
-    console.log("[TriviaBlitz:createParent:attempt]", {
-      sessionId,
-      authUid: auth.currentUser?.uid ?? null,
-      path: getTriviaParentSessionPath(sessionId),
-      payload: toLoggableParentPayload(parentSession),
-    });
-  }
-
   try {
     await setDoc(parentRef, parentSession);
-    if (__DEV__) {
-      console.log("[TriviaBlitz:createParent:success]", {
-        sessionId,
-        authUid: auth.currentUser?.uid ?? null,
-        path: getTriviaParentSessionPath(sessionId),
-      });
-    }
   } catch (error) {
-    console.error("[TriviaBlitz:createParent:error]", {
-      sessionId,
-      authUid: auth.currentUser?.uid ?? null,
-      path: getTriviaParentSessionPath(sessionId),
-      payload: toLoggableParentPayload(parentSession),
-      code: getFirebaseErrorCode(error),
-      message: error instanceof Error ? error.message : "Unknown Firestore error",
-    });
+    logTriviaFirebaseError("createParent", {}, error);
     throw error;
   }
 
@@ -413,28 +343,13 @@ async function createFirestoreSessionParent(sessionId: string, host: PlayerIdent
   try {
     createdParentSnap = await getDoc(parentRef);
   } catch (error) {
-    console.error("[TriviaBlitz:createParent:verifyError]", {
-      sessionId,
-      authUid: auth.currentUser?.uid ?? null,
-      path: getTriviaParentSessionPath(sessionId),
-      code: getFirebaseErrorCode(error),
-      message: error instanceof Error ? error.message : "Unknown Firestore error",
-    });
+    logTriviaFirebaseError("verifyParent", {}, error);
     throw error;
   }
 
   const parentSessionData = createdParentSnap.exists()
     ? summarizeParentSession(createdParentSnap.data() as Partial<TriviaParentSession>)
     : summarizeParentSession(parentSession);
-
-  if (__DEV__) {
-    console.log("[TriviaBlitz:createParent:verified]", {
-      sessionId,
-      path: getTriviaParentSessionPath(sessionId),
-      exists: createdParentSnap.exists(),
-      data: parentSessionData,
-    });
-  }
 
   if (!createdParentSnap.exists()) {
     throw new Error(`Firestore parent session ${sessionId} was not created`);
@@ -569,39 +484,6 @@ function summarizeParentSession(parentSession: Partial<TriviaParentSession>) {
   };
 }
 
-function toLoggableParentPayload(parentSession: TriviaParentSession) {
-  return {
-    sessionId: parentSession.sessionId,
-    gameId: parentSession.gameId,
-    gameType: parentSession.gameType,
-    hostPlayerId: parentSession.hostPlayerId,
-    playerIds: parentSession.playerIds,
-    status: parentSession.status,
-    createdAt: "serverTimestamp()",
-    updatedAt: "serverTimestamp()",
-  };
-}
-
-function toLoggableTriviaPayload(session: TriviaSession) {
-  return {
-    status: session.status,
-    turnIndex: session.turnIndex,
-    questionIndex: session.questionIndex,
-    teamStreak: session.teamStreak,
-    totalPoints: session.totalPoints,
-    correctAnswers: session.correctAnswers,
-    totalPlayers: session.totalPlayers,
-    selectedQuestions: session.selectedQuestions,
-    allReady: session.allReady,
-    currentSelection: session.currentSelection,
-    selectionRevealed: session.selectionRevealed,
-    hostPlayerId: session.hostPlayerId,
-    sessionCode: session.sessionCode,
-    createdAt: "serverTimestamp()",
-    updatedAt: "serverTimestamp()",
-  };
-}
-
 function formatTimestampForLog(value: unknown) {
   if (!value) {
     return null;
@@ -615,5 +497,6 @@ function formatTimestampForLog(value: unknown) {
 }
 
 function normalizeSessionId(sessionId: string) {
-  return sessionId.trim().toUpperCase();
+  const trimmed = sessionId.trim();
+  return /^[A-Za-z0-9]{4,6}$/.test(trimmed) ? trimmed.toUpperCase() : trimmed;
 }

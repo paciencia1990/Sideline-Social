@@ -1,98 +1,110 @@
-import { collection, getDocs, limit, orderBy, query, type DocumentData, type QueryDocumentSnapshot } from "firebase/firestore";
-import { db } from "@/config/firebase";
+import { httpsCallable } from "firebase/functions";
+import { Timestamp } from "firebase/firestore";
 
-export type LeaderboardTierKey = "bronze" | "silver" | "gold" | "platinum" | "legend";
+import { functions } from "@/config/firebase";
+import type { SquadSportId } from "@/constants/sports";
+import type { LeaderboardTierKey } from "@/constants/sidelineStars";
 
-export interface LeaderboardUser {
-  id: string;
-  displayName: string;
-  sidelineStars: number;
-  avatarUrl?: string | null;
-  tier: LeaderboardTierKey;
-}
+export type SquadSeasonStatus = "upcoming" | "active" | "closed";
 
-export const LEADERBOARD_TIERS: {
-  key: LeaderboardTierKey;
-  minStars: number;
-  color: string;
-}[] = [
-  { key: "bronze", minStars: 0, color: "#CD7F32" },
-  { key: "silver", minStars: 500, color: "#A8A9AD" },
-  { key: "gold", minStars: 1500, color: "#E8A84C" },
-  { key: "platinum", minStars: 3000, color: "#8AA3B2" },
-  { key: "legend", minStars: 5000, color: "#C7463B" },
-];
+export type SquadSeasonSummary = {
+  seasonId: string;
+  name: string;
+  startAt: Timestamp;
+  endAt: Timestamp;
+  timeZone: string;
+  status: SquadSeasonStatus;
+  isCurrent: boolean;
+};
 
-const DEFAULT_LIMIT = 50;
+export type SquadLeaderboardEntry = {
+  userId: string;
+  displayName: string | null;
+  seasonStars: number;
+  rank: number;
+  lifetimeTier: LeaderboardTierKey;
+  isCurrentUser: boolean;
+};
 
-export async function fetchLeaderboardUsers(maxUsers = DEFAULT_LIMIT): Promise<LeaderboardUser[]> {
-  try {
-    const usersRef = collection(db, "users");
-    const rankedSnapshot = await getDocs(query(usersRef, orderBy("sidelineStars", "desc"), limit(maxUsers)));
-
-    if (!rankedSnapshot.empty) {
-      return normalizeLeaderboardDocs(rankedSnapshot.docs);
-    }
-
-    const fallbackSnapshot = await getDocs(query(usersRef, limit(maxUsers)));
-    return normalizeLeaderboardDocs(fallbackSnapshot.docs);
-  } catch (error) {
-    console.warn("[LeaderboardService] fetchLeaderboardUsers error:", error);
-    throw error;
-  }
-}
-
-export function getLeaderboardTier(sidelineStars: number): LeaderboardTierKey {
-  return LEADERBOARD_TIERS.reduce<LeaderboardTierKey>((currentTier, tier) => {
-    return sidelineStars >= tier.minStars ? tier.key : currentTier;
-  }, "bronze");
-}
-
-export function getLeaderboardTierColor(tierKey: LeaderboardTierKey): string {
-  return LEADERBOARD_TIERS.find((tier) => tier.key === tierKey)?.color ?? LEADERBOARD_TIERS[0].color;
-}
-
-function normalizeLeaderboardDocs(docs: QueryDocumentSnapshot<DocumentData>[]): LeaderboardUser[] {
-  return docs
-    .map(docToLeaderboardUser)
-    .sort((a, b) => b.sidelineStars - a.sidelineStars)
-    .map((user) => ({ ...user, tier: getLeaderboardTier(user.sidelineStars) }));
-}
-
-function docToLeaderboardUser(userDoc: QueryDocumentSnapshot<DocumentData>): LeaderboardUser {
-  const data = userDoc.data();
-  const sidelineStars = readNumber(data.sidelineStars);
-  const displayName = readDisplayName(data);
-
-  return {
-    id: userDoc.id,
-    displayName,
-    sidelineStars,
-    avatarUrl: readNullableString(data.photoURL ?? data.avatarUrl),
-    tier: getLeaderboardTier(sidelineStars),
+export type SquadLeaderboardResult = {
+  squad: {
+    squadId: string;
+    venueName: string;
+    sportId: SquadSportId;
+    sportDisplayName: string;
   };
+  season: SquadSeasonSummary | null;
+  entries: SquadLeaderboardEntry[];
+  currentUserEntry: SquadLeaderboardEntry | null;
+  currentUserLifetimeStars: number;
+  totalMemberCount: number;
+  availableSeasons: SquadSeasonSummary[];
+  nextSeason: SquadSeasonSummary | null;
+  canManageSeasons: boolean;
+};
+
+export type GetSquadSeasonsResult = {
+  squadId: string;
+  currentSeasonId: string | null;
+  canManageSeasons: boolean;
+  timeZone: string | null;
+  seasons: SquadSeasonSummary[];
+};
+
+export type CreateSquadSeasonInput = {
+  squadId: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  timeZone: string;
+  startNow?: boolean;
+};
+
+export type UpdateSquadSeasonInput = {
+  squadId: string;
+  seasonId: string;
+  name?: string;
+  startDate?: string;
+  endDate?: string;
+  timeZone?: string;
+};
+
+export async function getSquadLeaderboard(
+  squadId: string,
+  seasonId?: string,
+): Promise<SquadLeaderboardResult> {
+  const callable = httpsCallable<
+    { squadId: string; seasonId?: string },
+    SquadLeaderboardResult
+  >(functions, "getSquadLeaderboard");
+  return (await callable({ squadId, ...(seasonId ? { seasonId } : {}) })).data;
 }
 
-function readDisplayName(data: DocumentData): string {
-  const displayName = readNullableString(data.displayName);
-  if (displayName) return displayName;
-
-  const firstName = readNullableString(data.firstName);
-  const lastName = readNullableString(data.lastName);
-  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
-  if (fullName) return fullName;
-
-  const email = readNullableString(data.email);
-  if (email) return email.split("@")[0] || "Sideline Parent";
-
-  return "Sideline Parent";
+export async function getSquadSeasons(squadId: string): Promise<GetSquadSeasonsResult> {
+  const callable = httpsCallable<{ squadId: string }, GetSquadSeasonsResult>(functions, "getSquadSeasons");
+  return (await callable({ squadId })).data;
 }
 
-function readNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+export async function createSquadSeason(input: CreateSquadSeasonInput) {
+  const callable = httpsCallable<CreateSquadSeasonInput, { seasonId: string; status: SquadSeasonStatus }>(
+    functions,
+    "createSquadSeason",
+  );
+  return (await callable(input)).data;
 }
 
-function readNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+export async function updateSquadSeason(input: UpdateSquadSeasonInput) {
+  const callable = httpsCallable<UpdateSquadSeasonInput, { seasonId: string; status: SquadSeasonStatus }>(
+    functions,
+    "updateSquadSeason",
+  );
+  return (await callable(input)).data;
 }
 
+export async function endSquadSeason(squadId: string, seasonId: string) {
+  const callable = httpsCallable<
+    { squadId: string; seasonId: string },
+    { seasonId: string; status: "closed" }
+  >(functions, "endSquadSeason");
+  return (await callable({ squadId, seasonId })).data;
+}

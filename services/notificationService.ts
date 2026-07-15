@@ -1,28 +1,25 @@
 import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import {
   collection,
-  doc,
-  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
-  updateDoc,
-  where,
-  writeBatch,
   type DocumentData,
   type QueryDocumentSnapshot,
   type Unsubscribe,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 
-import { db, functions } from "@/config/firebase";
+import { auth, db, functions } from "@/config/firebase";
 import { formatFriendRequestSenderName } from "@/utils/friendPrivacy";
 import {
-  countUnreadNotifications,
+  countVisibleNotifications,
   getNotificationDestination,
+  isVisibleNotification,
+  normalizeNotificationId,
   type AppNotificationType,
   type NotificationNavigationData,
 } from "@/utils/notificationCore";
@@ -37,6 +34,9 @@ export type AppNotification = {
   createdAt: Date;
   readAt: Date | null;
   isRead: boolean;
+  dismissedAt: Date | null;
+  hasDismissedAtField: boolean;
+  dismissReason: "opened" | "clearAll" | null;
   status: "active" | "dismissed";
   actorUserId: string | null;
   actorDisplayName: string | null;
@@ -52,6 +52,12 @@ export type NotificationOpenTarget = {
 };
 
 type FirestoreDate = Date | { toDate?: () => Date } | null | undefined;
+type AcknowledgeStatus = "dismissed" | "alreadyDismissed" | "notFound";
+const RETRY_QUEUE_KEY = "@sideline-social/notification-dismissal-retry-ids-v1";
+const MAX_RETRY_IDS = 50;
+const locallyHiddenNotificationKeys = new Set<string>();
+const localVisibilityListeners = new Set<() => void>();
+let retryInFlight: Promise<void> | null = null;
 
 function toDate(value: FirestoreDate) {
   if (value instanceof Date) return value;
@@ -87,6 +93,9 @@ function toNotification(snapshot: QueryDocumentSnapshot<DocumentData>): AppNotif
     createdAt: toDate(data.createdAt as FirestoreDate) ?? new Date(0),
     readAt: toDate(data.readAt as FirestoreDate),
     isRead: data.isRead === true,
+    dismissedAt: toDate(data.dismissedAt as FirestoreDate),
+    hasDismissedAtField: Object.prototype.hasOwnProperty.call(data, "dismissedAt"),
+    dismissReason: data.dismissReason === "opened" || data.dismissReason === "clearAll" ? data.dismissReason : null,
     status: data.status === "dismissed" ? "dismissed" : "active",
     actorUserId: typeof data.actorUserId === "string" ? data.actorUserId : null,
     actorDisplayName,
@@ -106,59 +115,87 @@ export function subscribeToNotifications(
   onNext: (notifications: AppNotification[]) => void,
   onError?: () => void,
 ): Unsubscribe {
-  return onSnapshot(
+  let latest: AppNotification[] = [];
+  const emitVisible = () => onNext(latest.filter((item) => (
+    isVisibleNotification(item) && !isNotificationHiddenForSession(userId, item.id)
+  )));
+  const snapshotUnsubscribe = onSnapshot(
     query(notificationCollection(userId), orderBy("createdAt", "desc"), limit(100)),
     (snapshot) => {
-      const now = Date.now();
-      const notifications = snapshot.docs
+      latest = snapshot.docs
         .map(toNotification)
-        .filter((item): item is AppNotification => Boolean(item))
-        .filter((item) => item.status === "active" && (!item.expiresAt || item.expiresAt.getTime() > now));
-      onNext(notifications);
+        .filter((item): item is AppNotification => Boolean(item));
+      emitVisible();
     },
     (error) => {
       logNotificationIssue("subscribeInbox", error);
       onError?.();
     },
   );
+  localVisibilityListeners.add(emitVisible);
+  void retryPendingNotificationAcknowledgements();
+  return () => {
+    snapshotUnsubscribe();
+    localVisibilityListeners.delete(emitVisible);
+  };
 }
 
 export function subscribeToUnreadNotificationCount(
   userId: string,
   onNext: (count: number) => void,
 ): Unsubscribe {
-  return onSnapshot(
-    query(notificationCollection(userId), where("readAt", "==", null), limit(100)),
+  let latest: AppNotification[] = [];
+  const emitCount = () => onNext(countVisibleNotifications(
+    latest.filter((item) => !isNotificationHiddenForSession(userId, item.id)),
+  ));
+  const snapshotUnsubscribe = onSnapshot(
+    query(notificationCollection(userId), orderBy("createdAt", "desc"), limit(100)),
     (snapshot) => {
-      const notifications = snapshot.docs
+      latest = snapshot.docs
         .map(toNotification)
         .filter((item): item is AppNotification => Boolean(item));
-      onNext(countUnreadNotifications(notifications));
+      emitCount();
     },
     (error) => logNotificationIssue("subscribeUnreadCount", error),
   );
+  localVisibilityListeners.add(emitCount);
+  return () => {
+    snapshotUnsubscribe();
+    localVisibilityListeners.delete(emitCount);
+  };
 }
 
-export async function markNotificationRead(userId: string, notificationId: string) {
-  await updateDoc(doc(db, "userNotifications", userId, "notifications", notificationId), {
-    isRead: true,
-    readAt: serverTimestamp(),
-  });
+export async function acknowledgeNotificationAfterOpen(notificationIdValue: unknown) {
+  const notificationId = normalizeNotificationId(notificationIdValue);
+  if (!notificationId) return { status: "notFound" as const, queued: false };
+
+  hideNotificationForSession(notificationId);
+  try {
+    const status = await callAcknowledgeNotification(notificationId);
+    await removeRetryIds([notificationId]);
+    return { status, queued: false };
+  } catch (error) {
+    const temporary = isTemporaryNotificationError(error);
+    if (temporary) await enqueueRetryId(notificationId);
+    else await removeRetryIds([notificationId]);
+    logNotificationIssue(temporary ? "acknowledgeQueued" : "acknowledgePermanentFailure", error);
+    return { status: "notFound" as const, queued: temporary };
+  }
 }
 
-export async function markAllNotificationsRead(userId: string) {
-  const snapshot = await getDocs(query(notificationCollection(userId), where("readAt", "==", null), limit(100)));
-  const unread = snapshot.docs
-    .map((notificationDocument) => ({ notificationDocument, notification: toNotification(notificationDocument) }))
-    .filter(({ notification }) => notification?.status === "active" && notification.readAt == null);
-  if (unread.length === 0) return 0;
+export async function clearAllNotifications(visibleNotificationIds: string[] = []) {
+  const callable = httpsCallable<Record<string, never>, { clearedCount: number }>(functions, "clearUserNotifications");
+  const result = await callable({});
+  visibleNotificationIds.forEach(hideNotificationForSession);
+  return Number.isFinite(result.data.clearedCount) ? Math.max(0, result.data.clearedCount) : 0;
+}
 
-  const batch = writeBatch(db);
-  unread.forEach(({ notificationDocument }) => {
-    batch.update(notificationDocument.ref, { isRead: true, readAt: serverTimestamp() });
+export function retryPendingNotificationAcknowledgements() {
+  if (retryInFlight) return retryInFlight;
+  retryInFlight = retryQueuedAcknowledgements().finally(() => {
+    retryInFlight = null;
   });
-  await batch.commit();
-  return unread.length;
+  return retryInFlight;
 }
 
 export function getNotificationOpenTargetFromData(
@@ -166,9 +203,12 @@ export function getNotificationOpenTargetFromData(
 ): NotificationOpenTarget | null {
   const route = getNotificationDestination(data ?? {});
   if (!route) return null;
+  const notificationId = normalizeNotificationId(data?.notificationId);
   return {
-    notificationId: typeof data?.notificationId === "string" ? data.notificationId : null,
-    route,
+    notificationId,
+    route: notificationId
+      ? `${route}${route.includes("?") ? "&" : "?"}notificationId=${encodeURIComponent(notificationId)}`
+      : route,
   };
 }
 
@@ -220,4 +260,92 @@ export async function unregisterCurrentDeviceNotificationToken() {
 function logNotificationIssue(operation: string, error: unknown) {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
   console.warn("[NotificationService] operation failed", { operation, code });
+}
+
+function hideNotificationForSession(notificationId: string) {
+  const userId = auth.currentUser?.uid;
+  if (!userId) return;
+  locallyHiddenNotificationKeys.add(`${userId}:${notificationId}`);
+  localVisibilityListeners.forEach((listener) => listener());
+}
+
+function isNotificationHiddenForSession(userId: string, notificationId: string) {
+  return locallyHiddenNotificationKeys.has(`${userId}:${notificationId}`);
+}
+
+async function callAcknowledgeNotification(notificationId: string) {
+  const callable = httpsCallable<{ notificationId: string }, { status: AcknowledgeStatus }>(
+    functions,
+    "acknowledgeNotificationOpened",
+  );
+  const result = await callable({ notificationId });
+  return result.data.status;
+}
+
+async function retryQueuedAcknowledgements() {
+  const ids = await readRetryIds();
+  if (ids.length === 0) return;
+  const removable: string[] = [];
+  for (const notificationId of ids) {
+    try {
+      await callAcknowledgeNotification(notificationId);
+      hideNotificationForSession(notificationId);
+      removable.push(notificationId);
+    } catch (error) {
+      if (!isTemporaryNotificationError(error)) removable.push(notificationId);
+      logNotificationIssue("retryAcknowledgement", error);
+    }
+  }
+  await removeRetryIds(removable);
+}
+
+async function readRetryIds() {
+  try {
+    const queueKey = getRetryQueueKey();
+    if (!queueKey) return [];
+    const stored = await AsyncStorage.getItem(queueKey);
+    const parsed: unknown = stored ? JSON.parse(stored) : [];
+    if (!Array.isArray(parsed)) return [];
+    return Array.from(new Set(parsed.map(normalizeNotificationId).filter((id): id is string => Boolean(id))))
+      .slice(-MAX_RETRY_IDS);
+  } catch (error) {
+    logNotificationIssue("readRetryQueue", error);
+    return [];
+  }
+}
+
+async function enqueueRetryId(notificationId: string) {
+  const queueKey = getRetryQueueKey();
+  if (!queueKey) return;
+  const ids = (await readRetryIds()).filter((id) => id !== notificationId);
+  ids.push(notificationId);
+  await AsyncStorage.setItem(queueKey, JSON.stringify(ids.slice(-MAX_RETRY_IDS)));
+}
+
+async function removeRetryIds(notificationIds: string[]) {
+  if (notificationIds.length === 0) return;
+  const queueKey = getRetryQueueKey();
+  if (!queueKey) return;
+  const removing = new Set(notificationIds);
+  const remaining = (await readRetryIds()).filter((id) => !removing.has(id));
+  if (remaining.length === 0) await AsyncStorage.removeItem(queueKey);
+  else await AsyncStorage.setItem(queueKey, JSON.stringify(remaining));
+}
+
+function getRetryQueueKey() {
+  const userId = auth.currentUser?.uid;
+  return userId ? `${RETRY_QUEUE_KEY}:${userId}` : null;
+}
+
+function isTemporaryNotificationError(error: unknown) {
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+  return [
+    "functions/cancelled",
+    "functions/deadline-exceeded",
+    "functions/internal",
+    "functions/resource-exhausted",
+    "functions/unavailable",
+    "functions/unknown",
+    "auth/network-request-failed",
+  ].includes(code);
 }

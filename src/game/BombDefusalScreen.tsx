@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -10,9 +10,17 @@ import {
   View,
 } from "react-native";
 import LottieView from "lottie-react-native";
+import { useLocalSearchParams } from "expo-router";
+import { useTranslation } from "react-i18next";
 import { GameEndActions } from "@/components/GameEndActions";
-import { ref, set } from "firebase/database";
-import { rtdb } from "@/config/firebase";
+import { GameRewardSummary } from "@/components/GameRewardSummary";
+import { useSquad } from "@/context/SquadContext";
+import {
+  createGameRewardSession,
+  finalizeGameReward,
+  recordGameSessionResult,
+  type GameRewardResult,
+} from "@/services/sidelineStarsService";
 import {
   generateBombPattern,
   STEP_TYPES,
@@ -28,7 +36,11 @@ const wireCutAnimation = require("../../assets/animations/wireCut.json");
 const explosionAnimation = require("../../assets/animations/explosion.json");
 
 export default function BombDefusalScreen() {
-  const gameId = useMemo(() => `game-${Date.now()}`, []);
+  const { t } = useTranslation();
+  const { currentSquad } = useSquad();
+  const params = useLocalSearchParams<{ sessionId?: string | string[] }>();
+  const requestedSessionId = normalizeRouteParam(params.sessionId);
+  const [attemptNumber, setAttemptNumber] = useState(0);
   const [steps, setSteps] = useState<BombStep[]>(() => generateBombPattern());
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(STARTING_TIME);
@@ -37,36 +49,40 @@ export default function BombDefusalScreen() {
   const [status, setStatus] = useState<"playing" | "defused" | "exploded">("playing");
   const [message, setMessage] = useState("Follow the sequence before time runs out.");
   const [showWireCut, setShowWireCut] = useState(false);
+  const [rewardSessionId, setRewardSessionId] = useState("");
+  const [rewardSetupAttempt, setRewardSetupAttempt] = useState(0);
+  const [rewardResult, setRewardResult] = useState<GameRewardResult | null>(null);
+  const [rewardLoading, setRewardLoading] = useState(false);
+  const [rewardError, setRewardError] = useState<string | null>(null);
+  const finalizedRewardKeyRef = useRef("");
   const dialRotation = useRef(new Animated.Value(0)).current;
   const currentStep = steps[currentStepIndex];
 
   useEffect(() => {
-  set(ref(rtdb, `bombDefusal/${gameId}/result`), {
-    status: "started",
-    startedAt: Date.now(),
-    pattern: steps,
-  }).catch((err) => {
-    console.log("WRITE ERROR:", err);
-  });
-}, [gameId, steps]);
+    let active = true;
+    setRewardSessionId("");
+    setRewardResult(null);
+    setRewardError(null);
+    finalizedRewardKeyRef.current = "";
+    void createGameRewardSession({
+      gameType: "bombDefusal",
+      sessionId: attemptNumber === 0 ? requestedSessionId || null : null,
+      sourceSquadId: currentSquad?.squadId ?? null,
+    }).then((created) => {
+      if (active) setRewardSessionId(created.sessionId);
+    }).catch(() => {
+      if (active) setRewardError(t("rewards.awardError"));
+    });
+    return () => { active = false; };
+  }, [attemptNumber, currentSquad?.squadId, requestedSessionId, rewardSetupAttempt, t]);
 
 
   const finishGame = useCallback(
     (nextStatus: "defused" | "exploded", nextMessage: string) => {
       setStatus(nextStatus);
       setMessage(nextMessage);
-    set(ref(rtdb, `bombDefusal/${gameId}/result`), {
-  status: nextStatus,
-  completedAt: Date.now(),
-  timeLeft,
-  stepsCompleted: currentStepIndex,
-  totalSteps: steps.length,
-}).catch((err) => {
-  console.log("WRITE ERROR (finish):", err);
-});
-
     },
-    [currentStepIndex, gameId, steps.length, timeLeft],
+    [],
   );
 
   useEffect(() => {
@@ -93,6 +109,7 @@ export default function BombDefusalScreen() {
   }, [dialRotation, dialValue]);
 
   const resetGame = () => {
+    setAttemptNumber((value) => value + 1);
     setSteps(generateBombPattern());
     setCurrentStepIndex(0);
     setTimeLeft(STARTING_TIME);
@@ -103,12 +120,40 @@ export default function BombDefusalScreen() {
     setShowWireCut(false);
   };
 
+  const awardCurrentResult = useCallback(async () => {
+    if (!rewardSessionId || status === "playing") return;
+    const rewardKey = `${rewardSessionId}:${status}`;
+    if (finalizedRewardKeyRef.current === rewardKey && rewardResult) return;
+    finalizedRewardKeyRef.current = rewardKey;
+    setRewardLoading(true);
+    setRewardError(null);
+    try {
+      await recordGameSessionResult({
+        gameType: "bombDefusal",
+        sessionId: rewardSessionId,
+        outcome: status,
+        firstAttemptCorrectStepCount: status === "defused" ? steps.length : currentStepIndex,
+        totalSteps: steps.length,
+      });
+      setRewardResult(await finalizeGameReward("bombDefusal", rewardSessionId));
+    } catch {
+      finalizedRewardKeyRef.current = "";
+      setRewardError(t("rewards.awardError"));
+    } finally {
+      setRewardLoading(false);
+    }
+  }, [currentStepIndex, rewardResult, rewardSessionId, status, steps.length, t]);
+
+  useEffect(() => {
+    if (rewardSessionId && status !== "playing") void awardCurrentResult();
+  }, [awardCurrentResult, rewardSessionId, status]);
+
   const submitStep = (input: Record<string, string | number>) => {
     if (!currentStep || status !== "playing") {
       return;
     }
 
-    const { correct } = validateStep(currentStep, input, gameId);
+    const { correct } = validateStep(currentStep, input, rewardSessionId);
 
     if (!correct) {
       finishGame("exploded", "Wrong move. The bomb exploded.");
@@ -267,14 +312,34 @@ export default function BombDefusalScreen() {
 
         {status === "defused" ? (
           <View style={styles.resultPanel}>
-            <Text style={styles.resultTitle}>Defused</Text>
-            <Text style={styles.resultText}>The result was saved to Realtime Database.</Text>
+            <Text style={styles.resultTitle}>{t("rewards.bombDefused")}</Text>
+            <Text style={styles.resultText}>{t("rewards.bombDefused")}</Text>
+            <GameRewardSummary
+              detailLines={[
+                t("rewards.bombDefused"),
+                t("rewards.accuracyBonus", { count: Math.min(steps.length, 5) }),
+              ]}
+              error={rewardError}
+              loading={rewardLoading}
+              onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
+              result={rewardResult}
+            />
             <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/bomb-defusal/Lobby" />
           </View>
         ) : status === "exploded" ? (
           <View style={styles.resultPanel}>
-            <Text style={styles.resultTitle}>Exploded</Text>
-            <Text style={styles.resultText}>The result was saved to Realtime Database.</Text>
+            <Text style={styles.resultTitle}>{t("rewards.attemptCompleted")}</Text>
+            <Text style={styles.resultText}>{t("rewards.attemptCompleted")}</Text>
+            <GameRewardSummary
+              detailLines={[
+                t("rewards.attemptCompleted"),
+                t("rewards.accuracyBonus", { count: Math.min(currentStepIndex, 5) }),
+              ]}
+              error={rewardError}
+              loading={rewardLoading}
+              onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
+              result={rewardResult}
+            />
             <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/bomb-defusal/Lobby" />
           </View>
         ) : (
@@ -283,6 +348,11 @@ export default function BombDefusalScreen() {
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+function normalizeRouteParam(value?: string | string[]) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw?.trim() ?? "";
 }
 
 function getInstruction(step?: BombStep) {
@@ -533,4 +603,3 @@ const wireStyles = {
   yellow: styles.yellowWire,
   green: styles.greenWire,
 };
-

@@ -234,8 +234,8 @@ assert.equal(leaveCallableSource.includes("context.auth?.uid"), true);
 assert.equal(leaveCallableSource.includes("data.userId"), false);
 assert.equal(leaveCallableSource.includes("removeParentRole"), true);
 assert.equal(leaveCallableSource.includes("childIds: []"), true);
-assert.equal(leaveCallableSource.includes("parentTeamIds: admin.firestore.FieldValue.arrayRemove(teamId)"), true);
-assert.equal(leaveCallableSource.includes("coachTeamIds = admin.firestore.FieldValue.arrayUnion(teamId)"), true);
+assert.equal(leaveCallableSource.includes("parentTeamIds: FieldValue.arrayRemove(teamId)"), true);
+assert.equal(leaveCallableSource.includes("coachTeamIds = FieldValue.arrayUnion(teamId)"), true);
 assert.equal(leaveCallableSource.includes("transaction.delete"), false);
 assert.equal(leaveCallableSource.includes("collection('children')"), false);
 const archiveCallableSource = functionsSource.slice(

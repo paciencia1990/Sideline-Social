@@ -39,6 +39,12 @@ module.exports = ({ config }) => ({
     "expo-font",
     "expo-notifications",
     [
+      "expo-location",
+      {
+        locationWhenInUsePermission: "Sideline Social uses your current location to find nearby sports communities. Your precise location is not shown to other parents.",
+      },
+    ],
+    [
       "expo-splash-screen",
       {
         image: "./assets/images/splash-icon.png",

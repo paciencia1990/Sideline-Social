@@ -31,6 +31,7 @@ function triviaPayload(sessionId, hostUid) {
     teamStreak: 0,
     totalPoints: 0,
     correctAnswers: 0,
+    answeredQuestions: 0,
     totalPlayers: 1,
     selectedQuestions: [
       {

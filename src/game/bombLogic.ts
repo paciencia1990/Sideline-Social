@@ -1,6 +1,3 @@
-import { ref, set, push } from "firebase/database";
-import { rtdb } from "@/config/firebase";
-
 export const STEP_TYPES = {
   CUT_WIRE: "cut_wire",
   PRESS_BUTTON: "press_button",
@@ -39,12 +36,16 @@ export const generateBombPattern = (): BombStep[] => {
       type: STEP_TYPES.ENTER_CODE,
       code: Math.floor(Math.random() * 900) + 100,
     },
+    {
+      type: STEP_TYPES.CUT_WIRE,
+      color: ["red", "blue", "yellow", "green"][Math.floor(Math.random() * 4)],
+    },
   ];
 
   return steps.sort(() => Math.random() - 0.5);
 };
 
-export const validateStep = (step: BombStep, input: StepInput, gameId: string) => {
+export const validateStep = (step: BombStep, input: StepInput, _sessionId?: string) => {
   let correct = false;
 
   switch (step.type) {
@@ -61,15 +62,6 @@ export const validateStep = (step: BombStep, input: StepInput, gameId: string) =
       correct = input.code === step.code;
       break;
   }
-
-  const logRef = push(ref(rtdb, `bombDefusal/${gameId}/steps`));
-  set(logRef, {
-    stepType: step.type,
-    expected: step,
-    input,
-    correct,
-    timestamp: Date.now(),
-  });
 
   return { correct };
 };

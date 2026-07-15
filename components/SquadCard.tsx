@@ -1,28 +1,15 @@
-import React from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { useTranslation } from 'react-i18next';
-import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
-import { Squad, SquadStatus, getSquadStatus } from '@/services/squadService';
+import React from "react";
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useTranslation } from "react-i18next";
 
-// Sport emoji map (keep in sync with SquadMarker)
-const SPORT_EMOJI: Record<string, string> = {
-  Soccer: '⚽',
-  Baseball: '⚾',
-  Basketball: '🏀',
-  Football: '🏈',
-  Lacrosse: '🥍',
-  Swimming: '🏊',
-  Dance: '💃',
-  Gymnastics: '🤸',
-  Tennis: '🎾',
-  TrackAndField: '🏃',
-  Volleyball: '🏐',
-  Other: '🏅',
-};
+import { SquadIdentity } from "@/components/SquadIdentity";
+import { getSquadSportOption } from "@/constants/sports";
+import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { type Squad, type SquadStatus, getSquadStatus } from "@/services/squadService";
 
 const STATUS_COLORS: Record<SquadStatus, { bg: string; text: string }> = {
-  active: { bg: Colors.accentGreen, text: '#FFFFFF' },
-  starting_soon: { bg: Colors.accentGold, text: '#FFFFFF' },
+  active: { bg: Colors.accentGreen, text: "#FFFFFF" },
+  starting_soon: { bg: Colors.accentGold, text: "#FFFFFF" },
   quiet: { bg: Colors.secondary, text: Colors.textHeading },
 };
 
@@ -35,78 +22,51 @@ interface SquadCardProps {
   joining?: boolean;
 }
 
-export function SquadCard({
-  squad,
-  isMember,
-  isHighlighted,
-  onJoin,
-  onPress,
-  joining,
-}: SquadCardProps) {
+export function SquadCard({ squad, isMember, isHighlighted, onJoin, onPress, joining }: SquadCardProps) {
   const { t } = useTranslation();
-  const emoji = SPORT_EMOJI[squad.sport] ?? '🏅';
   const status = getSquadStatus(squad);
   const statusColor = STATUS_COLORS[status];
-  const distText =
-    squad.distanceMiles !== undefined
-      ? t('squad.distance', { distance: squad.distanceMiles.toFixed(1) })
-      : '';
-
-  const statusLabel =
-    status === 'active'
-      ? t('squad.activeNow')
-      : status === 'starting_soon'
-        ? t('squad.startingSoon')
-        : t('squad.quiet');
+  const distance = squad.distanceMiles !== undefined
+    ? t("squad.distance", { distance: squad.distanceMiles.toFixed(1) })
+    : null;
+  const statusLabel = status === "active"
+    ? t("squad.activeNow")
+    : status === "starting_soon"
+      ? t("squad.startingSoon")
+      : t("squad.quiet");
 
   return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.85}
-      style={[styles.card, isHighlighted && styles.highlighted]}
-    >
-      {/* Left: emoji */}
+    <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={[styles.card, isHighlighted && styles.highlighted]}>
       <View style={styles.emojiWrap}>
-        <Text style={styles.emoji}>{emoji}</Text>
+        <Text style={styles.emoji}>{getSquadSportOption(squad.sportId).emoji}</Text>
       </View>
-
-      {/* Center: info */}
       <View style={styles.info}>
-        <Text style={styles.name} numberOfLines={1}>
-          {squad.name}
-        </Text>
-        <Text style={styles.meta} numberOfLines={1}>
-          {squad.venueName}
-          {distText ? ` · ${distText}` : ''}
-        </Text>
+        <SquadIdentity
+          compact
+          venueName={squad.venueName}
+          sportId={squad.sportId}
+          sportDisplayName={squad.sportDisplayName}
+        />
+        {distance ? <Text style={styles.meta}>{distance}</Text> : null}
         <View style={styles.row}>
-          <Text style={styles.members}>
-            {t('squad.membersHere', { count: squad.activeMemberCount })}
-          </Text>
+          <Text style={styles.members}>{t("squad.memberCount", { count: squad.memberCount })}</Text>
           <View style={[styles.statusPill, { backgroundColor: statusColor.bg }]}>
             <Text style={[styles.statusText, { color: statusColor.text }]}>{statusLabel}</Text>
           </View>
         </View>
       </View>
-
-      {/* Right: action */}
       <View style={styles.actionWrap}>
         {isMember ? (
-          <View style={styles.joinedPill}>
-            <Text style={styles.joinedText}>{t('squad.joinedPill')}</Text>
-          </View>
+          <View style={styles.joinedPill}><Text style={styles.joinedText}>{t("squad.joinedPill")}</Text></View>
         ) : (
           <TouchableOpacity
-            style={styles.joinButton}
-            onPress={onJoin}
-            disabled={joining}
+            accessibilityLabel={`${t("squad.joinButton")} ${squad.venueName}`}
             activeOpacity={0.8}
+            disabled={joining}
+            onPress={(event) => { event.stopPropagation(); onJoin(); }}
+            style={styles.joinButton}
           >
-            {joining ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <Text style={styles.joinText}>{t('squad.joinButton')}</Text>
-            )}
+            {joining ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.joinText}>{t("squad.joinButton")}</Text>}
           </TouchableOpacity>
         )}
       </View>
@@ -115,95 +75,19 @@ export function SquadCard({
 }
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.card,
-    padding: Spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    marginHorizontal: Spacing.md,
-    marginVertical: Spacing.xs,
-    ...Shadow.card,
-  },
-  highlighted: {
-    borderWidth: 2,
-    borderColor: Colors.primary,
-  },
-  emojiWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: Colors.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emoji: {
-    fontSize: 22,
-  },
-  info: {
-    flex: 1,
-    gap: 3,
-  },
-  name: {
-    fontFamily: Typography.bodySemiBold,
-    fontSize: 14,
-    color: Colors.textHeading,
-  },
-  meta: {
-    fontFamily: Typography.bodyRegular,
-    fontSize: 12,
-    color: Colors.textPrimary,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    marginTop: 2,
-  },
-  members: {
-    fontFamily: Typography.bodyRegular,
-    fontSize: 11,
-    color: Colors.textPrimary,
-  },
-  statusPill: {
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  statusText: {
-    fontFamily: Typography.bodyBold,
-    fontSize: 9,
-    letterSpacing: 0.5,
-  },
-  actionWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  joinButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.button,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs + 2,
-    minWidth: 68,
-    alignItems: 'center',
-  },
-  joinText: {
-    fontFamily: Typography.bodySemiBold,
-    fontSize: 13,
-    color: '#FFFFFF',
-  },
-  joinedPill: {
-    backgroundColor: Colors.accentGreen,
-    borderRadius: Radius.button,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs + 2,
-    minWidth: 80,
-    alignItems: 'center',
-  },
-  joinedText: {
-    fontFamily: Typography.bodySemiBold,
-    fontSize: 12,
-    color: '#FFFFFF',
-  },
+  card: { alignItems: "center", backgroundColor: Colors.surface, borderRadius: Radius.card, flexDirection: "row", gap: Spacing.sm, marginHorizontal: Spacing.md, marginVertical: Spacing.xs, padding: Spacing.md, ...Shadow.card },
+  highlighted: { borderColor: Colors.primary, borderWidth: 2 },
+  emojiWrap: { alignItems: "center", backgroundColor: Colors.background, borderRadius: 22, height: 44, justifyContent: "center", width: 44 },
+  emoji: { fontSize: 22 },
+  info: { flex: 1, gap: 3, minWidth: 0 },
+  meta: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12 },
+  row: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, marginTop: 2 },
+  members: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 11 },
+  statusPill: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  statusText: { fontFamily: Typography.bodyBold, fontSize: 9, letterSpacing: 0.5 },
+  actionWrap: { alignItems: "center", justifyContent: "center" },
+  joinButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, minWidth: 68, paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs + 2 },
+  joinText: { color: "#FFFFFF", fontFamily: Typography.bodySemiBold, fontSize: 13 },
+  joinedPill: { alignItems: "center", backgroundColor: Colors.accentGreen, borderRadius: Radius.button, minWidth: 72, paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs + 2 },
+  joinedText: { color: "#FFFFFF", fontFamily: Typography.bodySemiBold, fontSize: 12 },
 });

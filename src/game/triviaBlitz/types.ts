@@ -31,6 +31,7 @@ export type TriviaSession = {
   teamStreak: number;
   totalPoints: number;
   correctAnswers: number;
+  answeredQuestions: number;
   totalPlayers: number;
   selectedQuestions: TriviaQuestion[];
   allReady: boolean;

@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { ArrowLeft, Bell, CheckCheck, Megaphone, UserCheck, UserPlus } from "lucide-react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { AuthenticatedRouteGate } from "@/components/AuthenticatedRouteGate";
@@ -10,12 +10,12 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import {
-  markAllNotificationsRead,
-  markNotificationRead,
+  clearAllNotifications,
+  getNotificationOpenTargetFromData,
   subscribeToNotifications,
   type AppNotification,
 } from "@/services/notificationService";
-import { getNotificationDestination, isUnreadActiveNotification } from "@/utils/notificationCore";
+import { isUnreadActiveNotification } from "@/utils/notificationCore";
 
 export default function ProtectedNotificationInboxScreen() {
   return (
@@ -32,8 +32,14 @@ function NotificationInboxScreen() {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
-  const [markingAll, setMarkingAll] = useState(false);
+  const [clearingAll, setClearingAll] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+  const openingInFlight = React.useRef(false);
+
+  useFocusEffect(useCallback(() => {
+    openingInFlight.current = false;
+    setOpeningId(null);
+  }, []));
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -53,44 +59,38 @@ function NotificationInboxScreen() {
     );
   }, [retryKey, user?.uid]);
 
-  const unreadCount = useMemo(
-    () => notifications.filter((notification) => isUnreadActiveNotification(notification)).length,
-    [notifications],
-  );
-
   const openNotification = useCallback(async (notification: AppNotification) => {
-    if (!user?.uid || openingId) return;
+    if (!user?.uid || openingInFlight.current) return;
+    const target = getNotificationOpenTargetFromData({ ...notification, notificationId: notification.id });
+    if (!target) {
+      Alert.alert(t("notifications.unavailableTitle"), t("notifications.unavailableBody"));
+      return;
+    }
+    openingInFlight.current = true;
     setOpeningId(notification.id);
     try {
-      if (isUnreadActiveNotification(notification)) {
-        await markNotificationRead(user.uid, notification.id);
-      }
-      const destination = getNotificationDestination(notification);
-      if (!destination) {
-        Alert.alert(t("notifications.unavailableTitle"), t("notifications.unavailableBody"));
-        return;
-      }
-      router.push(destination as never);
+      router.push(target.route as never);
     } catch (error) {
       logInboxIssue("openNotification", error);
       Alert.alert(t("notifications.unavailableTitle"), t("notifications.unavailableBody"));
-    } finally {
+      openingInFlight.current = false;
       setOpeningId(null);
     }
-  }, [openingId, t, user?.uid]);
+  }, [t, user?.uid]);
 
-  const markAllRead = useCallback(async () => {
-    if (!user?.uid || markingAll) return;
-    setMarkingAll(true);
+  const clearAll = useCallback(async () => {
+    if (!user?.uid || clearingAll) return;
+    setClearingAll(true);
     try {
-      await markAllNotificationsRead(user.uid);
+      await clearAllNotifications(notifications.map((notification) => notification.id));
+      Alert.alert(t("notifications.clearedTitle"), t("notifications.clearedBody"));
     } catch (error) {
-      logInboxIssue("markAllRead", error);
-      Alert.alert(t("notifications.unavailableTitle"), t("notifications.markAllError"));
+      logInboxIssue("clearAll", error);
+      Alert.alert(t("notifications.unavailableTitle"), t("notifications.clearAllError"));
     } finally {
-      setMarkingAll(false);
+      setClearingAll(false);
     }
-  }, [markingAll, t, user?.uid]);
+  }, [clearingAll, notifications, t, user?.uid]);
 
   const goBack = () => {
     if (router.canGoBack()) router.back();
@@ -110,16 +110,18 @@ function NotificationInboxScreen() {
           <ArrowLeft color={Colors.textHeading} size={22} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{t("notifications.title")}</Text>
-        {unreadCount > 1 ? (
+        {notifications.length > 0 ? (
           <TouchableOpacity
+            accessibilityLabel={clearingAll ? t("notifications.clearing") : t("notifications.clearAll")}
             accessibilityRole="button"
+            accessibilityState={{ busy: clearingAll, disabled: clearingAll }}
             activeOpacity={0.82}
-            disabled={markingAll}
-            onPress={() => void markAllRead()}
+            disabled={clearingAll}
+            onPress={() => void clearAll()}
             style={styles.markAllButton}
           >
-            {markingAll ? <ActivityIndicator color={Colors.primary} size="small" /> : null}
-            <Text style={styles.markAllText}>{t("notifications.markAllRead")}</Text>
+            {clearingAll ? <ActivityIndicator color={Colors.primary} size="small" /> : null}
+            <Text style={styles.markAllText}>{clearingAll ? t("notifications.clearing") : t("notifications.clearAll")}</Text>
           </TouchableOpacity>
         ) : <View style={styles.headerSpacer} />}
       </View>
@@ -188,6 +190,7 @@ function NotificationRow({
     <TouchableOpacity
       accessibilityLabel={`${stateLabel}. ${title}. ${body}. ${timestamp}`}
       accessibilityRole="button"
+      accessibilityState={{ busy: loading, disabled: loading }}
       activeOpacity={0.86}
       disabled={loading}
       onPress={onPress}

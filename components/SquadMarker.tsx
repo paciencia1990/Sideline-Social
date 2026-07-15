@@ -2,22 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Colors, Typography } from '@/constants/theme';
 import { Squad } from '@/services/squadService';
-
-// Sport emoji map
-const SPORT_EMOJI: Record<string, string> = {
-  Soccer: '⚽',
-  Baseball: '⚾',
-  Basketball: '🏀',
-  Football: '🏈',
-  Lacrosse: '🥍',
-  Swimming: '🏊',
-  Dance: '💃',
-  Gymnastics: '🤸',
-  Tennis: '🎾',
-  TrackAndField: '🏃',
-  Volleyball: '🏐',
-  Other: '🏅',
-};
+import { getSquadSportOption } from '@/constants/sports';
 
 interface SquadMarkerProps {
   squad: Squad;
@@ -25,7 +10,7 @@ interface SquadMarkerProps {
 }
 
 export function SquadMarker({ squad, isSelected }: SquadMarkerProps) {
-  const emoji = SPORT_EMOJI[squad.sport] ?? '🏅';
+  const emoji = getSquadSportOption(squad.sportId).emoji;
 
   return (
     <View

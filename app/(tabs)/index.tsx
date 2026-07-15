@@ -17,6 +17,8 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { IcebreakerCard } from "@/components/IcebreakerCard";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { SquadIdentity } from "@/components/SquadIdentity";
+import { SquadSelector } from "@/components/SquadSelector";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
@@ -26,7 +28,10 @@ import {
   type LiveSquadData,
   type SquadDetail,
 } from "@/services/homeFeedService";
-import { subscribeToUnreadNotificationCount } from "@/services/notificationService";
+import {
+  retryPendingNotificationAcknowledgements,
+  subscribeToUnreadNotificationCount,
+} from "@/services/notificationService";
 import { formatUnreadBadgeCount } from "@/utils/notificationCore";
 import { fetchActiveSquadSession, getGameLabel, type GameSession } from "@/services/gameService";
 import {
@@ -45,7 +50,6 @@ import {
   getCurrentLocation,
   getLocationPermissionStatus,
   requestLocationPermission,
-  updateUserLocation,
   type Squad,
 } from "@/services/squadService";
 
@@ -56,7 +60,7 @@ type HomeProximityState = "checking" | "idle" | "denied" | "loading" | "unavaila
 export default function HomeScreen() {
   const { i18n, t } = useTranslation();
   const { user } = useAuth();
-  const { appConfig, mySquadIds } = useSquad();
+  const { appConfig, currentSquad, mySquadIds, selectedSquadId } = useSquad();
   const liveSquadUnsubscribe = useRef<(() => void) | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -106,18 +110,18 @@ export default function HomeScreen() {
       setMyTeamsLoading(false);
     }
   }, [t, user?.uid]);
-  const loadHomeProximity = useCallback(async (requestPermission = false) => {
+  const loadHomeProximity = useCallback(async () => {
     setProximityLoading(true);
     setProximityState("loading");
 
     try {
-      const permission = requestPermission ? await requestLocationPermission() : await getLocationPermissionStatus();
-      if (permission === "undetermined") {
+      const permission = await getLocationPermissionStatus();
+      if (permission.status === "undetermined") {
         setNearestSquad(null);
         setProximityState("idle");
         return;
       }
-      if (permission === "denied") {
+      if (permission.status === "denied") {
         setNearestSquad(null);
         setProximityState("denied");
         return;
@@ -128,10 +132,6 @@ export default function HomeScreen() {
         setNearestSquad(null);
         setProximityState(location.error === "services_disabled" ? "unavailable" : "error");
         return;
-      }
-
-      if (user?.uid) {
-        await updateUserLocation(user.uid, location.coords);
       }
 
       const nearby = await fetchNearbySquads(location.coords.latitude, location.coords.longitude, appConfig.squadRadiusMiles);
@@ -151,7 +151,25 @@ export default function HomeScreen() {
     } finally {
       setProximityLoading(false);
     }
-  }, [appConfig.squadRadiusMiles, mySquadIds, user?.uid]);
+  }, [appConfig.squadRadiusMiles, mySquadIds]);
+  const handleFindNearby = useCallback(() => {
+    Alert.alert(
+      t("squad.findNearby"),
+      t("squad.locationDisclosure"),
+      [
+        { text: t("squad.notNow"), style: "cancel" },
+        {
+          text: t("startMode.continue"),
+          onPress: () => {
+            void requestLocationPermission().then((permission) => {
+              if (permission.status === "granted") void loadHomeProximity();
+              else setProximityState("denied");
+            });
+          },
+        },
+      ],
+    );
+  }, [loadHomeProximity, t]);
   const loadHome = useCallback(async () => {
     setError(null);
     setChallengeError(null);
@@ -171,7 +189,7 @@ export default function HomeScreen() {
                 return { challenge: null, failed: true };
               })
           : Promise.resolve({ challenge: null, failed: false }),
-        mySquadIds[0] ? fetchActiveSquadSession(mySquadIds[0]) : Promise.resolve(null),
+        selectedSquadId ? fetchActiveSquadSession(selectedSquadId) : Promise.resolve(null),
       ]);
 
       setSquads(squadDetails);
@@ -179,7 +197,7 @@ export default function HomeScreen() {
       setChallengeError(challengeResult.failed ? t("home.challengeError") : null);
       setActiveSession(session);
 
-      liveSquadUnsubscribe.current = subscribeLiveSquadCard(mySquadIds, setLiveSquad);
+      liveSquadUnsubscribe.current = subscribeLiveSquadCard(selectedSquadId ? [selectedSquadId] : [], setLiveSquad);
     } catch (nextError) {
       console.warn("[HomeScreen] load error:", nextError);
       setError(t("home.errorBody"));
@@ -190,7 +208,7 @@ export default function HomeScreen() {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [mySquadIds, t, user?.uid]);
+  }, [mySquadIds, selectedSquadId, t, user?.uid]);
 
   useEffect(() => {
     void loadHome();
@@ -201,7 +219,7 @@ export default function HomeScreen() {
   }, [loadHome]);
 
   useEffect(() => {
-    void loadHomeProximity(false);
+    void loadHomeProximity();
   }, [loadHomeProximity]);
 
   useFocusEffect(useCallback(() => {
@@ -216,6 +234,7 @@ export default function HomeScreen() {
   }, [user?.uid]));
   const onRefresh = useCallback(() => {
     setRefreshing(true);
+    void retryPendingNotificationAcknowledgements();
     void loadHome();
     void loadMyTeams();
   }, [loadHome, loadMyTeams]);
@@ -239,7 +258,10 @@ export default function HomeScreen() {
                   t("home.challengeSuccessTitle"),
                   result.alreadyCompleted
                     ? t("home.challengeAlreadyCompleted")
-                    : t("home.challengeSuccessBody", { points: result.pointsAwarded }),
+                    : t("home.challengeSuccessBody", {
+                      points: result.pointsAwarded,
+                      total: result.sidelineStars,
+                    }),
                 );
               })
               .catch((nextError) => {
@@ -339,12 +361,13 @@ export default function HomeScreen() {
               <HomeProximityCard
                 loading={proximityLoading}
                 nearestSquad={nearestSquad}
-                onFind={() => loadHomeProximity(true)}
-                onRetry={() => loadHomeProximity(false)}
+                onFind={handleFindNearby}
+                onRetry={() => void loadHomeProximity()}
                 state={proximityState}
               />
             )}
-            {!liveSquad && squads.length > 0 ? <SquadSummaryCard squads={squads} /> : null}
+            <SquadSelector />
+            {!liveSquad && squads.length > 0 ? <SquadSummaryCard squad={currentSquad} squadCount={squads.length} /> : null}
 
             <SecondaryActions />
 
@@ -498,7 +521,7 @@ function HomeProximityCard({
     if (state === "unavailable") return t("location.unavailableTitle");
     if (state === "error") return t("location.errorTitle");
     if (state === "memberNearby") return t("location.yourSquadNearbyTitle");
-    if (state === "nearby") return nearestSquad?.name ?? t("location.nearbyTitle");
+    if (state === "nearby") return t("location.nearbyTitle");
     return t("location.noNearbyTitle");
   })();
   const body = (() => {
@@ -511,8 +534,19 @@ function HomeProximityCard({
     if (state === "nearby") return t("location.nearbyBody");
     return t("location.noNearbyBody");
   })();
-  const actionLabel = state === "idle" ? t("location.allowLocation") : isNearby ? t("squad.viewSquad") : t("location.retry");
-  const action = state === "idle" ? onFind : isNearby ? () => router.push("/(tabs)/squad") : onRetry;
+  const needsManualSearch = state === "denied" || state === "unavailable" || state === "error";
+  const actionLabel = state === "idle"
+    ? t("location.allowLocation")
+    : isNearby
+      ? t("squad.viewSquad")
+      : needsManualSearch
+        ? t("squad.searchByVenue")
+        : t("location.retry");
+  const action = state === "idle"
+    ? onFind
+    : isNearby || needsManualSearch
+      ? () => router.push("/(tabs)/squad")
+      : onRetry;
 
   return (
     <Card style={[styles.proximityCard, isNearby && styles.proximityCardActive]}>
@@ -528,7 +562,7 @@ function HomeProximityCard({
       </View>
       {nearestSquad ? (
         <View style={styles.proximityMetaRow}>
-          <Text style={styles.proximityMeta}>{nearestSquad.venueName}</Text>
+          <SquadIdentity compact venueName={nearestSquad.venueName} sportId={nearestSquad.sportId} sportDisplayName={nearestSquad.sportDisplayName} />
           {nearestSquad.distanceMiles !== undefined ? <Text style={styles.proximityMeta}>{t("squad.distance", { distance: nearestSquad.distanceMiles.toFixed(1) })}</Text> : null}
         </View>
       ) : null}
@@ -546,10 +580,7 @@ function LiveSquadCard({ squad }: { squad: LiveSquadData }) {
   return (
     <Card style={styles.liveCard}>
       <View style={styles.liveHeader}>
-        <View>
-          <Text style={styles.cardTitle}>{squad.name}</Text>
-          <Text style={styles.cardText}>{squad.venueName}</Text>
-        </View>
+        <SquadIdentity compact venueName={squad.venueName} sportId={squad.sportId} sportDisplayName={squad.sportDisplayName} />
         <View style={styles.livePill}>
           <Text style={styles.livePillText}>{t("home.live")}</Text>
         </View>
@@ -567,14 +598,13 @@ function LiveSquadCard({ squad }: { squad: LiveSquadData }) {
   );
 }
 
-function SquadSummaryCard({ squads }: { squads: SquadDetail[] }) {
+function SquadSummaryCard({ squad, squadCount }: { squad: Squad | null; squadCount: number }) {
   const { t } = useTranslation();
-  const firstSquad = squads[0];
 
   return (
     <Card style={styles.cardGap}>
-      <Text style={styles.cardTitle}>{firstSquad?.name ?? t("squad.title")}</Text>
-      <Text style={styles.cardText}>{t("home.squadSummary", { count: squads.length })}</Text>
+      {squad ? <SquadIdentity compact venueName={squad.venueName} sportId={squad.sportId} sportDisplayName={squad.sportDisplayName} /> : <Text style={styles.cardTitle}>{t("squad.title")}</Text>}
+      <Text style={styles.cardText}>{t("home.squadSummary", { count: squadCount })}</Text>
       <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/(tabs)/squad")} style={styles.outlineInlineButton}>
         <Text style={styles.outlineInlineText}>{t("home.viewSquads")}</Text>
       </TouchableOpacity>

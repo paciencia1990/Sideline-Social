@@ -77,17 +77,15 @@ export function getFirebaseErrorCode(error: unknown) {
 
 export function logTriviaFirebaseError(
   operation: string,
-  details: Record<string, unknown>,
+  _details: Record<string, unknown>,
   error: unknown,
 ) {
   if (!__DEV__) {
     return;
   }
 
-  console.error(`[TriviaBlitz:${operation}]`, {
-    ...details,
-    authUid: auth.currentUser?.uid ?? null,
+  console.error("[TriviaBlitz] Firebase operation failed", {
+    operation,
     code: getFirebaseErrorCode(error),
-    message: getFirebaseErrorMessage(error),
   });
 }

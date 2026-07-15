@@ -7,13 +7,13 @@ import LobbyBase from "@/components/LobbyBase";
 import { useGameLobby } from "@/hooks/useGameLobby";
 
 export default function SpotTheDifferenceLobby() {
-  const { players, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const { sessionId, players, toggleReady, startGame, showCountdown, setShowCountdown } =
     useGameLobby("spot-the-difference");
 
   const handleComplete = useCallback(() => {
     setShowCountdown(false);
-    router.replace("/games/spot-the-difference/play" as never);
-  }, [setShowCountdown]);
+    router.replace({ pathname: "/games/spot-the-difference/play", params: sessionId ? { sessionId } : {} } as never);
+  }, [sessionId, setShowCountdown]);
 
   return (
     <View style={styles.container}>

@@ -13,6 +13,7 @@ import { onSnapshot, orderBy, query, Unsubscribe } from "firebase/firestore";
 import { useTranslation } from "react-i18next";
 
 import { GameEndActions } from "@/components/GameEndActions";
+import { GameRewardSummary } from "@/components/GameRewardSummary";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useAuth } from "@/context/AuthContext";
 import { Colors, Spacing, Typography } from "@/constants/theme";
@@ -20,14 +21,12 @@ import {
   createGameSession,
   forceEndGameSession,
   joinGameSession,
-  resetGameSession,
   startGameSession,
   submitSessionSelection,
   togglePlayerReady,
   updateSessionAllReady,
 } from "./gameState";
 import {
-  getFirebaseErrorCode,
   getFirebaseErrorMessage,
   getTriviaPlayersPath,
   getTriviaPlayersRef,
@@ -36,6 +35,7 @@ import {
   logTriviaFirebaseError,
 } from "./firebaseUtils";
 import { scoreSessionAnswer, type ScoreResult } from "./scoring";
+import { finalizeGameReward, type GameRewardResult } from "@/services/sidelineStarsService";
 import { advanceTurn } from "./turnManager";
 import type { TriviaPlayer, TriviaQuestion, TriviaSession } from "./types";
 
@@ -67,10 +67,13 @@ export default function TriviaBlitzScreen() {
   const [settingUp, setSettingUp] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [setupAttempt, setSetupAttempt] = useState(0);
-  const [soloTestMode, setSoloTestMode] = useState(__DEV__);
+  const [rewardResult, setRewardResult] = useState<GameRewardResult | null>(null);
+  const [rewardLoading, setRewardLoading] = useState(false);
+  const [rewardError, setRewardError] = useState<string | null>(null);
   const setupInFlightRef = useRef(false);
   const scoringInFlightRef = useRef(false);
   const scoredSelectionRef = useRef<string | null>(null);
+  const rewardRequestKeyRef = useRef("");
 
   const resolvedPlayerName = useMemo(
     () => resolvePlayerName(user?.displayName, firebaseUser?.displayName, user?.email ?? firebaseUser?.email),
@@ -106,15 +109,27 @@ export default function TriviaBlitzScreen() {
 
     async function setupTriviaSession() {
       try {
-        const result = targetSessionId
-          ? await joinGameSession(targetSessionId, resolvedPlayerName)
-          : await createGameSession(resolvedPlayerName);
+        let result;
+        if (targetSessionId) {
+          try {
+            result = await joinGameSession(targetSessionId, resolvedPlayerName);
+          } catch (joinError) {
+            if (!shouldAutoStart) throw joinError;
+            try {
+              result = await createGameSession(resolvedPlayerName, targetSessionId);
+            } catch {
+              result = await joinGameSession(targetSessionId, resolvedPlayerName);
+            }
+          }
+        } else {
+          result = await createGameSession(resolvedPlayerName);
+        }
 
         if (!isMounted) {
           return;
         }
 
-        if (shouldAutoStart && __DEV__) {
+        if (shouldAutoStart && result.isHost) {
           await startGameSession(result.sessionId);
         }
 
@@ -154,7 +169,9 @@ export default function TriviaBlitzScreen() {
   const currentQuestion = session?.selectedQuestions[session.questionIndex] as TriviaQuestion | undefined;
   const isHost = Boolean(self && (session?.hostPlayerId === self.id || self.playerIndex === 0));
   const isActiveTurn = Boolean(self && activePlayer?.id === self.id);
-  const canStartGame = players.length >= TRIVIA_MIN_PLAYERS || (__DEV__ && soloTestMode);
+  // "Play Now" intentionally creates a legitimate authenticated solo session.
+  // Joined lobbies retain the existing multiplayer minimum.
+  const canStartGame = players.length >= TRIVIA_MIN_PLAYERS || (shouldAutoStart && players.length === 1);
   const lobbyPlayerSignature = players.map((player) => `${player.id}:${player.ready}`).join("|");
   const activeSelectionKey = session?.currentSelection
     ? `${session.currentSelection.playerId}:${session.currentSelection.answerIndex}:${session.currentSelection.selectedAt}`
@@ -335,110 +352,59 @@ export default function TriviaBlitzScreen() {
 
   const handleSelectAnswer = useCallback(
     (answerIndex: number) => {
-      const questionIndex = session?.questionIndex ?? null;
-      const gameStatus = session?.status ?? null;
       const hasAlreadyAnswered = Boolean(session?.currentSelection);
-      const timerExpired = secondsRemaining <= 0;
-      const isPlayer = Boolean(self);
-
-      if (__DEV__) {
-        console.log("[TriviaBlitz:answerTap]", {
-          sessionId,
-          authUid: firebaseUser?.uid ?? null,
-          playerId: (self?.id ?? playerId) || null,
-          questionIndex,
-          selectedOptionIndex: answerIndex,
-          gameStatus,
-        });
-      }
-
-      const blockAnswer = (reason: string) => {
-        if (__DEV__) {
-          console.warn("[TriviaBlitz:answerBlocked]", {
-            reason,
-            sessionId,
-            authUid: firebaseUser?.uid ?? null,
-            playerId: (self?.id ?? playerId) || null,
-            questionIndex,
-            gameStatus,
-            isPlayer,
-            isActiveTurn,
-            hasAlreadyAnswered,
-            timerExpired,
-          });
-        }
-      };
 
       if (!sessionId) {
-        blockAnswer("missing-session-id");
         return;
       }
 
       if (!self) {
-        blockAnswer("missing-current-player");
         return;
       }
 
       if (!currentQuestion) {
-        blockAnswer("missing-current-question");
         return;
       }
 
       if (session?.status !== "playing") {
-        blockAnswer("game-not-playing");
         return;
       }
 
       if (hasAlreadyAnswered) {
-        blockAnswer("answer-already-submitted");
         return;
       }
 
       if (!isActiveTurn) {
-        blockAnswer("not-active-turn");
         Alert.alert("Trivia Blitz", "It is another player's turn.");
         return;
       }
 
-      runAction(async () => {
-        try {
-          await submitSessionSelection(sessionId, self.id, answerIndex);
-        } catch (error) {
-          console.error("[TriviaBlitz:submitAnswer]", {
-            path: `sessions/${sessionId}/games/triviaBlitz`,
-            authUid: firebaseUser?.uid ?? null,
-            playerId: self.id,
-            sessionId,
-            questionIndex,
-            selectedOptionIndex: answerIndex,
-            code: getFirebaseErrorCode(error),
-            message: getFirebaseErrorMessage(error),
-          });
-          throw error;
-        }
-      });
+      runAction(() => submitSessionSelection(sessionId, self.id, answerIndex));
     },
     [
       currentQuestion,
-      firebaseUser?.uid,
       isActiveTurn,
-      playerId,
       runAction,
-      secondsRemaining,
       self,
       session?.currentSelection,
-      session?.questionIndex,
       session?.status,
       sessionId,
     ],
   );
   const handleReset = useCallback(() => {
-    if (!sessionId) {
-      return;
-    }
-
-    runAction(() => resetGameSession(sessionId));
-  }, [runAction, sessionId]);
+    setPlayerId("");
+    setSessionId("");
+    setSession(null);
+    setPlayers([]);
+    setLastResult(null);
+    setSetupError(null);
+    setRewardResult(null);
+    setRewardError(null);
+    rewardRequestKeyRef.current = "";
+    setupInFlightRef.current = false;
+    setSetupAttempt((value) => value + 1);
+    router.replace({ pathname: "/games/trivia-blitz/play", params: { start: "1", replay: String(Date.now()) } } as never);
+  }, []);
 
   const handleEnd = useCallback(() => {
     if (!sessionId) {
@@ -447,6 +413,27 @@ export default function TriviaBlitzScreen() {
 
     runAction(() => forceEndGameSession(sessionId));
   }, [runAction, sessionId]);
+
+  const awardTriviaResult = useCallback(async () => {
+    if (!sessionId || session?.status !== "results") return;
+    const rewardKey = `${sessionId}:results`;
+    if (rewardRequestKeyRef.current === rewardKey && rewardResult) return;
+    rewardRequestKeyRef.current = rewardKey;
+    setRewardLoading(true);
+    setRewardError(null);
+    try {
+      setRewardResult(await finalizeGameReward("triviaBlitz", sessionId));
+    } catch {
+      rewardRequestKeyRef.current = "";
+      setRewardError(t("rewards.awardError"));
+    } finally {
+      setRewardLoading(false);
+    }
+  }, [rewardResult, session?.status, sessionId, t]);
+
+  useEffect(() => {
+    if (session?.status === "results") void awardTriviaResult();
+  }, [awardTriviaResult, session?.status]);
 
   return (
     <ScreenWrapper>
@@ -494,11 +481,6 @@ export default function TriviaBlitzScreen() {
                 </Text>
               </View>
             ))}
-            {__DEV__ ? (
-              <Pressable style={styles.secondaryButton} onPress={() => setSoloTestMode((value) => !value)}>
-                <Text style={styles.secondaryButtonText}>Solo Test Mode: {soloTestMode ? "On" : "Off"}</Text>
-              </Pressable>
-            ) : null}
             {!canStartGame ? (
               <Text style={styles.metaText}>At least {TRIVIA_MIN_PLAYERS} players are needed to start.</Text>
             ) : null}
@@ -545,7 +527,7 @@ export default function TriviaBlitzScreen() {
             })}
             {lastResult ? (
               <Text style={styles.resultText}>
-                {lastResult.correct ? "Correct" : "Not quite"} +{lastResult.pointsAwarded} points
+                {lastResult.correct ? t("trivia.correct") : t("trivia.notQuite")}
               </Text>
             ) : null}
             {isHost ? (
@@ -558,15 +540,17 @@ export default function TriviaBlitzScreen() {
 
         {session?.status === "results" ? (
           <View style={styles.panel}>
-            <Text style={styles.sectionTitle}>Results</Text>
-            <Text style={styles.scoreText}>Team Points: {session.totalPoints}</Text>
-            <Text style={styles.metaText}>Correct Answers: {session.correctAnswers}</Text>
-            {players.map((player) => (
-              <View key={player.id} style={styles.playerRow}>
-                <Text style={styles.playerName}>{player.name}</Text>
-                <Text style={styles.scoreText}>{player.score}</Text>
-              </View>
-            ))}
+            <Text style={styles.sectionTitle}>{t("trivia.results")}</Text>
+            <GameRewardSummary
+              detailLines={[
+                t("rewards.correctAnswers", { count: session.correctAnswers }),
+                t("rewards.completionStars", { count: 5 }),
+              ]}
+              error={rewardError}
+              loading={rewardLoading}
+              onRetry={() => void awardTriviaResult()}
+              result={rewardResult}
+            />
             <GameEndActions onPlayAgain={handleReset} lobbyRoute="/(games)/trivia-blitz/Lobby" />
           </View>
         ) : null}
@@ -577,7 +561,8 @@ export default function TriviaBlitzScreen() {
 
 function normalizeParam(value?: string | string[]) {
   const rawValue = Array.isArray(value) ? value[0] : value;
-  return rawValue?.trim().toUpperCase() ?? "";
+  const trimmed = rawValue?.trim() ?? "";
+  return /^[A-Za-z0-9]{4,6}$/.test(trimmed) ? trimmed.toUpperCase() : trimmed;
 }
 
 function resolvePlayerName(

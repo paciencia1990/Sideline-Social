@@ -20,10 +20,19 @@ import {
   type TapGestureHandlerEventPayload,
 } from "react-native-gesture-handler";
 import { useTranslation } from "react-i18next";
+import { useLocalSearchParams } from "expo-router";
 
 import { GameEndActions } from "@/components/GameEndActions";
+import { GameRewardSummary } from "@/components/GameRewardSummary";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { useSquad } from "@/context/SquadContext";
+import {
+  createGameRewardSession,
+  finalizeGameReward,
+  recordGameSessionResult,
+  type GameRewardResult,
+} from "@/services/sidelineStarsService";
 import {
   playableSpotDifferenceScenes,
   spotDifferenceScenes,
@@ -92,12 +101,21 @@ const MAX_FOUND_MARKER_RADIUS = 16;
 
 export default function SpotDifferenceScreen() {
   const { t } = useTranslation();
+  const { currentSquad } = useSquad();
+  const params = useLocalSearchParams<{ sessionId?: string | string[] }>();
+  const requestedSessionId = normalizeRouteParam(params.sessionId);
   const [usedSceneIds, setUsedSceneIds] = useState<string[]>([]);
   const [currentScene, setCurrentScene] = useState<SpotDifferenceScene | null>(() => selectNextScene([]));
   const [foundIds, setFoundIds] = useState<string[]>([]);
   const [roundInstance, setRoundInstance] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(ROUND_SECONDS);
   const [feedback, setFeedback] = useState(t("spot.instructions"));
+  const [rewardSessionId, setRewardSessionId] = useState("");
+  const [rewardSetupAttempt, setRewardSetupAttempt] = useState(0);
+  const [rewardResult, setRewardResult] = useState<GameRewardResult | null>(null);
+  const [rewardLoading, setRewardLoading] = useState(false);
+  const [rewardError, setRewardError] = useState<string | null>(null);
+  const finalizedRewardKeyRef = useRef("");
   const [sceneLayouts, setSceneLayouts] = useState<SceneLayouts>({
     A: { width: 0, height: 0 },
     B: { width: 0, height: 0 },
@@ -114,6 +132,24 @@ export default function SpotDifferenceScreen() {
   const zoomViewport = sceneLayouts.B.width && sceneLayouts.B.height ? sceneLayouts.B : sceneLayouts.A;
   const zoomImageRect = imageRects.B ?? imageRects.A;
   const zoomControls = useSpotDifferenceZoom(currentScene, zoomViewport, zoomImageRect, secondsLeft, foundIds.length, differences.length, roundInstance);
+
+  useEffect(() => {
+    let active = true;
+    setRewardSessionId("");
+    setRewardResult(null);
+    setRewardError(null);
+    finalizedRewardKeyRef.current = "";
+    void createGameRewardSession({
+      gameType: "spotDifferences",
+      sessionId: roundInstance === 0 ? requestedSessionId || null : null,
+      sourceSquadId: currentSquad?.squadId ?? null,
+    }).then((created) => {
+      if (active) setRewardSessionId(created.sessionId);
+    }).catch(() => {
+      if (active) setRewardError(t("rewards.awardError"));
+    });
+    return () => { active = false; };
+  }, [currentSquad?.squadId, requestedSessionId, rewardSetupAttempt, roundInstance, t]);
 
   useEffect(() => {
     if (isComplete || secondsLeft <= 0 || !currentScene) {
@@ -135,6 +171,34 @@ export default function SpotDifferenceScreen() {
     setCurrentScene(nextScene);
     setUsedSceneIds(nextScene && nextUsedIds.length < playableSpotDifferenceScenes.length ? nextUsedIds : []);
   }, [currentScene, t, usedSceneIds]);
+
+  const awardCurrentResult = useCallback(async () => {
+    if (!rewardSessionId || (!isComplete && secondsLeft > 0)) return;
+    const rewardKey = `${rewardSessionId}:${isComplete ? "completed" : "timeExpired"}`;
+    if (finalizedRewardKeyRef.current === rewardKey && rewardResult) return;
+    finalizedRewardKeyRef.current = rewardKey;
+    setRewardLoading(true);
+    setRewardError(null);
+    try {
+      await recordGameSessionResult({
+        gameType: "spotDifferences",
+        sessionId: rewardSessionId,
+        outcome: isComplete ? "completed" : "timeExpired",
+        foundCount: foundIds.length,
+        totalDifferences: differences.length,
+      });
+      setRewardResult(await finalizeGameReward("spotDifferences", rewardSessionId));
+    } catch {
+      finalizedRewardKeyRef.current = "";
+      setRewardError(t("rewards.awardError"));
+    } finally {
+      setRewardLoading(false);
+    }
+  }, [differences.length, foundIds.length, isComplete, rewardResult, rewardSessionId, secondsLeft, t]);
+
+  useEffect(() => {
+    if (rewardSessionId && (isComplete || secondsLeft <= 0)) void awardCurrentResult();
+  }, [awardCurrentResult, isComplete, rewardSessionId, secondsLeft]);
 
   const handleSceneLayout = useCallback((side: ImageSide, size: SceneSize) => {
     setSceneLayouts((current) => {
@@ -282,18 +346,43 @@ export default function SpotDifferenceScreen() {
           <View style={styles.resultPanel}>
             <Text style={styles.resultTitle}>{t("spot.completeTitle")}</Text>
             <Text style={styles.resultText}>{t("spot.completeBody", { seconds: elapsedSeconds })}</Text>
+            <GameRewardSummary
+              detailLines={[
+                t("rewards.differencesFound", { found: foundIds.length, total: differences.length }),
+                t("rewards.completionStars", { count: 5 }),
+              ]}
+              error={rewardError}
+              loading={rewardLoading}
+              onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
+              result={rewardResult}
+            />
             <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/spot-the-difference/Lobby" />
           </View>
         ) : secondsLeft <= 0 ? (
           <View style={styles.resultPanel}>
             <Text style={styles.resultTitle}>{t("spot.timeUpTitle")}</Text>
             <Text style={styles.resultText}>{t("spot.timeUpBody", { found: foundIds.length, total: differences.length })}</Text>
+            <GameRewardSummary
+              detailLines={[
+                t("rewards.differencesFound", { found: foundIds.length, total: differences.length }),
+                t("rewards.completionStars", { count: 5 }),
+              ]}
+              error={rewardError}
+              loading={rewardLoading}
+              onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
+              result={rewardResult}
+            />
             <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/spot-the-difference/Lobby" />
           </View>
         ) : null}
       </ScrollView>
     </ScreenWrapper>
   );
+}
+
+function normalizeRouteParam(value?: string | string[]) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw?.trim() ?? "";
 }
 
 function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: SceneSize, imageRect: ImageRect | null, secondsLeft: number, foundCount: number, totalDifferences: number, roundInstance: number): ZoomControls {

@@ -1,54 +1,69 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
-import { geohashForLocation, geohashQueryBounds, distanceBetween } from "geofire-common";
+import { httpsCallable } from "firebase/functions";
 import {
   GeoPoint,
   Timestamp,
-  addDoc,
-  arrayRemove,
-  arrayUnion,
-  collection,
   doc,
   getDoc,
-  getDocs,
-  increment,
-  limit,
-  query,
-  serverTimestamp,
-  setDoc,
-  where,
-  writeBatch,
+  type DocumentData,
 } from "firebase/firestore";
-import { db } from "@/config/firebase";
+
+import { db, functions } from "@/config/firebase";
+import {
+  getSquadSportOption,
+  normalizeSquadSportId,
+  type SquadSportId,
+} from "@/constants/sports";
 import { getPublicUserProfiles } from "@/services/publicProfileService";
 import { getSafeProfileName } from "@/utils/friendPrivacy";
 
 export const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 export const STARTING_SOON_MS = 30 * 60 * 1000;
-export const MILES_TO_METERS = 1609.34;
+const LOCATION_TIMEOUT_MS = 12_000;
+const LAST_LOCATION_MAX_AGE_MS = 5 * 60 * 1000;
+
+export interface Coordinates {
+  latitude: number;
+  longitude: number;
+}
 
 export interface Squad {
   squadId: string;
-  name: string;
-  sport: string;
+  venueId: string;
   venueName: string;
-  venueLocation: { latitude: number; longitude: number };
+  normalizedVenueName: string;
+  sportId: SquadSportId;
+  sportDisplayName: string;
+  venueSportKey: string | null;
+  venueLocation: Coordinates;
   venueGeohash: string;
   memberIds: string[];
+  memberCount: number;
   activeMemberCount: number;
   createdBy: string;
   createdAt: number;
+  updatedAt: number;
   isActive: boolean;
-  seasonId: string | null;
-  sponsorId: string | null;
   lastActivityAt: number;
+  currentSeasonId: string | null;
+  timeZone: string | null;
   distanceMiles?: number;
+  // Compatibility aliases for legacy UI and stored documents.
+  name: string;
+  sport: string;
 }
 
 export interface CreateSquadInput {
-  name: string;
-  sport: string;
+  venueId?: string;
   venueName: string;
-  venueLocation: { latitude: number; longitude: number };
+  sportId: SquadSportId;
+  venueLocation: Coordinates;
+}
+
+export interface FindOrCreateSquadResult {
+  squadId: string;
+  status: "existing" | "created";
 }
 
 export interface AppConfig {
@@ -56,18 +71,24 @@ export interface AppConfig {
   maxSquadsPerUser: number;
 }
 
-export interface Coordinates {
-  latitude: number;
-  longitude: number;
+export interface UserSquadState {
+  squadIds: string[];
+  selectedSquadId: string | null;
 }
 
 export type LocationPermissionState = "undetermined" | "granted" | "denied";
 
+export interface LocationPermissionResult {
+  status: LocationPermissionState;
+  canAskAgain: boolean;
+}
+
 export interface CurrentLocationResult {
   coords: Coordinates | null;
-  error: "services_disabled" | "unavailable" | null;
+  error: "services_disabled" | "timeout" | "unavailable" | null;
   mocked: boolean;
   timestamp: number | null;
+  source: "current" | "last-known" | null;
 }
 
 export interface MemberPreview {
@@ -84,6 +105,8 @@ export interface SquadDetail extends Squad {
 export type SquadStatus = "active" | "starting_soon" | "quiet";
 
 type FirestoreDate = Timestamp | number | Date | null | undefined;
+type NearbyResponse = { squads: Record<string, unknown>[]; radiusMiles: number };
+type SearchResponse = { squads: Record<string, unknown>[] };
 
 function toMillis(value: FirestoreDate): number {
   if (!value) return 0;
@@ -93,11 +116,8 @@ function toMillis(value: FirestoreDate): number {
   return 0;
 }
 
-function readPoint(value: unknown): { latitude: number; longitude: number } {
-  if (value instanceof GeoPoint) {
-    return { latitude: value.latitude, longitude: value.longitude };
-  }
-
+function readPoint(value: unknown): Coordinates {
+  if (value instanceof GeoPoint) return { latitude: value.latitude, longitude: value.longitude };
   const data = value as { latitude?: number; longitude?: number; _latitude?: number; _longitude?: number } | null;
   return {
     latitude: data?.latitude ?? data?._latitude ?? 0,
@@ -105,310 +125,270 @@ function readPoint(value: unknown): { latitude: number; longitude: number } {
   };
 }
 
-function docToSquad(id: string, data: Record<string, unknown>): Squad {
+export function normalizeSquadDocument(id: string, data: DocumentData): Squad {
+  const venueName = readString(data.venueName) || readString(data.name) || "Sports Venue";
+  const sportId = normalizeSquadSportId(data.sportId ?? data.sportDisplayName ?? data.sport);
+  const sportOption = getSquadSportOption(sportId);
+  const memberIds = readStringArray(data.memberIds);
   return {
     squadId: id,
-    name: (data.name as string) ?? "",
-    sport: (data.sport as string) ?? "",
-    venueName: (data.venueName as string) ?? "",
+    venueId: readString(data.venueId) || `legacy_${id}`,
+    venueName,
+    normalizedVenueName: readString(data.normalizedVenueName),
+    sportId,
+    sportDisplayName: readString(data.sportDisplayName) || sportOption.englishName,
+    venueSportKey: readString(data.venueSportKey) || null,
     venueLocation: readPoint(data.venueLocation),
-    venueGeohash: (data.venueGeohash as string) ?? "",
-    memberIds: (data.memberIds as string[]) ?? [],
-    activeMemberCount: (data.activeMemberCount as number) ?? 0,
-    createdBy: (data.createdBy as string) ?? "",
+    venueGeohash: readString(data.venueGeohash),
+    memberIds,
+    memberCount: readFiniteNumber(data.memberCount, memberIds.length),
+    activeMemberCount: readFiniteNumber(data.activeMemberCount, 0),
+    createdBy: readString(data.createdBy),
     createdAt: toMillis(data.createdAt as FirestoreDate),
-    isActive: (data.isActive as boolean) ?? false,
-    seasonId: (data.seasonId as string | null) ?? null,
-    sponsorId: (data.sponsorId as string | null) ?? null,
+    updatedAt: toMillis(data.updatedAt as FirestoreDate),
+    isActive: data.isActive !== false,
     lastActivityAt: toMillis(data.lastActivityAt as FirestoreDate),
+    currentSeasonId: readString(data.currentSeasonId) || null,
+    timeZone: readString(data.timeZone) || null,
+    distanceMiles: typeof data.distanceMiles === "number" ? data.distanceMiles : undefined,
+    name: venueName,
+    sport: sportOption.englishName,
   };
 }
 
-export function encodeGeohash(lat: number, lng: number): string {
-  return geohashForLocation([lat, lng]);
-}
-
-export function calculateDistanceMiles(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  return distanceBetween([lat1, lng1], [lat2, lng2]) * 0.621371;
-}
-
 export function getSquadStatus(squad: Squad): SquadStatus {
+  if (!squad.lastActivityAt) return "quiet";
   const elapsed = Date.now() - squad.lastActivityAt;
   if (elapsed < STARTING_SOON_MS) return "active";
   if (elapsed < THREE_HOURS_MS) return "starting_soon";
   return "quiet";
 }
-function normalizePermissionStatus(status: Location.PermissionStatus): LocationPermissionState {
-  if (status === Location.PermissionStatus.GRANTED) return "granted";
-  if (status === Location.PermissionStatus.DENIED) return "denied";
-  return "undetermined";
+
+function normalizePermission(permission: Location.LocationPermissionResponse): LocationPermissionResult {
+  const status = permission.status === Location.PermissionStatus.GRANTED
+    ? "granted"
+    : permission.status === Location.PermissionStatus.DENIED
+      ? "denied"
+      : "undetermined";
+  return { status, canAskAgain: permission.canAskAgain };
 }
 
-export async function getLocationPermissionStatus(): Promise<LocationPermissionState> {
+export async function getLocationPermissionStatus(): Promise<LocationPermissionResult> {
   try {
-    const permission = await Location.getForegroundPermissionsAsync();
-    return normalizePermissionStatus(permission.status);
+    return normalizePermission(await Location.getForegroundPermissionsAsync());
   } catch (error) {
-    console.warn("[SquadService] getLocationPermissionStatus error:", error);
-    return "undetermined";
+    logSquadDiagnostic("permission-status", error);
+    return { status: "undetermined", canAskAgain: true };
   }
 }
 
-export async function requestLocationPermission(): Promise<LocationPermissionState> {
+export async function requestLocationPermission(): Promise<LocationPermissionResult> {
   try {
-    const permission = await Location.requestForegroundPermissionsAsync();
-    return normalizePermissionStatus(permission.status);
+    return normalizePermission(await Location.requestForegroundPermissionsAsync());
   } catch (error) {
-    console.warn("[SquadService] requestLocationPermission error:", error);
-    return "denied";
+    logSquadDiagnostic("permission-request", error);
+    return { status: "denied", canAskAgain: false };
   }
 }
 
 export async function getCurrentLocation(): Promise<CurrentLocationResult> {
   try {
-    const servicesEnabled = await Location.hasServicesEnabledAsync();
-    if (!servicesEnabled) {
-      return { coords: null, error: "services_disabled", mocked: false, timestamp: null };
+    if (!(await Location.hasServicesEnabledAsync())) {
+      return emptyLocation("services_disabled");
     }
-
-    const position = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
-      mayShowUserSettingsDialog: true,
-    });
-
-    const mocked = "mocked" in position ? Boolean(position.mocked) : false;
-
-    return {
-      coords: {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-      },
-      error: null,
-      mocked,
-      timestamp: position.timestamp ?? null,
-    };
+    try {
+      const position = await withTimeout(
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+          mayShowUserSettingsDialog: true,
+        }),
+        LOCATION_TIMEOUT_MS,
+      );
+      return locationResult(position, "current");
+    } catch (error) {
+      const lastKnown = await Location.getLastKnownPositionAsync({
+        maxAge: LAST_LOCATION_MAX_AGE_MS,
+        requiredAccuracy: 1000,
+      });
+      if (lastKnown) return locationResult(lastKnown, "last-known");
+      logSquadDiagnostic(error instanceof LocationTimeoutError ? "location-timeout" : "location-current", error);
+      return emptyLocation(error instanceof LocationTimeoutError ? "timeout" : "unavailable");
+    }
   } catch (error) {
-    console.warn("[SquadService] getCurrentLocation error:", error);
-    return { coords: null, error: "unavailable", mocked: false, timestamp: null };
+    logSquadDiagnostic("location-services", error);
+    return emptyLocation("unavailable");
   }
 }
 
-export async function updateUserLocation(userId: string, coords: Coordinates): Promise<void> {
-  if (!userId) return;
-  if (!Number.isFinite(coords.latitude) || !Number.isFinite(coords.longitude)) return;
-
+export async function fetchAppConfig(): Promise<AppConfig> {
   try {
-    await setDoc(doc(db, "users", userId), {
-      location: new GeoPoint(coords.latitude, coords.longitude),
-      locationGeohash: encodeGeohash(coords.latitude, coords.longitude),
-      locationUpdatedAt: serverTimestamp(),
-    }, { merge: true });
+    const snapshot = await getDoc(doc(db, "appConfig", "squadConfig"));
+    const data = snapshot.data();
+    return {
+      squadRadiusMiles: readFiniteNumber(data?.squadRadiusMiles, 2),
+      maxSquadsPerUser: readFiniteNumber(data?.maxSquadsPerUser, 10),
+    };
   } catch (error) {
-    console.warn("[SquadService] updateUserLocation error:", error);
+    logSquadDiagnostic("config", error);
+    return { squadRadiusMiles: 2, maxSquadsPerUser: 10 };
   }
+}
+
+export async function fetchUserSquadState(userId: string): Promise<UserSquadState> {
+  if (!userId) return { squadIds: [], selectedSquadId: null };
+  try {
+    const snapshot = await getDoc(doc(db, "users", userId));
+    const squadIds = readStringArray(snapshot.data()?.squadIds);
+    const serverSelected = readString(snapshot.data()?.selectedSquadId) || null;
+    const localSelected = await AsyncStorage.getItem(selectedSquadStorageKey(userId));
+    const selectedSquadId = [serverSelected, localSelected].find((candidate) => candidate && squadIds.includes(candidate)) ?? null;
+    return { squadIds, selectedSquadId };
+  } catch (error) {
+    logSquadDiagnostic("membership-state", error);
+    return { squadIds: [], selectedSquadId: null };
+  }
+}
+
+export async function fetchUserSquadIds(userId: string): Promise<string[]> {
+  return (await fetchUserSquadState(userId)).squadIds;
+}
+
+export async function fetchSquadsByIds(squadIds: string[]): Promise<Squad[]> {
+  const uniqueIds = Array.from(new Set(squadIds)).slice(0, 25);
+  const snapshots = await Promise.all(uniqueIds.map((squadId) => getDoc(doc(db, "squads", squadId))));
+  return snapshots.flatMap((snapshot) => {
+    const data = snapshot.data();
+    return data && data.isActive !== false ? [normalizeSquadDocument(snapshot.id, data)] : [];
+  });
+}
+
+export async function fetchNearbySquads(lat: number, lng: number, radiusMiles: number): Promise<Squad[]> {
+  const callable = httpsCallable<
+    { latitude: number; longitude: number; radiusMiles: number },
+    NearbyResponse
+  >(functions, "findNearbyVenueSportSquads");
+  const response = await callable({ latitude: lat, longitude: lng, radiusMiles });
+  return response.data.squads.map((data) => normalizeSquadDocument(readString(data.squadId), data));
 }
 
 export async function findNearbySquads(coords: Coordinates, radiusMiles: number): Promise<Squad[]> {
   return fetchNearbySquads(coords.latitude, coords.longitude, radiusMiles);
 }
 
-export async function fetchAppConfig(): Promise<AppConfig> {
-  try {
-    const snap = await getDoc(doc(db, "appConfig", "squadConfig"));
-    if (!snap.exists()) return { squadRadiusMiles: 2, maxSquadsPerUser: 10 };
-    const data = snap.data();
-    return {
-      squadRadiusMiles: data.squadRadiusMiles ?? 2,
-      maxSquadsPerUser: data.maxSquadsPerUser ?? 10,
-    };
-  } catch (error) {
-    console.warn("[SquadService] fetchAppConfig error:", error);
-    return { squadRadiusMiles: 2, maxSquadsPerUser: 10 };
-  }
+export async function searchVenueSquads(queryText: string): Promise<Squad[]> {
+  const callable = httpsCallable<{ queryText: string }, SearchResponse>(functions, "searchVenueSportSquads");
+  const response = await callable({ queryText: queryText.trim() });
+  return response.data.squads.map((data) => normalizeSquadDocument(readString(data.squadId), data));
 }
 
-export async function fetchUserSquadIds(userId: string): Promise<string[]> {
-  try {
-    const snap = await getDoc(doc(db, "users", userId));
-    return snap.exists() ? ((snap.data().squadIds as string[]) ?? []) : [];
-  } catch (error) {
-    console.warn("[SquadService] fetchUserSquadIds error:", error);
-    return [];
-  }
-}
-
-export async function fetchNearbySquads(lat: number, lng: number, radiusMiles: number): Promise<Squad[]> {
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radiusMiles)) return [];
-
-  try {
-    const radiusInMeters = radiusMiles * MILES_TO_METERS;
-    const bounds = geohashQueryBounds([lat, lng], radiusInMeters);
-    const squadsRef = collection(db, "squads");
-
-    const snapshots = await Promise.all(
-      bounds.map(([lower, upper]) =>
-        getDocs(query(
-          squadsRef,
-          where("venueGeohash", ">=", lower),
-          where("venueGeohash", "<=", upper),
-          where("isActive", "==", true)
-        ))
-      )
-    );
-
-    const seen = new Set<string>();
-    const squads: Squad[] = [];
-
-    snapshots.forEach((snap) => {
-      snap.docs.forEach((squadDoc) => {
-        if (seen.has(squadDoc.id)) return;
-        seen.add(squadDoc.id);
-
-        const squad = docToSquad(squadDoc.id, squadDoc.data());
-        const distanceMiles = calculateDistanceMiles(
-          lat,
-          lng,
-          squad.venueLocation.latitude,
-          squad.venueLocation.longitude
-        );
-
-        if (distanceMiles > radiusMiles) return;
-        if (Date.now() - squad.lastActivityAt > THREE_HOURS_MS) return;
-
-        squads.push({ ...squad, distanceMiles });
-      });
-    });
-
-    return squads.sort((a, b) => (a.distanceMiles ?? 0) - (b.distanceMiles ?? 0));
-  } catch (error) {
-    console.warn("[SquadService] fetchNearbySquads error:", error);
-    return [];
-  }
-}
-
-export async function joinSquad(userId: string, squadId: string, isFirstSquadEver: boolean): Promise<void> {
-  const membershipRef = doc(collection(db, "squadMemberships"));
-  const squadRef = doc(db, "squads", squadId);
-  const userRef = doc(db, "users", userId);
-  const batch = writeBatch(db);
-
-  batch.update(squadRef, {
-    memberIds: arrayUnion(userId),
-    lastActivityAt: serverTimestamp(),
+export async function findOrCreateSquad(input: CreateSquadInput): Promise<FindOrCreateSquadResult> {
+  const callable = httpsCallable<
+    { venueId?: string; venueName: string; latitude: number; longitude: number; sportId: SquadSportId },
+    FindOrCreateSquadResult
+  >(functions, "findOrCreateVenueSportSquad");
+  const response = await callable({
+    venueId: input.venueId,
+    venueName: input.venueName.trim(),
+    latitude: input.venueLocation.latitude,
+    longitude: input.venueLocation.longitude,
+    sportId: input.sportId,
   });
-  batch.set(membershipRef, {
-    membershipId: membershipRef.id,
-    userId,
-    squadId,
-    joinedAt: serverTimestamp(),
-    lastActiveAt: serverTimestamp(),
-    isActive: true,
-  });
-  batch.set(userRef, {
-    squadIds: arrayUnion(squadId),
-    sidelineStars: increment(isFirstSquadEver ? 100 : 25),
-  }, { merge: true });
-
-  await batch.commit();
-  await addDoc(collection(db, "activity"), {
-    type: "squad_join",
-    userId,
-    squadId,
-    createdAt: serverTimestamp(),
-  });
+  return response.data;
 }
 
-export async function createSquad(input: CreateSquadInput, userId: string): Promise<string> {
-  const squadRef = doc(collection(db, "squads"));
-  const membershipRef = doc(collection(db, "squadMemberships"));
-  const userRef = doc(db, "users", userId);
-  const geohash = encodeGeohash(input.venueLocation.latitude, input.venueLocation.longitude);
-  const batch = writeBatch(db);
-
-  batch.set(squadRef, {
-    squadId: squadRef.id,
-    name: input.name,
-    sport: input.sport,
-    venueName: input.venueName,
-    venueLocation: new GeoPoint(input.venueLocation.latitude, input.venueLocation.longitude),
-    venueGeohash: geohash,
-    memberIds: [userId],
-    activeMemberCount: 1,
-    createdBy: userId,
-    createdAt: serverTimestamp(),
-    isActive: true,
-    seasonId: null,
-    sponsorId: null,
-    lastActivityAt: serverTimestamp(),
-  });
-  batch.set(membershipRef, {
-    membershipId: membershipRef.id,
-    userId,
-    squadId: squadRef.id,
-    joinedAt: serverTimestamp(),
-    lastActiveAt: serverTimestamp(),
-    isActive: true,
-  });
-  batch.set(userRef, { squadIds: arrayUnion(squadRef.id) }, { merge: true });
-
-  await batch.commit();
-  return squadRef.id;
+export async function joinSquad(squadId: string): Promise<{ selectedSquadId: string; status: "existing" | "joined" }> {
+  const callable = httpsCallable<
+    { squadId: string },
+    { selectedSquadId: string; status: "existing" | "joined" }
+  >(functions, "joinVenueSportSquad");
+  return (await callable({ squadId })).data;
 }
 
-export async function leaveSquad(userId: string, squadId: string): Promise<void> {
-  const memberships = await getDocs(query(
-    collection(db, "squadMemberships"),
-    where("userId", "==", userId),
-    where("squadId", "==", squadId),
-    where("isActive", "==", true),
-    limit(1)
-  ));
-
-  const batch = writeBatch(db);
-  memberships.docs.forEach((membershipDoc) => batch.update(membershipDoc.ref, { isActive: false }));
-  batch.update(doc(db, "squads", squadId), { memberIds: arrayRemove(userId) });
-  batch.set(doc(db, "users", userId), { squadIds: arrayRemove(squadId) }, { merge: true });
-  await batch.commit();
+export async function leaveSquad(squadId: string): Promise<{ selectedSquadId: string | null }> {
+  const callable = httpsCallable<{ squadId: string }, { selectedSquadId: string | null }>(functions, "leaveVenueSportSquad");
+  return (await callable({ squadId })).data;
 }
 
-export async function updateMemberLastActive(userId: string): Promise<void> {
-  try {
-    const memberships = await getDocs(query(
-      collection(db, "squadMemberships"),
-      where("userId", "==", userId),
-      where("isActive", "==", true)
-    ));
-    if (memberships.empty) return;
+export async function persistSelectedSquad(userId: string, squadId: string | null): Promise<void> {
+  if (squadId) await AsyncStorage.setItem(selectedSquadStorageKey(userId), squadId);
+  else await AsyncStorage.removeItem(selectedSquadStorageKey(userId));
+  const callable = httpsCallable<{ squadId: string | null }, { selectedSquadId: string | null }>(functions, "setSelectedSquad");
+  await callable({ squadId });
+}
 
-    const batch = writeBatch(db);
-    memberships.docs.forEach((membershipDoc) => batch.update(membershipDoc.ref, { lastActiveAt: serverTimestamp() }));
-    await batch.commit();
-  } catch (error) {
-    console.warn("[SquadService] updateMemberLastActive error:", error);
-  }
+export async function updateMemberLastActive(): Promise<void> {
+  const callable = httpsCallable<Record<string, never>, { updatedCount: number }>(functions, "refreshSquadPresence");
+  await callable({});
 }
 
 export async function fetchSquadDetail(squadId: string): Promise<SquadDetail | null> {
   try {
-    const squadSnap = await getDoc(doc(db, "squads", squadId));
-    if (!squadSnap.exists()) return null;
-
-    const squad = docToSquad(squadSnap.id, squadSnap.data());
-    const memberIds = squad.memberIds.slice(0, 8);
-    const publicProfiles = await getPublicUserProfiles(memberIds);
+    const snapshot = await getDoc(doc(db, "squads", squadId));
+    if (!snapshot.exists()) return null;
+    const squad = normalizeSquadDocument(snapshot.id, snapshot.data());
+    const publicProfiles = await getPublicUserProfiles(squad.memberIds.slice(0, 8));
     const members = publicProfiles.map((profile) => ({
       uid: profile.userId,
       displayName: getSafeProfileName(profile.displayName),
       photoURL: null,
     }));
-
-    return {
-      ...squad,
-      members,
-      extraMemberCount: Math.max(0, squad.memberIds.length - members.length),
-    };
+    return { ...squad, members, extraMemberCount: Math.max(0, squad.memberCount - members.length) };
   } catch (error) {
-    console.warn("[SquadService] fetchSquadDetail error:", error);
+    logSquadDiagnostic("detail", error);
     return null;
   }
+}
+
+function selectedSquadStorageKey(userId: string) {
+  return `sideline:selectedSquad:${userId}`;
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? Array.from(new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0)))
+    : [];
+}
+
+function readFiniteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
+function locationResult(position: Location.LocationObject, source: "current" | "last-known"): CurrentLocationResult {
+  return {
+    coords: { latitude: position.coords.latitude, longitude: position.coords.longitude },
+    error: null,
+    mocked: Boolean(position.mocked),
+    timestamp: position.timestamp ?? null,
+    source,
+  };
+}
+
+function emptyLocation(error: CurrentLocationResult["error"]): CurrentLocationResult {
+  return { coords: null, error, mocked: false, timestamp: null, source: null };
+}
+
+class LocationTimeoutError extends Error {}
+
+async function withTimeout<T>(request: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      request,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new LocationTimeoutError("Location request timed out.")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function logSquadDiagnostic(operation: string, error: unknown) {
+  if (!__DEV__) return;
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+  console.info("[SquadDiagnostic]", { operation, code });
 }

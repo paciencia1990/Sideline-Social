@@ -19,6 +19,7 @@ type LobbyPlayers = {
 };
 
 type GameLobbyState = {
+  sessionId: string;
   players: LobbyPlayers;
   toggleReady: () => void;
   startGame: () => void;
@@ -148,7 +149,7 @@ export function useGameLobby(gameId: string): GameLobbyState {
 
     const timeout = setTimeout(() => {
       setShowCountdown(false);
-      router.replace(`/games/${gameId}/play` as never);
+      router.replace({ pathname: `/games/${gameId}/play`, params: { sessionId } } as never);
     }, remaining);
 
     return () => clearTimeout(timeout);
@@ -203,6 +204,7 @@ export function useGameLobby(gameId: string): GameLobbyState {
   }, [currentUserId, gameId, players.isHost, sessionId]);
 
   return {
+    sessionId,
     players,
     toggleReady,
     startGame,

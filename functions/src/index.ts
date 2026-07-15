@@ -7,10 +7,12 @@
  *  1. updateActiveMemberCount — triggered on squadMemberships writes
  *  2. deactivateInactiveMembers — scheduled daily at 02:00 UTC
  */
-import { createHash, randomInt } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
+import { FieldValue, GeoPoint, Timestamp } from 'firebase-admin/firestore';
 import * as functions from 'firebase-functions';
+import { distanceBetween, geohashForLocation, geohashQueryBounds } from 'geofire-common';
 import {
   countMutualConnections,
   findSharedActivity,
@@ -55,12 +57,55 @@ import {
   resolveReplyAuthorName,
   setStaffRole,
 } from './teamMembershipCore';
+import {
+  assertValidCoordinates,
+  canonicalVenueId,
+  deterministicSquadId,
+  getSportDisplayName,
+  normalizeSportId,
+  normalizeVenueName,
+  resolveJoinProjection,
+  resolveSelectionAfterLeave,
+  validateVenueId,
+  venueSportKeyFor,
+  type SquadSportId,
+} from './squadCore';
+import {
+  WEEKLY_CHALLENGE_STARS,
+  calculateBombDefusalReward,
+  calculateSpotDifferencesReward,
+  calculateTriviaReward,
+  gameRewardId,
+  normalizeStars,
+  totalBreakdown,
+  type GameRewardBreakdown,
+  type SupportedRewardGame,
+} from './sidelineStarsCore';
+import { readSeasonEligibleSquadIds } from './squadSeason';
+
+export {
+  createSquadSeason,
+  endSquadSeason,
+  getSquadLeaderboard,
+  getSquadSeasons,
+  projectRewardToSquadSeasons,
+  syncSquadSeasonStates,
+  updateSquadSeason,
+} from './squadSeason';
+export {
+  acknowledgeNotificationOpened,
+  cleanupExpiredUserNotifications,
+  clearUserNotifications,
+} from './userNotificationDismissal';
 
 admin.initializeApp();
 
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const TEAM_INVITE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const DEFAULT_SQUAD_RADIUS_MILES = 2;
+const MAX_SQUAD_RADIUS_MILES = 10;
+const SQUAD_MILES_TO_METERS = 1609.34;
 
 type PersonalNotificationInput = {
   recipientUserId: string;
@@ -96,9 +141,11 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
       titleKey: input.titleKey,
       bodyKey: input.bodyKey,
       params: input.params,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
       readAt: null,
       isRead: false,
+      dismissedAt: null,
+      dismissReason: null,
       status: 'active',
       actorUserId: input.actorUserId ?? null,
       actorDisplayName: input.actorDisplayName ?? null,
@@ -165,11 +212,575 @@ async function getPrivateNotificationActorName(userId: unknown, fallback = 'Side
   }
 }
 
+type SquadDocument = admin.firestore.DocumentData & {
+  squadId?: string;
+  venueId?: string;
+  venueName?: string;
+  normalizedVenueName?: string;
+  sportId?: string;
+  sportDisplayName?: string;
+  sport?: string;
+  venueSportKey?: string;
+  venueLocation?: GeoPoint;
+  venueGeohash?: string;
+  memberIds?: string[];
+  memberCount?: number;
+  activeMemberCount?: number;
+  isActive?: boolean;
+  createdBy?: string;
+  creatorId?: string;
+  currentSeasonId?: string | null;
+  timeZone?: string | null;
+};
+
+function readCallableCoordinates(data: unknown) {
+  const input = (data ?? {}) as { latitude?: unknown; longitude?: unknown };
+  const latitude = typeof input.latitude === 'number' ? input.latitude : Number.NaN;
+  const longitude = typeof input.longitude === 'number' ? input.longitude : Number.NaN;
+  try {
+    assertValidCoordinates(latitude, longitude);
+  } catch {
+    throw new functions.https.HttpsError('invalid-argument', 'Valid venue coordinates are required.');
+  }
+  return { latitude, longitude };
+}
+
+function readCallableVenueName(value: unknown) {
+  const venueName = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  if (venueName.length < 2 || venueName.length > 120) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid venue name is required.');
+  }
+  return venueName;
+}
+
+function readCallableSportId(value: unknown): SquadSportId {
+  const sportId = normalizeSportId(value);
+  if (!sportId) throw new functions.https.HttpsError('invalid-argument', 'A supported sport is required.');
+  return sportId;
+}
+
+function readCallableSquadId(value: unknown) {
+  const squadId = typeof value === 'string' ? value.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,360}$/.test(squadId)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid Squad reference is required.');
+  }
+  return squadId;
+}
+
+function readGameSessionId(value: unknown) {
+  const sessionId = typeof value === 'string' ? value.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,200}$/.test(sessionId)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid game session reference is required.');
+  }
+  return sessionId;
+}
+
+function readRewardGameType(value: unknown): SupportedRewardGame {
+  if (value === 'triviaBlitz' || value === 'spotDifferences' || value === 'bombDefusal') return value;
+  throw new functions.https.HttpsError('invalid-argument', 'A supported game type is required.');
+}
+
+function readLocalRewardGameType(value: unknown): 'spotDifferences' | 'bombDefusal' {
+  const gameType = readRewardGameType(value);
+  if (gameType === 'triviaBlitz') {
+    throw new functions.https.HttpsError('invalid-argument', 'Trivia Blitz uses its existing canonical session.');
+  }
+  return gameType;
+}
+
+async function hasDurableSquadMembership(uid: string, squadId: string) {
+  const snapshot = await admin.firestore().collection('squadMemberships').doc(`${squadId}__${uid}`).get();
+  return snapshot.exists && snapshot.data()?.membershipStatus === 'active';
+}
+
+type RewardEligibility = { breakdown: GameRewardBreakdown; sourceSquadId: string | null };
+
+async function readTriviaRewardEligibility(
+  transaction: FirebaseFirestore.Transaction,
+  sessionId: string,
+  uid: string,
+): Promise<RewardEligibility | null> {
+  const firestore = admin.firestore();
+  const parentRef = firestore.collection('sessions').doc(sessionId);
+  const gameRef = parentRef.collection('games').doc('triviaBlitz');
+  const playerRef = gameRef.collection('players').doc(uid);
+  const [parentSnapshot, gameSnapshot, playerSnapshot] = await Promise.all([
+    transaction.get(parentRef),
+    transaction.get(gameRef),
+    transaction.get(playerRef),
+  ]);
+  if (!parentSnapshot.exists || !gameSnapshot.exists || !playerSnapshot.exists) return null;
+  const parent = parentSnapshot.data()!;
+  const game = gameSnapshot.data()!;
+  const participantIds = readStringArray(parent.playerIds);
+  const questionCount = Array.isArray(game.selectedQuestions) ? game.selectedQuestions.length : 0;
+  const completedAllQuestions = parent.status === 'results' && game.status === 'results' &&
+    questionCount > 0 && questionCount <= 10 && game.questionIndex === questionCount - 1 &&
+    game.answeredQuestions === questionCount;
+  if (!participantIds.includes(uid) && parent.hostPlayerId !== uid) return null;
+  const breakdown = calculateTriviaReward({
+    completedAllQuestions,
+    correctAnswers: game.correctAnswers,
+    questionCount,
+  });
+  return breakdown ? { breakdown, sourceSquadId: typeof parent.sourceSquadId === 'string' ? parent.sourceSquadId : null } : null;
+}
+
+async function readLocalGameRewardEligibility(
+  transaction: FirebaseFirestore.Transaction,
+  gameType: 'spotDifferences' | 'bombDefusal',
+  sessionId: string,
+  uid: string,
+): Promise<RewardEligibility | null> {
+  const sessionRef = admin.firestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
+  const sessionSnapshot = await transaction.get(sessionRef);
+  if (!sessionSnapshot.exists) return null;
+  const session = sessionSnapshot.data()!;
+  if (session.status !== 'completed' || !readStringArray(session.participantIds).includes(uid)) return null;
+  const result = session.finalizedResult as Record<string, unknown> | undefined;
+  if (!result) return null;
+  const breakdown = gameType === 'spotDifferences'
+    ? calculateSpotDifferencesReward({
+      terminal: result.outcome === 'completed' || result.outcome === 'timeExpired',
+      foundCount: result.foundCount as number,
+      totalDifferences: result.totalDifferences as number,
+    })
+    : calculateBombDefusalReward({
+      outcome: result.outcome as 'defused' | 'exploded',
+      firstAttemptCorrectStepCount: result.firstAttemptCorrectStepCount as number,
+      totalSteps: result.totalSteps as number,
+    });
+  return breakdown ? {
+    breakdown,
+    sourceSquadId: typeof session.sourceSquadId === 'string' ? session.sourceSquadId : null,
+  } : null;
+}
+
+function emptyRewardBreakdown(): GameRewardBreakdown {
+  return { completionStars: 0, performanceStars: 0, achievementStars: 0 };
+}
+
+function normalizeStoredBreakdown(value: unknown): GameRewardBreakdown {
+  const breakdown = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    completionStars: normalizeStars(breakdown.completionStars),
+    performanceStars: normalizeStars(breakdown.performanceStars),
+    achievementStars: normalizeStars(breakdown.achievementStars),
+  };
+}
+
+function legacySportIdForSquad(squad: SquadDocument): SquadSportId {
+  return normalizeSportId(squad.sportId ?? squad.sportDisplayName ?? squad.sport) ?? 'other';
+}
+
+function squadProjection(snapshot: admin.firestore.DocumentSnapshot) {
+  const squad = (snapshot.data() ?? {}) as SquadDocument;
+  const sportId = legacySportIdForSquad(squad);
+  const venueName = typeof squad.venueName === 'string' && squad.venueName.trim()
+    ? squad.venueName.trim()
+    : typeof squad.name === 'string' && squad.name.trim()
+      ? squad.name.trim()
+      : 'Sports Venue';
+  const point = squad.venueLocation;
+  return {
+    squadId: snapshot.id,
+    venueId: typeof squad.venueId === 'string' ? squad.venueId : `legacy_${snapshot.id}`,
+    venueName,
+    normalizedVenueName: typeof squad.normalizedVenueName === 'string'
+      ? squad.normalizedVenueName
+      : normalizeVenueName(venueName),
+    sportId,
+    sportDisplayName: typeof squad.sportDisplayName === 'string' && squad.sportDisplayName.trim()
+      ? squad.sportDisplayName.trim()
+      : getSportDisplayName(sportId),
+    venueSportKey: typeof squad.venueSportKey === 'string' ? squad.venueSportKey : null,
+    venueLocation: point instanceof GeoPoint
+      ? { latitude: point.latitude, longitude: point.longitude }
+      : null,
+    venueGeohash: typeof squad.venueGeohash === 'string' ? squad.venueGeohash : null,
+    memberCount: typeof squad.memberCount === 'number'
+      ? Math.max(0, squad.memberCount)
+      : Array.isArray(squad.memberIds) ? new Set(squad.memberIds).size : 0,
+    activeMemberCount: typeof squad.activeMemberCount === 'number' ? Math.max(0, squad.activeMemberCount) : 0,
+    isActive: squad.isActive !== false,
+  };
+}
+
+async function findLegacyVenueSportCandidate(input: {
+  firestore: admin.firestore.Firestore;
+  latitude: number;
+  longitude: number;
+  normalizedVenueName: string;
+  sportId: SquadSportId;
+}) {
+  const bounds = geohashQueryBounds([input.latitude, input.longitude], 250);
+  const snapshots = await Promise.all(bounds.map(([lower, upper]) => input.firestore
+    .collection('squads')
+    .where('venueGeohash', '>=', lower)
+    .where('venueGeohash', '<=', upper)
+    .where('isActive', '==', true)
+    .limit(50)
+    .get()));
+  const candidates = new Map<string, admin.firestore.QueryDocumentSnapshot>();
+  snapshots.forEach((snapshot) => snapshot.docs.forEach((candidate) => {
+    const squad = candidate.data() as SquadDocument;
+    const point = squad.venueLocation;
+    if (!(point instanceof GeoPoint)) return;
+    const venueName = typeof squad.venueName === 'string' ? squad.venueName : squad.name;
+    if (typeof venueName !== 'string' || normalizeVenueName(venueName) !== input.normalizedVenueName) return;
+    if (legacySportIdForSquad(squad) !== input.sportId) return;
+    const miles = distanceBetween(
+      [input.latitude, input.longitude],
+      [point.latitude, point.longitude],
+    ) * 0.621371;
+    if (miles <= 0.15) candidates.set(candidate.id, candidate);
+  }));
+  if (candidates.size > 1) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Multiple legacy Squads may match this venue and sport. Review them before creating another.',
+      { reason: 'duplicate-candidates' },
+    );
+  }
+  return Array.from(candidates.values())[0] ?? null;
+}
+
+// A venue-and-sport key is the canonical Squad identity. The deterministic
+// document ID makes concurrent creation of the same combination race-safe.
+export const findOrCreateVenueSportSquad = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to create a Squad.');
+  const venueName = readCallableVenueName(data?.venueName);
+  const { latitude, longitude } = readCallableCoordinates(data);
+  const sportId = readCallableSportId(data?.sportId);
+  const normalizedVenueName = normalizeVenueName(venueName);
+  const suppliedVenueId = data?.venueId == null ? null : validateVenueId(data.venueId);
+  if (data?.venueId != null && !suppliedVenueId) {
+    throw new functions.https.HttpsError('invalid-argument', 'The venue reference is invalid.');
+  }
+  const firestore = admin.firestore();
+  if (suppliedVenueId) {
+    const venueDocuments = await firestore.collection('squads').where('venueId', '==', suppliedVenueId).limit(20).get();
+    const verified = venueDocuments.docs.some((document) => {
+      const existingSquad = document.data() as SquadDocument;
+      const point = existingSquad.venueLocation;
+      const existingVenueName = existingSquad.venueName ?? existingSquad.name;
+      return existingSquad.isActive !== false
+        && point instanceof GeoPoint
+        && typeof existingVenueName === 'string'
+        && normalizeVenueName(existingVenueName) === normalizedVenueName
+        && distanceBetween([latitude, longitude], [point.latitude, point.longitude]) * 0.621371 <= 0.15;
+    });
+    if (!verified) {
+      throw new functions.https.HttpsError('invalid-argument', 'The venue reference could not be verified.');
+    }
+  }
+  const venueId = suppliedVenueId ?? canonicalVenueId(venueName, latitude, longitude);
+  const venueSportKey = venueSportKeyFor(venueId, sportId);
+  const canonicalSquadId = deterministicSquadId(venueSportKey);
+
+  const indexedExisting = await firestore.collection('squads')
+    .where('venueSportKey', '==', venueSportKey)
+    .where('isActive', '==', true)
+    .limit(2)
+    .get();
+  if (indexedExisting.size > 1) {
+    throw new functions.https.HttpsError('failed-precondition', 'Duplicate Squad records require review.', { reason: 'duplicate-candidates' });
+  }
+  let existing = indexedExisting.docs[0] ?? null;
+  if (!existing) {
+    const canonicalSnapshot = await firestore.collection('squads').doc(canonicalSquadId).get();
+    if (canonicalSnapshot.exists && canonicalSnapshot.data()?.isActive !== false) {
+      existing = canonicalSnapshot as admin.firestore.QueryDocumentSnapshot;
+    }
+  }
+  if (!existing) {
+    existing = await findLegacyVenueSportCandidate({
+      firestore, latitude, longitude, normalizedVenueName, sportId,
+    });
+  }
+
+  if (existing) {
+    const existingData = existing.data() as SquadDocument;
+    const existingVenueName = typeof existingData.venueName === 'string' && existingData.venueName.trim()
+      ? existingData.venueName.trim()
+      : typeof existingData.name === 'string' && existingData.name.trim()
+        ? existingData.name.trim()
+        : venueName;
+    await existing.ref.set({
+      squadId: existing.id,
+      venueId,
+      venueName: existingVenueName,
+      normalizedVenueName: normalizeVenueName(existingVenueName),
+      sportId,
+      sportDisplayName: getSportDisplayName(sportId),
+      venueSportKey,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { squadId: existing.id, status: 'existing' as const };
+  }
+
+  const squadRef = firestore.collection('squads').doc(canonicalSquadId);
+  const status = await firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(squadRef);
+    if (snapshot.exists && snapshot.data()?.isActive !== false) return 'existing' as const;
+    const timestamp = FieldValue.serverTimestamp();
+    transaction.set(squadRef, {
+      squadId: canonicalSquadId,
+      name: venueName,
+      venueId,
+      venueName,
+      normalizedVenueName,
+      sportId,
+      sport: getSportDisplayName(sportId),
+      sportDisplayName: getSportDisplayName(sportId),
+      venueSportKey,
+      venueLocation: new GeoPoint(latitude, longitude),
+      venueGeohash: geohashForLocation([latitude, longitude]),
+      memberIds: [],
+      memberCount: 0,
+      activeMemberCount: 0,
+      createdBy: uid,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      isActive: true,
+      seasonId: null,
+      currentSeasonId: null,
+      timeZone: null,
+      sponsorId: null,
+      lastActivityAt: null,
+    });
+    return 'created' as const;
+  });
+  return { squadId: canonicalSquadId, status };
+});
+
+export const joinVenueSportSquad = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to join a Squad.');
+  const squadId = readCallableSquadId(data?.squadId);
+  const firestore = admin.firestore();
+  const squadRef = firestore.collection('squads').doc(squadId);
+  const userRef = firestore.collection('users').doc(uid);
+  const membershipRef = firestore.collection('squadMemberships').doc(`${squadId}__${uid}`);
+
+  return firestore.runTransaction(async (transaction) => {
+    const [squadSnapshot, userSnapshot, membershipSnapshot] = await transaction.getAll(squadRef, userRef, membershipRef);
+    const legacyMembershipSnapshot = await transaction.get(firestore.collection('squadMemberships')
+      .where('userId', '==', uid)
+      .where('squadId', '==', squadId));
+    if (!squadSnapshot.exists || squadSnapshot.data()?.isActive === false) {
+      throw new functions.https.HttpsError('failed-precondition', 'This Squad is unavailable.');
+    }
+    if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
+    const squad = squadSnapshot.data() as SquadDocument;
+    const memberIds = Array.from(new Set(Array.isArray(squad.memberIds) ? squad.memberIds : []));
+    const existingMembership = membershipSnapshot.data();
+    const hasActiveMembership = existingMembership?.membershipStatus === 'active'
+      || legacyMembershipSnapshot.docs.some((document) => {
+        const membership = document.data();
+        return membership.membershipStatus === 'active'
+          || (membership.membershipStatus == null && membership.isActive === true);
+      });
+    const { alreadyMember, memberIds: nextMemberIds } = resolveJoinProjection(memberIds, uid, hasActiveMembership);
+    const timestamp = Timestamp.now();
+    transaction.set(membershipRef, {
+      membershipId: membershipRef.id,
+      userId: uid,
+      squadId,
+      membershipStatus: 'active',
+      squadRole: existingMembership?.squadRole === 'admin' || squad.createdBy === uid || squad.creatorId === uid
+        ? 'admin'
+        : 'member',
+      presenceStatus: 'recent',
+      joinedAt: existingMembership?.joinedAt ?? timestamp,
+      updatedAt: timestamp,
+      lastSeenAt: timestamp,
+      // Kept only for legacy readers. It now mirrors durable membership and is
+      // never expired by the presence cleanup job.
+      isActive: true,
+      lastActiveAt: timestamp,
+      notificationEligible: !alreadyMember,
+    }, { merge: true });
+    legacyMembershipSnapshot.docs.forEach((document) => {
+      if (document.id === membershipRef.id) return;
+      transaction.set(document.ref, {
+        membershipStatus: 'superseded',
+        presenceStatus: 'away',
+        isActive: false,
+        supersededBy: membershipRef.id,
+        updatedAt: timestamp,
+      }, { merge: true });
+    });
+    transaction.update(squadRef, {
+      memberIds: nextMemberIds,
+      memberCount: nextMemberIds.length,
+      updatedAt: timestamp,
+    });
+    const currentSquadIds = Array.from(new Set(
+      Array.isArray(userSnapshot.data()?.squadIds) ? userSnapshot.data()!.squadIds : [],
+    )) as string[];
+    const nextSquadIds = currentSquadIds.includes(squadId) ? currentSquadIds : [...currentSquadIds, squadId];
+    const selectedSquadId = typeof userSnapshot.data()?.selectedSquadId === 'string'
+      && nextSquadIds.includes(userSnapshot.data()!.selectedSquadId)
+      ? userSnapshot.data()!.selectedSquadId
+      : squadId;
+    transaction.set(userRef, { squadIds: nextSquadIds, selectedSquadId, updatedAt: timestamp }, { merge: true });
+    return { squadId, status: alreadyMember ? 'existing' : 'joined', selectedSquadId };
+  });
+});
+
+export const leaveVenueSportSquad = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to leave a Squad.');
+  const squadId = readCallableSquadId(data?.squadId);
+  const firestore = admin.firestore();
+  const squadRef = firestore.collection('squads').doc(squadId);
+  const userRef = firestore.collection('users').doc(uid);
+  const membershipRef = firestore.collection('squadMemberships').doc(`${squadId}__${uid}`);
+  return firestore.runTransaction(async (transaction) => {
+    const [squadSnapshot, userSnapshot, membershipSnapshot] = await transaction.getAll(squadRef, userRef, membershipRef);
+    const legacyMembershipSnapshot = await transaction.get(firestore.collection('squadMemberships')
+      .where('userId', '==', uid)
+      .where('squadId', '==', squadId));
+    if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
+    const timestamp = Timestamp.now();
+    const memberIds = squadSnapshot.exists && Array.isArray(squadSnapshot.data()?.memberIds)
+      ? Array.from(new Set(squadSnapshot.data()!.memberIds as string[])).filter((id) => id !== uid)
+      : [];
+    if (squadSnapshot.exists) {
+      transaction.update(squadRef, { memberIds, memberCount: memberIds.length, updatedAt: timestamp });
+    }
+    transaction.set(membershipRef, {
+      membershipId: membershipRef.id,
+      userId: uid,
+      squadId,
+      membershipStatus: 'left',
+      presenceStatus: 'away',
+      isActive: false,
+      leftAt: timestamp,
+      updatedAt: timestamp,
+      joinedAt: membershipSnapshot.data()?.joinedAt ?? timestamp,
+    }, { merge: true });
+    legacyMembershipSnapshot.docs.forEach((document) => {
+      if (document.id === membershipRef.id) return;
+      transaction.set(document.ref, {
+        membershipStatus: 'left',
+        presenceStatus: 'away',
+        isActive: false,
+        leftAt: timestamp,
+        updatedAt: timestamp,
+      }, { merge: true });
+    });
+    const { squadIds: nextSquadIds, selectedSquadId } = resolveSelectionAfterLeave(
+      userSnapshot.data()?.squadIds,
+      userSnapshot.data()?.selectedSquadId,
+      squadId,
+    );
+    transaction.set(userRef, { squadIds: nextSquadIds, selectedSquadId, updatedAt: timestamp }, { merge: true });
+    return { squadId, status: 'left', selectedSquadId };
+  });
+});
+
+export const setSelectedSquad = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to select a Squad.');
+  const selectedSquadId = data?.squadId == null ? null : readCallableSquadId(data.squadId);
+  const userRef = admin.firestore().collection('users').doc(uid);
+  return admin.firestore().runTransaction(async (transaction) => {
+    const userSnapshot = await transaction.get(userRef);
+    if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
+    const squadIds = Array.isArray(userSnapshot.data()?.squadIds) ? userSnapshot.data()!.squadIds as string[] : [];
+    if (selectedSquadId && !squadIds.includes(selectedSquadId)) {
+      throw new functions.https.HttpsError('permission-denied', 'Join this Squad before selecting it.');
+    }
+    transaction.update(userRef, {
+      selectedSquadId,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return { selectedSquadId };
+  });
+});
+
+export const refreshSquadPresence = functions.https.onCall(async (_data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to update Squad presence.');
+  const firestore = admin.firestore();
+  const userSnapshot = await firestore.collection('users').doc(uid).get();
+  const squadIds = Array.isArray(userSnapshot.data()?.squadIds)
+    ? Array.from(new Set(userSnapshot.data()!.squadIds as string[])).slice(0, 25)
+    : [];
+  const batch = firestore.batch();
+  const timestamp = Timestamp.now();
+  squadIds.forEach((squadId) => batch.set(
+    firestore.collection('squadMemberships').doc(`${squadId}__${uid}`),
+    {
+      membershipId: `${squadId}__${uid}`,
+      userId: uid,
+      squadId,
+      membershipStatus: 'active',
+      presenceStatus: 'recent',
+      isActive: true,
+      lastSeenAt: timestamp,
+      lastActiveAt: timestamp,
+      updatedAt: timestamp,
+      notificationEligible: false,
+    },
+    { merge: true },
+  ));
+  await batch.commit();
+  return { updatedCount: squadIds.length };
+});
+
+export const findNearbyVenueSportSquads = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to find nearby Squads.');
+  const { latitude, longitude } = readCallableCoordinates(data);
+  const requestedRadius = typeof data?.radiusMiles === 'number' ? data.radiusMiles : DEFAULT_SQUAD_RADIUS_MILES;
+  const radiusMiles = Math.min(MAX_SQUAD_RADIUS_MILES, Math.max(0.25, requestedRadius));
+  const bounds = geohashQueryBounds([latitude, longitude], radiusMiles * SQUAD_MILES_TO_METERS);
+  const firestore = admin.firestore();
+  const snapshots = await Promise.all(bounds.map(([lower, upper]) => firestore.collection('squads')
+    .where('venueGeohash', '>=', lower)
+    .where('venueGeohash', '<=', upper)
+    .where('isActive', '==', true)
+    .limit(60)
+    .get()));
+  const results = new Map<string, ReturnType<typeof squadProjection> & { distanceMiles: number }>();
+  snapshots.forEach((snapshot) => snapshot.docs.forEach((squadSnapshot) => {
+    const projection = squadProjection(squadSnapshot);
+    if (!projection.venueLocation) return;
+    const distanceMiles = distanceBetween(
+      [latitude, longitude],
+      [projection.venueLocation.latitude, projection.venueLocation.longitude],
+    ) * 0.621371;
+    if (distanceMiles <= radiusMiles) results.set(squadSnapshot.id, { ...projection, distanceMiles });
+  }));
+  return {
+    radiusMiles,
+    squads: Array.from(results.values()).sort((a, b) => a.distanceMiles - b.distanceMiles).slice(0, 50),
+  };
+});
+
+export const searchVenueSportSquads = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to search for Squads.');
+  const queryText = typeof data?.queryText === 'string' ? normalizeVenueName(data.queryText) : '';
+  if (queryText.length < 2 || queryText.length > 80) {
+    throw new functions.https.HttpsError('invalid-argument', 'Enter at least two characters of the venue name.');
+  }
+  const snapshot = await admin.firestore().collection('squads')
+    .where('isActive', '==', true)
+    .where('normalizedVenueName', '>=', queryText)
+    .where('normalizedVenueName', '<=', `${queryText}\uf8ff`)
+    .limit(50)
+    .get();
+  return { squads: snapshot.docs.map(squadProjection) };
+});
+
 // ---------------------------------------------------------------------------
 // 1. updateActiveMemberCount
 //    Triggered whenever a squadMemberships document is created or updated.
-//    Counts members with lastActiveAt within the past 3 hours and updates
-//    the parent squad's activeMemberCount + lastActivityAt.
+//    Counts durable members seen within the past 3 hours. Presence can expire;
+//    membership cannot.
 // ---------------------------------------------------------------------------
 
 export const updateActiveMemberCount = functions.firestore
@@ -187,19 +798,29 @@ export const updateActiveMemberCount = functions.firestore
 
     const threeHoursAgo = Date.now() - THREE_HOURS_MS;
 
-    const snapshot = await admin
+    const canonicalSnapshot = await admin
+      .firestore()
+      .collection('squadMemberships')
+      .where('squadId', '==', squadId)
+      .where('membershipStatus', '==', 'active')
+      .where('lastSeenAt', '>=', new Date(threeHoursAgo))
+      .get();
+    const legacySnapshot = await admin
       .firestore()
       .collection('squadMemberships')
       .where('squadId', '==', squadId)
       .where('isActive', '==', true)
       .where('lastActiveAt', '>=', threeHoursAgo)
       .get();
+    const activeUserIds = new Set<string>();
+    canonicalSnapshot.docs.concat(legacySnapshot.docs).forEach((document) => {
+      const userId = document.data().userId;
+      if (typeof userId === 'string') activeUserIds.add(userId);
+    });
+    const activeMemberCount = activeUserIds.size;
+    const lastActivityAt = activeMemberCount > 0 ? Timestamp.now() : null;
 
-    const activeMemberCount = snapshot.size;
-    const lastActivityAt = activeMemberCount > 0 ? Date.now() : undefined;
-
-    const update: Record<string, unknown> = { activeMemberCount };
-    if (lastActivityAt) update.lastActivityAt = lastActivityAt;
+    const update: Record<string, unknown> = { activeMemberCount, lastActivityAt };
 
     await admin.firestore().collection('squads').doc(squadId).update(update);
 
@@ -219,7 +840,7 @@ export const activateWeeklyChallenge = functions.pubsub
   .timeZone('America/New_York')
   .onRun(async () => {
     const db = admin.firestore();
-    const now = admin.firestore.Timestamp.now();
+    const now = Timestamp.now();
     const batch = db.batch();
 
     // Deactivate all currently active challenges
@@ -344,8 +965,8 @@ export const sendFriendRequest = functions.https.onCall(async (data, context) =>
       toUserId: targetUserId,
       toDisplayName: targetName,
       status: 'pending',
-      createdAt: outgoingSnapshot.data()?.createdAt ?? admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: outgoingSnapshot.data()?.createdAt ?? FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     return 'pending';
   });
@@ -384,13 +1005,13 @@ export const respondToFriendRequest = functions.https.onCall(async (data, contex
       if (!senderSnapshot.exists || !recipientSnapshot.exists) {
         throw new functions.https.HttpsError('not-found', 'A friend profile is no longer available.');
       }
-      transaction.set(senderRef, { friendIds: admin.firestore.FieldValue.arrayUnion(userId) }, { merge: true });
-      transaction.set(recipientRef, { friendIds: admin.firestore.FieldValue.arrayUnion(request.fromUserId) }, { merge: true });
+      transaction.set(senderRef, { friendIds: FieldValue.arrayUnion(userId) }, { merge: true });
+      transaction.set(recipientRef, { friendIds: FieldValue.arrayUnion(request.fromUserId) }, { merge: true });
     }
 
     transaction.update(requestRef, {
       status: decision,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     return { status: decision as 'accepted' | 'declined' };
   });
@@ -411,10 +1032,10 @@ export const removeFriendConnection = functions.https.onCall(async (data, contex
   const firestore = admin.firestore();
   const batch = firestore.batch();
   batch.set(firestore.collection('users').doc(userId), {
-    friendIds: admin.firestore.FieldValue.arrayRemove(friendUserId),
+    friendIds: FieldValue.arrayRemove(friendUserId),
   }, { merge: true });
   batch.set(firestore.collection('users').doc(friendUserId), {
-    friendIds: admin.firestore.FieldValue.arrayRemove(userId),
+    friendIds: FieldValue.arrayRemove(userId),
   }, { merge: true });
   batch.delete(firestore.collection('friendRequests').doc(friendRequestIdFor(userId, friendUserId)));
   batch.delete(firestore.collection('friendRequests').doc(friendRequestIdFor(friendUserId, userId)));
@@ -499,7 +1120,10 @@ export const onSquadMemberJoined = functions.firestore
   .document('squadMemberships/{membershipId}')
   .onCreate(async (snap) => {
     const membership = snap.data();
-    if (!membership.isActive) return null;
+    if (
+      (membership.membershipStatus !== 'active' && membership.isActive !== true)
+      || membership.notificationEligible === false
+    ) return null;
 
     const db = admin.firestore();
     const messaging = admin.messaging();
@@ -522,8 +1146,8 @@ export const onSquadMemberJoined = functions.firestore
     await messaging.sendEachForMulticast({
       tokens,
       notification: {
-        title: `New member in ${squad.name}! 👥`,
-        body: `Someone just joined your squad`,
+        title: `New member in ${squad.venueName ?? squad.name ?? 'your Squad'}`,
+        body: `${squad.sportDisplayName ?? squad.sport ?? 'A parent'} joined this Squad.`,
       },
       data: { type: 'squad_member_joined', squadId: membership.squadId },
     });
@@ -533,8 +1157,7 @@ export const onSquadMemberJoined = functions.firestore
 // ---------------------------------------------------------------------------
 // 2. deactivateInactiveMembers
 //    Runs daily at 02:00 UTC.
-//    Finds squadMembership records where lastActiveAt is older than 24 hours
-//    and sets isActive = false (batch writes in chunks of 500).
+//    Marks recent presence as away after 24 hours. It never ends membership.
 // ---------------------------------------------------------------------------
 
 export const deactivateInactiveMembers = functions.pubsub
@@ -546,12 +1169,12 @@ export const deactivateInactiveMembers = functions.pubsub
     const snapshot = await admin
       .firestore()
       .collection('squadMemberships')
-      .where('isActive', '==', true)
-      .where('lastActiveAt', '<', cutoff)
+      .where('membershipStatus', '==', 'active')
+      .where('lastSeenAt', '<', new Date(cutoff))
       .get();
 
     if (snapshot.empty) {
-      console.log('[deactivateInactiveMembers] No inactive memberships found.');
+      console.log('[deactivateInactiveMembers] No expired Squad presence found.');
       return null;
     }
 
@@ -563,12 +1186,21 @@ export const deactivateInactiveMembers = functions.pubsub
     for (let i = 0; i < docs.length; i += BATCH_LIMIT) {
       const chunk = docs.slice(i, i + BATCH_LIMIT);
       const batch = admin.firestore().batch();
-      chunk.forEach((doc) => batch.update(doc.ref, { isActive: false }));
-      await batch.commit();
+      let writes = 0;
+      chunk.forEach((doc) => {
+        if (doc.data().presenceStatus !== 'away') {
+          batch.update(doc.ref, {
+            presenceStatus: 'away',
+            presenceUpdatedAt: FieldValue.serverTimestamp(),
+          });
+          writes += 1;
+        }
+      });
+      if (writes > 0) await batch.commit();
       processed += chunk.length;
     }
 
-    console.log(`[deactivateInactiveMembers] Deactivated ${processed} memberships.`);
+    console.log(`[deactivateInactiveMembers] Reviewed ${processed} expired presence records.`);
     return null;
   });
 
@@ -580,57 +1212,177 @@ export const deactivateInactiveMembers = functions.pubsub
 //    function that game clients invoke on completion instead.
 // ---------------------------------------------------------------------------
 
-export const awardGameStars = functions.https.onCall(async (data) => {
-  const { sessionId, gameType, players } = data as {
-    sessionId: string;
-    gameType: string;
-    players: Record<string, { score: number; displayName: string }>;
-  };
+// awardGameStars was intentionally removed. It accepted arbitrary target UIDs
+// and client-provided scores without authentication or idempotency. The only
+// active game award entry point is finalizeGameReward below.
 
-  if (!sessionId || !gameType || !players) {
-    throw new functions.https.HttpsError('invalid-argument', 'Missing required fields.');
+export const createGameRewardSession = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in before starting a rewarded game.');
+  const gameType = readLocalRewardGameType(data?.gameType);
+  const requestedSessionId = data?.sessionId == null ? null : readGameSessionId(data.sessionId);
+  const requestedSourceSquadId = data?.sourceSquadId == null ? null : readCallableSquadId(data.sourceSquadId);
+  let sourceSquadId = requestedSourceSquadId;
+
+  if (requestedSessionId) {
+    const realtimeSnapshot = await admin.database().ref(`/gameSessions/${requestedSessionId}`).once('value');
+    if (!realtimeSnapshot.exists()) {
+      throw new functions.https.HttpsError('failed-precondition', 'The multiplayer game session was not found.');
+    }
+    const realtimeSession = realtimeSnapshot.val() as Record<string, unknown>;
+    const expectedLegacyType = gameType === 'spotDifferences' ? 'spot_difference' : 'bomb_defusal';
+    const participants = realtimeSession.players as Record<string, unknown> | undefined;
+    if (realtimeSession.gameType !== expectedLegacyType || !participants?.[uid]) {
+      throw new functions.https.HttpsError('permission-denied', 'You are not a participant in this game session.');
+    }
+    sourceSquadId = typeof realtimeSession.squadId === 'string' ? realtimeSession.squadId : sourceSquadId;
   }
+  if (sourceSquadId && !await hasDurableSquadMembership(uid, sourceSquadId)) sourceSquadId = null;
 
-  const STARS_PER_GAME: Record<string, number> = {
-    bomb_defusal: 300,
-    spot_difference: 200,
-    trivia_blitz: 150,
-  };
+  const sessionId = requestedSessionId ?? `solo_${randomBytes(18).toString('base64url')}`;
+  const sessionRef = admin.firestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
+  const result = await admin.firestore().runTransaction(async (transaction) => {
+    const existing = await transaction.get(sessionRef);
+    if (existing.exists) {
+      const participantIds = readStringArray(existing.data()?.participantIds);
+      if (existing.data()?.gameType !== gameType || (!requestedSessionId && !participantIds.includes(uid))) {
+        throw new functions.https.HttpsError('permission-denied', 'This game session is unavailable.');
+      }
+      if (!participantIds.includes(uid)) {
+        transaction.update(sessionRef, {
+          participantIds: [...participantIds, uid],
+          updatedAt: Timestamp.now(),
+        });
+      }
+      return { sessionId, sourceSquadId: existing.data()?.sourceSquadId ?? null };
+    }
+    const timestamp = Timestamp.now();
+    transaction.create(sessionRef, {
+      sessionId,
+      gameType,
+      participantIds: [uid],
+      sourceSquadId: sourceSquadId ?? null,
+      mode: requestedSessionId ? 'multiplayer' : 'solo',
+      status: 'active',
+      expectedTotal: gameType === 'spotDifferences' ? 10 : 5,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    return { sessionId, sourceSquadId: sourceSquadId ?? null };
+  });
+  console.info('[createGameRewardSession] completed', { gameType, mode: requestedSessionId ? 'multiplayer' : 'solo' });
+  return result;
+});
 
-  const starsBase = STARS_PER_GAME[gameType] ?? 150;
-  const db = admin.firestore();
-  const batch = db.batch();
+export const recordGameSessionResult = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to finish this game.');
+  const gameType = readLocalRewardGameType(data?.gameType);
+  const sessionId = readGameSessionId(data?.sessionId);
+  const sessionRef = admin.firestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
 
-  await Promise.all(
-    Object.entries(players).map(async ([userId, playerData]) => {
-      const userRef = db.collection('users').doc(userId);
-      const snap = await userRef.get();
-      if (!snap.exists) return;
-      const current = (snap.data()?.sidelineStars as number) ?? 0;
-      batch.update(userRef, {
-        sidelineStars: current + starsBase,
-        [`gameStats.${gameType}.gamesPlayed`]: admin.firestore.FieldValue.increment(1),
-        [`gameStats.${gameType}.totalScore`]: admin.firestore.FieldValue.increment(playerData.score),
-      });
+  return admin.firestore().runTransaction(async (transaction) => {
+    const sessionSnapshot = await transaction.get(sessionRef);
+    if (!sessionSnapshot.exists || !readStringArray(sessionSnapshot.data()?.participantIds).includes(uid)) {
+      throw new functions.https.HttpsError('permission-denied', 'You are not a participant in this game session.');
+    }
+    if (sessionSnapshot.data()?.status === 'completed') return { status: 'alreadyRecorded' as const };
+    const expectedTotal = sessionSnapshot.data()?.expectedTotal;
+    let finalizedResult: Record<string, unknown>;
+    if (gameType === 'spotDifferences') {
+      const outcome = data?.outcome;
+      const foundCount = data?.foundCount;
+      const totalDifferences = data?.totalDifferences;
+      const breakdown = calculateSpotDifferencesReward({ terminal: true, foundCount, totalDifferences });
+      if (
+        !breakdown || totalDifferences !== expectedTotal ||
+        !['completed', 'timeExpired'].includes(outcome) ||
+        (outcome === 'completed' && foundCount !== totalDifferences)
+      ) throw new functions.https.HttpsError('invalid-argument', 'The Spot the Differences result is invalid.');
+      finalizedResult = { outcome, foundCount, totalDifferences };
+    } else {
+      const outcome = data?.outcome;
+      const firstAttemptCorrectStepCount = data?.firstAttemptCorrectStepCount;
+      const totalSteps = data?.totalSteps;
+      const breakdown = calculateBombDefusalReward({ outcome, firstAttemptCorrectStepCount, totalSteps });
+      if (
+        !breakdown || totalSteps !== expectedTotal ||
+        (outcome === 'defused' && firstAttemptCorrectStepCount !== totalSteps)
+      ) throw new functions.https.HttpsError('invalid-argument', 'The Bomb Defusal result is invalid.');
+      finalizedResult = { outcome, firstAttemptCorrectStepCount, totalSteps };
+    }
+    transaction.update(sessionRef, {
+      status: 'completed',
+      finalizedResult,
+      finalizedAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    });
+    console.info('[recordGameSessionResult] completed', { gameType, outcome: finalizedResult.outcome });
+    return { status: 'recorded' as const };
+  });
+});
 
-      // Write activity entry
-      const activityRef = db.collection('activity').doc();
-      batch.set(activityRef, {
-        type: 'play_game',
-        userId,
-        displayName: playerData.displayName,
-        avatarUrl: null,
-        squadId: null,
-        message: `${playerData.displayName} played ${gameType.replace('_', ' ')}!`,
-        message_es: `${playerData.displayName} jugó ${gameType.replace('_', ' ')}!`,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-    })
-  );
+export const finalizeGameReward = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to receive Sideline Stars.');
+  const gameType = readRewardGameType(data?.gameType);
+  const sessionId = readGameSessionId(data?.sessionId);
+  const firestore = admin.firestore();
+  const userRef = firestore.collection('users').doc(uid);
+  const rewardId = gameRewardId(gameType, sessionId, uid);
+  const rewardRef = userRef.collection('rewardTransactions').doc(rewardId);
 
-  await batch.commit();
-  console.log(`[awardGameStars] Stars awarded for session ${sessionId}`);
-  return { success: true, starsAwarded: starsBase };
+  const result = await firestore.runTransaction(async (transaction) => {
+    const userSnapshot = await transaction.get(userRef);
+    const rewardSnapshot = await transaction.get(rewardRef);
+    if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
+    const currentStars = normalizeStars(userSnapshot.data()?.sidelineStars);
+    if (rewardSnapshot.exists) {
+      return {
+        status: 'alreadyAwarded' as const,
+        starsAwarded: normalizeStars(rewardSnapshot.data()?.amount ?? rewardSnapshot.data()?.points),
+        totalSidelineStars: currentStars,
+        breakdown: normalizeStoredBreakdown(rewardSnapshot.data()?.breakdown),
+      };
+    }
+
+    const eligibility = gameType === 'triviaBlitz'
+      ? await readTriviaRewardEligibility(transaction, sessionId, uid)
+      : await readLocalGameRewardEligibility(transaction, gameType, sessionId, uid);
+    if (!eligibility) {
+      return {
+        status: 'notEligible' as const,
+        starsAwarded: 0,
+        totalSidelineStars: currentStars,
+        breakdown: emptyRewardBreakdown(),
+      };
+    }
+    const amount = totalBreakdown(eligibility.breakdown);
+    const awardedAt = Timestamp.now();
+    const seasonEligibleSquadIds = await readSeasonEligibleSquadIds(transaction, uid);
+    transaction.update(userRef, {
+      sidelineStars: FieldValue.increment(amount),
+      updatedAt: awardedAt,
+    });
+    transaction.create(rewardRef, {
+      amount,
+      sourceType: 'game',
+      sourceId: sessionId,
+      gameType,
+      sourceSquadId: eligibility.sourceSquadId,
+      awardedAt,
+      seasonEligibleSquadIds,
+      breakdown: eligibility.breakdown,
+    });
+    return {
+      status: 'awarded' as const,
+      starsAwarded: amount,
+      totalSidelineStars: currentStars + amount,
+      breakdown: eligibility.breakdown,
+    };
+  });
+  console.info('[finalizeGameReward] completed', { gameType, rewardStatus: result.status, starsAmount: result.starsAwarded });
+  return result;
 });
 
 // ---------------------------------------------------------------------------
@@ -702,12 +1454,12 @@ export const getCurrentWeeklyChallenge = functions.https.onCall(async (data, con
       points: challenge.points,
       category: challenge.category,
       isActive: challenge.isActive,
-      assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+      assignedAt: FieldValue.serverTimestamp(),
       completed: false,
       completedAt: null,
       pointsAwarded: false,
       timezone,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     };
     transaction.create(assignmentRef, record);
     return record;
@@ -756,7 +1508,7 @@ export const completeWeeklyChallenge = functions.https.onCall(async (data, conte
         transaction.update(assignmentRef, {
           completed: true,
           pointsAwarded: true,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         });
       }
       return {
@@ -768,24 +1520,29 @@ export const completeWeeklyChallenge = functions.https.onCall(async (data, conte
       };
     }
 
-    const completedAt = admin.firestore.Timestamp.now();
+    const completedAt = Timestamp.now();
+    const seasonEligibleSquadIds = await readSeasonEligibleSquadIds(transaction, uid);
     transaction.update(assignmentRef, {
       completed: true,
       completedAt,
       pointsAwarded: true,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     transaction.update(userRef, {
-      sidelineStars: admin.firestore.FieldValue.increment(definition.points),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      sidelineStars: FieldValue.increment(WEEKLY_CHALLENGE_STARS),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     transaction.create(rewardRef, {
       transactionId: rewardId,
+      amount: WEEKLY_CHALLENGE_STARS,
+      sourceType: 'weeklyChallenge',
+      sourceId: weekKey,
       type: 'weekly_challenge',
       weekKey,
       challengeId: definition.id,
-      points: definition.points,
+      points: WEEKLY_CHALLENGE_STARS,
       awardedAt: completedAt,
+      seasonEligibleSquadIds,
     });
     const displayName = userSnapshot.data()?.displayName || 'Sideline Parent';
     transaction.set(activityRef, {
@@ -804,8 +1561,8 @@ export const completeWeeklyChallenge = functions.https.onCall(async (data, conte
     return {
       assignment: { ...assignment, completed: true, completedAt, pointsAwarded: true },
       alreadyCompleted: false,
-      pointsAwarded: definition.points,
-      sidelineStars: currentStars + definition.points,
+      pointsAwarded: WEEKLY_CHALLENGE_STARS,
+      sidelineStars: currentStars + WEEKLY_CHALLENGE_STARS,
       nextResetKey: currentWeek.nextWeekKey,
     };
   });
@@ -841,12 +1598,12 @@ export const registerDeviceNotificationToken = functions.https.onCall(async (dat
       uid,
       token,
       platform,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     }),
     // Remove the legacy profile fields if a development build ever wrote them.
     firestore.collection('users').doc(uid).set({
-      fcmToken: admin.firestore.FieldValue.delete(),
-      fcmTokenUpdatedAt: admin.firestore.FieldValue.delete(),
+      fcmToken: FieldValue.delete(),
+      fcmTokenUpdatedAt: FieldValue.delete(),
     }, { merge: true }),
   ]);
 
@@ -1198,7 +1955,7 @@ export const createTeamAnnouncementReply = functions.https.onCall(async (data, c
       displayName,
       body,
       replyType,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
   });
 
@@ -1348,27 +2105,27 @@ export const joinParentTeamByInviteCode = functions.https.onCall(async (data, co
       role: legacyRoleForMergedMembership(member?.role, roles),
       status: 'active',
       createdAt: memberSnapshot.exists
-        ? member?.createdAt ?? admin.firestore.FieldValue.serverTimestamp()
-        : admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ? member?.createdAt ?? FieldValue.serverTimestamp()
+        : FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
     transaction.set(linkRef, {
       teamId: teamRef.id,
       childIds: linkedChildIds,
       status: 'active',
       createdAt: linkSnapshot.exists
-        ? linkSnapshot.data()?.createdAt ?? admin.firestore.FieldValue.serverTimestamp()
-        : admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ? linkSnapshot.data()?.createdAt ?? FieldValue.serverTimestamp()
+        : FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
     transaction.update(teamRef, {
-      parentIds: admin.firestore.FieldValue.arrayUnion(uid),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      parentIds: FieldValue.arrayUnion(uid),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     transaction.set(userRef, {
       activeTeamId: teamRef.id,
-      parentTeamIds: admin.firestore.FieldValue.arrayUnion(teamRef.id),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      parentTeamIds: FieldValue.arrayUnion(teamRef.id),
+      updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
   });
 
@@ -1449,8 +2206,8 @@ export const setTeamStaffRole = functions.https.onCall(async (data, context) => 
       // Parent remains the primary legacy role. Explicit role flags retain the
       // additional staff permission without weakening older client behavior.
       role: 'parent',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      staffRoleUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      staffRoleUpdatedAt: FieldValue.serverTimestamp(),
       staffRoleUpdatedBy: uid,
     });
 
@@ -1510,18 +2267,18 @@ export const setParentTeamChildLinks = functions.https.onCall(async (data, conte
       throw new functions.https.HttpsError('permission-denied', 'Every selected child profile must belong to this account.');
     }
     transaction.update(memberRef, {
-      childId: admin.firestore.FieldValue.delete(),
-      childName: admin.firestore.FieldValue.delete(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      childId: FieldValue.delete(),
+      childName: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     transaction.set(linkRef, {
       teamId,
       childIds,
       status: childIds.length > 0 ? 'active' : 'inactive',
       createdAt: linkSnapshot.exists
-        ? linkSnapshot.data()?.createdAt ?? admin.firestore.FieldValue.serverTimestamp()
-        : admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ? linkSnapshot.data()?.createdAt ?? FieldValue.serverTimestamp()
+        : FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
   });
   return { childIds };
@@ -1565,33 +2322,33 @@ export const leaveParentTeam = functions.https.onCall(async (data, context) => {
       roles: nextMembership.roles,
       role: nextMembership.role,
       status: nextMembership.status,
-      childId: admin.firestore.FieldValue.delete(),
-      childName: admin.firestore.FieldValue.delete(),
-      parentLeftAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      childId: FieldValue.delete(),
+      childName: FieldValue.delete(),
+      parentLeftAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     transaction.set(linkRef, {
       teamId,
       childIds: [],
       status: 'inactive',
       createdAt: linkSnapshot.exists
-        ? linkSnapshot.data()?.createdAt ?? admin.firestore.FieldValue.serverTimestamp()
-        : admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ? linkSnapshot.data()?.createdAt ?? FieldValue.serverTimestamp()
+        : FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
     transaction.update(teamRef, {
-      parentIds: admin.firestore.FieldValue.arrayRemove(uid),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      parentIds: FieldValue.arrayRemove(uid),
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     const userUpdate: Record<string, unknown> = {
-      parentTeamIds: admin.firestore.FieldValue.arrayRemove(teamId),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      parentTeamIds: FieldValue.arrayRemove(teamId),
+      updatedAt: FieldValue.serverTimestamp(),
     };
     if (nextMembership.status === 'active') {
-      userUpdate.coachTeamIds = admin.firestore.FieldValue.arrayUnion(teamId);
+      userUpdate.coachTeamIds = FieldValue.arrayUnion(teamId);
     } else if (userSnapshot.data()?.activeTeamId === teamId) {
-      userUpdate.activeTeamId = admin.firestore.FieldValue.delete();
+      userUpdate.activeTeamId = FieldValue.delete();
     }
     transaction.set(userRef, userUpdate, { merge: true });
 
@@ -1653,17 +2410,17 @@ export const setTeamArchived = functions.https.onCall(async (data, context) => {
     if (archived) {
       transaction.update(teamRef, {
         status: 'archived',
-        archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+        archivedAt: FieldValue.serverTimestamp(),
         archivedBy: uid,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       });
     } else {
       transaction.update(teamRef, {
         status: 'active',
         inviteCode: replacementInviteCode,
-        restoredAt: admin.firestore.FieldValue.serverTimestamp(),
+        restoredAt: FieldValue.serverTimestamp(),
         restoredBy: uid,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       });
     }
 
@@ -1709,7 +2466,7 @@ export const deleteChildProfile = functions.https.onCall(async (data, context) =
         : 0)) {
         transaction.update(linkDocument.ref, {
           childIds: nextChildIds,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         });
       }
     });
@@ -1737,7 +2494,7 @@ async function generateAvailableTeamInviteCode(
 }
 
 function serializeWeeklyChallenge(data: FirebaseFirestore.DocumentData, nextResetKey: string) {
-  const completedAt = data.completedAt instanceof admin.firestore.Timestamp
+  const completedAt = data.completedAt instanceof Timestamp
     ? data.completedAt.toDate().toISOString()
     : null;
   return {
@@ -1745,7 +2502,7 @@ function serializeWeeklyChallenge(data: FirebaseFirestore.DocumentData, nextRese
     challengeId: data.challengeId,
     title: data.title,
     description: data.description,
-    points: data.points,
+    points: WEEKLY_CHALLENGE_STARS,
     category: data.category,
     completed: data.completed === true,
     completedAt,

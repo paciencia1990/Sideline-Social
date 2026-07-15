@@ -65,6 +65,7 @@ export async function scoreSessionAnswer(
       totalPoints: increment(pointsAwarded),
       teamStreak: nextTeamStreak,
       correctAnswers: correct ? increment(1) : session.correctAnswers ?? 0,
+      answeredQuestions: increment(1),
       selectionRevealed: true,
       updatedAt: serverTimestamp(),
     });
