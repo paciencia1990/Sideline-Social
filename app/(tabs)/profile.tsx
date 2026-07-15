@@ -151,13 +151,24 @@ export default function ProfileScreen() {
         <Card style={styles.card}>
           <Text style={styles.name}>{user?.displayName || t("profile.defaultName")}</Text>
           <Text style={styles.email}>{user?.email || t("profile.notSignedIn")}</Text>
-          <PrimaryButton
-            disabled={isSigningOut}
-            loading={isSigningOut}
-            onPress={handleSignOut}
-            title={t("profile.signOut")}
-          />
-          {signOutError ? <Text style={styles.signOutError}>{signOutError}</Text> : null}
+        </Card>
+
+        <Card style={styles.languageCard}>
+          <View style={styles.languageCopy}>
+            <Text style={styles.cardTitle}>{t("mode.viewingParent")}</Text>
+            <Text style={styles.cardText}>{hasCoachRole ? t("coach.home.modeHelp") : t("coach.home.noCoachRole")}</Text>
+          </View>
+          {modeError ? <Text style={styles.modeError}>{modeError}</Text> : null}
+          <View style={styles.modeActions}>
+            <TouchableOpacity
+              activeOpacity={0.86}
+              disabled={isSwitchingMode}
+              onPress={handleCoachPress}
+              style={flattenStyle([styles.modePrimaryButton, isSwitchingMode && styles.modeDisabledButton])}
+            >
+              <Text style={styles.modePrimaryText}>{t("mode.switchToCoach")}</Text>
+            </TouchableOpacity>
+          </View>
         </Card>
 
         <View style={styles.sectionHeader}>
@@ -227,23 +238,15 @@ export default function ProfileScreen() {
           </View>
         </Card>
 
-        <Card style={styles.languageCard}>
-          <View style={styles.languageCopy}>
-            <Text style={styles.cardTitle}>{t("mode.viewingParent")}</Text>
-            <Text style={styles.cardText}>{hasCoachRole ? t("coach.home.modeHelp") : t("coach.home.noCoachRole")}</Text>
-          </View>
-          {modeError ? <Text style={styles.modeError}>{modeError}</Text> : null}
-          <View style={styles.modeActions}>
-            <TouchableOpacity
-              activeOpacity={0.86}
-              disabled={isSwitchingMode}
-              onPress={handleCoachPress}
-              style={flattenStyle([styles.modePrimaryButton, isSwitchingMode && styles.modeDisabledButton])}
-            >
-              <Text style={styles.modePrimaryText}>{t("mode.switchToCoach")}</Text>
-            </TouchableOpacity>
-          </View>
-        </Card>
+        <View style={styles.signOutSection}>
+          <PrimaryButton
+            disabled={isSigningOut}
+            loading={isSigningOut}
+            onPress={handleSignOut}
+            title={t("profile.signOut")}
+          />
+          {signOutError ? <Text style={styles.signOutError}>{signOutError}</Text> : null}
+        </View>
       </ScrollView>
     </ScreenWrapper>
   );
@@ -257,6 +260,7 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: Spacing.lg,
+    paddingBottom: Spacing.xl,
     gap: Spacing.md,
   },
   title: {
@@ -280,6 +284,10 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontFamily: Typography.bodySemiBold,
     lineHeight: 20,
+  },
+  signOutSection: {
+    gap: Spacing.sm,
+    marginTop: Spacing.lg,
   },
   sectionHeader: {
     marginTop: Spacing.xs,
