@@ -23,6 +23,11 @@ module.exports = ({ config }) => ({
   android: {
     package: "com.sidelinesquad.app",
     googleServicesFile: "./google-services.json",
+    config: {
+      googleMaps: {
+        apiKey: process.env.GOOGLE_MAPS_API_KEY,
+      },
+    },
     adaptiveIcon: {
       foregroundImage: "./assets/images/adaptive-icon.png",
       backgroundColor: "#ffffff",
