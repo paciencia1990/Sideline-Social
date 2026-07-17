@@ -49,7 +49,7 @@ const coachComposer = read("app", "coach", "messages.tsx");
 const privateThread = read("components", "PrivateTeamMessageThread.tsx");
 const rules = read("firestore.rules");
 const storageRules = read("storage.rules");
-for (const required of ["Audio.requestPermissionsAsync", "MAX_DURATION_MS = 90_000", "MAX_SIZE_BYTES = 2 * 1024 * 1024", "AppState.addEventListener", "previewed: false", "deleteLocalVoiceMemo"]) assert.equal(recorder.includes(required), true, required);
+for (const required of ["ensureVoiceRecordingPermission(Audio)", "MAX_DURATION_MS = 90_000", "MAX_SIZE_BYTES = 2 * 1024 * 1024", "AppState.addEventListener", "previewed: false", "deleteLocalVoiceMemo"]) assert.equal(recorder.includes(required), true, required);
 assert.equal(recorder.includes('from "expo-av"'), false, "expo-av must load only after native capability detection");
 assert.equal(player.includes('from "expo-av"'), false, "announcement surfaces must remain safe in old binaries");
 assert.equal(player.includes("shouldPlay: true"), true);

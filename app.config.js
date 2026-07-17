@@ -23,6 +23,7 @@ module.exports = ({ config }) => ({
   android: {
     package: "com.sidelinesquad.app",
     googleServicesFile: "./google-services.json",
+    permissions: ["android.permission.RECORD_AUDIO"],
     config: {
       googleMaps: {
         apiKey: process.env.GOOGLE_MAPS_API_KEY,

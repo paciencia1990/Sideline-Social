@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Mic, RotateCcw, Trash2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
@@ -7,6 +7,7 @@ import { VoiceMemoPlayer } from "@/components/VoiceMemoPlayer";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo, getLocalVoiceMemoSize } from "@/services/voiceMemoFileService";
+import { ensureVoiceRecordingPermission } from "@/services/voiceMemoPermissionService";
 import { stopVoicePlayback } from "@/services/voiceMemoAudioService";
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
 
@@ -53,6 +54,7 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
   const recordingRef = useRef<InstanceType<typeof Audio.Recording> | null>(null);
   const draftRef = useRef<LocalVoiceMemoDraft | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const permissionRequestInFlight = useRef(false);
   const startedAt = useRef(0);
   const [draft, setDraft] = useState<LocalVoiceMemoDraft | null>(null);
   const [recording, setRecording] = useState(false);
@@ -99,12 +101,29 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
   }, [Audio, clearTimer, onChange, t]);
 
   const startRecording = useCallback(async () => {
-    if (!active || disabled || recordingRef.current) return;
+    if (!active || disabled || recordingRef.current || permissionRequestInFlight.current) return;
+    permissionRequestInFlight.current = true;
     setError(null);
     try {
       await stopVoicePlayback();
-      const permission = await Audio.requestPermissionsAsync();
-      if (!permission.granted) {
+      const permission = await ensureVoiceRecordingPermission(Audio);
+      if (permission === "settings") {
+        Alert.alert(
+          t("voiceMemo.permissionRequiredTitle"),
+          t("voiceMemo.permissionRequiredBody"),
+          [
+            { text: t("common.cancel"), style: "cancel" },
+            {
+              text: t("voiceMemo.openSettings"),
+              onPress: () => {
+                void Linking.openSettings().catch(() => setError(t("voiceMemo.permissionDenied")));
+              },
+            },
+          ],
+        );
+        return;
+      }
+      if (permission !== "granted") {
         setError(t("voiceMemo.permissionDenied"));
         return;
       }
@@ -151,6 +170,8 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
     } catch (nextError) {
       console.warn("[VoiceMemoComposer] start error", getErrorCode(nextError));
       setError(t("voiceMemo.recordingError"));
+    } finally {
+      permissionRequestInFlight.current = false;
     }
   }, [Audio, InterruptionModeAndroid.DoNotMix, InterruptionModeIOS.DoNotMix, active, disabled, finishRecording, t]);
 
