@@ -50,7 +50,15 @@ export default function CoachTeamMessagesInboxScreen() {
         <CoachResourceHeader accessibilityLabel={t("teamMessages.back")} onBack={navigateBack} subtitle={t("teamMessages.inboxSubtitle")} title={t("teamMessages.title")} />
         {loading ? <ActivityIndicator color={Colors.primary} /> : null}
         {error ? <Card><Text style={styles.empty}>{t("teamMessages.loadError")}</Text></Card> : null}
-        {!loading && !error && conversations.length === 0 ? <Card><Text style={styles.empty}>{t("teamMessages.inboxEmpty")}</Text></Card> : null}
+        {!loading && !error && conversations.length === 0 ? (
+          <Card style={styles.emptyCard}>
+            <Text style={styles.emptyTitle}>{t("teamMessages.inboxEmptyTitle")}</Text>
+            <Text style={styles.empty}>{t("teamMessages.inboxEmptyBody")}</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/coach/team" as never)} style={styles.viewTeamButton}>
+              <Text style={styles.viewTeamText}>{t("teamMessages.viewTeam")}</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : null}
         {conversations.map((conversation) => (
           <TouchableOpacity accessibilityRole="button" key={conversation.conversationId} onPress={() => router.push(`/coach/team-messages/${conversation.conversationId}` as never)}>
             <Card style={styles.row}>
@@ -105,5 +113,9 @@ const styles = StyleSheet.create({
   chevron: { position: "absolute", right: Spacing.md, top: Spacing.lg },
   loadMore: { alignItems: "center", justifyContent: "center", minHeight: 44 },
   loadMoreText: { color: Colors.primary, fontFamily: Typography.bodyBold },
+  emptyCard: { alignItems: "center", gap: Spacing.md },
+  emptyTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 18, textAlign: "center" },
   empty: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, textAlign: "center" },
+  viewTeamButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.lg },
+  viewTeamText: { color: Colors.surface, fontFamily: Typography.bodyBold },
 });

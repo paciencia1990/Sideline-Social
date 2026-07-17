@@ -32,6 +32,7 @@ import {
 import { formatPublicUserName } from "@/utils/friendPrivacy";
 import { getTeamPrivateMessageInbox } from "@/services/teamPrivateMessageService";
 import type { StoredVoiceMemo, TeamPrivateConversation } from "@/types/teamVoiceMessaging";
+import { resolveAnnouncementContentType } from "@/utils/teamAnnouncementCore";
 
 export type ParentTeamAnnouncement = TeamAnnouncement & {
   createdAtDate: Date | null;
@@ -260,6 +261,7 @@ async function resolveCoachName(team: Team): Promise<string | null> {
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): ParentTeamAnnouncement {
   const voice = data.voiceMemo && typeof data.voiceMemo === "object" ? data.voiceMemo as Record<string, unknown> : null;
+  const contentType = resolveAnnouncementContentType(data.contentType, voice);
   return {
     id,
     title: readString(data.title) ?? "",
@@ -268,8 +270,8 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): Paren
     createdByName: formatPublicUserName(readString(data.createdByName)) ?? "",
     audience: data.audience === "staff" || data.audience === "all" ? data.audience : "parents",
     allowReplies: data.allowReplies !== false,
-    contentType: data.contentType === "voice" && voice ? "voice" : "text",
-    voiceMemo: voice ? {
+    contentType,
+    voiceMemo: contentType === "voice" && voice ? {
       storagePath: readString(voice.storagePath) ?? "",
       durationMilliseconds: Number(voice.durationMilliseconds ?? 0),
       sizeBytes: Number(voice.sizeBytes ?? 0),

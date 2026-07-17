@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
-import * as FileSystem from "expo-file-system";
 import { useTranslation } from "react-i18next";
 
 import { VoiceMemoComposer } from "@/components/VoiceMemoComposer";
@@ -19,6 +18,8 @@ import {
   sendPrivateTeamTextMessage,
   uploadReservedVoiceMemo,
 } from "@/services/teamPrivateMessageService";
+import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
+import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import type { LocalVoiceMemoDraft, TeamPrivateConversation, TeamPrivateMessage } from "@/types/teamVoiceMessaging";
 
 export function PrivateTeamMessageThread({ conversationId, role }: { conversationId: string; role: "coach" | "parent" }) {
@@ -34,6 +35,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [sendPhase, setSendPhase] = useState<"uploading" | "finalizing" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const voiceAudioAvailable = isTeamVoiceAudioAvailable();
   const clientId = useRef(createClientMessageId());
   const uploadCancel = useRef<(() => boolean) | null>(null);
   const sendInFlight = useRef(false);
@@ -93,7 +95,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
       await upload.completion;
       setSendPhase("finalizing");
       await finalizePrivateVoiceMessage(reservation.reservationId);
-      await FileSystem.deleteAsync(voiceDraft.uri, { idempotent: true });
+      await deleteLocalVoiceMemo(voiceDraft.uri);
       setCaption("");
       setVoiceDraft(null);
       setVoiceComposerKey((value) => value + 1);
@@ -143,16 +145,17 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
         <Card style={styles.composer}>
           <View accessibilityRole="tablist" style={styles.tabs}>
             {(["text", "voice"] as const).map((nextMode) => (
-              <TouchableOpacity accessibilityRole="tab" accessibilityState={{ selected: mode === nextMode }} key={nextMode} onPress={() => setMode(nextMode)} style={[styles.tab, mode === nextMode && styles.tabActive]}>
+              <TouchableOpacity accessibilityRole="tab" accessibilityState={{ disabled: nextMode === "voice" && !voiceAudioAvailable, selected: mode === nextMode }} disabled={nextMode === "voice" && !voiceAudioAvailable} key={nextMode} onPress={() => setMode(nextMode)} style={[styles.tab, mode === nextMode && styles.tabActive, nextMode === "voice" && !voiceAudioAvailable && styles.disabled]}>
                 <Text style={[styles.tabText, mode === nextMode && styles.tabTextActive]}>{t(`teamMessages.${nextMode}Mode`)}</Text>
               </TouchableOpacity>
             ))}
           </View>
+          {!voiceAudioAvailable ? <Text accessibilityLiveRegion="polite" style={styles.error}>{t("voiceMemo.updatedBuildRequired")}</Text> : null}
           {mode === "text" ? <TextInput maxLength={2000} multiline onChangeText={setText} placeholder={t("teamMessages.messagePlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={text} /> : null}
-          <View style={mode === "voice" ? undefined : styles.hidden}>
+          {voiceAudioAvailable ? <View style={mode === "voice" ? undefined : styles.hidden}>
             <VoiceMemoComposer active={mode === "voice"} disabled={sending} key={voiceComposerKey} onChange={setVoiceDraft} uploadProgress={uploadProgress} />
             <TextInput maxLength={500} multiline onChangeText={setCaption} placeholder={t("teamMessages.captionPlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={caption} />
-          </View>
+          </View> : null}
           {sendPhase === "finalizing" ? <Text accessibilityLiveRegion="polite" style={styles.cancel}>{t("voiceMemo.finalizing")}</Text> : null}
           <TouchableOpacity accessibilityRole="button" disabled={sending || (mode === "text" ? !text.trim() : !voiceDraft)} onPress={mode === "text" ? sendText : sendVoice} style={[styles.send, (sending || (mode === "text" ? !text.trim() : !voiceDraft)) && styles.disabled]}>
             {sending ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.sendText}>{t("teamMessages.send")}</Text>}

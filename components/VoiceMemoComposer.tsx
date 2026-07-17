@@ -1,26 +1,56 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from "expo-av";
-import * as FileSystem from "expo-file-system";
 import { Mic, RotateCcw, Trash2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { VoiceMemoPlayer } from "@/components/VoiceMemoPlayer";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
+import { deleteLocalVoiceMemo, getLocalVoiceMemoSize } from "@/services/voiceMemoFileService";
 import { stopVoicePlayback } from "@/services/voiceMemoAudioService";
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
 
 const MAX_DURATION_MS = 90_000;
 const MAX_SIZE_BYTES = 2 * 1024 * 1024;
 
-export function VoiceMemoComposer({ active = true, disabled = false, onChange, uploadProgress }: {
+type Props = {
   active?: boolean;
   disabled?: boolean;
   onChange: (draft: LocalVoiceMemoDraft | null) => void;
   uploadProgress?: number | null;
-}) {
+};
+
+type ExpoAvModule = typeof import("expo-av");
+
+export function VoiceMemoComposer(props: Props) {
   const { t } = useTranslation();
-  const recordingRef = useRef<Audio.Recording | null>(null);
+  const audioAvailable = isTeamVoiceAudioAvailable();
+  const [audioModule, setAudioModule] = useState<ExpoAvModule | null>(null);
+
+  useEffect(() => {
+    if (!audioAvailable) return;
+    let mounted = true;
+    Promise.resolve().then(() => require("expo-av") as ExpoAvModule).then((module) => {
+      if (mounted) setAudioModule(module);
+    }).catch(() => {
+      if (mounted) setAudioModule(null);
+    });
+    return () => { mounted = false; };
+  }, [audioAvailable]);
+
+  if (!audioAvailable) {
+    return <Text accessibilityLiveRegion="polite" style={styles.help}>{t("voiceMemo.updatedBuildRequired")}</Text>;
+  }
+  if (!audioModule) {
+    return <ActivityIndicator accessibilityLabel={t("common.loading")} color={Colors.primary} size="small" />;
+  }
+  return <VoiceMemoComposerAvailable {...props} audioModule={audioModule} />;
+}
+
+function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = false, onChange, uploadProgress }: Props & { audioModule: ExpoAvModule }) {
+  const { t } = useTranslation();
+  const { Audio, InterruptionModeAndroid, InterruptionModeIOS } = audioModule;
+  const recordingRef = useRef<InstanceType<typeof Audio.Recording> | null>(null);
   const draftRef = useRef<LocalVoiceMemoDraft | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAt = useRef(0);
@@ -45,10 +75,9 @@ export function VoiceMemoComposer({ active = true, disabled = false, onChange, u
       const status = await active.getStatusAsync();
       const uri = active.getURI();
       if (!uri || !status.durationMillis || status.durationMillis < 500) throw new Error("recording_too_short");
-      const info = await FileSystem.getInfoAsync(uri, { size: true });
-      const sizeBytes = info.exists && "size" in info ? Number(info.size ?? 0) : 0;
+      const sizeBytes = await getLocalVoiceMemoSize(uri);
       if (sizeBytes < 1 || sizeBytes > MAX_SIZE_BYTES) {
-        await FileSystem.deleteAsync(uri, { idempotent: true });
+        await deleteLocalVoiceMemo(uri);
         throw new Error("voice_file_too_large");
       }
       const next: LocalVoiceMemoDraft = {
@@ -67,7 +96,7 @@ export function VoiceMemoComposer({ active = true, disabled = false, onChange, u
     } finally {
       await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
     }
-  }, [clearTimer, onChange, t]);
+  }, [Audio, clearTimer, onChange, t]);
 
   const startRecording = useCallback(async () => {
     if (!active || disabled || recordingRef.current) return;
@@ -123,10 +152,10 @@ export function VoiceMemoComposer({ active = true, disabled = false, onChange, u
       console.warn("[VoiceMemoComposer] start error", getErrorCode(nextError));
       setError(t("voiceMemo.recordingError"));
     }
-  }, [active, disabled, finishRecording, t]);
+  }, [Audio, InterruptionModeAndroid.DoNotMix, InterruptionModeIOS.DoNotMix, active, disabled, finishRecording, t]);
 
   const removeDraft = useCallback(async () => {
-    if (draft?.uri) await FileSystem.deleteAsync(draft.uri, { idempotent: true });
+    if (draft?.uri) await deleteLocalVoiceMemo(draft.uri);
     setDraft(null);
     draftRef.current = null;
     onChange(null);
@@ -146,7 +175,7 @@ export function VoiceMemoComposer({ active = true, disabled = false, onChange, u
   useEffect(() => () => {
     clearTimer();
     if (recordingRef.current) void recordingRef.current.stopAndUnloadAsync();
-    if (draftRef.current?.uri) void FileSystem.deleteAsync(draftRef.current.uri, { idempotent: true });
+    if (draftRef.current?.uri) void deleteLocalVoiceMemo(draftRef.current.uri);
   }, [clearTimer]);
 
   return (

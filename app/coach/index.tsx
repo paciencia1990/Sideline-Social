@@ -19,6 +19,8 @@ import {
   switchActiveMode,
   type TeamMembership,
 } from "@/services/teamService";
+import { getTeamPrivateMessageInboxPage } from "@/services/teamPrivateMessageService";
+import { shouldShowPrivateMessagesCard, type PrivateInboxLoadState } from "@/utils/coachCommunicationCore";
 
 export default function CoachHomeScreen() {
   const { t } = useTranslation();
@@ -29,6 +31,11 @@ export default function CoachHomeScreen() {
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [restoringTeamId, setRestoringTeamId] = useState<string | null>(null);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  const [privateInbox, setPrivateInbox] = useState<{
+    conversationCount: number;
+    loadState: PrivateInboxLoadState;
+    unreadCount: number;
+  }>({ conversationCount: 0, loadState: "loading", unreadCount: 0 });
 
   const loadTeams = useCallback(async () => {
     setLoading(true);
@@ -57,6 +64,26 @@ export default function CoachHomeScreen() {
     membership.team?.status === "archived" &&
     canManageTeamRoles(membership, membership.team),
   );
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      setPrivateInbox((current) => ({ ...current, loadState: "loading" }));
+      void getTeamPrivateMessageInboxPage("coach", undefined, 0, 50).then((page) => {
+        if (!active) return;
+        setPrivateInbox({
+          conversationCount: page.conversations.length,
+          loadState: "loaded",
+          unreadCount: page.conversations.reduce((total, conversation) => total + conversation.unreadCount, 0),
+        });
+      }).catch((nextError) => {
+        if (!active) return;
+        console.info("[CoachHome] private inbox unavailable", { code: getErrorCode(nextError) });
+        setPrivateInbox({ conversationCount: 0, loadState: "error", unreadCount: 0 });
+      });
+      return () => { active = false; };
+    }, []),
+  );
   const parentTeams = memberships.filter((membership) =>
     hasTeamRole(membership, "parent") && isTeamActive(membership.team),
   );
@@ -65,6 +92,7 @@ export default function CoachHomeScreen() {
   const hasTeams = coachTeams.length > 0;
   const teamSectionTitle = hasTeams ? t("coach.home.addTeam") : t("coach.home.getStarted");
   const teamActionLabel = hasTeams ? t("coach.home.addTeam") : t("coach.team.createTeam");
+  const showPrivateMessages = shouldShowPrivateMessagesCard(privateInbox);
 
   useEffect(() => {
     if (!__DEV__ || loading || activeMode !== "coach") return;
@@ -186,9 +214,9 @@ export default function CoachHomeScreen() {
                   <Text maxFontSizeMultiplier={1.4} style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
                 </View>
                 <View style={styles.quickGrid}>
-                  <QuickAction label={t("coach.home.sendMessage")} Icon={MessageCircle} onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: selectedTeam.id } } as never)} />
-                  <QuickAction label={t("teamMessages.title")} Icon={MessagesSquare} onPress={() => router.push("/coach/team-messages" as never)} />
                   <QuickAction label={t("coach.home.viewTeam")} Icon={Users} onPress={() => router.push({ pathname: "/coach/team", params: { teamId: selectedTeam.id } } as never)} />
+                  <QuickAction label={t("coach.home.sendMessage")} Icon={MessageCircle} onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: selectedTeam.id } } as never)} />
+                  {showPrivateMessages ? <QuickAction badge={privateInbox.unreadCount > 0 ? t("teamMessages.unread", { count: privateInbox.unreadCount }) : undefined} label={t("teamMessages.title")} Icon={MessagesSquare} onPress={() => router.push("/coach/team-messages" as never)} /> : null}
                   <QuickAction label={t("coach.home.resources")} Icon={Shield} onPress={() => router.push("/coach/resources" as never)} />
                 </View>
               </Card>
@@ -246,11 +274,12 @@ export default function CoachHomeScreen() {
   );
 }
 
-function QuickAction({ Icon, label, onPress }: { Icon: LucideIcon; label: string; onPress: () => void }) {
+function QuickAction({ Icon, badge, label, onPress }: { Icon: LucideIcon; badge?: string; label: string; onPress: () => void }) {
   return (
     <TouchableOpacity activeOpacity={0.86} onPress={onPress} style={styles.quickAction}>
       <Icon size={21} color={Colors.primary} />
       <Text style={styles.quickText}>{label}</Text>
+      {badge ? <Text style={styles.quickBadge}>{badge}</Text> : null}
     </TouchableOpacity>
   );
 }
@@ -287,6 +316,7 @@ const styles = StyleSheet.create({
   quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   quickAction: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.card, borderWidth: 1, flexBasis: "31%", flexGrow: 1, gap: Spacing.xs, minHeight: 86, justifyContent: "center", padding: Spacing.sm, ...Shadow.card },
   quickText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center" },
+  quickBadge: { backgroundColor: Colors.primary, borderRadius: Radius.button, color: Colors.surface, fontFamily: Typography.bodyBold, fontSize: 10, overflow: "hidden", paddingHorizontal: Spacing.xs, paddingVertical: 2 },
   buttonRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, justifyContent: "center" },
   primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, flexGrow: 1, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 14 },

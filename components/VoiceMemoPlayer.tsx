@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { Audio, type AVPlaybackStatus } from "expo-av";
 import { useFocusEffect } from "expo-router";
 import { Pause, Play } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { getVoiceMemoDownloadUrl } from "@/services/teamPrivateMessageService";
+import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { activateVoicePlayback, releaseVoicePlayback } from "@/services/voiceMemoAudioService";
 
 type Props = {
@@ -16,9 +16,37 @@ type Props = {
   onPreviewed?: () => void;
 };
 
-export function VoiceMemoPlayer({ durationMilliseconds, onPreviewed, storagePath, uri }: Props) {
+type ExpoAvModule = typeof import("expo-av");
+
+export function VoiceMemoPlayer(props: Props) {
   const { t } = useTranslation();
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const audioAvailable = isTeamVoiceAudioAvailable();
+  const [audioModule, setAudioModule] = useState<ExpoAvModule | null>(null);
+
+  useEffect(() => {
+    if (!audioAvailable) return;
+    let mounted = true;
+    Promise.resolve().then(() => require("expo-av") as ExpoAvModule).then((module) => {
+      if (mounted) setAudioModule(module);
+    }).catch(() => {
+      if (mounted) setAudioModule(null);
+    });
+    return () => { mounted = false; };
+  }, [audioAvailable]);
+
+  if (!audioAvailable) {
+    return <Text accessibilityLiveRegion="polite" style={styles.unavailable}>{t("voiceMemo.updatedBuildRequired")}</Text>;
+  }
+  if (!audioModule) {
+    return <ActivityIndicator accessibilityLabel={t("common.loading")} color={Colors.primary} size="small" />;
+  }
+  return <VoiceMemoPlayerAvailable {...props} audioModule={audioModule} />;
+}
+
+function VoiceMemoPlayerAvailable({ audioModule, durationMilliseconds, onPreviewed, storagePath, uri }: Props & { audioModule: ExpoAvModule }) {
+  const { t } = useTranslation();
+  const { Audio } = audioModule;
+  const soundRef = useRef<InstanceType<typeof Audio.Sound> | null>(null);
   const cachedUrl = useRef<{ url: string; expiresAtMillis: number } | null>(null);
   const [position, setPosition] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -48,7 +76,7 @@ export function VoiceMemoPlayer({ durationMilliseconds, onPreviewed, storagePath
     return cachedUrl.current.url;
   }, [storagePath, uri]);
 
-  const onStatus = useCallback((status: AVPlaybackStatus) => {
+  const onStatus = useCallback((status: import("expo-av").AVPlaybackStatus) => {
     if (!status.isLoaded) return;
     setPosition(status.positionMillis);
     setPlaying(status.isPlaying);
@@ -83,7 +111,7 @@ export function VoiceMemoPlayer({ durationMilliseconds, onPreviewed, storagePath
     } finally {
       setLoading(false);
     }
-  }, [durationMilliseconds, loading, onStatus, playing, position, resolveUri, stop]);
+  }, [Audio, durationMilliseconds, loading, onStatus, playing, position, resolveUri, stop]);
 
   const total = Math.max(durationMilliseconds, 1);
   return (
@@ -117,4 +145,5 @@ const styles = StyleSheet.create({
   progress: { backgroundColor: Colors.primary, height: 6 },
   time: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12 },
   error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 12 },
+  unavailable: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 18 },
 });

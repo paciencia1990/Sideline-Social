@@ -191,7 +191,7 @@ function normalizeMessage(id: string, data: Record<string, unknown>): TeamPrivat
 }
 
 function requireUser() {
-  if (!auth.currentUser) throw new Error("Sign in to use Team Messages.");
+  if (!auth.currentUser) throw new Error("Sign in to use Private Messages.");
 }
 
 function readString(value: unknown, fallback = "") {

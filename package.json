@@ -19,6 +19,7 @@
     "test:friend-requests": "node scripts/test-friend-request-core.cjs",
     "test:public-profile-authorization": "node scripts/test-public-profile-authorization-core.cjs",
     "test:notifications": "node scripts/test-notification-core.cjs",
+    "test:coach-communication-regressions": "node scripts/test-coach-communication-regressions.cjs",
     "test:team-messages": "npm --prefix functions run build && node scripts/test-team-voice-private-core.cjs",
     "test:firestore:team-messages": "firebase.cmd emulators:exec --only firestore \"node scripts/test-team-messages-firestore-rules.cjs\"",
     "test:storage:team-voice": "firebase.cmd emulators:exec --project sideline-team-voice-storage-rules-test --only firestore,storage \"node scripts/test-team-voice-storage-rules.cjs\"",

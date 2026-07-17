@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import * as FileSystem from "expo-file-system";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -13,6 +12,8 @@ import { useCoachBackNavigation } from "@/hooks/useCoachBackNavigation";
 import { createTeamAnnouncement, listenToTeamAnnouncements, type AnnouncementAudience, type TeamAnnouncement } from "@/services/teamMessageService";
 import { finalizeVoiceAnnouncement, reserveVoiceUpload, uploadReservedVoiceMemo } from "@/services/teamPrivateMessageService";
 import { getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive, type TeamMembership } from "@/services/teamService";
+import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
+import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
 
 const AUDIENCES: AnnouncementAudience[] = ["all", "parents", "staff"];
@@ -46,6 +47,7 @@ export default function CoachMessagesScreen() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submissionInFlight = useRef(false);
+  const voiceAudioAvailable = isTeamVoiceAudioAvailable();
 
   useEffect(() => {
     let isMounted = true;
@@ -124,7 +126,7 @@ export default function CoachMessagesScreen() {
         await upload.completion;
         setSendPhase("finalizing");
         await finalizeVoiceAnnouncement(reservation.reservationId);
-        await FileSystem.deleteAsync(voiceDraft.uri, { idempotent: true });
+        await deleteLocalVoiceMemo(voiceDraft.uri);
         setVoiceDraft(null);
         setVoiceComposerKey((value) => value + 1);
       } else {
@@ -222,15 +224,23 @@ export default function CoachMessagesScreen() {
             <Text style={styles.inputLabel}>{t("coach.messages.messageType")}</Text>
             <View accessibilityRole="tablist" style={styles.segmentRow}>
               {(["text", "voice"] as const).map((nextType) => (
-                <TouchableOpacity accessibilityRole="tab" accessibilityState={{ selected: messageType === nextType }} key={nextType} onPress={() => setMessageType(nextType)} style={[styles.segment, messageType === nextType && styles.segmentActive]}>
+                <TouchableOpacity
+                  accessibilityRole="tab"
+                  accessibilityState={{ disabled: nextType === "voice" && !voiceAudioAvailable, selected: messageType === nextType }}
+                  disabled={nextType === "voice" && !voiceAudioAvailable}
+                  key={nextType}
+                  onPress={() => setMessageType(nextType)}
+                  style={[styles.segment, messageType === nextType && styles.segmentActive, nextType === "voice" && !voiceAudioAvailable && styles.disabledButton]}
+                >
                   <Text style={[styles.segmentText, messageType === nextType && styles.segmentTextActive]}>{t(`coach.messages.type${capitalize(nextType)}`)}</Text>
                 </TouchableOpacity>
               ))}
             </View>
+            {!voiceAudioAvailable ? <Text accessibilityLiveRegion="polite" style={styles.capabilityHelp}>{t("voiceMemo.updatedBuildRequired")}</Text> : null}
             <TextInput onChangeText={setTitle} placeholder={t("coach.messages.titlePlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={title} />
-            <View style={messageType === "voice" ? undefined : styles.hidden}>
+            {voiceAudioAvailable ? <View style={messageType === "voice" ? undefined : styles.hidden}>
               <VoiceMemoComposer active={messageType === "voice"} disabled={sending} key={voiceComposerKey} onChange={setVoiceDraft} uploadProgress={uploadProgress} />
-            </View>
+            </View> : null}
             {sendPhase === "finalizing" ? <Text accessibilityLiveRegion="polite" style={styles.progressText}>{t("voiceMemo.finalizing")}</Text> : null}
             <TextInput multiline maxLength={2000} onChangeText={setBody} placeholder={t(messageType === "voice" ? "coach.messages.summaryPlaceholder" : "coach.messages.bodyPlaceholder")} placeholderTextColor={Colors.textPrimary} style={[styles.input, styles.bodyInput]} value={body} />
             <Text style={styles.inputLabel}>{t("coach.messages.audience")}</Text>
@@ -318,4 +328,5 @@ const styles = StyleSheet.create({
   cancelUpload: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   hidden: { display: "none" },
   progressText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
+  capabilityHelp: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 18 },
 });

@@ -16,6 +16,7 @@ import { auth, db, functions } from "@/config/firebase";
 import { getTeamRosterProfiles } from "@/services/teamRosterService";
 import { canSendTeamMessages, getTeamById, isTeamActive, resolveTeamRoles, type TeamRoleFlags } from "@/services/teamService";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
+import { resolveAnnouncementContentType } from "@/utils/teamAnnouncementCore";
 import type { StoredVoiceMemo } from "@/types/teamVoiceMessaging";
 
 export type AnnouncementAudience = "parents" | "staff" | "all";
@@ -291,6 +292,7 @@ function resolveDisplayName() {
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamAnnouncement {
   const voice = data.voiceMemo && typeof data.voiceMemo === "object" ? data.voiceMemo as Record<string, unknown> : null;
+  const contentType = resolveAnnouncementContentType(data.contentType, voice);
   return {
     id,
     title: readString(data.title),
@@ -299,8 +301,8 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamA
     createdByName: formatPublicUserName(readString(data.createdByName)) ?? "Coach",
     audience: readAudience(data.audience),
     allowReplies: data.allowReplies !== false,
-    contentType: data.contentType === "voice" && voice ? "voice" : "text",
-    voiceMemo: voice ? {
+    contentType,
+    voiceMemo: contentType === "voice" && voice ? {
       storagePath: readString(voice.storagePath),
       durationMilliseconds: Number(voice.durationMilliseconds ?? 0),
       sizeBytes: Number(voice.sizeBytes ?? 0),
