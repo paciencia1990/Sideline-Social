@@ -5,6 +5,7 @@ import { MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { VoiceMemoPlayer } from "@/components/VoiceMemoPlayer";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { auth } from "@/config/firebase";
 import { QUICK_REPLY_IDS, QUICK_REPLY_TRANSLATION_KEYS, type QuickReplyId } from "@/constants/teamReplies";
@@ -266,6 +267,9 @@ export default function AnnouncementThreadScreen() {
               ) : null}
             </View>
             <Text style={styles.cardText}>{announcement.body}</Text>
+            {announcement.contentType === "voice" && announcement.voiceMemo ? (
+              <VoiceMemoPlayer durationMilliseconds={announcement.voiceMemo.durationMilliseconds} storagePath={announcement.voiceMemo.storagePath} />
+            ) : null}
             <Text style={styles.metaText}>{announcement.createdByName}</Text>
           </Card>
         ) : !loading ? (

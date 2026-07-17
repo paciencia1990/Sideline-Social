@@ -16,6 +16,7 @@ import { auth, db, functions } from "@/config/firebase";
 import { getTeamRosterProfiles } from "@/services/teamRosterService";
 import { canSendTeamMessages, getTeamById, isTeamActive, resolveTeamRoles, type TeamRoleFlags } from "@/services/teamService";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
+import type { StoredVoiceMemo } from "@/types/teamVoiceMessaging";
 
 export type AnnouncementAudience = "parents" | "staff" | "all";
 export type ReplyType = "team" | "privateToCoach";
@@ -28,6 +29,8 @@ export type TeamAnnouncement = {
   createdByName: string;
   audience: AnnouncementAudience;
   allowReplies: boolean;
+  contentType: "text" | "voice";
+  voiceMemo: StoredVoiceMemo | null;
   createdAt?: unknown;
   updatedAt?: unknown;
 };
@@ -287,6 +290,7 @@ function resolveDisplayName() {
 }
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamAnnouncement {
+  const voice = data.voiceMemo && typeof data.voiceMemo === "object" ? data.voiceMemo as Record<string, unknown> : null;
   return {
     id,
     title: readString(data.title),
@@ -295,6 +299,13 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamA
     createdByName: formatPublicUserName(readString(data.createdByName)) ?? "Coach",
     audience: readAudience(data.audience),
     allowReplies: data.allowReplies !== false,
+    contentType: data.contentType === "voice" && voice ? "voice" : "text",
+    voiceMemo: voice ? {
+      storagePath: readString(voice.storagePath),
+      durationMilliseconds: Number(voice.durationMilliseconds ?? 0),
+      sizeBytes: Number(voice.sizeBytes ?? 0),
+      mimeType: voice.mimeType === "audio/m4a" || voice.mimeType === "audio/x-m4a" ? voice.mimeType : "audio/mp4",
+    } : null,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };

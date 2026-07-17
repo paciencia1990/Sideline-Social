@@ -7,23 +7,40 @@ import { SquadIdentity } from "@/components/SquadIdentity";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 
-export function SquadSelector() {
-  const { t } = useTranslation();
-  const { currentSquad, mySquads, selectSquad } = useSquad();
-  const [open, setOpen] = useState(false);
-  const [savingId, setSavingId] = useState<string | null>(null);
+type SquadSelectorProps = {
+  hideTrigger?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  open?: boolean;
+};
 
-  if (mySquads.length < 2 || !currentSquad) return null;
+export function SquadSelector({ hideTrigger = false, onOpenChange, open: controlledOpen }: SquadSelectorProps = {}) {
+  const { t } = useTranslation();
+  const { currentSquad, mySquads, selectedSquadId, selectSquad } = useSquad();
+  const [internalOpen, setInternalOpen] = useState(false);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (nextOpen: boolean) => {
+    if (controlledOpen === undefined) setInternalOpen(nextOpen);
+    onOpenChange?.(nextOpen);
+    if (!nextOpen) setSelectionError(null);
+  };
+
+  if (mySquads.length === 0 || (!hideTrigger && (mySquads.length < 2 || !currentSquad))) return null;
 
   const choose = async (squadId: string) => {
-    if (squadId === currentSquad.squadId) {
+    if (squadId === selectedSquadId) {
       setOpen(false);
       return;
     }
     setSavingId(squadId);
+    setSelectionError(null);
     try {
       await selectSquad(squadId);
       setOpen(false);
+    } catch (error) {
+      console.warn("[SquadSelector] selection error:", error);
+      setSelectionError(t("squad.selectionError"));
     } finally {
       setSavingId(null);
     }
@@ -31,7 +48,7 @@ export function SquadSelector() {
 
   return (
     <>
-      <Pressable
+      {!hideTrigger && currentSquad ? <Pressable
         accessibilityLabel={t("squad.changeSquad")}
         accessibilityRole="button"
         onPress={() => setOpen(true)}
@@ -47,7 +64,7 @@ export function SquadSelector() {
           />
         </View>
         <ChevronDown color={Colors.textHeading} size={20} />
-      </Pressable>
+      </Pressable> : null}
 
       <Modal animationType="slide" onRequestClose={() => setOpen(false)} transparent visible={open}>
         <View style={styles.backdrop}>
@@ -61,8 +78,9 @@ export function SquadSelector() {
                 <X color={Colors.textHeading} size={20} />
               </Pressable>
             </View>
+            {selectionError ? <Text accessibilityLiveRegion="polite" style={styles.error}>{selectionError}</Text> : null}
             {mySquads.map((squad) => {
-              const selected = squad.squadId === currentSquad.squadId;
+              const selected = squad.squadId === selectedSquadId;
               return (
                 <Pressable
                   accessibilityRole="radio"
@@ -108,6 +126,7 @@ const styles = StyleSheet.create({
   header: { alignItems: "flex-start", flexDirection: "row", justifyContent: "space-between", marginBottom: Spacing.sm },
   title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 22 },
   subtitle: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, marginTop: Spacing.xs },
+  error: { color: Colors.primary, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 18 },
   close: { alignItems: "center", height: 44, justifyContent: "center", width: 44 },
   option: { alignItems: "center", borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", minHeight: 68, padding: Spacing.md },
   selectedOption: { backgroundColor: Colors.background, borderColor: Colors.accentGreen },

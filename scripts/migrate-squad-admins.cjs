@@ -24,46 +24,44 @@ const db = admin.firestore();
 async function run() {
   const squads = await db.collection("squads").get();
   const updates = [];
-  const missingCreator = [];
-  const inactiveOrMissingMembership = [];
+  let missingCreatorCount = 0;
+  let inactiveOrMissingCreatorMembershipCount = 0;
+  let orphanedSquadCount = 0;
+  let explicitAdminSquadCount = 0;
 
   for (const squadDocument of squads.docs) {
     const squad = squadDocument.data();
     const creatorId = typeof squad.createdBy === "string" && squad.createdBy
       ? squad.createdBy
       : typeof squad.creatorId === "string" && squad.creatorId ? squad.creatorId : null;
-    if (!creatorId) {
-      missingCreator.push(squadDocument.id);
-      continue;
-    }
-
-    const canonical = await db.collection("squadMemberships").doc(`${squadDocument.id}__${creatorId}`).get();
-    let membership = canonical.exists && canonical.data().membershipStatus === "active" ? canonical : null;
-    if (!membership) {
-      const legacy = await db.collection("squadMemberships")
-        .where("squadId", "==", squadDocument.id)
-        .where("userId", "==", creatorId)
-        .get();
-      membership = legacy.docs.find((document) => {
-        const data = document.data();
-        return data.membershipStatus === "active" || (data.membershipStatus == null && data.isActive === true);
-      }) ?? null;
-    }
-    if (!membership) {
-      inactiveOrMissingMembership.push(squadDocument.id);
-      continue;
-    }
-    if (membership.data().squadRole !== "admin") {
-      updates.push({ squadId: squadDocument.id, membershipRef: membership.ref });
-    }
+    if (!creatorId) missingCreatorCount += 1;
+    const activeMemberships = await db.collection("squadMemberships")
+      .where("squadId", "==", squadDocument.id)
+      .where("membershipStatus", "==", "active")
+      .get();
+    const explicitAdmins = activeMemberships.docs.filter((document) => document.data().squadRole === "admin");
+    if (explicitAdmins.length > 0) explicitAdminSquadCount += 1;
+    const activeCreator = creatorId
+      ? activeMemberships.docs.find((document) => document.data().userId === creatorId) ?? null
+      : null;
+    if (creatorId && !activeCreator) inactiveOrMissingCreatorMembershipCount += 1;
+    const creatorNeedsSelfHeal = Boolean(
+      activeCreator &&
+      activeCreator.data().squadRole !== "admin" &&
+      activeCreator.data().squadRole !== "member",
+    );
+    if (creatorNeedsSelfHeal) updates.push({ membershipRef: activeCreator.ref });
+    if (explicitAdmins.length === 0 && !creatorNeedsSelfHeal) orphanedSquadCount += 1;
   }
 
   console.log(JSON.stringify({
     mode: apply ? "apply" : "dry-run",
     scannedSquads: squads.size,
+    squadsWithExplicitAdmin: explicitAdminSquadCount,
     creatorAdminUpdates: updates.length,
-    squadsWithoutRecordedCreator: missingCreator,
-    squadsWithoutActiveCreatorMembership: inactiveOrMissingMembership,
+    squadsWithoutRecordedCreator: missingCreatorCount,
+    squadsWithoutActiveCreatorMembership: inactiveOrMissingCreatorMembershipCount,
+    orphanedSquadsRequiringManualReview: orphanedSquadCount,
   }, null, 2));
   if (!apply) return;
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
-import { Bell, CheckCircle2, ChevronRight, MapPin, MessageCircle, Navigation, Play, RefreshCw, Star, Trophy, Users } from "lucide-react-native";
+import { Bell, CheckCircle2, ChevronRight, MessageCircle, Play, Star, Trophy, Users } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -22,12 +22,6 @@ import { SquadSelector } from "@/components/SquadSelector";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
-import {
-  fetchUserSquadsDetail,
-  subscribeLiveSquadCard,
-  type LiveSquadData,
-  type SquadDetail,
-} from "@/services/homeFeedService";
 import {
   retryPendingNotificationAcknowledgements,
   subscribeToUnreadNotificationCount,
@@ -46,31 +40,28 @@ import {
   getCurrentWeeklyChallenge,
   type UserWeeklyChallenge,
 } from "@/services/weeklyChallengeService";
-import {
-  fetchNearbySquads,
-  getCurrentLocation,
-  getLocationPermissionStatus,
-  requestLocationPermission,
-  type Squad,
-} from "@/services/squadService";
+import { type Squad } from "@/services/squadService";
 
 const logoSource = require("@/assets/branding/sideline-social-logo.png");
-
-type HomeProximityState = "checking" | "idle" | "denied" | "loading" | "unavailable" | "nearby" | "memberNearby" | "none" | "error";
 
 export default function HomeScreen() {
   const { i18n, t } = useTranslation();
   const { user } = useAuth();
-  const { appConfig, currentSquad, mySquadIds, selectedSquadId } = useSquad();
-  const liveSquadUnsubscribe = useRef<(() => void) | null>(null);
+  const {
+    currentSquad,
+    membershipError,
+    membershipLoading,
+    mySquads,
+    reloadMemberships,
+    selectionWasStale,
+    selectedSquadId,
+  } = useSquad();
 
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
-  const [squads, setSquads] = useState<SquadDetail[]>([]);
-  const [liveSquad, setLiveSquad] = useState<LiveSquadData | null>(null);
   const [myTeamsOverview, setMyTeamsOverview] = useState<ParentTeamsOverview | null>(null);
   const [myTeamsLoading, setMyTeamsLoading] = useState(true);
   const [myTeamsError, setMyTeamsError] = useState<string | null>(null);
@@ -78,9 +69,7 @@ export default function HomeScreen() {
   const [challengeError, setChallengeError] = useState<string | null>(null);
   const [challengeCompletionLoading, setChallengeCompletionLoading] = useState(false);
   const [activeSession, setActiveSession] = useState<GameSession | null>(null);
-  const [proximityState, setProximityState] = useState<HomeProximityState>("checking");
-  const [nearestSquad, setNearestSquad] = useState<Squad | null>(null);
-  const [proximityLoading, setProximityLoading] = useState(false);
+  const [squadSelectorOpen, setSquadSelectorOpen] = useState(false);
 
   const safeUnreadCount = Number.isFinite(unreadCount) ? Math.max(0, unreadCount) : 0;
   const unreadBadge = formatUnreadBadgeCount(safeUnreadCount);
@@ -112,77 +101,13 @@ export default function HomeScreen() {
       setMyTeamsLoading(false);
     }
   }, [t, user?.uid]);
-  const loadHomeProximity = useCallback(async () => {
-    setProximityLoading(true);
-    setProximityState("loading");
-
-    try {
-      const permission = await getLocationPermissionStatus();
-      if (permission.status === "undetermined") {
-        setNearestSquad(null);
-        setProximityState("idle");
-        return;
-      }
-      if (permission.status === "denied") {
-        setNearestSquad(null);
-        setProximityState("denied");
-        return;
-      }
-
-      const location = await getCurrentLocation();
-      if (!location.coords) {
-        setNearestSquad(null);
-        setProximityState(location.error === "services_disabled" ? "unavailable" : "error");
-        return;
-      }
-
-      const nearby = await fetchNearbySquads(location.coords.latitude, location.coords.longitude, appConfig.squadRadiusMiles);
-      const closest = nearby[0] ?? null;
-      setNearestSquad(closest);
-
-      if (!closest) {
-        setProximityState("none");
-        return;
-      }
-
-      setProximityState(mySquadIds.includes(closest.squadId) ? "memberNearby" : "nearby");
-    } catch (nextError) {
-      console.warn("[HomeScreen] proximity error:", nextError);
-      setNearestSquad(null);
-      setProximityState("error");
-    } finally {
-      setProximityLoading(false);
-    }
-  }, [appConfig.squadRadiusMiles, mySquadIds]);
-  const handleFindNearby = useCallback(() => {
-    Alert.alert(
-      t("squad.findNearby"),
-      t("squad.locationDisclosure"),
-      [
-        { text: t("squad.notNow"), style: "cancel" },
-        {
-          text: t("startMode.continue"),
-          onPress: () => {
-            void requestLocationPermission().then((permission) => {
-              if (permission.status === "granted") void loadHomeProximity();
-              else setProximityState("denied");
-            });
-          },
-        },
-      ],
-    );
-  }, [loadHomeProximity, t]);
   const loadHome = useCallback(async () => {
     setError(null);
     setChallengeError(null);
     const userId = user?.uid;
 
-    liveSquadUnsubscribe.current?.();
-    liveSquadUnsubscribe.current = null;
-
     try {
-      const [squadDetails, challengeResult, session] = await Promise.all([
-        fetchUserSquadsDetail(mySquadIds),
+      const [challengeResult, session] = await Promise.all([
         userId
           ? getCurrentWeeklyChallenge()
               .then((challenge) => ({ challenge, failed: false }))
@@ -194,39 +119,30 @@ export default function HomeScreen() {
         selectedSquadId ? fetchActiveSquadSession(selectedSquadId) : Promise.resolve(null),
       ]);
 
-      setSquads(squadDetails);
       setActiveChallenge(challengeResult.challenge);
       setChallengeError(challengeResult.failed ? t("home.challengeError") : null);
       setActiveSession(session);
 
-      liveSquadUnsubscribe.current = subscribeLiveSquadCard(selectedSquadId ? [selectedSquadId] : [], setLiveSquad);
     } catch (nextError) {
       console.warn("[HomeScreen] load error:", nextError);
       setError(t("home.errorBody"));
       setActiveChallenge(null);
       setChallengeError(t("home.challengeError"));
-      setLiveSquad(null);
     } finally {
       setIsLoading(false);
-      setRefreshing(false);
     }
-  }, [mySquadIds, selectedSquadId, t, user?.uid]);
+  }, [selectedSquadId, t, user?.uid]);
 
   useEffect(() => {
     void loadHome();
-
-    return () => {
-      liveSquadUnsubscribe.current?.();
-    };
   }, [loadHome]);
-
-  useEffect(() => {
-    void loadHomeProximity();
-  }, [loadHomeProximity]);
 
   useFocusEffect(useCallback(() => {
     void loadMyTeams();
   }, [loadMyTeams]));
+  useFocusEffect(useCallback(() => {
+    void reloadMemberships();
+  }, [reloadMemberships]));
   useFocusEffect(useCallback(() => {
     if (!user?.uid) {
       setUnreadCount(0);
@@ -243,10 +159,13 @@ export default function HomeScreen() {
   }, [user?.uid]));
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    void retryPendingNotificationAcknowledgements();
-    void loadHome();
-    void loadMyTeams();
-  }, [loadHome, loadMyTeams]);
+    void Promise.allSettled([
+      retryPendingNotificationAcknowledgements(),
+      loadHome(),
+      loadMyTeams(),
+      reloadMemberships(),
+    ]).finally(() => setRefreshing(false));
+  }, [loadHome, loadMyTeams, reloadMemberships]);
 
   const confirmChallengeCompletion = useCallback(() => {
     if (!activeChallenge || activeChallenge.completed || challengeCompletionLoading) return;
@@ -341,57 +260,47 @@ export default function HomeScreen() {
           onRetry={loadMyTeams}
           overview={myTeamsOverview}
         />
-        {isLoading ? (
-          <LoadingCard />
-        ) : (
-          <>
-            {error ? <StateCard title={t("home.errorTitle")} body={error} /> : null}
+        {error ? <StateCard title={t("home.errorTitle")} body={error} /> : null}
 
-            {activeSession ? (
-              <TouchableOpacity
-                activeOpacity={0.86}
-                onPress={() => router.push("/(tabs)/games")}
-                style={styles.activeGameCard}
-              >
-                <View style={styles.activeGameIcon}>
-                  <Play size={22} color={Colors.surface} fill={Colors.surface} />
-                </View>
-                <View style={styles.cardCopy}>
-                  <Text style={styles.cardEyebrow}>{t("home.activeGame")}</Text>
-                  <Text style={styles.cardTitle}>{t("games.squadPlaying", { game: getGameLabel(activeSession.gameType) })}</Text>
-                </View>
-              </TouchableOpacity>
-            ) : null}
+        {activeSession ? (
+          <TouchableOpacity
+            activeOpacity={0.86}
+            onPress={() => router.push("/(tabs)/games")}
+            style={styles.activeGameCard}
+          >
+            <View style={styles.activeGameIcon}>
+              <Play size={22} color={Colors.surface} fill={Colors.surface} />
+            </View>
+            <View style={styles.cardCopy}>
+              <Text style={styles.cardEyebrow}>{t("home.activeGame")}</Text>
+              <Text style={styles.cardTitle}>{t("games.squadPlaying", { game: getGameLabel(activeSession.gameType) })}</Text>
+            </View>
+          </TouchableOpacity>
+        ) : null}
 
-            <SectionTitle title={t("home.liveSquad")} />
-            {liveSquad ? (
-              <LiveSquadCard squad={liveSquad} />
-            ) : (
-              <HomeProximityCard
-                loading={proximityLoading}
-                nearestSquad={nearestSquad}
-                onFind={handleFindNearby}
-                onRetry={() => void loadHomeProximity()}
-                state={proximityState}
-              />
-            )}
-            <SquadSelector />
-            {!liveSquad && squads.length > 0 ? <SquadSummaryCard squad={currentSquad} squadCount={squads.length} /> : null}
+        <SecondaryActions unreadChatCount={unreadChatCount} />
 
-            <SecondaryActions unreadChatCount={unreadChatCount} />
+        <YourSquadCard
+          currentSquad={currentSquad}
+          error={membershipError}
+          loading={membershipLoading}
+          membershipCount={mySquads.length}
+          onChoose={() => setSquadSelectorOpen(true)}
+          onRetry={() => void reloadMemberships()}
+          selectionWasStale={selectionWasStale}
+        />
+        <SquadSelector hideTrigger onOpenChange={setSquadSelectorOpen} open={squadSelectorOpen} />
 
-            <ChallengeCard
-              challenge={activeChallenge}
-              completionLoading={challengeCompletionLoading}
-              error={challengeError}
-              loading={isLoading}
-              onPress={confirmChallengeCompletion}
-              onRetry={loadHome}
-            />
+        <ChallengeCard
+          challenge={activeChallenge}
+          completionLoading={challengeCompletionLoading}
+          error={challengeError}
+          loading={isLoading}
+          onPress={confirmChallengeCompletion}
+          onRetry={loadHome}
+        />
 
-            <IcebreakerCard />
-          </>
-        )}
+        <IcebreakerCard />
       </ScrollView>
     </ScreenWrapper>
   );
@@ -411,6 +320,10 @@ function MyTeamsCard({
   const { t } = useTranslation();
   const latestTeam = overview?.latestTeam ?? null;
   const latest = overview?.latestAnnouncement ?? null;
+  const latestPrivate = overview?.teams
+    .flatMap((team) => team.privateConversations.map((conversation) => ({ conversation, team })))
+    .sort((first, second) => second.conversation.lastMessageAtMillis - first.conversation.lastMessageAtMillis)[0] ?? null;
+  const combinedUnread = (overview?.unreadCount ?? 0) + (overview?.privateUnreadCount ?? 0);
 
   if (error && !overview) {
     return (
@@ -447,14 +360,15 @@ function MyTeamsCard({
               <Text style={styles.myTeamsSummary}>
                 {t("myTeams.teamCount", { count: overview.totalTeams })}
                 {overview.unreadCount > 0 ? " · " + t("myTeams.unreadUpdates", { count: overview.unreadCount }) : ""}
+                {overview.privateUnreadCount > 0 ? " · " + t("teamMessages.unread", { count: overview.privateUnreadCount }) : ""}
               </Text>
             ) : (
               <Text style={styles.myTeamsSummary}>{t("myTeams.noTeams")}</Text>
             )}
           </View>
-          {overview?.unreadCount ? (
+          {combinedUnread > 0 ? (
             <View style={styles.myTeamsBadge}>
-              <Text style={styles.myTeamsBadgeText}>{overview.unreadCount}</Text>
+              <Text style={styles.myTeamsBadgeText}>{combinedUnread}</Text>
             </View>
           ) : null}
           <ChevronRight color={Colors.textPrimary} size={20} />
@@ -473,7 +387,14 @@ function MyTeamsCard({
           </View>
         ) : null}
 
-        {!loading && overview?.totalTeams && overview.unreadCount === 0 ? (
+        {latestPrivate ? (
+          <View style={styles.myTeamsPreview}>
+            <Text style={styles.myTeamsPreviewTeam}>{t("teamMessages.privateLabel")} · {latestPrivate.team.team.name}</Text>
+            <Text numberOfLines={2} style={styles.myTeamsPreviewBody}>{latestPrivate.conversation.lastMessageType === "voice" ? t("teamMessages.voicePreview") : latestPrivate.conversation.lastMessagePreview || t("teamMessages.noMessagesYet")}</Text>
+          </View>
+        ) : null}
+
+        {!loading && overview?.totalTeams && combinedUnread === 0 ? (
           <Text style={styles.myTeamsCaughtUp}>{t("myTeams.caughtUp")}</Text>
         ) : null}
 
@@ -509,115 +430,100 @@ function SecondaryActions({ unreadChatCount }: { unreadChatCount: number }) {
   );
 }
 
-function HomeProximityCard({
+function YourSquadCard({
+  currentSquad,
+  error,
   loading,
-  nearestSquad,
-  onFind,
+  membershipCount,
+  onChoose,
   onRetry,
-  state,
+  selectionWasStale,
 }: {
+  currentSquad: Squad | null;
+  error: string | null;
   loading: boolean;
-  nearestSquad: Squad | null;
-  onFind: () => void;
+  membershipCount: number;
+  onChoose: () => void;
   onRetry: () => void;
-  state: HomeProximityState;
+  selectionWasStale: boolean;
 }) {
   const { t } = useTranslation();
-  const isNearby = state === "nearby" || state === "memberNearby";
-  const title = (() => {
-    if (state === "checking" || state === "loading") return t("location.loading");
-    if (state === "idle") return t("squad.findNearby");
-    if (state === "denied") return t("location.permissionTitle");
-    if (state === "unavailable") return t("location.unavailableTitle");
-    if (state === "error") return t("location.errorTitle");
-    if (state === "memberNearby") return t("location.yourSquadNearbyTitle");
-    if (state === "nearby") return t("location.nearbyTitle");
-    return t("location.noNearbyTitle");
-  })();
-  const body = (() => {
-    if (state === "checking" || state === "loading") return t("location.loadingBody");
-    if (state === "idle") return t("location.findNearbyBody");
-    if (state === "denied") return t("location.permissionBody");
-    if (state === "unavailable") return t("location.unavailableBody");
-    if (state === "error") return t("location.errorBody");
-    if (state === "memberNearby") return t("location.yourSquadNearbyBody");
-    if (state === "nearby") return t("location.nearbyBody");
-    return t("location.noNearbyBody");
-  })();
-  const needsManualSearch = state === "denied" || state === "unavailable" || state === "error";
-  const actionLabel = state === "idle"
-    ? t("location.allowLocation")
-    : isNearby
-      ? t("squad.viewSquad")
-      : needsManualSearch
-        ? t("squad.searchByVenue")
-        : t("location.retry");
-  const action = state === "idle"
-    ? onFind
-    : isNearby || needsManualSearch
-      ? () => router.push("/(tabs)/squad")
-      : onRetry;
+
+  if (loading) {
+    return (
+      <Card style={styles.yourSquadCard}>
+        <Text accessibilityRole="header" style={styles.cardEyebrow}>{t("home.yourSquad")}</Text>
+        <View style={styles.yourSquadLoadingRow}>
+          <ActivityIndicator color={Colors.primary} size="small" />
+          <Text style={styles.cardText}>{t("home.yourSquadLoading")}</Text>
+        </View>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card style={styles.yourSquadCard}>
+        <Text accessibilityRole="header" style={styles.cardEyebrow}>{t("home.yourSquad")}</Text>
+        <Text style={styles.cardTitle}>{t("home.yourSquadErrorTitle")}</Text>
+        <Text style={styles.cardText}>{t("home.yourSquadErrorBody")}</Text>
+        <TouchableOpacity accessibilityRole="button" activeOpacity={0.86} onPress={onRetry} style={styles.outlineInlineButton}>
+          <Text style={styles.outlineInlineText}>{t("common.retry")}</Text>
+        </TouchableOpacity>
+      </Card>
+    );
+  }
+
+  if (!currentSquad) {
+    const hasMemberships = membershipCount > 0;
+    return (
+      <Card style={styles.yourSquadCard}>
+        <Text accessibilityRole="header" style={styles.cardEyebrow}>{t("home.yourSquad")}</Text>
+        <Text style={styles.cardTitle}>{t(hasMemberships ? "home.chooseSquadTitle" : "home.noSquadTitle")}</Text>
+        <Text style={styles.cardText}>{t(
+          hasMemberships
+            ? selectionWasStale
+              ? "home.staleSquadBody"
+              : "home.chooseSquadBody"
+            : "home.noSquadBody"
+        )}</Text>
+        <TouchableOpacity
+          accessibilityRole="button"
+          activeOpacity={0.86}
+          onPress={hasMemberships ? onChoose : () => router.push("/(tabs)/squad")}
+          style={styles.primaryInlineButton}
+        >
+          <Text style={styles.primaryInlineText}>{t(hasMemberships ? "home.chooseSquad" : "home.findSquad")}</Text>
+        </TouchableOpacity>
+      </Card>
+    );
+  }
 
   return (
-    <Card style={[styles.proximityCard, isNearby && styles.proximityCardActive]}>
-      <View style={styles.proximityHeader}>
-        <View style={styles.proximityIcon}>
-          {loading ? <ActivityIndicator color={Colors.primary} size="small" /> : isNearby ? <Navigation size={22} color={Colors.primary} /> : <MapPin size={22} color={Colors.primary} />}
-        </View>
-        <View style={styles.cardCopy}>
-          <Text style={styles.cardEyebrow}>{t("squad.liveTitle")}</Text>
-          <Text style={styles.cardTitle}>{title}</Text>
-          <Text style={styles.cardText}>{body}</Text>
-        </View>
+    <Card style={styles.yourSquadCard}>
+      <Text accessibilityRole="header" style={styles.cardEyebrow}>{t("home.yourSquad")}</Text>
+      <SquadIdentity
+        venueName={currentSquad.venueName}
+        sportId={currentSquad.sportId}
+        sportDisplayName={currentSquad.sportDisplayName}
+      />
+      <Text style={styles.cardText}>{t("home.squadMemberCount", { count: currentSquad.memberCount })}</Text>
+      <View style={styles.yourSquadActions}>
+        <TouchableOpacity
+          accessibilityLabel={t("home.viewSquadAccessibility", { squad: currentSquad.venueName })}
+          accessibilityRole="button"
+          activeOpacity={0.86}
+          onPress={() => router.push(`/(social)/squad-detail?squadId=${currentSquad.squadId}` as never)}
+          style={styles.primaryInlineButton}
+        >
+          <Text style={styles.primaryInlineText}>{t("home.viewSquad")}</Text>
+        </TouchableOpacity>
+        {membershipCount > 1 ? (
+          <TouchableOpacity accessibilityRole="button" activeOpacity={0.86} onPress={onChoose} style={styles.outlineInlineButton}>
+            <Text style={styles.outlineInlineText}>{t("home.switchSquad")}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
-      {nearestSquad ? (
-        <View style={styles.proximityMetaRow}>
-          <SquadIdentity compact venueName={nearestSquad.venueName} sportId={nearestSquad.sportId} sportDisplayName={nearestSquad.sportDisplayName} />
-          {nearestSquad.distanceMiles !== undefined ? <Text style={styles.proximityMeta}>{t("squad.distance", { distance: nearestSquad.distanceMiles.toFixed(1) })}</Text> : null}
-        </View>
-      ) : null}
-      <TouchableOpacity activeOpacity={0.86} onPress={action} style={isNearby ? styles.primaryInlineButton : styles.outlineInlineButton}>
-        {loading ? <RefreshCw size={16} color={isNearby ? Colors.surface : Colors.primary} /> : null}
-        <Text style={isNearby ? styles.primaryInlineText : styles.outlineInlineText}>{actionLabel}</Text>
-      </TouchableOpacity>
-    </Card>
-  );
-}
-
-function LiveSquadCard({ squad }: { squad: LiveSquadData }) {
-  const { t } = useTranslation();
-
-  return (
-    <Card style={styles.liveCard}>
-      <View style={styles.liveHeader}>
-        <SquadIdentity compact venueName={squad.venueName} sportId={squad.sportId} sportDisplayName={squad.sportDisplayName} />
-        <View style={styles.livePill}>
-          <Text style={styles.livePillText}>{t("home.live")}</Text>
-        </View>
-      </View>
-      <Text style={styles.cardText}>{t("home.parentsActiveNow", { count: squad.activeMemberCount })}</Text>
-      <TouchableOpacity
-        activeOpacity={0.86}
-        onPress={() => router.push("/(social)/chat")}
-        style={styles.primaryInlineButton}
-      >
-        <MessageCircle size={16} color={Colors.surface} />
-        <Text style={styles.primaryInlineText}>{t("home.chat")}</Text>
-      </TouchableOpacity>
-    </Card>
-  );
-}
-
-function SquadSummaryCard({ squad, squadCount }: { squad: Squad | null; squadCount: number }) {
-  const { t } = useTranslation();
-
-  return (
-    <Card style={styles.cardGap}>
-      {squad ? <SquadIdentity compact venueName={squad.venueName} sportId={squad.sportId} sportDisplayName={squad.sportDisplayName} /> : <Text style={styles.cardTitle}>{t("squad.title")}</Text>}
-      <Text style={styles.cardText}>{t("home.squadSummary", { count: squadCount })}</Text>
-      <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/(tabs)/squad")} style={styles.outlineInlineButton}>
-        <Text style={styles.outlineInlineText}>{t("home.viewSquads")}</Text>
-      </TouchableOpacity>
     </Card>
   );
 }
@@ -701,21 +607,6 @@ function ChallengeCard({
     </Card>
   );
 }
-function SectionTitle({ title }: { title: string }) {
-  return <Text style={styles.sectionTitle}>{title}</Text>;
-}
-
-function LoadingCard() {
-  const { t } = useTranslation();
-
-  return (
-    <Card style={styles.loadingCard}>
-      <ActivityIndicator color={Colors.primary} />
-      <Text style={styles.cardText}>{t("common.loading")}</Text>
-    </Card>
-  );
-}
-
 function StateCard({
   actionLabel,
   body,
@@ -949,68 +840,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 48,
   },
-  sectionTitle: {
-    color: Colors.textHeading,
-    fontFamily: Typography.bodySemiBold,
-    fontSize: 17,
-  },
-  proximityCard: {
-    gap: Spacing.md,
-  },
-  proximityCardActive: {
+  yourSquadCard: {
     borderLeftColor: Colors.accentGreen,
     borderLeftWidth: 4,
-  },
-  proximityHeader: {
-    alignItems: "center",
-    flexDirection: "row",
     gap: Spacing.md,
   },
-  proximityIcon: {
+  yourSquadActions: {
     alignItems: "center",
-    backgroundColor: Colors.background,
-    borderRadius: 24,
-    height: 48,
-    justifyContent: "center",
-    width: 48,
-  },
-  proximityMetaRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: Spacing.sm,
   },
-  proximityMeta: {
-    backgroundColor: Colors.background,
-    borderRadius: Radius.sm,
-    color: Colors.textPrimary,
-    fontFamily: Typography.bodySemiBold,
-    fontSize: 12,
-    overflow: "hidden",
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs,
-  },  liveCard: {
-    borderLeftColor: Colors.accentGreen,
-    borderLeftWidth: 4,
-    gap: Spacing.sm,
-  },
-  liveHeader: {
+  yourSquadLoadingRow: {
     alignItems: "center",
     flexDirection: "row",
-    justifyContent: "space-between",
-    gap: Spacing.sm,
-  },
-  livePill: {
-    backgroundColor: Colors.accentGreen,
-    borderRadius: Radius.sm,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs,
-  },
-  livePillText: {
-    color: Colors.surface,
-    fontFamily: Typography.bodyBold,
-    fontSize: 10,
-  },
-  cardGap: {
     gap: Spacing.sm,
   },
   cardCopy: {
@@ -1132,10 +975,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     textAlign: "center",
-  },
-  loadingCard: {
-    alignItems: "center",
-    gap: Spacing.sm,
-    paddingVertical: Spacing.xl,
   },
 });

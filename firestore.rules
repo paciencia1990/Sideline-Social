@@ -21,6 +21,13 @@ service cloud.firestore {
       return /databases/$(database)/documents/squadMemberships/$(squadId + "__" + userId);
     }
 
+    function isExplicitActiveSquadAdmin(squadId) {
+      return signedIn() &&
+        exists(squadMembershipPath(squadId, request.auth.uid)) &&
+        get(squadMembershipPath(squadId, request.auth.uid)).data.membershipStatus == "active" &&
+        get(squadMembershipPath(squadId, request.auth.uid)).data.squadRole == "admin";
+    }
+
     function teamPath(teamId) {
       return /databases/$(database)/documents/teams/$(teamId);
     }
@@ -172,6 +179,18 @@ service cloud.firestore {
 
     function announcementPath(teamId, announcementId) {
       return /databases/$(database)/documents/teams/$(teamId)/announcements/$(announcementId);
+    }
+
+    function privateTeamConversationPath(conversationId) {
+      return /databases/$(database)/documents/teamPrivateConversations/$(conversationId);
+    }
+
+    function isPrivateTeamConversationParticipant(conversationId) {
+      return signedIn() &&
+        exists(privateTeamConversationPath(conversationId)) &&
+        get(privateTeamConversationPath(conversationId)).data.participantUserIds is list &&
+        get(privateTeamConversationPath(conversationId)).data.participantUserIds.size() == 2 &&
+        request.auth.uid in get(privateTeamConversationPath(conversationId)).data.participantUserIds;
     }
 
     function isSquadMember(squadId) {
@@ -467,6 +486,23 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // Squad administrator authority and invitation state are server-managed.
+    // Recipients may read their own invitation; explicit active admins may read
+    // the invitation roster for management. Legacy creator fallback is healed
+    // by trusted server operations and is intentionally not reproduced here.
+    match /squadAdminInvitations/{invitationId} {
+      allow get, list: if signedIn() && (
+        resource.data.targetUserId == request.auth.uid ||
+        isExplicitActiveSquadAdmin(resource.data.squadId)
+      );
+      allow create, update, delete: if false;
+    }
+
+    match /squadAdminAccessRequests/{requestId} {
+      allow get, list: if signedIn() && resource.data.requesterUserId == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
     // Minimal canonical terminal records for locally played rewarded games.
     // Clients cannot read participant IDs/results or forge completion. The
     // authenticated reward callables use the Admin SDK for all access.
@@ -526,9 +562,13 @@ service cloud.firestore {
           isCoachStaff(teamId) &&
           request.resource.data.createdBy == request.auth.uid &&
           request.resource.data.audience in ["parents", "staff", "all"] &&
-          request.resource.data.allowReplies is bool;
+          request.resource.data.allowReplies is bool &&
+          (!("contentType" in request.resource.data) || request.resource.data.contentType == "text") &&
+          !("voiceMemo" in request.resource.data);
 
-        allow update: if isTeamActive(teamId) && isCoachStaff(teamId);
+        allow update: if isTeamActive(teamId) &&
+          isCoachStaff(teamId) &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(["contentType", "voiceMemo"]);
 
         // Announcement deletion recursively removes protected descendants and
         // notification inbox entries through deleteTeamAnnouncement only.
@@ -549,6 +589,32 @@ service cloud.firestore {
           allow delete: if false;
         }
       }
+    }
+
+    match /teamPrivateConversations/{conversationId} {
+      allow get, list: if resource.data.participantUserIds is list &&
+        resource.data.participantUserIds.size() == 2 &&
+        signedIn() &&
+        request.auth.uid in resource.data.participantUserIds;
+      allow create, update, delete: if false;
+
+      match /members/{userId} {
+        allow get: if isSelf(userId) && isPrivateTeamConversationParticipant(conversationId);
+        allow list, create, update, delete: if false;
+      }
+
+      match /messages/{messageId} {
+        allow get, list: if isPrivateTeamConversationParticipant(conversationId);
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /teamVoiceUploadReservations/{reservationId} {
+      allow read, write: if false;
+    }
+
+    match /teamMessageRateLimits/{rateLimitId} {
+      allow read, write: if false;
     }
 
     // -----------------------------------------------------------------------

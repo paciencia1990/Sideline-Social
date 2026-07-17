@@ -1,12 +1,13 @@
 import React, { useCallback, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { ArrowLeft, ChevronRight, Mail, MoreVertical } from "lucide-react-native";
+import { ArrowLeft, ChevronRight, LockKeyhole, Mail, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ChildProfilePicker } from "@/components/ChildProfilePicker";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { VoiceMemoPlayer } from "@/components/VoiceMemoPlayer";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import {
   getCoachUpdateRoute,
@@ -266,6 +267,40 @@ export default function ParentTeamHubScreen() {
 
             <View style={styles.sectionHeader}>
               <View>
+                <Text accessibilityRole="header" style={styles.sectionTitle}>{t("teamMessages.title")}</Text>
+                <Text style={styles.sectionSubtitle}>{t("teamMessages.parentSectionSubtitle")}</Text>
+              </View>
+              {summary.privateUnreadCount > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{summary.privateUnreadCount}</Text></View> : null}
+            </View>
+
+            {summary.privateConversations.length === 0 ? (
+              <Card style={styles.stateCard}>
+                <LockKeyhole color={Colors.secondary} size={28} />
+                <Text style={styles.stateTitle}>{t("teamMessages.parentEmpty")}</Text>
+                <Text style={styles.cardText}>{t("teamMessages.parentEmptyBody")}</Text>
+              </Card>
+            ) : summary.privateConversations.map((conversation) => (
+              <TouchableOpacity
+                accessibilityRole="button"
+                key={conversation.conversationId}
+                onPress={() => router.push({ pathname: "/teams/[teamId]/messages/[conversationId]", params: { teamId, conversationId: conversation.conversationId } } as never)}
+              >
+                <Card style={[styles.announcementCard, conversation.unreadCount > 0 && styles.announcementUnread]}>
+                  <View style={styles.announcementTopRow}>
+                    <LockKeyhole color={Colors.primary} size={20} />
+                    <View style={styles.announcementCopy}>
+                      <Text style={styles.announcementTitle}>{conversation.coachDisplayName}</Text>
+                      <Text numberOfLines={2} style={styles.announcementBody}>{conversation.lastMessageType === "voice" ? t("teamMessages.voicePreview") : conversation.lastMessagePreview || t("teamMessages.noMessagesYet")}</Text>
+                    </View>
+                    <ChevronRight color={Colors.textPrimary} size={20} />
+                  </View>
+                  {conversation.unreadCount > 0 ? <Text style={styles.announcementMeta}>{t("teamMessages.unread", { count: conversation.unreadCount })}</Text> : null}
+                </Card>
+              </TouchableOpacity>
+            ))}
+
+            <View style={styles.sectionHeader}>
+              <View>
                 <Text accessibilityRole="header" style={styles.sectionTitle}>{t("myTeams.coachUpdates")}</Text>
                 <Text style={styles.sectionSubtitle}>
                   {summary.unreadCount > 0
@@ -304,6 +339,7 @@ export default function ParentTeamHubScreen() {
                     <View style={[styles.readDot, announcement.isRead && styles.readDotRead]} />
                     <View style={styles.announcementCopy}>
                       {announcement.title ? <Text style={styles.announcementTitle}>{announcement.title}</Text> : null}
+                      {announcement.contentType === "voice" ? <Text style={styles.voiceLabel}>{t("teamMessages.voicePreview")}</Text> : null}
                       <Text numberOfLines={3} style={styles.announcementBody}>{announcement.body}</Text>
                     </View>
                     <ChevronRight color={Colors.textPrimary} size={20} />
@@ -315,6 +351,7 @@ export default function ParentTeamHubScreen() {
                       {announcement.allowReplies ? t("myTeams.repliesEnabled") : t("myTeams.repliesDisabledShort")}
                     </Text>
                   </View>
+                  {announcement.contentType === "voice" && announcement.voiceMemo ? <VoiceMemoPlayer durationMilliseconds={announcement.voiceMemo.durationMilliseconds} storagePath={announcement.voiceMemo.storagePath} /> : null}
                 </Card>
               </TouchableOpacity>
             ))}
@@ -404,6 +441,7 @@ const styles = StyleSheet.create({
   readDot: { backgroundColor: Colors.accentGold, borderRadius: 5, height: 10, width: 10 },
   readDotRead: { backgroundColor: Colors.secondary },
   announcementTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 16 },
+  voiceLabel: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 11, textTransform: "uppercase" },
   announcementBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20 },
   announcementMetaRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, paddingLeft: 18 },
   announcementMeta: { color: Colors.primary, fontFamily: Typography.bodyMedium, fontSize: 11 },

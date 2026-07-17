@@ -35,6 +35,8 @@ interface SquadContextType {
   currentSquad: Squad | null;
   loading: boolean;
   membershipLoading: boolean;
+  membershipError: string | null;
+  selectionWasStale: boolean;
   error: string | null;
   appConfig: AppConfig;
   fetchSquads: (lat: number, lng: number, radiusMiles?: number) => Promise<void>;
@@ -57,6 +59,8 @@ const SquadContext = createContext<SquadContextType>({
   currentSquad: null,
   loading: false,
   membershipLoading: true,
+  membershipError: null,
+  selectionWasStale: false,
   error: null,
   appConfig: DEFAULT_CONFIG,
   fetchSquads: async () => {},
@@ -77,6 +81,8 @@ export function SquadProvider({ children }: { children: ReactNode }) {
   const [selectedSquadId, setSelectedSquadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [membershipLoading, setMembershipLoading] = useState(true);
+  const [membershipError, setMembershipError] = useState<string | null>(null);
+  const [selectionWasStale, setSelectionWasStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const activeUserId = useRef(user?.uid);
@@ -89,24 +95,29 @@ export function SquadProvider({ children }: { children: ReactNode }) {
       setMySquadIds([]);
       setMySquads([]);
       setSelectedSquadId(null);
+      setMembershipError(null);
+      setSelectionWasStale(false);
       setMembershipLoading(false);
       return;
     }
 
     setMembershipLoading(true);
+    setMembershipError(null);
     try {
       const state = await fetchUserSquadState(requestUserId);
       const squads = await fetchSquadsByIds(state.squadIds);
       if (activeUserId.current !== requestUserId || requestId !== membershipRequestId.current) return;
 
       const validIds = squads.map((squad) => squad.squadId);
-      let nextSelected = state.selectedSquadId && validIds.includes(state.selectedSquadId)
+      const hadStaleSelection = Boolean(state.selectedSquadId && !validIds.includes(state.selectedSquadId));
+      const nextSelected = state.selectedSquadId && validIds.includes(state.selectedSquadId)
         ? state.selectedSquadId
-        : validIds[0] ?? null;
+        : null;
 
       setMySquadIds(validIds);
       setMySquads(squads);
       setSelectedSquadId(nextSelected);
+      setSelectionWasStale(hadStaleSelection && validIds.length > 0);
 
       if (nextSelected !== state.selectedSquadId) {
         try {
@@ -116,11 +127,13 @@ export function SquadProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch (nextError) {
-      if (activeUserId.current === requestUserId) {
+      if (activeUserId.current === requestUserId && requestId === membershipRequestId.current) {
         logContextDiagnostic("load-memberships", nextError);
         setMySquadIds([]);
         setMySquads([]);
         setSelectedSquadId(null);
+        setMembershipError("membership_load_failed");
+        setSelectionWasStale(false);
       }
     } finally {
       if (activeUserId.current === requestUserId && requestId === membershipRequestId.current) {
@@ -193,14 +206,17 @@ export function SquadProvider({ children }: { children: ReactNode }) {
     if (!user?.uid) return;
     if (squadId && !mySquadIds.includes(squadId)) throw new Error("invalid_selection");
     const previous = selectedSquadId;
+    const previousSelectionWasStale = selectionWasStale;
     setSelectedSquadId(squadId);
+    setSelectionWasStale(false);
     try {
       await persistSelectedSquad(user.uid, squadId);
     } catch (nextError) {
       setSelectedSquadId(previous);
+      setSelectionWasStale(previousSelectionWasStale);
       throw nextError;
     }
-  }, [mySquadIds, selectedSquadId, user?.uid]);
+  }, [mySquadIds, selectedSquadId, selectionWasStale, user?.uid]);
 
   const refreshLastActive = useCallback(async () => {
     if (user?.uid && mySquadIds.length > 0) await updateMemberLastActive();
@@ -220,6 +236,8 @@ export function SquadProvider({ children }: { children: ReactNode }) {
       currentSquad,
       loading,
       membershipLoading,
+      membershipError,
+      selectionWasStale,
       error,
       appConfig,
       fetchSquads,

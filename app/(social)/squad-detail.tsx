@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -8,19 +8,33 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from 'react-native';
 import { useLocalSearchParams, router, Stack } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { MoreVertical, Users } from 'lucide-react-native';
+import { MoreVertical, Settings, Users } from 'lucide-react-native';
 
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { PrimaryButton } from '@/components/PrimaryButton';
+import { Card } from '@/components/Card';
 import { SquadIdentity } from '@/components/SquadIdentity';
 import { SquadSeasonManager } from '@/components/SquadSeasonManager';
+import {
+  SquadAdministrationCard,
+  type SquadAdministrationCardHandle,
+} from '@/components/SquadAdministrationCard';
 import { useSquad } from '@/context/SquadContext';
 import { useAuth } from '@/context/AuthContext';
-import { fetchSquadDetail, SquadDetail, getSquadStatus } from '@/services/squadService';
+import {
+  fetchSquadDetail,
+  getSquadAdminErrorReason,
+  getSquadStatus,
+  type SquadAdministration,
+  type SquadDetail,
+} from '@/services/squadService';
 import { getSquadSportOption, getSquadSportTranslationKey } from '@/constants/sports';
 
 export default function SquadDetailScreen() {
@@ -33,6 +47,14 @@ export default function SquadDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [leaving, setLeaving] = useState(false);
   const [joining, setJoining] = useState(false);
+  const [administration, setAdministration] = useState<SquadAdministration | null>(null);
+  const [adminSelectionRequestKey, setAdminSelectionRequestKey] = useState(0);
+  const [adminSectionY, setAdminSectionY] = useState<number | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const administrationCardRef = useRef<SquadAdministrationCardHandle>(null);
+  const currentScrollYRef = useRef(0);
+  const pendingAdministrationFocusRef = useRef(false);
+  const administrationScrollTargetRef = useRef<number | null>(null);
 
   const isMember = mySquadIds.includes(squadId ?? '');
   const emoji = getSquadSportOption(squadDetail?.sportId).emoji;
@@ -47,7 +69,64 @@ export default function SquadDetailScreen() {
     })();
   }, [squadId]);
 
+  const focusAdministrationHeading = useCallback(() => {
+    if (!pendingAdministrationFocusRef.current || !administrationCardRef.current) return;
+    pendingAdministrationFocusRef.current = false;
+    administrationScrollTargetRef.current = null;
+    administrationCardRef.current.focusHeading();
+  }, []);
+
+  const scrollToAdministrationPosition = useCallback((sectionY: number) => {
+    const targetY = Math.max(0, sectionY - Spacing.lg);
+    administrationScrollTargetRef.current = targetY;
+    if (Math.abs(currentScrollYRef.current - targetY) <= 4) {
+      focusAdministrationHeading();
+      return;
+    }
+    scrollRef.current?.scrollTo({ animated: true, y: targetY });
+  }, [focusAdministrationHeading]);
+
+  const scrollToAdministration = useCallback(() => {
+    pendingAdministrationFocusRef.current = true;
+    if (adminSectionY != null) scrollToAdministrationPosition(adminSectionY);
+  }, [adminSectionY, scrollToAdministrationPosition]);
+
+  const openAdminSelector = useCallback(() => {
+    setAdminSelectionRequestKey((value) => value + 1);
+    scrollToAdministration();
+  }, [scrollToAdministration]);
+
+  const handleAdministrationLayout = useCallback((event: LayoutChangeEvent) => {
+    const sectionY = event.nativeEvent.layout.y;
+    setAdminSectionY(sectionY);
+    if (pendingAdministrationFocusRef.current) scrollToAdministrationPosition(sectionY);
+  }, [scrollToAdministrationPosition]);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const scrollY = event.nativeEvent.contentOffset.y;
+    currentScrollYRef.current = scrollY;
+    const targetY = administrationScrollTargetRef.current;
+    if (pendingAdministrationFocusRef.current && targetY != null && Math.abs(scrollY - targetY) <= 4) {
+      focusAdministrationHeading();
+    }
+  }, [focusAdministrationHeading]);
+
+  const showLastAdminExplanation = useCallback(() => {
+    Alert.alert(
+      t('squadAdmin.chooseNewAdmin'),
+      t('squadAdmin.lastAdminExplanation'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('squadAdmin.chooseNewAdmin'), onPress: openAdminSelector },
+      ],
+    );
+  }, [openAdminSelector, t]);
+
   const handleLeave = useCallback(() => {
+    if (administration?.callerIsAdmin && administration.activeAdminCount <= 1) {
+      showLastAdminExplanation();
+      return;
+    }
     Alert.alert(
       t('squad.leaveConfirmTitle'),
       t('squad.leaveConfirmBody'),
@@ -62,8 +141,9 @@ export default function SquadDetailScreen() {
             try {
               await leaveSquad(squadId);
               router.back();
-            } catch {
-              Alert.alert('', t('squad.errorLeaving'));
+            } catch (error) {
+              if (getSquadAdminErrorReason(error) === 'last_active_admin') showLastAdminExplanation();
+              else Alert.alert('', t('squad.errorLeaving'));
             } finally {
               setLeaving(false);
             }
@@ -71,7 +151,7 @@ export default function SquadDetailScreen() {
         },
       ]
     );
-  }, [squadId, user, leaveSquad, t]);
+  }, [administration?.activeAdminCount, administration?.callerIsAdmin, leaveSquad, showLastAdminExplanation, squadId, t, user]);
 
   const handleJoin = useCallback(async () => {
     if (!squadId) return;
@@ -118,6 +198,8 @@ export default function SquadDetailScreen() {
       : status === 'starting_soon'
         ? Colors.accentGold
         : Colors.secondary;
+  const sportName = t(getSquadSportTranslationKey(squadDetail.sportId));
+  const squadAccessibilityName = [squadDetail.venueName, sportName].filter(Boolean).join(' ');
 
   return (
     <ScreenWrapper>
@@ -127,6 +209,8 @@ export default function SquadDetailScreen() {
           headerRight: isMember
             ? () => (
                 <TouchableOpacity
+                  accessibilityLabel={t('squad.detailLeave')}
+                  accessibilityRole="button"
                   onPress={handleLeave}
                   style={{ marginRight: Spacing.sm }}
                   disabled={leaving}
@@ -142,7 +226,15 @@ export default function SquadDetailScreen() {
         }}
       />
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.scroll}
+        onMomentumScrollEnd={focusAdministrationHeading}
+        onScroll={handleScroll}
+        onScrollEndDrag={focusAdministrationHeading}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Hero header */}
         <View style={styles.heroCard}>
           <Text style={styles.heroEmoji}>{emoji}</Text>
@@ -158,6 +250,23 @@ export default function SquadDetailScreen() {
           </View>
         </View>
 
+        {administration?.callerIsAdmin === true ? (
+          <Card style={styles.manageSquadCard}>
+            <Text style={styles.adminRoleLabel}>{t('squadAdmin.administratorStatus')}</Text>
+            <Text style={styles.manageSquadDescription}>{t('squadAdmin.manageDescription')}</Text>
+            <TouchableOpacity
+              accessibilityLabel={t('squadAdmin.manageAccessibility', { squadName: squadAccessibilityName })}
+              accessibilityRole="button"
+              activeOpacity={0.84}
+              onPress={scrollToAdministration}
+              style={styles.manageSquadButton}
+            >
+              <Settings color={Colors.primary} size={19} />
+              <Text style={styles.manageSquadButtonText}>{t('squadAdmin.manageSquad')}</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : null}
+
         {/* Stats row */}
         <View style={styles.statsRow}>
           <View style={styles.statItem}>
@@ -172,7 +281,7 @@ export default function SquadDetailScreen() {
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statItem}>
-            <Text style={styles.statValue}>{t(getSquadSportTranslationKey(squadDetail.sportId))}</Text>
+            <Text style={styles.statValue}>{sportName}</Text>
             <Text style={styles.statLabel}>{t('squad.sport')}</Text>
           </View>
         </View>
@@ -208,7 +317,23 @@ export default function SquadDetailScreen() {
           </View>
         )}
 
-        {isMember ? <SquadSeasonManager squadId={squadDetail.squadId} /> : null}
+        {isMember ? (
+          <View onLayout={handleAdministrationLayout}>
+            <SquadAdministrationCard
+              ref={administrationCardRef}
+              onStateChange={setAdministration}
+              selectionRequestKey={adminSelectionRequestKey}
+              squadId={squadDetail.squadId}
+            />
+          </View>
+        ) : null}
+
+        {isMember ? (
+          <SquadSeasonManager
+            key={`${squadDetail.squadId}:${administration?.callerIsAdmin ? 'admin' : 'member'}`}
+            squadId={squadDetail.squadId}
+          />
+        ) : null}
 
         {/* Actions */}
         <View style={styles.actionsSection}>
@@ -217,7 +342,14 @@ export default function SquadDetailScreen() {
           ) : null}
 
           {isMember && (
-            <TouchableOpacity style={styles.leaveBtn} onPress={handleLeave} disabled={leaving}>
+            <TouchableOpacity
+              accessibilityLabel={t('squad.detailLeave')}
+              accessibilityRole="button"
+              accessibilityState={{ busy: leaving, disabled: leaving }}
+              style={styles.leaveBtn}
+              onPress={handleLeave}
+              disabled={leaving}
+            >
               <Text style={styles.leaveBtnText}>{t('squad.detailLeave')}</Text>
             </TouchableOpacity>
           )}
@@ -264,6 +396,41 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodyRegular,
     fontSize: 13,
     color: Colors.textPrimary,
+  },
+  manageSquadCard: {
+    gap: Spacing.sm,
+  },
+  adminRoleLabel: {
+    color: Colors.textHeading,
+    flexShrink: 1,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 14,
+  },
+  manageSquadDescription: {
+    color: Colors.textPrimary,
+    flexShrink: 1,
+    fontFamily: Typography.bodyRegular,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  manageSquadButton: {
+    alignItems: 'center',
+    borderColor: Colors.primary,
+    borderRadius: Radius.button,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    justifyContent: 'center',
+    minHeight: 48,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  manageSquadButtonText: {
+    color: Colors.primary,
+    flexShrink: 1,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 15,
+    textAlign: 'center',
   },
   statusPill: {
     borderRadius: 6,

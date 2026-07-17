@@ -109,6 +109,7 @@ function ParentTeamCard({ locale, summary }: { locale: string; summary: ParentTe
   const { t } = useTranslation();
   const latest = summary.latestAnnouncement;
   const details = [summary.team.sport, summary.team.season || summary.team.division || summary.team.ageRange].filter(Boolean).join(" · ");
+  const totalUnread = summary.unreadCount + summary.privateUnreadCount;
 
   return (
     <TouchableOpacity
@@ -131,9 +132,9 @@ function ParentTeamCard({ locale, summary }: { locale: string; summary: ParentTe
             <Text style={styles.teamName}>{summary.team.name}</Text>
             {details ? <Text style={styles.teamDetails}>{details}</Text> : null}
           </View>
-          {summary.unreadCount > 0 ? (
+          {totalUnread > 0 ? (
             <View style={styles.badge}>
-              <Text style={styles.badgeText}>{summary.unreadCount}</Text>
+              <Text style={styles.badgeText}>{totalUnread}</Text>
             </View>
           ) : null}
           <ChevronRight color={Colors.textPrimary} size={20} />
@@ -142,6 +143,7 @@ function ParentTeamCard({ locale, summary }: { locale: string; summary: ParentTe
           <Text style={styles.metaLabel}>{t("myTeams.child")}: {formatChildLabel(summary, t)}</Text>
           <Text style={styles.metaLabel}>{t("myTeams.coach")}: {summary.coachName ?? t("myTeams.coachFallback")}</Text>
         </View>
+        {summary.privateUnreadCount > 0 ? <Text style={styles.privateUnread}>{t("teamMessages.unread", { count: summary.privateUnreadCount })} · {t("teamMessages.title")}</Text> : null}
         {latest ? (
           <View style={[styles.preview, !latest.isRead && styles.previewUnread]}>
             {latest.title ? <Text style={styles.previewTitle}>{latest.title}</Text> : null}
@@ -216,4 +218,5 @@ const styles = StyleSheet.create({
   previewBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 18 },
   previewTime: { color: Colors.primary, fontFamily: Typography.bodyMedium, fontSize: 11 },
   emptyUpdates: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, fontStyle: "italic" },
+  privateUnread: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 12 },
 });

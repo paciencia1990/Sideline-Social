@@ -21,9 +21,14 @@ const serverCore = loadTypeScript("functions/src/notificationDismissalCore.ts");
 assert.equal(core.getNotificationDestination({ type: "coachAnnouncement", teamId: "team-1", announcementId: "update-1" }), "/teams/team-1/announcements/update-1");
 assert.equal(core.getNotificationDestination({ type: "coach_update", teamId: "team-1", announcementId: "update-1" }), "/teams/team-1/announcements/update-1");
 assert.equal(core.getNotificationDestination({ type: "coachAnnouncement", teamId: "bad/path", announcementId: "update-1" }), null);
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "private-1", conversationType: "coach" }), "/coach/team-messages/private-1");
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "private-1", conversationType: "parent" }), "/teams/team-1/messages/private-1");
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "private-1" }), null);
 assert.equal(core.getNotificationDestination({ type: "friendRequest" }), "/(tabs)/friends");
 assert.equal(core.getNotificationDestination({ type: "friendRequestAccepted" }), "/(tabs)/friends");
 assert.equal(core.getNotificationDestination({ type: "chatGroupInvitation", conversationId: "group-1" }), "/(social)/chat/invitation/group-1");
+assert.equal(core.getNotificationDestination({ type: "squadAdminInvitation", squadId: "squad-1" }), "/(social)/squad-detail?squadId=squad-1");
+assert.equal(core.getNotificationDestination({ type: "squadAdminInvitation", squadId: "bad/path" }), null);
 assert.equal(core.getNotificationDestination({ type: "friendChatMessage", conversationId: "direct-1" }), "/(social)/chat/direct-1");
 assert.equal(core.getNotificationDestination({ type: "chatGroupInvitation", conversationId: "bad/path" }), null);
 assert.equal(core.getNotificationDestination({ type: "unknown" }), null);
@@ -153,6 +158,8 @@ for (const key of [
   "opened", "unableToUpdate", "dismissalRetry", "bellNoUnread", "bellUnread",
   "coachAnnouncementTitle", "friendRequestTitle", "friendRequestAcceptedTitle",
   "friendRequestFallbackBody", "chatGroupInvitationTitle", "chatGroupInvitationBody", "chatGroupInvitationUnnamedBody",
+  "squadAdminInvitationTitle", "squadAdminInvitationBody", "squadAdminAcceptedTitle", "squadAdminAcceptedBody",
+  "squadAdminRecoveryTitle", "squadAdminRecoveryBody",
 ]) {
   assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length, 2, `${key} needs English and Spanish copy.`);
 }

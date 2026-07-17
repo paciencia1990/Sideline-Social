@@ -1,8 +1,12 @@
 export const APP_NOTIFICATION_TYPES = [
   "coachAnnouncement",
+  "teamPrivateMessage",
   "friendRequest",
   "friendRequestAccepted",
   "chatGroupInvitation",
+  "squadAdminInvitation",
+  "squadAdminInvitationAccepted",
+  "squadAdminRecoveryRequested",
 ] as const;
 
 export type AppNotificationType = (typeof APP_NOTIFICATION_TYPES)[number];
@@ -13,6 +17,8 @@ export type NotificationNavigationData = {
   announcementId?: unknown;
   conversationId?: unknown;
   conversationType?: unknown;
+  squadId?: unknown;
+  squadAdminInvitationId?: unknown;
 };
 
 export type UnreadNotificationLike = {
@@ -40,6 +46,17 @@ export function getNotificationDestination(data: NotificationNavigationData): st
     return `/teams/${encodeURIComponent(data.teamId)}/announcements/${encodeURIComponent(data.announcementId)}`;
   }
 
+  if (data.type === "teamPrivateMessage") {
+    if (!isValidRouteId(data.teamId) || !isValidRouteId(data.conversationId)) return null;
+    if (data.conversationType === "coach") {
+      return `/coach/team-messages/${encodeURIComponent(data.conversationId)}`;
+    }
+    if (data.conversationType === "parent") {
+      return `/teams/${encodeURIComponent(data.teamId)}/messages/${encodeURIComponent(data.conversationId)}`;
+    }
+    return null;
+  }
+
   if (
     data.type === "friendRequest" ||
     data.type === "friendRequestAccepted" ||
@@ -52,6 +69,15 @@ export function getNotificationDestination(data: NotificationNavigationData): st
   if (data.type === "chatGroupInvitation") {
     if (!isValidRouteId(data.conversationId)) return null;
     return `/(social)/chat/invitation/${encodeURIComponent(data.conversationId)}`;
+  }
+
+  if (
+    data.type === "squadAdminInvitation" ||
+    data.type === "squadAdminInvitationAccepted" ||
+    data.type === "squadAdminRecoveryRequested"
+  ) {
+    if (!isValidRouteId(data.squadId)) return null;
+    return `/(social)/squad-detail?squadId=${encodeURIComponent(data.squadId)}`;
   }
 
   if (data.type === "friendChatMessage") {

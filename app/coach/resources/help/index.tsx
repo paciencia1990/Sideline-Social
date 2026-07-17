@@ -1,0 +1,194 @@
+import React, { useCallback, useState } from "react";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { router, useFocusEffect } from "expo-router";
+import { ChevronRight, ShieldAlert } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
+
+import { Card } from "@/components/Card";
+import { CoachResourceHeader } from "@/components/CoachResourceHeader";
+import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useAuth } from "@/context/AuthContext";
+import {
+  cacheGeneratedCoachHelpResult,
+  generateCoachResourceHelp,
+  getSavedCoachHelpResults,
+  resolveCoachResourceLocale,
+} from "@/services/coachResourcesService";
+import type { CoachHelpCategory, CoachHelpRequest, CoachHelpTone, SavedCoachHelpResult } from "@/types/coachResources";
+
+const CATEGORIES: CoachHelpCategory[] = [
+  "practice_plan", "parent_message", "parent_concern", "player_behavior", "discouraged_player",
+  "team_culture", "child_explanation", "game_day", "other",
+];
+const TONES: CoachHelpTone[] = ["warm", "direct", "encouraging", "neutral"];
+
+export default function CoachResourceHelpScreen() {
+  const { i18n, t } = useTranslation();
+  const { user } = useAuth();
+  const locale = resolveCoachResourceLocale(i18n.language);
+  const [category, setCategory] = useState<CoachHelpCategory | null>(null);
+  const [sport, setSport] = useState("");
+  const [ageGroup, setAgeGroup] = useState("");
+  const [situation, setSituation] = useState("");
+  const [desiredOutcome, setDesiredOutcome] = useState("");
+  const [tone, setTone] = useState<CoachHelpTone>("warm");
+  const [practiceMinutes, setPracticeMinutes] = useState("");
+  const [playerCount, setPlayerCount] = useState("");
+  const [equipment, setEquipment] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<SavedCoachHelpResult[]>([]);
+
+  useFocusEffect(useCallback(() => {
+    if (user?.uid) void getSavedCoachHelpResults(user.uid).then(setSaved);
+  }, [user?.uid]));
+
+  const generate = useCallback(async () => {
+    if (!user?.uid || !category || generating) return;
+    const trimmedSituation = situation.trim();
+    if (trimmedSituation.length < 10) {
+      setError(t("coach.resources.helpSituationRequired"));
+      return;
+    }
+    const clientRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const request: CoachHelpRequest = {
+      category,
+      situation: trimmedSituation.slice(0, 1500),
+      clientRequestId,
+      locale,
+      ...(sport.trim() ? { sport: sport.trim().slice(0, 80) } : {}),
+      ...(ageGroup.trim() ? { ageGroup: ageGroup.trim().slice(0, 80) } : {}),
+      ...(desiredOutcome.trim() ? { desiredOutcome: desiredOutcome.trim().slice(0, 500) } : {}),
+      ...(!["practice_plan"].includes(category) ? { tone } : {}),
+      ...(practiceMinutes ? { practiceMinutes: Number(practiceMinutes) } : {}),
+      ...(playerCount ? { playerCount: Number(playerCount) } : {}),
+      ...(equipment.trim() ? { equipment: equipment.split(",").map((entry) => entry.trim()).filter(Boolean).slice(0, 12) } : {}),
+    };
+    setGenerating(true);
+    setError(null);
+    try {
+      const result = await generateCoachResourceHelp(request);
+      await cacheGeneratedCoachHelpResult(user.uid, clientRequestId, result);
+      router.push({ pathname: "/coach/resources/help/result", params: { requestId: clientRequestId } } as never);
+    } catch {
+      setError(t("coach.resources.helpError"));
+    } finally {
+      setGenerating(false);
+    }
+  }, [ageGroup, category, desiredOutcome, equipment, generating, locale, playerCount, practiceMinutes, situation, sport, t, tone, user?.uid]);
+
+  return (
+    <ScreenWrapper>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <CoachResourceHeader subtitle={t("coach.resources.helpSubtitle")} title={t("coach.resources.needHelp")} />
+
+        {!category ? (
+          <>
+            <Text accessibilityRole="header" style={styles.sectionTitle}>{t("coach.resources.helpQuestion")}</Text>
+            <View style={styles.categoryList}>
+              {CATEGORIES.map((entry) => (
+                <TouchableOpacity accessibilityRole="button" key={entry} onPress={() => { setCategory(entry); setError(null); }} style={styles.categoryRow}>
+                  <Text style={styles.categoryText}>{t(`coach.resources.helpCategories.${entry}`)}</Text>
+                  <ChevronRight color={Colors.textHeading} size={20} />
+                </TouchableOpacity>
+              ))}
+            </View>
+            {saved.length > 0 ? (
+              <View style={styles.savedSection}>
+                <Text accessibilityRole="header" style={styles.sectionTitle}>{t("coach.resources.savedHelp")}</Text>
+                {saved.map((entry) => (
+                  <TouchableOpacity accessibilityRole="button" key={entry.id} onPress={() => router.push({ pathname: "/coach/resources/help/result", params: { requestId: entry.id } } as never)} style={styles.categoryRow}>
+                    <Text style={styles.categoryText}>{entry.result.title}</Text>
+                    <ChevronRight color={Colors.textHeading} size={20} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <Card style={styles.reminderCard}>
+              <ShieldAlert color={Colors.accentGold} size={22} />
+              <Text style={styles.reminderText}>{t("coach.resources.privacyReminder")}</Text>
+            </Card>
+            <Text accessibilityRole="header" style={styles.sectionTitle}>{t(`coach.resources.helpCategories.${category}`)}</Text>
+
+            {category === "practice_plan" ? (
+              <>
+                <Field label={t("coach.resources.fields.sport")} maxLength={80} onChangeText={setSport} value={sport} />
+                <Field label={t("coach.resources.fields.ageGroup")} maxLength={80} onChangeText={setAgeGroup} value={ageGroup} />
+                <Field keyboardType="number-pad" label={t("coach.resources.fields.practiceMinutes")} maxLength={3} onChangeText={setPracticeMinutes} value={practiceMinutes} />
+                <Field keyboardType="number-pad" label={t("coach.resources.fields.playerCount")} maxLength={3} onChangeText={setPlayerCount} value={playerCount} />
+                <Field label={t("coach.resources.fields.skillFocus")} maxLength={1500} multiline onChangeText={setSituation} value={situation} />
+                <Field label={t("coach.resources.fields.equipment")} maxLength={300} onChangeText={setEquipment} value={equipment} />
+              </>
+            ) : (
+              <>
+                {!["parent_message", "parent_concern", "team_culture"].includes(category) ? <Field label={t("coach.resources.fields.ageGroup")} maxLength={80} onChangeText={setAgeGroup} value={ageGroup} /> : null}
+                {category === "game_day" || category === "child_explanation" ? <Field label={t("coach.resources.fields.sport")} maxLength={80} onChangeText={setSport} value={sport} /> : null}
+                <Field label={t(`coach.resources.situationLabels.${category}`)} maxLength={1500} multiline onChangeText={setSituation} value={situation} />
+                <Field label={t("coach.resources.fields.desiredOutcome")} maxLength={500} multiline onChangeText={setDesiredOutcome} value={desiredOutcome} />
+                <Text style={styles.label}>{t("coach.resources.fields.tone")}</Text>
+                <View accessibilityRole="radiogroup" style={styles.tones}>
+                  {TONES.map((entry) => (
+                    <TouchableOpacity accessibilityRole="radio" accessibilityState={{ checked: tone === entry }} key={entry} onPress={() => setTone(entry)} style={[styles.tone, tone === entry && styles.toneSelected]}>
+                      <Text style={[styles.toneText, tone === entry && styles.toneTextSelected]}>{t(`coach.resources.tones.${entry}`)}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
+
+            {error ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
+            <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: generating, disabled: generating }} disabled={generating} onPress={() => void generate()} style={[styles.generateButton, generating && styles.disabled]}>
+              {generating ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.generateText}>{t("coach.resources.generateHelp")}</Text>}
+            </TouchableOpacity>
+            {generating ? <Text accessibilityLiveRegion="polite" style={styles.loadingText}>{t("coach.resources.generating")}</Text> : null}
+            <TouchableOpacity accessibilityRole="button" disabled={generating} onPress={() => { setCategory(null); setError(null); }} style={styles.backStepButton}>
+              <Text style={styles.backStepText}>{t("coach.resources.chooseDifferentSituation")}</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </ScrollView>
+    </ScreenWrapper>
+  );
+}
+
+function Field({ keyboardType, label, maxLength, multiline, onChangeText, value }: {
+  keyboardType?: "default" | "number-pad"; label: string; maxLength: number; multiline?: boolean; onChangeText: (value: string) => void; value: string;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput accessibilityLabel={label} keyboardType={keyboardType} maxLength={maxLength} multiline={multiline} onChangeText={onChangeText} style={[styles.input, multiline && styles.textarea]} textAlignVertical={multiline ? "top" : "center"} value={value} />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
+  sectionTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, lineHeight: 24 },
+  categoryList: { gap: Spacing.sm },
+  categoryRow: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.sm, minHeight: 58, padding: Spacing.md },
+  categoryText: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodySemiBold, fontSize: 14, lineHeight: 20 },
+  savedSection: { gap: Spacing.sm, paddingTop: Spacing.md },
+  reminderCard: { alignItems: "flex-start", borderLeftColor: Colors.accentGold, borderLeftWidth: 4, flexDirection: "row", gap: Spacing.sm },
+  reminderText: { color: Colors.textPrimary, flex: 1, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 20 },
+  field: { gap: Spacing.xs },
+  label: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19 },
+  input: { backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 50, paddingHorizontal: Spacing.md },
+  textarea: { minHeight: 110, paddingTop: Spacing.md },
+  tones: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  tone: { borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexGrow: 1, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.sm },
+  toneSelected: { backgroundColor: Colors.primary },
+  toneText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
+  toneTextSelected: { color: Colors.surface },
+  error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19, textAlign: "center" },
+  generateButton: { alignItems: "center", backgroundColor: Colors.textHeading, borderRadius: Radius.button, justifyContent: "center", minHeight: 52, paddingHorizontal: Spacing.lg },
+  generateText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 15, textAlign: "center" },
+  loadingText: { color: Colors.textPrimary, fontFamily: Typography.bodyMedium, fontSize: 13, textAlign: "center" },
+  disabled: { opacity: 0.65 },
+  backStepButton: { alignItems: "center", justifyContent: "center", minHeight: 44 },
+  backStepText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13, textAlign: "center" },
+});

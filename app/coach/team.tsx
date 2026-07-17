@@ -13,9 +13,12 @@ import { Archive, MoreVertical, RotateCcw } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
+import { useCoachBackNavigation } from "@/hooks/useCoachBackNavigation";
 import { getTeamRosterProfiles } from "@/services/teamRosterService";
+import { getOrCreatePrivateTeamConversation } from "@/services/teamPrivateMessageService";
 import {
   canManageTeamRoles,
   getCurrentUserTeamMemberships,
@@ -35,6 +38,7 @@ type StaffRoleFeedback = { message: string; isError: boolean };
 
 export default function CoachTeamScreen() {
   const { t } = useTranslation();
+  const navigateBack = useCoachBackNavigation();
   const params = useLocalSearchParams<{ teamId?: string | string[] }>();
   const requestedTeamId = normalizeParam(params.teamId);
   const [members, setMembers] = useState<TeamMembership[]>([]);
@@ -47,6 +51,7 @@ export default function CoachTeamScreen() {
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [openingMessageUserId, setOpeningMessageUserId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<StaffRoleFeedback | null>(null);
   const [lifecycleAction, setLifecycleAction] = useState<"archive" | "restore" | null>(null);
   const staffRoleUpdateInFlight = useRef(false);
@@ -228,22 +233,50 @@ export default function CoachTeamScreen() {
   }, [changeStaffRole, t]);
 
   const openMemberActions = useCallback((member: TeamMembership, name: string) => {
-    if (updatingUserId) return;
+    if (updatingUserId || openingMessageUserId || !selectedTeam) return;
     const isStaff = hasTeamRole(member, "staff");
     const nextStaffValue = !isStaff;
+    const mayChangeRole = Boolean(
+      mayManageRoles &&
+      currentMembership &&
+      member.userId !== currentMembership.userId &&
+      member.userId !== selectedTeam.createdBy &&
+      isEligibleStaffRoleTarget(member),
+    );
+    const maySendPrivateMessage = Boolean(
+      isTeamActive(selectedTeam) &&
+      currentMembership &&
+      member.userId !== currentMembership.userId &&
+      hasTeamRole(member, "parent"),
+    );
+    const actions = [] as { text: string; style?: "default" | "cancel" | "destructive"; onPress?: () => void }[];
+    if (maySendPrivateMessage) actions.push({
+      text: t("teamMessages.sendPrivateMessage"),
+      onPress: () => {
+        setOpeningMessageUserId(member.userId);
+        void getOrCreatePrivateTeamConversation(selectedTeam.id, member.userId)
+          .then((conversation) => router.push(`/coach/team-messages/${conversation.conversationId}` as never))
+          .catch((nextError) => {
+            console.warn("[CoachTeam] open private message", getErrorCode(nextError));
+            setFeedback({ isError: true, message: t("teamMessages.openError") });
+          })
+          .finally(() => setOpeningMessageUserId(null));
+      },
+    });
+    if (mayChangeRole) actions.push({
+      text: nextStaffValue ? t("coach.team.makeStaff") : t("coach.team.removeStaffAccess"),
+      style: nextStaffValue ? "default" : "destructive",
+      onPress: () => confirmStaffRole(member, name, nextStaffValue),
+    });
     Alert.alert(
       t("coach.team.memberActionsTitle", { name }),
       undefined,
       [
         { text: t("common.cancel"), style: "cancel" },
-        {
-          text: nextStaffValue ? t("coach.team.makeStaff") : t("coach.team.removeStaffAccess"),
-          style: nextStaffValue ? "default" : "destructive",
-          onPress: () => confirmStaffRole(member, name, nextStaffValue),
-        },
+        ...actions,
       ],
     );
-  }, [confirmStaffRole, t, updatingUserId]);
+  }, [confirmStaffRole, currentMembership, mayManageRoles, openingMessageUserId, selectedTeam, t, updatingUserId]);
 
   const canManageMember = useCallback((member: TeamMembership) => Boolean(
     mayManageRoles &&
@@ -254,9 +287,19 @@ export default function CoachTeamScreen() {
     isEligibleStaffRoleTarget(member),
   ), [currentMembership, mayManageRoles, selectedTeam]);
 
+  const canOpenParentActions = useCallback((member: TeamMembership) => Boolean(
+    currentMembership && selectedTeam && isTeamActive(selectedTeam) && member.userId !== currentMembership.userId
+  ), [currentMembership, selectedTeam]);
+
   return (
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <CoachResourceHeader
+          accessibilityLabel={t("coach.team.backAccessibility")}
+          onBack={navigateBack}
+          title={t("coach.home.viewTeam")}
+        />
+
         {teamLoading && !selectedTeam ? (
           <Card style={styles.centerCard}>
             <ActivityIndicator color={Colors.primary} />
@@ -325,7 +368,7 @@ export default function CoachTeamScreen() {
                     members={staffMembers}
                     profiles={profiles}
                     title={t("coach.team.staff")}
-                    updatingUserId={updatingUserId}
+                    updatingUserId={updatingUserId ?? openingMessageUserId}
                     canManageMember={canManageMember}
                     onOpenActions={openMemberActions}
                   />
@@ -335,8 +378,8 @@ export default function CoachTeamScreen() {
                     members={parentMembers}
                     profiles={profiles}
                     title={t("coach.team.parents")}
-                    updatingUserId={updatingUserId}
-                    canManageMember={canManageMember}
+                    updatingUserId={updatingUserId ?? openingMessageUserId}
+                    canManageMember={canOpenParentActions}
                     onOpenActions={openMemberActions}
                   />
 

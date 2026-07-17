@@ -30,6 +30,8 @@ import {
   type TeamMembership,
 } from "@/services/teamService";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
+import { getTeamPrivateMessageInbox } from "@/services/teamPrivateMessageService";
+import type { StoredVoiceMemo, TeamPrivateConversation } from "@/types/teamVoiceMessaging";
 
 export type ParentTeamAnnouncement = TeamAnnouncement & {
   createdAtDate: Date | null;
@@ -49,6 +51,8 @@ export type ParentTeamSummary = {
   announcements: ParentTeamAnnouncement[];
   unreadCount: number;
   latestAnnouncement: ParentTeamAnnouncement | null;
+  privateConversations: TeamPrivateConversation[];
+  privateUnreadCount: number;
 };
 
 export type ParentTeamsOverview = {
@@ -57,6 +61,7 @@ export type ParentTeamsOverview = {
   unreadCount: number;
   latestTeam: ParentTeamSummary | null;
   latestAnnouncement: ParentTeamAnnouncement | null;
+  privateUnreadCount: number;
 };
 
 export type ChildTeamGroup = {
@@ -68,9 +73,10 @@ export type ChildTeamGroup = {
 };
 
 export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
-  const [memberships, childProfiles] = await Promise.all([
+  const [memberships, childProfiles, privateConversations] = await Promise.all([
     getParentTeams({ throwOnError: true }),
     getCurrentUserChildren(),
+    getTeamPrivateMessageInbox("parent"),
   ]);
   const childLinksByTeam = await loadChildLinksByTeam(childProfiles);
   const summaries = await Promise.all(
@@ -79,6 +85,7 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
       .map((membership) => loadParentTeamSummary(
         membership,
         resolveMembershipChildren(membership, childProfiles, childLinksByTeam),
+        privateConversations.filter((conversation) => conversation.teamId === membership.teamId),
       )),
   );
   const teams = summaries.sort(compareTeamSummaries);
@@ -90,6 +97,7 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
     unreadCount,
     latestTeam,
     latestAnnouncement: latestTeam?.latestAnnouncement ?? null,
+    privateUnreadCount: teams.reduce((total, team) => total + team.privateUnreadCount, 0),
   };
 }
 
@@ -143,6 +151,7 @@ export function getCoachUpdateRoute(teamId: string, announcementId: string, ..._
 async function loadParentTeamSummary(
   membership: TeamMembership,
   childResolution: ResolvedMembershipChildren,
+  privateConversations: TeamPrivateConversation[],
 ): Promise<ParentTeamSummary> {
   const user = auth.currentUser;
   if (!user || !membership.team) throw new Error("Parent team membership is unavailable.");
@@ -182,6 +191,8 @@ async function loadParentTeamSummary(
     announcements,
     unreadCount: announcements.filter((announcement) => !announcement.isRead).length,
     latestAnnouncement: announcements[0] ?? null,
+    privateConversations,
+    privateUnreadCount: privateConversations.reduce((total, conversation) => total + conversation.unreadCount, 0),
   };
 }
 
@@ -248,6 +259,7 @@ async function resolveCoachName(team: Team): Promise<string | null> {
 }
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): ParentTeamAnnouncement {
+  const voice = data.voiceMemo && typeof data.voiceMemo === "object" ? data.voiceMemo as Record<string, unknown> : null;
   return {
     id,
     title: readString(data.title) ?? "",
@@ -256,11 +268,22 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): Paren
     createdByName: formatPublicUserName(readString(data.createdByName)) ?? "",
     audience: data.audience === "staff" || data.audience === "all" ? data.audience : "parents",
     allowReplies: data.allowReplies !== false,
+    contentType: data.contentType === "voice" && voice ? "voice" : "text",
+    voiceMemo: voice ? {
+      storagePath: readString(voice.storagePath) ?? "",
+      durationMilliseconds: Number(voice.durationMilliseconds ?? 0),
+      sizeBytes: Number(voice.sizeBytes ?? 0),
+      mimeType: readVoiceMime(voice.mimeType),
+    } satisfies StoredVoiceMemo : null,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
     createdAtDate: readDate(data.createdAt),
     isRead: false,
   };
+}
+
+function readVoiceMime(value: unknown): StoredVoiceMemo["mimeType"] {
+  return value === "audio/m4a" || value === "audio/x-m4a" ? value : "audio/mp4";
 }
 
 function compareTeamSummaries(first: ParentTeamSummary, second: ParentTeamSummary) {

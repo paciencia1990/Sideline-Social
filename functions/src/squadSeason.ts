@@ -89,20 +89,18 @@ async function readActiveMembership(
   firestore: FirebaseFirestore.Firestore,
   userId: string,
   squadId: string,
-): Promise<FirebaseFirestore.DocumentData | null> {
+): Promise<{ data: FirebaseFirestore.DocumentData; ref: FirebaseFirestore.DocumentReference } | null> {
   const canonical = await firestore.collection('squadMemberships').doc(`${squadId}__${userId}`).get();
   if (canonical.exists) {
     const membership = canonical.data()!;
-    return membership.membershipStatus === 'active' ? membership : null;
+    return membership.membershipStatus === 'active' ? { data: membership, ref: canonical.ref } : null;
   }
   const legacy = await firestore.collection('squadMemberships')
     .where('userId', '==', userId)
     .where('squadId', '==', squadId)
     .get();
-  return legacy.docs.map((document) => document.data()).find((membership) => (
-    membership.membershipStatus === 'active' ||
-    (membership.membershipStatus == null && membership.isActive === true)
-  )) ?? null;
+  const active = legacy.docs.find((document) => document.data().membershipStatus === 'active');
+  return active ? { data: active.data(), ref: active.ref } : null;
 }
 
 async function assertSquadAccess(input: {
@@ -119,11 +117,13 @@ async function assertSquadAccess(input: {
   }
   const squad = squadSnapshot.data() as SquadData;
   const platformAdmin = isPlatformAdmin(input.context);
-  const membership = platformAdmin ? null : await readActiveMembership(firestore, userId, input.squadId);
-  if (!platformAdmin && !membership) {
+  const membershipRecord = platformAdmin ? null : await readActiveMembership(firestore, userId, input.squadId);
+  if (!platformAdmin && !membershipRecord) {
     throw new functions.https.HttpsError('permission-denied', 'Active Squad membership is required.');
   }
+  const membership = membershipRecord?.data ?? null;
   const canManageSeasons = isAuthorizedSeasonManager({
+    squadId: input.squadId,
     userId,
     isPlatformAdmin: platformAdmin,
     membershipStatus: membership?.membershipStatus ?? (membership?.isActive === true ? 'active' : null),
@@ -132,6 +132,21 @@ async function assertSquadAccess(input: {
   });
   if (input.requireAdmin && !canManageSeasons) {
     throw new functions.https.HttpsError('permission-denied', 'Only Squad Admins can manage seasons.');
+  }
+  if (
+    !platformAdmin &&
+    canManageSeasons &&
+    membershipRecord &&
+    membership?.squadRole !== 'admin' &&
+    membership?.squadRole !== 'member' &&
+    squadCreatorId(squad) === userId
+  ) {
+    await membershipRecord.ref.set({
+      squadRole: 'admin',
+      squadRoleUpdatedAt: Timestamp.now(),
+      squadRoleUpdatedBy: 'system:legacy-creator-self-heal',
+      updatedAt: Timestamp.now(),
+    }, { merge: true });
   }
   return { firestore, membership, squad, squadSnapshot, userId, canManageSeasons, platformAdmin };
 }
@@ -153,19 +168,21 @@ async function assertTransactionSeasonAdmin(input: {
 
   const canonicalRef = input.firestore.collection('squadMemberships').doc(`${input.squadId}__${input.userId}`);
   const canonical = await input.transaction.get(canonicalRef);
+  let membershipRef: FirebaseFirestore.DocumentReference | null = null;
   let membership = canonical.exists && canonical.data()?.membershipStatus === 'active'
     ? canonical.data()!
     : null;
+  if (membership) membershipRef = canonicalRef;
   if (!canonical.exists) {
     const legacy = await input.transaction.get(input.firestore.collection('squadMemberships')
       .where('userId', '==', input.userId)
       .where('squadId', '==', input.squadId));
-    membership = legacy.docs.map((document) => document.data()).find((candidate) => (
-      candidate.membershipStatus === 'active' ||
-      (candidate.membershipStatus == null && candidate.isActive === true)
-    )) ?? null;
+    const active = legacy.docs.find((document) => document.data().membershipStatus === 'active');
+    membership = active?.data() ?? null;
+    membershipRef = active?.ref ?? null;
   }
   if (!isAuthorizedSeasonManager({
+    squadId: input.squadId,
     userId: input.userId,
     isPlatformAdmin: false,
     membershipStatus: membership?.membershipStatus ?? (membership?.isActive === true ? 'active' : null),
@@ -173,6 +190,20 @@ async function assertTransactionSeasonAdmin(input: {
     squadCreatorId: squadCreatorId(squad),
   })) {
     throw new functions.https.HttpsError('permission-denied', 'Only Squad Admins can manage seasons.');
+  }
+  if (
+    membershipRef &&
+    membership?.squadRole !== 'admin' &&
+    membership?.squadRole !== 'member' &&
+    squadCreatorId(squad) === input.userId
+  ) {
+    const now = Timestamp.now();
+    input.transaction.set(membershipRef, {
+      squadRole: 'admin',
+      squadRoleUpdatedAt: now,
+      squadRoleUpdatedBy: 'system:legacy-creator-self-heal',
+      updatedAt: now,
+    }, { merge: true });
   }
   return { squad, squadRef };
 }

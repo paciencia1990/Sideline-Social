@@ -102,6 +102,56 @@ export interface SquadDetail extends Squad {
   extraMemberCount: number;
 }
 
+export type SquadAdminMember = {
+  userId: string;
+  displayName: string | null;
+  photoURL: string | null;
+  squadRole: "admin" | "member";
+  isCurrentUser: boolean;
+};
+
+export type SquadAdminInvitationSummary = {
+  invitationId: string;
+  targetUserId: string;
+  invitedByUserId: string;
+  status: "pending";
+  expiresAtMillis: number;
+};
+
+export type SquadAdministration = {
+  squadId: string;
+  squadLabel: string;
+  callerIsAdmin: boolean;
+  activeAdminCount: number;
+  isOrphaned: boolean;
+  admins: SquadAdminMember[];
+  members: SquadAdminMember[];
+  eligibleMembers: SquadAdminMember[];
+  pendingInvitations: SquadAdminInvitationSummary[];
+  myInvitation: SquadAdminInvitationSummary | null;
+  recoveryRequestStatus: "pending" | "approved" | "declined" | "canceled" | null;
+};
+
+export type SquadAdminErrorReason =
+  | "cannot_invite_self"
+  | "last_active_admin"
+  | "target_not_admin"
+  | "target_not_active_member"
+  | "target_already_admin"
+  | "invitation_accepted"
+  | "invitation_already_pending"
+  | "invitation_declined"
+  | "invitation_expired"
+  | "invitation_not_found"
+  | "invitation_canceled"
+  | "not_squad_admin"
+  | "squad_has_active_admin"
+  | "squad_has_no_active_admin"
+  | "squad_not_found"
+  | "recovery_request_already_pending"
+  | "recovery_request_not_found"
+  | "concurrent_admin_change";
+
 export type SquadStatus = "active" | "starting_soon" | "quiet";
 
 type FirestoreDate = Timestamp | number | Date | null | undefined;
@@ -241,11 +291,11 @@ export async function fetchUserSquadState(userId: string): Promise<UserSquadStat
     const squadIds = readStringArray(snapshot.data()?.squadIds);
     const serverSelected = readString(snapshot.data()?.selectedSquadId) || null;
     const localSelected = await AsyncStorage.getItem(selectedSquadStorageKey(userId));
-    const selectedSquadId = [serverSelected, localSelected].find((candidate) => candidate && squadIds.includes(candidate)) ?? null;
+    const selectedSquadId = serverSelected || localSelected || null;
     return { squadIds, selectedSquadId };
   } catch (error) {
     logSquadDiagnostic("membership-state", error);
-    return { squadIds: [], selectedSquadId: null };
+    throw error;
   }
 }
 
@@ -307,6 +357,59 @@ export async function joinSquad(squadId: string): Promise<{ selectedSquadId: str
 export async function leaveSquad(squadId: string): Promise<{ selectedSquadId: string | null }> {
   const callable = httpsCallable<{ squadId: string }, { selectedSquadId: string | null }>(functions, "leaveVenueSportSquad");
   return (await callable({ squadId })).data;
+}
+
+export async function getSquadAdministration(squadId: string): Promise<SquadAdministration> {
+  const callable = httpsCallable<{ squadId: string }, SquadAdministration>(functions, "getSquadAdministration");
+  return (await callable({ squadId })).data;
+}
+
+export async function inviteSquadAdmin(squadId: string, targetUserId: string) {
+  const callable = httpsCallable<
+    { squadId: string; targetUserId: string },
+    { status: "pending"; invitationId: string }
+  >(functions, "inviteSquadAdmin");
+  return (await callable({ squadId, targetUserId })).data;
+}
+
+export async function respondToSquadAdminInvitation(squadId: string, decision: "accept" | "decline") {
+  const callable = httpsCallable<
+    { squadId: string; decision: "accept" | "decline" },
+    { status: "accepted" | "declined" }
+  >(functions, "respondToSquadAdminInvitation");
+  return (await callable({ squadId, decision })).data;
+}
+
+export async function cancelSquadAdminInvitation(squadId: string, targetUserId: string) {
+  const callable = httpsCallable<
+    { squadId: string; targetUserId: string },
+    { status: "canceled" }
+  >(functions, "cancelSquadAdminInvitation");
+  return (await callable({ squadId, targetUserId })).data;
+}
+
+export async function removeSquadAdmin(squadId: string, targetUserId: string) {
+  const callable = httpsCallable<
+    { squadId: string; targetUserId: string },
+    { status: "member"; targetUserId: string }
+  >(functions, "removeSquadAdmin");
+  return (await callable({ squadId, targetUserId })).data;
+}
+
+export async function requestSquadAdminAccess(squadId: string) {
+  const callable = httpsCallable<
+    { squadId: string },
+    { status: "pending"; requestId: string }
+  >(functions, "requestSquadAdminAccess");
+  return (await callable({ squadId })).data;
+}
+
+export function getSquadAdminErrorReason(error: unknown): SquadAdminErrorReason | null {
+  if (!error || typeof error !== "object" || !("details" in error)) return null;
+  const details = (error as { details?: unknown }).details;
+  if (!details || typeof details !== "object" || !("reason" in details)) return null;
+  const reason = (details as { reason?: unknown }).reason;
+  return typeof reason === "string" ? reason as SquadAdminErrorReason : null;
 }
 
 export async function persistSelectedSquad(userId: string, squadId: string | null): Promise<void> {

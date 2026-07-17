@@ -201,7 +201,7 @@ assert.equal(notificationSource.includes("createPersonalNotificationAndPush"), t
 assert.equal(notificationSource.includes("notifications.types.coachAnnouncementTitle"), true);
 assert.equal(notificationSource.includes("memberSnapshot.id === authorUserId"), true);
 assert.equal(notificationSource.includes("isTeamActive(teamSnapshot.data())"), true);
-assert.equal(notificationSource.includes("hasParentRole(member)"), true);
+assert.equal(notificationSource.includes("shouldReceiveAnnouncement(member, announcement.audience)"), true);
 const joinCallableSource = functionsSource.slice(
   functionsSource.indexOf("export const joinParentTeamByInviteCode"),
   functionsSource.indexOf("export const setTeamStaffRole"),

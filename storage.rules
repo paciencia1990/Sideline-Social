@@ -1,0 +1,49 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function reservation(reservationId) {
+      return firestore.get(/databases/(default)/documents/teamVoiceUploadReservations/$(reservationId)).data;
+    }
+
+    function validVoiceUpload(reservationId, teamId, kind, targetId) {
+      let upload = reservation(reservationId);
+      return signedIn() &&
+        upload.status == "pending" &&
+        upload.userId == request.auth.uid &&
+        upload.teamId == teamId &&
+        upload.kind == kind &&
+        upload.targetId == targetId &&
+        upload.expiresAt > request.time &&
+        upload.voiceMemo is map &&
+        upload.voiceMemo.mimeType in ["audio/mp4", "audio/m4a", "audio/x-m4a"] &&
+        upload.voiceMemo.durationMilliseconds is int &&
+        upload.voiceMemo.durationMilliseconds > 0 &&
+        upload.voiceMemo.durationMilliseconds <= 90000 &&
+        upload.voiceMemo.sizeBytes is int &&
+        upload.voiceMemo.sizeBytes > 0 &&
+        upload.voiceMemo.sizeBytes <= 2 * 1024 * 1024 &&
+        request.resource.size == upload.voiceMemo.sizeBytes &&
+        request.resource.contentType == upload.voiceMemo.mimeType;
+    }
+
+    match /teamVoiceMemos/{teamId}/announcements/{announcementId}/{reservationId}/memo.m4a {
+      allow create: if validVoiceUpload(reservationId, teamId, "announcement", announcementId);
+      allow read, update, delete: if false;
+    }
+
+    match /teamVoiceMemos/{teamId}/privateConversations/{conversationId}/{messageId}/{reservationId}/memo.m4a {
+      allow create: if validVoiceUpload(reservationId, teamId, "privateMessage", messageId) &&
+        reservation(reservationId).conversationId == conversationId;
+      allow read, update, delete: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

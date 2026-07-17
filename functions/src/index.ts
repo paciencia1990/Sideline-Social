@@ -69,6 +69,21 @@ import {
   setStaffRole,
 } from './teamMembershipCore';
 import {
+  TEAM_VOICE_MAX_SIZE_BYTES,
+  isExplicitConversationParticipant,
+  privateMessagePreview,
+  readAnnouncementAudience,
+  readBoundedText,
+  readClientIdentifier,
+  readOptionalBoundedText,
+  readRequiredIdentifier,
+  shouldReceiveAnnouncement,
+  teamPrivateConversationId,
+  teamPrivateMessageId,
+  teamVoiceStoragePath,
+  validateVoiceMemoMetadata,
+} from './teamVoiceMessagingCore';
+import {
   assertValidCoordinates,
   canonicalVenueId,
   deterministicSquadId,
@@ -76,7 +91,6 @@ import {
   normalizeSportId,
   normalizeVenueName,
   resolveJoinProjection,
-  resolveSelectionAfterLeave,
   validateVenueId,
   venueSportKeyFor,
   type SquadSportId,
@@ -104,10 +118,22 @@ export {
   updateSquadSeason,
 } from './squadSeason';
 export {
+  cancelSquadAdminInvitation,
+  expireSquadAdminInvitations,
+  getSquadAdministration,
+  inviteSquadAdmin,
+  leaveVenueSportSquad,
+  removeSquadAdmin,
+  requestSquadAdminAccess,
+  respondToSquadAdminInvitation,
+  reviewSquadAdminAccessRequest,
+} from './squadAdmin';
+export {
   acknowledgeNotificationOpened,
   cleanupExpiredUserNotifications,
   clearUserNotifications,
 } from './userNotificationDismissal';
+export { generateCoachResourceHelp } from './coachResourceHelp';
 export {
   blockFriendChatUser,
   createFriendGroupConversation,
@@ -140,7 +166,7 @@ const SQUAD_MILES_TO_METERS = 1609.34;
 type PersonalNotificationInput = {
   recipientUserId: string;
   eventId: string;
-  type: 'coachAnnouncement' | 'friendRequest' | 'friendRequestAccepted';
+  type: 'coachAnnouncement' | 'teamPrivateMessage' | 'friendRequest' | 'friendRequestAccepted';
   titleKey: string;
   bodyKey: string;
   params: Record<string, string | number>;
@@ -148,6 +174,8 @@ type PersonalNotificationInput = {
   actorDisplayName?: string;
   teamId?: string;
   announcementId?: string;
+  conversationId?: string;
+  conversationType?: 'coach' | 'parent';
   friendRequestId?: string;
   pushTitle: string;
   pushBody: string;
@@ -188,6 +216,8 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
       actorDisplayName: input.actorDisplayName ?? null,
       teamId: input.teamId ?? null,
       announcementId: input.announcementId ?? null,
+      conversationId: input.conversationId ?? null,
+      conversationType: input.conversationType ?? null,
       friendRequestId: input.friendRequestId ?? null,
       expiresAt: null,
     });
@@ -611,12 +641,21 @@ export const joinVenueSportSquad = functions.https.onCall(async (data, context) 
     const squad = squadSnapshot.data() as SquadDocument;
     const memberIds = Array.from(new Set(Array.isArray(squad.memberIds) ? squad.memberIds : []));
     const existingMembership = membershipSnapshot.data();
+    const activeLegacyMembership = legacyMembershipSnapshot.docs.map((document) => document.data()).find((membership) => (
+      membership.membershipStatus === 'active'
+      || (membership.membershipStatus == null && membership.isActive === true)
+    ));
     const hasActiveMembership = existingMembership?.membershipStatus === 'active'
-      || legacyMembershipSnapshot.docs.some((document) => {
-        const membership = document.data();
-        return membership.membershipStatus === 'active'
-          || (membership.membershipStatus == null && membership.isActive === true);
-      });
+      || Boolean(activeLegacyMembership);
+    const existingRole = existingMembership?.squadRole ?? activeLegacyMembership?.squadRole;
+    const isRecordedCreator = squad.createdBy === uid || squad.creatorId === uid;
+    const isFirstRecordedCreatorMembership = isRecordedCreator
+      && !membershipSnapshot.exists
+      && legacyMembershipSnapshot.empty;
+    const isActiveLegacyCreator = isRecordedCreator
+      && hasActiveMembership
+      && existingRole !== 'admin'
+      && existingRole !== 'member';
     const { alreadyMember, memberIds: nextMemberIds } = resolveJoinProjection(memberIds, uid, hasActiveMembership);
     const timestamp = Timestamp.now();
     transaction.set(membershipRef, {
@@ -624,7 +663,7 @@ export const joinVenueSportSquad = functions.https.onCall(async (data, context) 
       userId: uid,
       squadId,
       membershipStatus: 'active',
-      squadRole: existingMembership?.squadRole === 'admin' || squad.createdBy === uid || squad.creatorId === uid
+      squadRole: (hasActiveMembership && existingRole === 'admin') || isFirstRecordedCreatorMembership || isActiveLegacyCreator
         ? 'admin'
         : 'member',
       presenceStatus: 'recent',
@@ -662,58 +701,6 @@ export const joinVenueSportSquad = functions.https.onCall(async (data, context) 
       : squadId;
     transaction.set(userRef, { squadIds: nextSquadIds, selectedSquadId, updatedAt: timestamp }, { merge: true });
     return { squadId, status: alreadyMember ? 'existing' : 'joined', selectedSquadId };
-  });
-});
-
-export const leaveVenueSportSquad = functions.https.onCall(async (data, context) => {
-  const uid = context.auth?.uid;
-  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to leave a Squad.');
-  const squadId = readCallableSquadId(data?.squadId);
-  const firestore = admin.firestore();
-  const squadRef = firestore.collection('squads').doc(squadId);
-  const userRef = firestore.collection('users').doc(uid);
-  const membershipRef = firestore.collection('squadMemberships').doc(`${squadId}__${uid}`);
-  return firestore.runTransaction(async (transaction) => {
-    const [squadSnapshot, userSnapshot, membershipSnapshot] = await transaction.getAll(squadRef, userRef, membershipRef);
-    const legacyMembershipSnapshot = await transaction.get(firestore.collection('squadMemberships')
-      .where('userId', '==', uid)
-      .where('squadId', '==', squadId));
-    if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
-    const timestamp = Timestamp.now();
-    const memberIds = squadSnapshot.exists && Array.isArray(squadSnapshot.data()?.memberIds)
-      ? Array.from(new Set(squadSnapshot.data()!.memberIds as string[])).filter((id) => id !== uid)
-      : [];
-    if (squadSnapshot.exists) {
-      transaction.update(squadRef, { memberIds, memberCount: memberIds.length, updatedAt: timestamp });
-    }
-    transaction.set(membershipRef, {
-      membershipId: membershipRef.id,
-      userId: uid,
-      squadId,
-      membershipStatus: 'left',
-      presenceStatus: 'away',
-      isActive: false,
-      leftAt: timestamp,
-      updatedAt: timestamp,
-      joinedAt: membershipSnapshot.data()?.joinedAt ?? timestamp,
-    }, { merge: true });
-    legacyMembershipSnapshot.docs.forEach((document) => {
-      if (document.id === membershipRef.id) return;
-      transaction.set(document.ref, {
-        membershipStatus: 'left',
-        presenceStatus: 'away',
-        isActive: false,
-        leftAt: timestamp,
-        updatedAt: timestamp,
-      }, { merge: true });
-    });
-    const { squadIds: nextSquadIds, selectedSquadId } = resolveSelectionAfterLeave(
-      userSnapshot.data()?.squadIds,
-      userSnapshot.data()?.selectedSquadId,
-      squadId,
-    );
-    transaction.set(userRef, { squadIds: nextSquadIds, selectedSquadId, updatedAt: timestamp }, { merge: true });
-    return { squadId, status: 'left', selectedSquadId };
   });
 });
 
@@ -1020,7 +1007,7 @@ export const getActiveFriendRequests = functions.https.onCall(async (_data, cont
   const [incomingSnapshot, outgoingSnapshot, blockedUserIds] = await Promise.all([
     firestore.collection('friendRequests')
       .where('toUserId', '==', userId)
-      .where('status', '==', 'pending')
+      .where('status', 'in', ['pending', 'deletePending'])
       .limit(FRIEND_REQUEST_PAGE_SIZE)
       .get(),
     firestore.collection('friendRequests')
@@ -1991,7 +1978,7 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
   .document('teams/{teamId}/announcements/{announcementId}')
   .onCreate(async (snapshot, context) => {
     const announcement = snapshot.data();
-    if (announcement.audience !== 'parents' && announcement.audience !== 'all') return null;
+    if (!['parents', 'staff', 'all'].includes(announcement.audience)) return null;
 
     const teamId = context.params.teamId as string;
     const announcementId = context.params.announcementId as string;
@@ -2009,7 +1996,8 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
     const deliveries = await Promise.allSettled(
       membersSnapshot.docs.map(async (memberSnapshot) => {
         const member = memberSnapshot.data();
-        if (!hasParentRole(member) || memberSnapshot.id === authorUserId) return;
+        if (!shouldReceiveAnnouncement(member, announcement.audience) || memberSnapshot.id === authorUserId) return;
+        const isVoice = announcement.contentType === 'voice';
         await createPersonalNotificationAndPush({
           recipientUserId: memberSnapshot.id,
           eventId: `coachAnnouncement_${teamId}_${announcementId}`,
@@ -2020,8 +2008,10 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
           actorUserId: authorUserId || undefined,
           teamId,
           announcementId,
-          pushTitle: 'New team announcement',
-          pushBody: `${coachName} posted an update for ${teamName}.`,
+          pushTitle: isVoice ? 'New team voice message' : 'New team announcement',
+          pushBody: isVoice
+            ? `${coachName} sent a voice message about ${teamName}.`
+            : `${coachName} posted an update for ${teamName}.`,
           pushData: { teamId, announcementId },
         });
       }),
@@ -2036,6 +2026,642 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
     }
     return null;
   });
+
+// ---------------------------------------------------------------------------
+// Team voice uploads and private coach-parent Team Messages
+// Reservations own every Storage path. Visible records are created only after
+// trusted metadata verification, and private conversations are readable only
+// by their explicit coach and parent participants.
+// ---------------------------------------------------------------------------
+
+const teamMessagingFunctions = functions.region('us-central1').runWith({
+  timeoutSeconds: 30,
+  memory: '256MB',
+});
+const TEAM_VOICE_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+const TEAM_VOICE_SIGNED_URL_MS = 5 * 60 * 1000;
+
+export const getOrCreatePrivateTeamConversation = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
+    const parentUserId = readRequiredIdentifier(data?.parentUserId, 'invalid_parent_id');
+    if (uid === parentUserId) throw new Error('invalid_parent_id');
+    const firestore = admin.firestore();
+    const teamRef = firestore.collection('teams').doc(teamId);
+    const coachMemberRef = teamRef.collection('members').doc(uid);
+    const parentMemberRef = teamRef.collection('members').doc(parentUserId);
+    const conversationId = teamPrivateConversationId(teamId, uid, parentUserId);
+    const conversationRef = firestore.collection('teamPrivateConversations').doc(conversationId);
+    const [coachName, parentName] = await Promise.all([
+      getPrivateNotificationActorName(uid, 'Coach'),
+      getPrivateNotificationActorName(parentUserId, 'Team Parent'),
+    ]);
+    const result = await firestore.runTransaction(async (transaction) => {
+      const [teamSnapshot, coachSnapshot, parentSnapshot, conversationSnapshot] = await transaction.getAll(
+        teamRef,
+        coachMemberRef,
+        parentMemberRef,
+        conversationRef,
+      );
+      const team = teamSnapshot.data();
+      const coachMember = coachSnapshot.data();
+      const parentMember = parentSnapshot.data();
+      if (!teamSnapshot.exists || !isTeamActive(team)) throw new Error('team_not_found');
+      if (!coachSnapshot.exists || !canManageTeamAnnouncements(coachMember)) throw new Error('not_authorized_coach');
+      if (!parentSnapshot.exists || parentMember?.status !== 'active' || !hasParentRole(parentMember)) {
+        throw new Error('parent_not_active');
+      }
+      const now = Timestamp.now();
+      const teamName = resolvePublicProfileName({ displayName: team?.name }) || 'Team';
+      if (conversationSnapshot.exists) {
+        const existing = conversationSnapshot.data();
+        if (existing?.teamId !== teamId || existing?.coachUserId !== uid || existing?.parentUserId !== parentUserId) {
+          throw new Error('conversation_conflict');
+        }
+        transaction.update(conversationRef, { status: 'active', updatedAt: now });
+      } else {
+        transaction.create(conversationRef, {
+          conversationId,
+          teamId,
+          coachUserId: uid,
+          parentUserId,
+          participantUserIds: [uid, parentUserId],
+          status: 'active',
+          teamName,
+          coachDisplayName: coachName,
+          parentDisplayName: parentName,
+          lastMessageAt: null,
+          lastMessageType: null,
+          lastMessagePreview: null,
+          lastSenderUserId: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        transaction.create(conversationRef.collection('members').doc(uid), {
+          userId: uid,
+          role: 'coach',
+          joinedAt: now,
+          lastReadAt: now,
+          unreadCount: 0,
+        });
+        transaction.create(conversationRef.collection('members').doc(parentUserId), {
+          userId: parentUserId,
+          role: 'parent',
+          joinedAt: now,
+          lastReadAt: null,
+          unreadCount: 0,
+        });
+      }
+      return { conversationId, teamId, coachUserId: uid, parentUserId, teamName, coachName, parentName };
+    });
+    functions.logger.info('private_team_conversation_opened', { createdForTeam: Boolean(result.teamId) });
+    return result;
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
+export const sendPrivateTeamTextMessage = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
+    const clientMessageId = readClientIdentifier(data?.clientMessageId);
+    const text = readBoundedText(data?.text, 1, 2000, 'invalid_message_text');
+    const firestore = admin.firestore();
+    await enforceTeamMessageRateLimit(firestore, uid, 'privateText', 60);
+    const result = await createPrivateTeamMessageTransaction(firestore, {
+      caption: undefined,
+      clientMessageId,
+      contentType: 'text',
+      conversationId,
+      senderUserId: uid,
+      text,
+    });
+    if (result.blocked) throw new Error('conversation_read_only');
+    if (result.created) await notifyPrivateTeamMessage(result.conversation, uid, result.messageId);
+    return { messageId: result.messageId, status: result.created ? 'sent' : 'alreadySent' };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
+export const createTeamVoiceMemoUpload = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
+    const kind = data?.kind;
+    if (kind !== 'announcement' && kind !== 'privateMessage') throw new Error('invalid_voice_target');
+    const voiceMemo = validateVoiceMemoMetadata(data?.voiceMemo);
+    const firestore = admin.firestore();
+    await enforceTeamMessageRateLimit(firestore, uid, 'voiceUpload', 20);
+    const reservationRef = firestore.collection('teamVoiceUploadReservations').doc();
+    const expiresAt = Timestamp.fromMillis(Date.now() + TEAM_VOICE_UPLOAD_TTL_MS);
+    let targetId: string;
+    let storagePath: string;
+    let reservationData: Record<string, unknown>;
+    if (kind === 'announcement') {
+      const title = readBoundedText(data?.title, 1, 160, 'announcement_title_required');
+      const summary = readBoundedText(data?.summary, 1, 2000, 'announcement_summary_required');
+      const audience = readAnnouncementAudience(data?.audience);
+      const allowReplies = data?.allowReplies !== false;
+      const teamRef = firestore.collection('teams').doc(teamId);
+      const [teamSnapshot, memberSnapshot] = await Promise.all([
+        teamRef.get(),
+        teamRef.collection('members').doc(uid).get(),
+      ]);
+      if (!teamSnapshot.exists || !isTeamActive(teamSnapshot.data())) throw new Error('team_not_found');
+      if (!memberSnapshot.exists || !canManageTeamAnnouncements(memberSnapshot.data())) throw new Error('not_authorized_coach');
+      targetId = teamRef.collection('announcements').doc().id;
+      storagePath = teamVoiceStoragePath({ teamId, announcementId: targetId, reservationId: reservationRef.id });
+      reservationData = { title, summary, audience, allowReplies };
+    } else {
+      const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
+      const clientMessageId = readClientIdentifier(data?.clientMessageId);
+      const caption = readOptionalBoundedText(data?.caption, 500, 'invalid_caption');
+      const conversation = await requireActivePrivateConversation(firestore, conversationId, uid);
+      if (conversation.teamId !== teamId) throw new Error('conversation_not_found');
+      targetId = teamPrivateMessageId(conversationId, uid, clientMessageId);
+      storagePath = teamVoiceStoragePath({
+        teamId,
+        conversationId,
+        messageId: targetId,
+        reservationId: reservationRef.id,
+      });
+      reservationData = { conversationId, clientMessageId, caption: caption ?? null };
+    }
+    await reservationRef.create({
+      reservationId: reservationRef.id,
+      kind,
+      teamId,
+      userId: uid,
+      targetId,
+      storagePath,
+      status: 'pending',
+      voiceMemo,
+      ...reservationData,
+      createdAt: FieldValue.serverTimestamp(),
+      expiresAt,
+    });
+    return { reservationId: reservationRef.id, targetId, storagePath, expiresAtMillis: expiresAt.toMillis() };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
+export const finalizeTeamVoiceAnnouncement = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const reservationId = readRequiredIdentifier(data?.reservationId, 'invalid_reservation_id');
+    const firestore = admin.firestore();
+    const reservationRef = firestore.collection('teamVoiceUploadReservations').doc(reservationId);
+    const initialSnapshot = await reservationRef.get();
+    const initial = initialSnapshot.data();
+    if (!initialSnapshot.exists || initial?.kind !== 'announcement' || initial.userId !== uid) throw new Error('upload_expired');
+    if (initial.status === 'finalized') return { announcementId: initial.targetId, status: 'alreadyFinalized' };
+    const verifiedVoiceMemo = await verifyUploadedVoiceMemo(initial);
+    const teamId = readRequiredIdentifier(initial.teamId, 'invalid_team_id');
+    const announcementId = readRequiredIdentifier(initial.targetId, 'invalid_announcement_id');
+    const teamRef = firestore.collection('teams').doc(teamId);
+    const announcementRef = teamRef.collection('announcements').doc(announcementId);
+    const status = await firestore.runTransaction(async (transaction) => {
+      const [reservationSnapshot, teamSnapshot, memberSnapshot, announcementSnapshot] = await transaction.getAll(
+        reservationRef,
+        teamRef,
+        teamRef.collection('members').doc(uid),
+        announcementRef,
+      );
+      const reservation = reservationSnapshot.data();
+      if (!reservationSnapshot.exists || reservation?.userId !== uid || reservation.kind !== 'announcement') throw new Error('upload_expired');
+      if (reservation.status === 'finalized' || announcementSnapshot.exists) return 'alreadyFinalized' as const;
+      if ((timestampMillis(reservation.expiresAt) ?? 0) <= Date.now()) throw new Error('upload_expired');
+      if (!teamSnapshot.exists || !isTeamActive(teamSnapshot.data())) throw new Error('team_not_found');
+      if (!memberSnapshot.exists || !canManageTeamAnnouncements(memberSnapshot.data())) throw new Error('not_authorized_coach');
+      transaction.create(announcementRef, {
+        contentType: 'voice',
+        title: reservation.title,
+        body: reservation.summary,
+        voiceMemo: verifiedVoiceMemo,
+        audience: reservation.audience,
+        allowReplies: reservation.allowReplies !== false,
+        createdBy: uid,
+        createdByName: resolveReplyAuthorName(undefined, memberSnapshot.data(), context.auth?.token?.name),
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      transaction.update(reservationRef, { status: 'finalized', finalizedAt: FieldValue.serverTimestamp() });
+      return 'sent' as const;
+    });
+    return { announcementId, status };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
+export const finalizePrivateTeamVoiceMessage = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const reservationId = readRequiredIdentifier(data?.reservationId, 'invalid_reservation_id');
+    const firestore = admin.firestore();
+    const reservationRef = firestore.collection('teamVoiceUploadReservations').doc(reservationId);
+    const initialSnapshot = await reservationRef.get();
+    const initial = initialSnapshot.data();
+    if (!initialSnapshot.exists || initial?.kind !== 'privateMessage' || initial.userId !== uid) throw new Error('upload_expired');
+    if (initial.status === 'finalized') return { messageId: initial.targetId, status: 'alreadyFinalized' };
+    const voiceMemo = await verifyUploadedVoiceMemo(initial);
+    const result = await createPrivateTeamMessageTransaction(firestore, {
+      caption: typeof initial.caption === 'string' ? initial.caption : undefined,
+      clientMessageId: readClientIdentifier(initial.clientMessageId),
+      contentType: 'voice',
+      conversationId: readRequiredIdentifier(initial.conversationId, 'invalid_conversation_id'),
+      reservationRef,
+      senderUserId: uid,
+      voiceMemo,
+    });
+    if (result.blocked) throw new Error('conversation_read_only');
+    if (result.created) await notifyPrivateTeamMessage(result.conversation, uid, result.messageId);
+    return { messageId: result.messageId, status: result.created ? 'sent' : 'alreadyFinalized' };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
+export const markPrivateTeamConversationRead = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
+    const firestore = admin.firestore();
+    const conversationRef = firestore.collection('teamPrivateConversations').doc(conversationId);
+    await firestore.runTransaction(async (transaction) => {
+      const conversationSnapshot = await transaction.get(conversationRef);
+      const conversation = conversationSnapshot.data();
+      if (!conversationSnapshot.exists || !isExplicitConversationParticipant(conversation, uid)) {
+        throw new Error('not_conversation_participant');
+      }
+      transaction.set(conversationRef.collection('members').doc(uid), {
+        userId: uid,
+        role: conversation?.coachUserId === uid ? 'coach' : 'parent',
+        lastReadAt: FieldValue.serverTimestamp(),
+        unreadCount: 0,
+      }, { merge: true });
+    });
+    return { status: 'read' };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
+export const getTeamPrivateMessageInbox = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const requestedRole = data?.role === 'coach' ? 'coach' : data?.role === 'parent' ? 'parent' : null;
+    if (!requestedRole) throw new Error('invalid_conversation_role');
+    const teamId = data?.teamId == null ? null : readRequiredIdentifier(data.teamId, 'invalid_team_id');
+    const offset = data?.offset == null ? 0 : Number(data.offset);
+    const pageSize = data?.pageSize == null ? 25 : Number(data.pageSize);
+    if (!Number.isInteger(offset) || offset < 0 || offset > 500) throw new Error('invalid_inbox_offset');
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) throw new Error('invalid_inbox_page_size');
+    const firestore = admin.firestore();
+    const snapshot = await firestore.collection('teamPrivateConversations')
+      .where('participantUserIds', 'array-contains', uid)
+      .orderBy('lastMessageAt', 'desc')
+      .offset(offset)
+      .limit(pageSize + 1)
+      .get();
+    const pageDocuments = snapshot.docs.slice(0, pageSize);
+    const conversations = pageDocuments.filter((document) => {
+      const value = document.data();
+      if (!isExplicitConversationParticipant(value, uid)) return false;
+      if (requestedRole === 'coach' && value.coachUserId !== uid) return false;
+      if (requestedRole === 'parent' && value.parentUserId !== uid) return false;
+      return !teamId || value.teamId === teamId;
+    });
+    const memberSnapshots = conversations.length > 0
+      ? await firestore.getAll(...conversations.map((document) => document.ref.collection('members').doc(uid)))
+      : [];
+    return {
+      conversations: conversations.map((document, index) => serializePrivateConversation(
+        document.id,
+        document.data(),
+        memberSnapshots[index]?.data(),
+      )),
+      hasMore: snapshot.size > pageSize,
+      nextOffset: offset + pageDocuments.length,
+    };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
+export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const storagePath = readBoundedText(data?.storagePath, 1, 1024, 'invalid_storage_path');
+    const match = /^teamVoiceMemos\/[^/]+\/(?:announcements|privateConversations)\/.+\/([A-Za-z0-9_-]+)\/memo\.m4a$/u.exec(storagePath);
+    if (!match) throw new Error('invalid_storage_path');
+    const reservationSnapshot = await admin.firestore().collection('teamVoiceUploadReservations').doc(match[1]).get();
+    const reservation = reservationSnapshot.data();
+    if (!reservationSnapshot.exists || reservation?.status !== 'finalized' || reservation.storagePath !== storagePath) {
+      throw new Error('voice_message_unavailable');
+    }
+    const firestore = admin.firestore();
+    if (reservation.kind === 'announcement') {
+      const teamId = readRequiredIdentifier(reservation.teamId, 'invalid_team_id');
+      const [memberSnapshot, announcementSnapshot] = await Promise.all([
+        firestore.collection('teams').doc(teamId).collection('members').doc(uid).get(),
+        firestore.collection('teams').doc(teamId).collection('announcements').doc(reservation.targetId).get(),
+      ]);
+      if (!announcementSnapshot.exists || !canAccessTeamAnnouncement(memberSnapshot.data(), announcementSnapshot.data()?.audience)) {
+        throw new Error('not_authorized_voice_recipient');
+      }
+    } else {
+      const conversationSnapshot = await firestore.collection('teamPrivateConversations').doc(reservation.conversationId).get();
+      if (!conversationSnapshot.exists || !isExplicitConversationParticipant(conversationSnapshot.data(), uid)) {
+        throw new Error('not_conversation_participant');
+      }
+    }
+    const expiresAtMillis = Date.now() + TEAM_VOICE_SIGNED_URL_MS;
+    const [url] = await admin.storage().bucket().file(storagePath).getSignedUrl({ action: 'read', expires: expiresAtMillis });
+    return { url, expiresAtMillis };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
+export const cleanupAbandonedTeamVoiceUploads = teamMessagingFunctions.pubsub
+  .schedule('every 24 hours')
+  .onRun(async () => {
+    const firestore = admin.firestore();
+    const snapshot = await firestore.collection('teamVoiceUploadReservations')
+      .where('status', '==', 'pending')
+      .where('expiresAt', '<=', Timestamp.now())
+      .limit(100)
+      .get();
+    let deletedObjects = 0;
+    await Promise.all(snapshot.docs.map(async (document) => {
+      const storagePath = document.data()?.storagePath;
+      if (typeof storagePath === 'string' && storagePath.startsWith('teamVoiceMemos/')) {
+        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        deletedObjects += 1;
+      }
+      await document.ref.delete();
+    }));
+    functions.logger.info('team_voice_cleanup_completed', {
+      reservations: snapshot.size,
+      deletedObjects,
+    });
+    return null;
+  });
+
+type PrivateMessageTransactionInput = {
+  caption?: string;
+  clientMessageId: string;
+  contentType: 'text' | 'voice';
+  conversationId: string;
+  reservationRef?: FirebaseFirestore.DocumentReference;
+  senderUserId: string;
+  text?: string;
+  voiceMemo?: Record<string, unknown>;
+};
+
+async function createPrivateTeamMessageTransaction(
+  firestore: FirebaseFirestore.Firestore,
+  input: PrivateMessageTransactionInput,
+) {
+  const conversationRef = firestore.collection('teamPrivateConversations').doc(input.conversationId);
+  const messageId = teamPrivateMessageId(input.conversationId, input.senderUserId, input.clientMessageId);
+  return firestore.runTransaction(async (transaction) => {
+    const conversationSnapshot = await transaction.get(conversationRef);
+    const conversation = conversationSnapshot.data();
+    if (!conversationSnapshot.exists || !isExplicitConversationParticipant(conversation, input.senderUserId)) {
+      throw new Error('not_conversation_participant');
+    }
+    const teamId = readRequiredIdentifier(conversation?.teamId, 'invalid_team_id');
+    const coachUserId = readRequiredIdentifier(conversation?.coachUserId, 'invalid_coach_id');
+    const parentUserId = readRequiredIdentifier(conversation?.parentUserId, 'invalid_parent_id');
+    const teamRef = firestore.collection('teams').doc(teamId);
+    const messageRef = conversationRef.collection('messages').doc(messageId);
+    const senderMemberRef = teamRef.collection('members').doc(input.senderUserId);
+    const coachMemberRef = teamRef.collection('members').doc(coachUserId);
+    const parentMemberRef = teamRef.collection('members').doc(parentUserId);
+    const reads: FirebaseFirestore.DocumentReference[] = [teamRef, coachMemberRef, parentMemberRef, messageRef];
+    if (input.reservationRef) reads.push(input.reservationRef);
+    const [teamSnapshot, coachSnapshot, parentSnapshot, messageSnapshot, reservationSnapshot] = await transaction.getAll(...reads);
+    const active = teamSnapshot.exists && isTeamActive(teamSnapshot.data()) &&
+      coachSnapshot.exists && canManageTeamAnnouncements(coachSnapshot.data()) &&
+      parentSnapshot.exists && parentSnapshot.data()?.status === 'active' && hasParentRole(parentSnapshot.data());
+    if (!active) {
+      transaction.update(conversationRef, { status: 'readOnly', updatedAt: FieldValue.serverTimestamp() });
+      return { blocked: true as const, conversation: conversation ?? {}, created: false, messageId };
+    }
+    if (messageSnapshot.exists) {
+      if (input.reservationRef && reservationSnapshot?.exists && reservationSnapshot.data()?.status !== 'finalized') {
+        transaction.update(input.reservationRef, { status: 'finalized', finalizedAt: FieldValue.serverTimestamp() });
+      }
+      return { blocked: false as const, conversation: conversation ?? {}, created: false, messageId };
+    }
+    if (input.reservationRef) {
+      const reservation = reservationSnapshot?.data();
+      if (!reservationSnapshot?.exists || reservation?.userId !== input.senderUserId || reservation.status !== 'pending') {
+        throw new Error('upload_expired');
+      }
+      if ((timestampMillis(reservation.expiresAt) ?? 0) <= Date.now()) throw new Error('upload_expired');
+    }
+    const senderRole = conversation?.coachUserId === input.senderUserId ? 'coach' : 'parent';
+    const recipientUserId = senderRole === 'coach' ? parentUserId : coachUserId;
+    const now = Timestamp.now();
+    const preview = privateMessagePreview(input.contentType, input.text ?? input.caption, input.voiceMemo?.durationMilliseconds as number | undefined);
+    transaction.create(messageRef, {
+      messageId,
+      conversationId: input.conversationId,
+      teamId,
+      senderUserId: input.senderUserId,
+      senderRole,
+      contentType: input.contentType,
+      text: input.contentType === 'text' ? input.text : null,
+      caption: input.contentType === 'voice' ? input.caption ?? null : null,
+      voiceMemo: input.contentType === 'voice' ? input.voiceMemo : null,
+      clientMessageId: input.clientMessageId,
+      createdAt: now,
+    });
+    transaction.update(conversationRef, {
+      status: 'active',
+      lastMessageAt: now,
+      lastMessageType: input.contentType,
+      lastMessagePreview: preview,
+      lastSenderUserId: input.senderUserId,
+      updatedAt: now,
+    });
+    transaction.set(conversationRef.collection('members').doc(input.senderUserId), {
+      userId: input.senderUserId,
+      role: senderRole,
+      lastReadAt: now,
+      unreadCount: 0,
+    }, { merge: true });
+    transaction.set(conversationRef.collection('members').doc(recipientUserId), {
+      userId: recipientUserId,
+      role: senderRole === 'coach' ? 'parent' : 'coach',
+      unreadCount: FieldValue.increment(1),
+    }, { merge: true });
+    if (input.reservationRef) transaction.update(input.reservationRef, { status: 'finalized', finalizedAt: now });
+    return { blocked: false as const, conversation: conversation ?? {}, created: true, messageId };
+  });
+}
+
+async function requireActivePrivateConversation(
+  firestore: FirebaseFirestore.Firestore,
+  conversationId: string,
+  userId: string,
+) {
+  const conversationRef = firestore.collection('teamPrivateConversations').doc(conversationId);
+  const conversationSnapshot = await conversationRef.get();
+  const conversation = conversationSnapshot.data();
+  if (!conversationSnapshot.exists || !isExplicitConversationParticipant(conversation, userId)) {
+    throw new Error('not_conversation_participant');
+  }
+  const teamId = readRequiredIdentifier(conversation?.teamId, 'invalid_team_id');
+  const [teamSnapshot, coachSnapshot, parentSnapshot] = await Promise.all([
+    firestore.collection('teams').doc(teamId).get(),
+    firestore.collection('teams').doc(teamId).collection('members').doc(String(conversation?.coachUserId)).get(),
+    firestore.collection('teams').doc(teamId).collection('members').doc(String(conversation?.parentUserId)).get(),
+  ]);
+  if (!teamSnapshot.exists || !isTeamActive(teamSnapshot.data()) ||
+    !coachSnapshot.exists || !canManageTeamAnnouncements(coachSnapshot.data()) ||
+    !parentSnapshot.exists || parentSnapshot.data()?.status !== 'active' || !hasParentRole(parentSnapshot.data())) {
+    await conversationRef.set({ status: 'readOnly', updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    throw new Error('conversation_read_only');
+  }
+  return conversation as Record<string, unknown>;
+}
+
+async function verifyUploadedVoiceMemo(reservation: Record<string, unknown>) {
+  const storagePath = readBoundedText(reservation.storagePath, 1, 1024, 'invalid_storage_path');
+  const declared = validateVoiceMemoMetadata(reservation.voiceMemo);
+  const [exists] = await admin.storage().bucket().file(storagePath).exists();
+  if (!exists) throw new Error('upload_failed');
+  const [metadata] = await admin.storage().bucket().file(storagePath).getMetadata();
+  const actualSize = Number(metadata.size);
+  const actualMime = typeof metadata.contentType === 'string' ? metadata.contentType : '';
+  if (!Number.isInteger(actualSize) || actualSize < 1 || actualSize > TEAM_VOICE_MAX_SIZE_BYTES || actualSize !== declared.sizeBytes) {
+    throw new Error('voice_file_too_large');
+  }
+  if (!['audio/mp4', 'audio/m4a', 'audio/x-m4a'].includes(actualMime) || actualMime !== declared.mimeType) {
+    throw new Error('unsupported_audio_type');
+  }
+  return { storagePath, ...declared };
+}
+
+async function notifyPrivateTeamMessage(
+  conversation: Record<string, unknown>,
+  senderUserId: string,
+  messageId: string,
+) {
+  const coachUserId = String(conversation.coachUserId ?? '');
+  const parentUserId = String(conversation.parentUserId ?? '');
+  const recipientUserId = senderUserId === coachUserId ? parentUserId : coachUserId;
+  if (!recipientUserId) return;
+  const senderName = await getPrivateNotificationActorName(senderUserId, senderUserId === coachUserId ? 'Coach' : 'Team Parent');
+  const teamName = resolvePublicProfileName({ displayName: conversation.teamName }) || 'your team';
+  const recipientIsCoach = recipientUserId === coachUserId;
+  await createPersonalNotificationAndPush({
+    recipientUserId,
+    eventId: `teamPrivateMessage_${conversation.conversationId}_${messageId}`,
+    type: 'teamPrivateMessage',
+    titleKey: 'notifications.types.teamPrivateMessageTitle',
+    bodyKey: 'notifications.types.teamPrivateMessageBody',
+    params: { actorName: senderName, teamName },
+    actorUserId: senderUserId,
+    teamId: String(conversation.teamId ?? ''),
+    conversationId: String(conversation.conversationId ?? ''),
+    conversationType: recipientIsCoach ? 'coach' : 'parent',
+    pushTitle: recipientIsCoach ? 'New private team reply' : 'New private team message',
+    pushBody: recipientIsCoach
+      ? `${senderName} replied about ${teamName}.`
+      : `${senderName} sent you a message about ${teamName}.`,
+    pushData: {
+      teamId: String(conversation.teamId ?? ''),
+      conversationId: String(conversation.conversationId ?? ''),
+      conversationType: recipientIsCoach ? 'coach' : 'parent',
+    },
+  });
+}
+
+async function enforceTeamMessageRateLimit(
+  firestore: FirebaseFirestore.Firestore,
+  userId: string,
+  scope: string,
+  maximum: number,
+) {
+  const reference = firestore.collection('teamMessageRateLimits').doc(`${userId}_${scope}`);
+  await firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    const now = Date.now();
+    const windowStart = timestampMillis(snapshot.data()?.windowStart) ?? 0;
+    const withinWindow = now - windowStart < 60 * 60 * 1000;
+    const count = withinWindow ? Number(snapshot.data()?.count ?? 0) : 0;
+    if (count >= maximum) throw new Error('rate_limited');
+    transaction.set(reference, {
+      userId,
+      scope,
+      count: count + 1,
+      windowStart: Timestamp.fromMillis(withinWindow ? windowStart : now),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+}
+
+function serializePrivateConversation(
+  conversationId: string,
+  conversation: Record<string, unknown>,
+  member: Record<string, unknown> | undefined,
+) {
+  return {
+    conversationId,
+    teamId: String(conversation.teamId ?? ''),
+    coachUserId: String(conversation.coachUserId ?? ''),
+    parentUserId: String(conversation.parentUserId ?? ''),
+    teamName: String(conversation.teamName ?? ''),
+    coachDisplayName: String(conversation.coachDisplayName ?? 'Coach'),
+    parentDisplayName: String(conversation.parentDisplayName ?? 'Team Parent'),
+    status: conversation.status === 'readOnly' ? 'readOnly' : 'active',
+    lastMessageAtMillis: timestampMillis(conversation.lastMessageAt) ?? 0,
+    lastMessageType: conversation.lastMessageType === 'voice' ? 'voice' : conversation.lastMessageType === 'text' ? 'text' : null,
+    lastMessagePreview: typeof conversation.lastMessagePreview === 'string' ? conversation.lastMessagePreview : null,
+    lastSenderUserId: typeof conversation.lastSenderUserId === 'string' ? conversation.lastSenderUserId : null,
+    unreadCount: Math.max(0, Number(member?.unreadCount ?? 0)),
+  };
+}
+
+function throwTeamMessagingError(error: unknown): never {
+  if (error instanceof functions.https.HttpsError) throw error;
+  const reason = error instanceof Error ? error.message : 'team_messaging_failed';
+  const permissionReasons = new Set([
+    'not_authorized_coach',
+    'not_conversation_participant',
+    'not_authorized_voice_recipient',
+    'parent_not_active',
+  ]);
+  const notFoundReasons = new Set(['team_not_found', 'conversation_not_found', 'voice_message_unavailable']);
+  const failedReasons = new Set(['conversation_read_only', 'upload_expired']);
+  const code: functions.https.FunctionsErrorCode = reason === 'rate_limited'
+    ? 'resource-exhausted'
+    : permissionReasons.has(reason)
+      ? 'permission-denied'
+      : notFoundReasons.has(reason)
+        ? 'not-found'
+        : failedReasons.has(reason)
+          ? 'failed-precondition'
+          : 'invalid-argument';
+  throw new functions.https.HttpsError(code, 'The Team Message request could not be completed.', { reason });
+}
 
 // ---------------------------------------------------------------------------
 // Public social profile reads
@@ -2287,6 +2913,7 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
   const memberRef = teamRef.collection('members').doc(uid);
   const announcementRef = teamRef.collection('announcements').doc(announcementId);
   let status: TeamAnnouncementDeletionStatus = 'alreadyDeleted';
+  let voiceStoragePath: string | null = null;
 
   await firestore.runTransaction(async (transaction) => {
     const [teamSnapshot, memberSnapshot, announcementSnapshot] = await transaction.getAll(
@@ -2306,6 +2933,11 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
     }
     if (!announcementSnapshot.exists) return;
 
+    const storedPath = announcementSnapshot.data()?.voiceMemo?.storagePath;
+    voiceStoragePath = typeof storedPath === 'string' && storedPath.startsWith(`teamVoiceMemos/${teamId}/announcements/`)
+      ? storedPath
+      : null;
+
     transaction.delete(announcementRef);
     status = 'deleted';
   });
@@ -2318,6 +2950,21 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
     announcementRef,
     memberSnapshot.docs.map((memberDocument) => memberDocument.id),
   );
+  if (voiceStoragePath) {
+    const reservationMatch = /\/([A-Za-z0-9_-]+)\/memo\.m4a$/u.exec(voiceStoragePath);
+    const reservationRef = reservationMatch
+      ? firestore.collection('teamVoiceUploadReservations').doc(reservationMatch[1])
+      : null;
+    if (reservationRef) {
+      await reservationRef.set({ status: 'deletePending', expiresAt: Timestamp.now(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    }
+    try {
+      await admin.storage().bucket().file(voiceStoragePath).delete({ ignoreNotFound: true });
+      if (reservationRef) await reservationRef.delete();
+    } catch (error) {
+      functions.logger.warn('team_voice_announcement_cleanup_deferred', { retryScheduled: Boolean(reservationRef) });
+    }
+  }
 
   return { status };
 });

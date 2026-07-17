@@ -44,6 +44,12 @@ module.exports = ({ config }) => ({
     "expo-font",
     "expo-notifications",
     [
+      "expo-av",
+      {
+        microphonePermission: "Sideline Social uses your microphone only when you choose to record a team voice message.",
+      },
+    ],
+    [
       "expo-location",
       {
         locationWhenInUsePermission: "Sideline Social uses your current location to find nearby sports communities. Your precise location is not shown to other parents.",

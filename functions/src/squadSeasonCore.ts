@@ -1,3 +1,5 @@
+import { isActiveSquadAdmin } from './squadAdminCore';
+
 export type SquadSeasonStatus = 'upcoming' | 'active' | 'closed';
 
 export type SquadSeasonState = {
@@ -208,6 +210,7 @@ export function normalizeSeasonStars(value: unknown): number {
 }
 
 export function isAuthorizedSeasonManager(input: {
+  squadId: string;
   userId: string;
   isPlatformAdmin: boolean;
   membershipStatus: unknown;
@@ -215,6 +218,15 @@ export function isAuthorizedSeasonManager(input: {
   squadCreatorId: unknown;
 }): boolean {
   if (input.isPlatformAdmin) return true;
-  if (input.membershipStatus !== 'active') return false;
-  return input.squadRole === 'admin' || input.squadCreatorId === input.userId;
+  return isActiveSquadAdmin({
+    squad: { createdBy: input.squadCreatorId },
+    membership: {
+      userId: input.userId,
+      squadId: input.squadId,
+      membershipStatus: input.membershipStatus,
+      squadRole: input.squadRole,
+    },
+    squadId: input.squadId,
+    userId: input.userId,
+  });
 }

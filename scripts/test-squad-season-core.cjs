@@ -69,19 +69,22 @@ assert.throws(() => core.planSeasonStateSynchronization([
 ], 50, "one"), /MULTIPLE_ACTIVE_SEASONS/);
 
 assert.equal(core.isAuthorizedSeasonManager({
-  userId: "creator", isPlatformAdmin: false, membershipStatus: "active", squadRole: "member", squadCreatorId: "creator",
+  squadId: "squad-a", userId: "creator", isPlatformAdmin: false, membershipStatus: "active", squadRole: null, squadCreatorId: "creator",
 }), true, "legacy creator fallback is an admin");
 assert.equal(core.isAuthorizedSeasonManager({
-  userId: "admin", isPlatformAdmin: false, membershipStatus: "active", squadRole: "admin", squadCreatorId: "creator",
+  squadId: "squad-a", userId: "creator", isPlatformAdmin: false, membershipStatus: "active", squadRole: "member", squadCreatorId: "creator",
+}), false, "an explicit member role prevents creator fallback after demotion");
+assert.equal(core.isAuthorizedSeasonManager({
+  squadId: "squad-a", userId: "admin", isPlatformAdmin: false, membershipStatus: "active", squadRole: "admin", squadCreatorId: "creator",
 }), true);
 assert.equal(core.isAuthorizedSeasonManager({
-  userId: "coach", isPlatformAdmin: false, membershipStatus: "active", squadRole: "member", squadCreatorId: "creator",
+  squadId: "squad-a", userId: "coach", isPlatformAdmin: false, membershipStatus: "active", squadRole: "member", squadCreatorId: "creator",
 }), false, "coach identity alone cannot grant Squad season access");
 assert.equal(core.isAuthorizedSeasonManager({
-  userId: "admin", isPlatformAdmin: false, membershipStatus: "left", squadRole: "admin", squadCreatorId: "creator",
+  squadId: "squad-a", userId: "admin", isPlatformAdmin: false, membershipStatus: "left", squadRole: "admin", squadCreatorId: "creator",
 }), false, "Squad admins must retain active durable membership");
 assert.equal(core.isAuthorizedSeasonManager({
-  userId: "platform", isPlatformAdmin: true, membershipStatus: null, squadRole: null, squadCreatorId: null,
+  squadId: "squad-a", userId: "platform", isPlatformAdmin: true, membershipStatus: null, squadRole: null, squadCreatorId: null,
 }), true);
 
 const ranked = core.rankSeasonLeaderboardEntries([

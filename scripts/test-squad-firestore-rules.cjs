@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { assertFails, assertSucceeds, initializeTestEnvironment } = require("@firebase/rules-unit-testing");
-const { Timestamp, collection, doc, getDoc, getDocs, setDoc, updateDoc } = require("firebase/firestore");
+const { Timestamp, collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where } = require("firebase/firestore");
 
 const projectId = "sideline-squad-rules-test";
 const rules = fs.readFileSync(path.join(process.cwd(), "firestore.rules"), "utf8");
@@ -16,7 +16,10 @@ async function run() {
       await setDoc(doc(db, "users", "parent-a"), { displayName: "Parent A", squadIds: ["venue__baseball"], selectedSquadId: "venue__baseball", sidelineStars: 0 });
       await setDoc(doc(db, "users", "parent-b"), { displayName: "Parent B", squadIds: [], selectedSquadId: null, sidelineStars: 0 });
       await setDoc(doc(db, "squads", "venue__baseball"), { venueName: "Venue", sportId: "baseball", isActive: true, memberIds: ["parent-a"] });
-      await setDoc(doc(db, "squadMemberships", "venue__baseball__parent-a"), { userId: "parent-a", squadId: "venue__baseball", membershipStatus: "active", presenceStatus: "away", lastSeenAt: Timestamp.now() });
+      await setDoc(doc(db, "squadMemberships", "venue__baseball__parent-a"), { userId: "parent-a", squadId: "venue__baseball", membershipStatus: "active", squadRole: "admin", presenceStatus: "away", lastSeenAt: Timestamp.now() });
+      await setDoc(doc(db, "squadMemberships", "venue__baseball__parent-b"), { userId: "parent-b", squadId: "venue__baseball", membershipStatus: "active", squadRole: "member", presenceStatus: "away", lastSeenAt: Timestamp.now() });
+      await setDoc(doc(db, "squadAdminInvitations", "venue__baseball__parent-b"), { squadId: "venue__baseball", targetUserId: "parent-b", invitedByUserId: "parent-a", status: "pending", expiresAt: Timestamp.now() });
+      await setDoc(doc(db, "squadAdminAccessRequests", "venue__baseball__parent-b"), { squadId: "venue__baseball", requesterUserId: "parent-b", status: "pending", createdAt: Timestamp.now() });
       await setDoc(doc(db, "squads", "venue__baseball", "seasons", "spring"), {
         seasonId: "spring", squadId: "venue__baseball", name: "Spring", status: "active",
         startAt: Timestamp.now(), endAt: Timestamp.now(), timeZone: "America/New_York",
@@ -44,6 +47,14 @@ async function run() {
     await assertFails(updateDoc(doc(parentA, "squadMemberships", "venue__baseball__parent-a"), { squadRole: "admin" }));
     await assertFails(getDoc(doc(parentB, "squadMemberships", "venue__baseball__parent-a")));
     await assertFails(setDoc(doc(parentB, "squadMemberships", "venue__baseball__parent-b"), { userId: "parent-b", squadId: "venue__baseball", membershipStatus: "active" }));
+    await assertSucceeds(getDoc(doc(parentB, "squadAdminInvitations", "venue__baseball__parent-b")));
+    await assertSucceeds(getDoc(doc(parentA, "squadAdminInvitations", "venue__baseball__parent-b")));
+    await assertSucceeds(getDocs(query(collection(parentA, "squadAdminInvitations"), where("squadId", "==", "venue__baseball"))));
+    await assertFails(setDoc(doc(parentA, "squadAdminInvitations", "venue__baseball__new"), { squadId: "venue__baseball", targetUserId: "parent-b", status: "pending" }));
+    await assertFails(updateDoc(doc(parentB, "squadAdminInvitations", "venue__baseball__parent-b"), { status: "accepted" }));
+    await assertSucceeds(getDoc(doc(parentB, "squadAdminAccessRequests", "venue__baseball__parent-b")));
+    await assertFails(getDoc(doc(parentA, "squadAdminAccessRequests", "venue__baseball__parent-b")));
+    await assertFails(updateDoc(doc(parentB, "squadAdminAccessRequests", "venue__baseball__parent-b"), { status: "approved" }));
     await assertFails(updateDoc(doc(parentA, "squads", "venue__baseball"), { memberIds: ["parent-a", "parent-b"] }));
     await assertFails(updateDoc(doc(parentA, "users", "parent-a"), { squadIds: [] }));
     await assertFails(updateDoc(doc(parentA, "users", "parent-a"), { selectedSquadId: null }));

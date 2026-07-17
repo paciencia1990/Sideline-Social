@@ -44,6 +44,9 @@ export type AppNotification = {
   announcementId: string | null;
   friendRequestId: string | null;
   conversationId: string | null;
+  conversationType: "coach" | "parent" | null;
+  squadId: string | null;
+  squadAdminInvitationId: string | null;
   expiresAt: Date | null;
 };
 
@@ -106,6 +109,9 @@ function toNotification(snapshot: QueryDocumentSnapshot<DocumentData>): AppNotif
     announcementId: typeof data.announcementId === "string" ? data.announcementId : null,
     friendRequestId: typeof data.friendRequestId === "string" ? data.friendRequestId : null,
     conversationId: typeof data.conversationId === "string" ? data.conversationId : null,
+    conversationType: data.conversationType === "coach" || data.conversationType === "parent" ? data.conversationType : null,
+    squadId: typeof data.squadId === "string" ? data.squadId : null,
+    squadAdminInvitationId: typeof data.squadAdminInvitationId === "string" ? data.squadAdminInvitationId : null,
     expiresAt: toDate(data.expiresAt as FirestoreDate),
   };
 }
