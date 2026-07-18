@@ -22,6 +22,7 @@ module.exports = ({ config }) => ({
 
   android: {
     package: "com.sidelinesquad.app",
+    versionCode: 1,
     googleServicesFile: "./google-services.json",
     permissions: ["android.permission.RECORD_AUDIO"],
     config: {
