@@ -1,7 +1,8 @@
-type ExpoFileSystemModule = typeof import("expo-file-system");
+type ExpoFileSystemModule = typeof import("expo-file-system/legacy");
 
 function getFileSystem() {
-  return require("expo-file-system") as ExpoFileSystemModule;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- Deferred loading preserves compatibility with older native clients.
+  return require("expo-file-system/legacy") as ExpoFileSystemModule;
 }
 
 export async function deleteLocalVoiceMemo(uri: string) {
@@ -9,6 +10,6 @@ export async function deleteLocalVoiceMemo(uri: string) {
 }
 
 export async function getLocalVoiceMemoSize(uri: string) {
-  const info = await getFileSystem().getInfoAsync(uri, { size: true });
+  const info = await getFileSystem().getInfoAsync(uri);
   return info.exists && "size" in info ? Number(info.size ?? 0) : 0;
 }

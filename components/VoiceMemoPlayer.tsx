@@ -16,17 +16,18 @@ type Props = {
   onPreviewed?: () => void;
 };
 
-type ExpoAvModule = typeof import("expo-av");
+type ExpoAudioModule = typeof import("expo-audio");
 
 export function VoiceMemoPlayer(props: Props) {
   const { t } = useTranslation();
   const audioAvailable = isTeamVoiceAudioAvailable();
-  const [audioModule, setAudioModule] = useState<ExpoAvModule | null>(null);
+  const [audioModule, setAudioModule] = useState<ExpoAudioModule | null>(null);
 
   useEffect(() => {
     if (!audioAvailable) return;
     let mounted = true;
-    Promise.resolve().then(() => require("expo-av") as ExpoAvModule).then((module) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- Deferred loading protects older native clients without expo-audio.
+    Promise.resolve().then(() => require("expo-audio") as ExpoAudioModule).then((module) => {
       if (mounted) setAudioModule(module);
     }).catch(() => {
       if (mounted) setAudioModule(null);
@@ -43,10 +44,10 @@ export function VoiceMemoPlayer(props: Props) {
   return <VoiceMemoPlayerAvailable {...props} audioModule={audioModule} />;
 }
 
-function VoiceMemoPlayerAvailable({ audioModule, durationMilliseconds, onPreviewed, storagePath, uri }: Props & { audioModule: ExpoAvModule }) {
+function VoiceMemoPlayerAvailable({ audioModule, durationMilliseconds, onPreviewed, storagePath, uri }: Props & { audioModule: ExpoAudioModule }) {
   const { t } = useTranslation();
-  const { Audio } = audioModule;
-  const soundRef = useRef<InstanceType<typeof Audio.Sound> | null>(null);
+  const playerRef = useRef<import("expo-audio").AudioPlayer | null>(null);
+  const statusSubscriptionRef = useRef<{ remove: () => void } | null>(null);
   const cachedUrl = useRef<{ url: string; expiresAtMillis: number } | null>(null);
   const [position, setPosition] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -54,13 +55,15 @@ function VoiceMemoPlayerAvailable({ audioModule, durationMilliseconds, onPreview
   const [error, setError] = useState(false);
 
   const stop = useCallback(async () => {
-    const sound = soundRef.current;
-    soundRef.current = null;
+    const player = playerRef.current;
+    playerRef.current = null;
+    statusSubscriptionRef.current?.remove();
+    statusSubscriptionRef.current = null;
     setPlaying(false);
     setPosition(0);
-    if (sound) {
-      try { await sound.stopAsync(); } catch {}
-      try { await sound.unloadAsync(); } catch {}
+    if (player) {
+      try { player.pause(); } catch {}
+      try { player.remove(); } catch {}
     }
     releaseVoicePlayback(stop);
   }, []);
@@ -76,10 +79,10 @@ function VoiceMemoPlayerAvailable({ audioModule, durationMilliseconds, onPreview
     return cachedUrl.current.url;
   }, [storagePath, uri]);
 
-  const onStatus = useCallback((status: import("expo-av").AVPlaybackStatus) => {
+  const onStatus = useCallback((status: import("expo-audio").AudioStatus) => {
     if (!status.isLoaded) return;
-    setPosition(status.positionMillis);
-    setPlaying(status.isPlaying);
+    setPosition(status.currentTime * 1000);
+    setPlaying(status.playing);
     if (status.didJustFinish) {
       onPreviewed?.();
       void stop();
@@ -90,19 +93,21 @@ function VoiceMemoPlayerAvailable({ audioModule, durationMilliseconds, onPreview
     if (loading) return;
     setError(false);
     try {
-      if (soundRef.current && playing) {
-        await soundRef.current.pauseAsync();
+      if (playerRef.current && playing) {
+        playerRef.current.pause();
         return;
       }
       setLoading(true);
       await activateVoicePlayback(stop);
-      if (!soundRef.current) {
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true, shouldDuckAndroid: true });
-        const created = await Audio.Sound.createAsync({ uri: await resolveUri() }, { shouldPlay: true }, onStatus);
-        soundRef.current = created.sound;
+      if (!playerRef.current) {
+        await audioModule.setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true, interruptionMode: "duckOthers" });
+        const player = audioModule.createAudioPlayer(await resolveUri(), { updateInterval: 250 });
+        statusSubscriptionRef.current = player.addListener("playbackStatusUpdate", onStatus);
+        playerRef.current = player;
+        player.play();
       } else {
-        if (position >= durationMilliseconds - 100) await soundRef.current.replayAsync();
-        else await soundRef.current.playAsync();
+        if (position >= durationMilliseconds - 100) await playerRef.current.seekTo(0);
+        playerRef.current.play();
       }
     } catch (nextError) {
       console.warn("[VoiceMemoPlayer] playback error", getErrorCode(nextError));
@@ -111,7 +116,7 @@ function VoiceMemoPlayerAvailable({ audioModule, durationMilliseconds, onPreview
     } finally {
       setLoading(false);
     }
-  }, [Audio, durationMilliseconds, loading, onStatus, playing, position, resolveUri, stop]);
+  }, [audioModule, durationMilliseconds, loading, onStatus, playing, position, resolveUri, stop]);
 
   const total = Math.max(durationMilliseconds, 1);
   return (

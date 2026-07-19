@@ -44,10 +44,16 @@ const service = read("services", "chatService.ts");
 const functionsSource = read("functions", "src", "friendChat.ts");
 const rules = read("firestore.rules");
 const indexes = JSON.parse(read("firestore.indexes.json"));
-const originalService = execFileSync("git", ["show", "HEAD:services/chatService.ts"], { encoding: "utf8" });
-const originalRules = execFileSync("git", ["show", "HEAD:firestore.rules"], { encoding: "utf8" });
-const originalLanding = execFileSync("git", ["show", "HEAD:app/(social)/chat/index.tsx"], { encoding: "utf8" });
-const originalTranslations = execFileSync("git", ["show", "HEAD:i18n/index.ts"], { encoding: "utf8" });
+const friendChatFeatureCommit = execFileSync(
+  "git",
+  ["log", "--diff-filter=A", "--format=%H", "--", "scripts/test-friend-chat-core.cjs"],
+  { encoding: "utf8" },
+).trim().split(/\r?\n/u)[0];
+const legacyRevision = `${friendChatFeatureCommit}^`;
+const originalService = execFileSync("git", ["show", `${legacyRevision}:services/chatService.ts`], { encoding: "utf8" });
+const originalRules = execFileSync("git", ["show", `${legacyRevision}:firestore.rules`], { encoding: "utf8" });
+const originalLanding = execFileSync("git", ["show", `${legacyRevision}:app/(social)/chat/index.tsx`], { encoding: "utf8" });
+const originalTranslations = execFileSync("git", ["show", `${legacyRevision}:i18n/index.ts`], { encoding: "utf8" });
 assert.equal(originalService.includes('const CHATS_COLLECTION = "chats"'), true, "legacy failure fixture must use the denied chats collection");
 assert.equal(originalRules.includes("match /chats/"), false, "legacy rules must reproduce default-deny for chats");
 assert.equal(originalLanding.includes('setError(t("chat.errorBody"))'), true, "legacy listener must map the failure to the placeholder");

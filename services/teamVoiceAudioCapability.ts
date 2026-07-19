@@ -5,7 +5,7 @@ let cachedAvailability: boolean | null = null;
 export function isTeamVoiceAudioAvailable() {
   if (cachedAvailability != null) return cachedAvailability;
   try {
-    cachedAvailability = requireOptionalNativeModule("ExponentAV") != null;
+    cachedAvailability = requireOptionalNativeModule("ExpoAudio") != null;
   } catch {
     cachedAvailability = false;
   }

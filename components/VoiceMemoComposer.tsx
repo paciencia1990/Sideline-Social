@@ -21,17 +21,41 @@ type Props = {
   uploadProgress?: number | null;
 };
 
-type ExpoAvModule = typeof import("expo-av");
+type ExpoAudioModule = typeof import("expo-audio");
+
+const VOICE_RECORDING_OPTIONS: import("expo-audio").RecordingOptions = {
+  extension: ".m4a",
+  sampleRate: 44_100,
+  numberOfChannels: 1,
+  bitRate: 64_000,
+  android: {
+    extension: ".m4a",
+    outputFormat: "mpeg4",
+    audioEncoder: "aac",
+    sampleRate: 44_100,
+  },
+  ios: {
+    extension: ".m4a",
+    outputFormat: "aac ",
+    audioQuality: 64,
+    sampleRate: 44_100,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: { mimeType: "audio/mp4", bitsPerSecond: 64_000 },
+};
 
 export function VoiceMemoComposer(props: Props) {
   const { t } = useTranslation();
   const audioAvailable = isTeamVoiceAudioAvailable();
-  const [audioModule, setAudioModule] = useState<ExpoAvModule | null>(null);
+  const [audioModule, setAudioModule] = useState<ExpoAudioModule | null>(null);
 
   useEffect(() => {
     if (!audioAvailable) return;
     let mounted = true;
-    Promise.resolve().then(() => require("expo-av") as ExpoAvModule).then((module) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- Deferred loading protects older native clients without expo-audio.
+    Promise.resolve().then(() => require("expo-audio") as ExpoAudioModule).then((module) => {
       if (mounted) setAudioModule(module);
     }).catch(() => {
       if (mounted) setAudioModule(null);
@@ -48,10 +72,10 @@ export function VoiceMemoComposer(props: Props) {
   return <VoiceMemoComposerAvailable {...props} audioModule={audioModule} />;
 }
 
-function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = false, onChange, uploadProgress }: Props & { audioModule: ExpoAvModule }) {
+function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = false, onChange, uploadProgress }: Props & { audioModule: ExpoAudioModule }) {
   const { t } = useTranslation();
-  const { Audio, InterruptionModeAndroid, InterruptionModeIOS } = audioModule;
-  const recordingRef = useRef<InstanceType<typeof Audio.Recording> | null>(null);
+  const recorder = audioModule.useAudioRecorder(VOICE_RECORDING_OPTIONS);
+  const recordingRef = useRef<typeof recorder | null>(null);
   const draftRef = useRef<LocalVoiceMemoDraft | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const permissionRequestInFlight = useRef(false);
@@ -73,9 +97,9 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
     clearTimer();
     setRecording(false);
     try {
-      await active.stopAndUnloadAsync();
-      const status = await active.getStatusAsync();
-      const uri = active.getURI();
+      await active.stop();
+      const status = active.getStatus();
+      const uri = active.uri;
       if (!uri || !status.durationMillis || status.durationMillis < 500) throw new Error("recording_too_short");
       const sizeBytes = await getLocalVoiceMemoSize(uri);
       if (sizeBytes < 1 || sizeBytes > MAX_SIZE_BYTES) {
@@ -96,9 +120,9 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
       console.warn("[VoiceMemoComposer] finish error", getErrorCode(nextError));
       setError(getErrorCode(nextError).includes("large") ? t("voiceMemo.fileTooLarge") : t("voiceMemo.recordingError"));
     } finally {
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      await audioModule.setAudioModeAsync({ allowsRecording: false });
     }
-  }, [Audio, clearTimer, onChange, t]);
+  }, [audioModule, clearTimer, onChange, t]);
 
   const startRecording = useCallback(async () => {
     if (!active || disabled || recordingRef.current || permissionRequestInFlight.current) return;
@@ -106,7 +130,7 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
     setError(null);
     try {
       await stopVoicePlayback();
-      const permission = await ensureVoiceRecordingPermission(Audio);
+      const permission = await ensureVoiceRecordingPermission(audioModule);
       if (permission === "settings") {
         Alert.alert(
           t("voiceMemo.permissionRequiredTitle"),
@@ -127,38 +151,14 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
         setError(t("voiceMemo.permissionDenied"));
         return;
       }
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-        interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-        shouldDuckAndroid: true,
+      await audioModule.setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        interruptionMode: "doNotMix",
       });
-      const active = new Audio.Recording();
-      await active.prepareToRecordAsync({
-        android: {
-          extension: ".m4a",
-          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-          audioEncoder: Audio.AndroidAudioEncoder.AAC,
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          bitRate: 64000,
-        },
-        ios: {
-          extension: ".m4a",
-          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
-          audioQuality: Audio.IOSAudioQuality.MEDIUM,
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          bitRate: 64000,
-          linearPCMBitDepth: 16,
-          linearPCMIsBigEndian: false,
-          linearPCMIsFloat: false,
-        },
-        web: { mimeType: "audio/mp4", bitsPerSecond: 64000 },
-      });
-      await active.startAsync();
-      recordingRef.current = active;
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      recordingRef.current = recorder;
       startedAt.current = Date.now();
       setElapsed(0);
       setRecording(true);
@@ -173,7 +173,7 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
     } finally {
       permissionRequestInFlight.current = false;
     }
-  }, [Audio, InterruptionModeAndroid.DoNotMix, InterruptionModeIOS.DoNotMix, active, disabled, finishRecording, t]);
+  }, [active, audioModule, disabled, finishRecording, recorder, t]);
 
   const removeDraft = useCallback(async () => {
     if (draft?.uri) await deleteLocalVoiceMemo(draft.uri);
@@ -195,7 +195,7 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
 
   useEffect(() => () => {
     clearTimer();
-    if (recordingRef.current) void recordingRef.current.stopAndUnloadAsync();
+    if (recordingRef.current) void recordingRef.current.stop();
     if (draftRef.current?.uri) void deleteLocalVoiceMemo(draftRef.current.uri);
   }, [clearTimer]);
 

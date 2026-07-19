@@ -2,7 +2,7 @@ import "@/i18n";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useMemo } from "react";
-import { StyleSheet, useColorScheme } from "react-native";
+import { StyleSheet, useColorScheme, type ColorSchemeName } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Stack } from "expo-router";
@@ -11,7 +11,7 @@ import {
   DefaultTheme,
   ThemeProvider,
   type Theme,
-} from "@react-navigation/native";
+} from "expo-router/react-navigation";
 import { useFonts } from "expo-font";
 import {
   PlayfairDisplay_400Regular,
@@ -36,7 +36,7 @@ import { Colors, Typography } from "@/constants/theme";
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
-function createNavigationTheme(colorScheme: "light" | "dark" | null | undefined): Theme {
+function createNavigationTheme(colorScheme: ColorSchemeName): Theme {
   const baseTheme = colorScheme === "dark" ? DarkTheme : DefaultTheme;
 
   return {

@@ -11,7 +11,7 @@ export function CoachResourceHeader({ accessibilityLabel, onBack, subtitle, titl
   onBack?: () => void;
   subtitle?: string;
   title: string;
-  titleRef?: React.RefObject<Text>;
+  titleRef?: React.RefObject<Text | null>;
 }) {
   const { t } = useTranslation();
   return (

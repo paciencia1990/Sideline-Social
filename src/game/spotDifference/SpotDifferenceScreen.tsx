@@ -915,7 +915,11 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   transformedSceneContent: {
-    ...StyleSheet.absoluteFillObject,
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
   },
   sceneImage: {
     height: "100%",

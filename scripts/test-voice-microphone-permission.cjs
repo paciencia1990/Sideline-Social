@@ -31,45 +31,45 @@ async function run() {
   const { ensureVoiceRecordingPermission } = loadTypeScript("services/voiceMemoPermissionService.ts");
   let requests = 0;
   assert.equal(await ensureVoiceRecordingPermission({
-    getPermissionsAsync: async () => ({ granted: true, canAskAgain: true }),
-    requestPermissionsAsync: async () => { requests += 1; return { granted: false, canAskAgain: true }; },
+    getRecordingPermissionsAsync: async () => ({ granted: true, canAskAgain: true }),
+    requestRecordingPermissionsAsync: async () => { requests += 1; return { granted: false, canAskAgain: true }; },
   }), "granted");
   assert.equal(requests, 0, "already-granted permission must not prompt");
 
   assert.equal(await ensureVoiceRecordingPermission({
-    getPermissionsAsync: async () => ({ granted: false, canAskAgain: true }),
-    requestPermissionsAsync: async () => { requests += 1; return { granted: true, canAskAgain: true }; },
+    getRecordingPermissionsAsync: async () => ({ granted: false, canAskAgain: true }),
+    requestRecordingPermissionsAsync: async () => { requests += 1; return { granted: true, canAskAgain: true }; },
   }), "granted");
   assert.equal(requests, 1, "requestable permission must prompt exactly once");
 
   assert.equal(await ensureVoiceRecordingPermission({
-    getPermissionsAsync: async () => ({ granted: false, canAskAgain: true }),
-    requestPermissionsAsync: async () => ({ granted: false, canAskAgain: true }),
+    getRecordingPermissionsAsync: async () => ({ granted: false, canAskAgain: true }),
+    requestRecordingPermissionsAsync: async () => ({ granted: false, canAskAgain: true }),
   }), "denied");
   assert.equal(await ensureVoiceRecordingPermission({
-    getPermissionsAsync: async () => ({ granted: false, canAskAgain: false }),
-    requestPermissionsAsync: async () => { throw new Error("must not prompt"); },
+    getRecordingPermissionsAsync: async () => ({ granted: false, canAskAgain: false }),
+    requestRecordingPermissionsAsync: async () => { throw new Error("must not prompt"); },
   }), "settings");
   assert.equal(await ensureVoiceRecordingPermission({
-    getPermissionsAsync: async () => { throw new Error("native permission failure"); },
-    requestPermissionsAsync: async () => ({ granted: false, canAskAgain: true }),
+    getRecordingPermissionsAsync: async () => { throw new Error("native permission failure"); },
+    requestRecordingPermissionsAsync: async () => ({ granted: false, canAskAgain: true }),
   }), "error");
 
   const composer = read("components", "VoiceMemoComposer.tsx");
   const capability = read("services", "teamVoiceAudioCapability.ts");
   const coachComposer = read("app", "coach", "messages.tsx");
   const privateThread = read("components", "PrivateTeamMessageThread.tsx");
-  assert.equal(composer.includes("Audio.requestPermissionsAsync()"), false, "permission logic must check before requesting");
-  assert.ok(composer.indexOf("ensureVoiceRecordingPermission(Audio)") > composer.indexOf("const startRecording"));
+  assert.equal(composer.includes("audioModule.requestRecordingPermissionsAsync()"), false, "permission logic must check before requesting");
+  assert.ok(composer.indexOf("ensureVoiceRecordingPermission(audioModule)") > composer.indexOf("const startRecording"));
   assert.match(composer, /permissionRequestInFlight/);
   assert.match(composer, /permission === "settings"/);
   assert.match(composer, /Linking\.openSettings\(\)/);
   assert.match(composer, /voiceMemo\.permissionRequiredTitle/);
   assert.match(composer, /voiceMemo\.permissionRequiredBody/);
   assert.equal(composer.includes("setError(getErrorCode(nextError))"), false, "raw native errors must not be displayed");
-  assert.match(capability, /requireOptionalNativeModule\("ExponentAV"\)/);
-  assert.match(composer, /require\("expo-av"\)/);
-  assert.equal(composer.includes('from "expo-av"'), false, "older clients must retain deferred audio loading");
+  assert.match(capability, /requireOptionalNativeModule\("ExpoAudio"\)/);
+  assert.match(composer, /require\("expo-audio"\)/);
+  assert.equal(composer.includes('from "expo-audio"'), false, "older clients must retain deferred audio loading");
   assert.match(coachComposer, /VoiceMemoComposer/);
   assert.match(privateThread, /VoiceMemoComposer/);
   assert.match(coachComposer, /useState<"text" \| "voice">\("text"\)/, "text messaging must remain the default");
@@ -91,4 +91,3 @@ run().catch((error) => {
   console.error(error);
   process.exit(1);
 });
-

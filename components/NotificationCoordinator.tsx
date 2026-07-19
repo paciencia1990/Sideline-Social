@@ -19,6 +19,8 @@ Notifications.setNotificationHandler({
       shouldPlaySound: false,
       shouldSetBadge: shouldShowAlert,
       shouldShowAlert,
+      shouldShowBanner: shouldShowAlert,
+      shouldShowList: shouldShowAlert,
     };
   },
 });

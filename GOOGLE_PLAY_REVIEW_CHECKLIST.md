@@ -1,6 +1,6 @@
 # Google Play Review Readiness Checklist
 
-Audit date: July 17, 2026
+Audit date: July 18, 2026
 
 Repository: `C:\Dev\Sideline_Social_Code`
 
@@ -8,316 +8,379 @@ Branch: `main`
 
 ## Overall result
 
-**FAIL: must fix before upload.**
+**PARTIAL: the signed production AAB is technically uploadable, but the app is not ready to submit for Google Play review until the privacy-policy and account-deletion requirements are completed.**
 
-The app builds and launches, and a production Android App Bundle can be generated with the managed EAS upload credential. It must not be submitted for review yet because:
+The framework, Android build, API targeting, versioning, signing, 16 KB compatibility, clean install, cold launch, offline handling, and authenticated first-level navigation all pass. Remaining product/Play Console work is listed under **Remaining review blockers** and **Exact next steps**.
 
-1. Expo SDK 51 / React Native 0.74 native libraries are not compatible with 16 KB memory pages. All 49 arm64 native libraries inspected in the production bundle had LOAD segment alignment below 16 KB. Google Play requires 16 KB support for API 35+ submissions.
-2. No public privacy-policy URL or in-app privacy-policy screen/link was found.
-3. The app supports account creation but no in-app account-deletion path or account-deletion web URL was found.
-4. A complete authenticated smoke test could not be performed because no dedicated Play-review/test credentials were provided.
+No Google Play upload, Firebase deployment, migration, commit, push, or source-file deletion was performed.
 
 ## Project stack
 
-- Expo SDK 51 with Expo Router
-- React Native 0.74.5
-- React 18.2
-- Maintained native Android directory
+- Expo SDK 57.0.7 with Expo Router 57.0.7
+- React Native 0.86.0
+- React 19.2.3
+- TypeScript 6.0.3
+- Maintained native Android directory (`android/` is authoritative)
+- React Native New Architecture enabled
+- Hermes V1
 - Firebase Authentication, Firestore, Realtime Database, Cloud Functions, Storage, and Cloud Messaging
-- Hermes JavaScript engine
-- EAS Build for production signing and App Bundle generation
+- EAS Build with the existing managed Android upload keystore
+- Node 24.16.0 for local and production EAS builds
 
-This is not a purely managed Expo project. Because `android/` is checked in, the native Gradle and manifest files are authoritative for Android builds.
+## Incremental Expo upgrade checkpoints
 
-## Changes made during this audit
+The app was upgraded without skipping Expo SDK versions. Each stable checkpoint includes source/config snapshots and verified APK artifacts under `build/expo-upgrade-checkpoints/`.
 
-- Added repeatable npm commands for the debug APK, debug installation, and production AAB.
-- Set the checked-in Android target SDK to API 35, which is the current Google Play submission minimum for phone apps.
-- Kept compile SDK at API 34 because Expo SDK 51's permission module fails Kotlin compilation against compile SDK 35. This is a temporary compatibility measure, not the long-term Play-readiness solution.
-- Removed obsolete READ/WRITE external-storage permissions from the merged Android manifest using manifest-merger removal directives.
-- Removed `SYSTEM_ALERT_WINDOW` from the main manifest. It remains debug-only through `android/app/src/debug/AndroidManifest.xml`.
-- Preserved required location, microphone, notification, networking, vibration, and Firebase messaging permissions.
-- Added Android versionCode 1 to the Expo config for consistency with the checked-in native source. EAS production builds use remote version management and auto-increment.
-- Added the existing Google Maps key to the EAS production environment as a project-scoped secret. The value is not stored in source control.
+| Checkpoint | Expo | React Native | React | Router | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Baseline | 51.0.39 | 0.74.5 | 18.2.0 | 3.5.24 | Inventoried before native changes |
+| SDK 52 | 52.0.49 | 0.76.9 | 18.3.1 | 4.0.22 | Stable checkpoint; tests/build/startup pass |
+| SDK 53 | 53.0.27 | 0.79.6 | 19.0.0 | 5.1.11 | Stable checkpoint; tests/build/startup pass |
+| SDK 54 | 54.0.36 | 0.81.5 | 19.1.0 | 6.0.24 | Stable checkpoint; tests/build/startup pass |
+| SDK 55 | 55.0.28 | 0.83.6 | 19.2.0 | 55.0.17 | Stable checkpoint; tests/build/startup pass |
+| SDK 56 | 56.0.16 | 0.85.3 | 19.2.3 | 56.2.15 | Stable checkpoint; tests/build/startup pass |
+| SDK 57 | 57.0.7 | 0.86.0 | 19.2.3 | 57.0.7 | Stable checkpoint; tests/build/startup pass |
+
+## Important compatibility changes resolved
+
+- Migrated voice recording/playback from deprecated `expo-av` to deferred `expo-audio` loading while preserving older-client fallback behavior and the shared permission flow.
+- Preserved microphone-on-Record behavior, 90-second limit, preview, record-again, upload, playback, and localized Settings handling.
+- Migrated navigation imports required by newer Expo Router releases.
+- Adopted TypeScript 6 and React Native 0.86 type changes.
+- Updated React Native New Architecture Android host wiring, Gradle wrapper, AGP/NDK integration, Hermes compiler path, edge-to-edge behavior, and Expo inline-module configuration incrementally.
+- Preserved the package/application ID, EAS project ID, Firebase project/files, Google Maps placeholder, notification/microphone permissions, application scheme, and ABI controls.
+- Added `expo-status-bar` to the dynamic config plugin list required by SDK 57 alignment.
+- Updated the Google Services Gradle plugin to 4.4.4 without changing the Firebase project.
+- Raised the Node engine/build runtime to the supported SDK 57 range.
+- Pinned transitive `undici` to patched 6.27.0, eliminating the production high-severity advisory without changing the Firebase app major.
+- Aligned `@firebase/rules-unit-testing` to 3.0.4, whose peer requirement matches the preserved Firebase 10.14.1 SDK.
+
+## Final Android toolchain
+
+- Minimum SDK: 24
+- Compile SDK: 36
+- Target SDK: 36
+- Android Gradle Plugin: 8.12.0
+- Gradle wrapper: 9.3.1
+- Kotlin Gradle plugin: 2.1.20
+- NDK: 27.1.12297006
+- New Architecture: enabled
+- Hermes: enabled
+- Edge-to-edge: mandatory/enabled
+- Application ID: `com.sidelinesquad.app`
+- Version name: `1.0.0`
+- Final version code: `5`
 
 ## Build commands used
 
 ```powershell
-npm run android:apk:debug
+# Run under Node 24.16.0
+npx expo install --fix
+npx expo-doctor@latest
+npm run typecheck
+npm run lint
+
+# All-ABI debug checkpoint
 cd android
-.\gradlew.bat processDebugMainManifest processReleaseMainManifest assembleDebug
-cd ..
+.\gradlew.bat assembleDebug --no-daemon --stacktrace
+
+# Self-contained x86_64 release smoke checkpoint
+$env:NODE_ENV='production'
+.\gradlew.bat -PreactNativeArchitectures=x86_64 assembleRelease --no-daemon --stacktrace
+
+# Android production JavaScript export
+npx expo export --platform android --output-dir build\expo-upgrade-exports\sdk57
+
+# Remotely signed production AAB (completed; not submitted to Play)
 npx eas-cli@latest build --platform android --profile production --non-interactive --wait
 ```
 
-Additional validation and install-test commands used:
+Binary inspection/install commands used:
 
 ```powershell
-npm run typecheck
-npm run lint
-npm run test:voice-microphone-permission
-java -jar bundletool-all-1.18.3.jar validate --bundle <bundle-path>
-java -jar bundletool-all-1.18.3.jar build-apks --mode=universal --bundle <bundle-path> --output <apks-path>
-adb install -r -t <debug-apk>
-adb shell am start -W -n com.sidelinesquad.app/.MainActivity
+zipalign -c -P 16 -v 4 <final-aab>
+java -jar bundletool-all-1.18.3.jar dump manifest --bundle=<final-aab> --module=base
+java -jar bundletool-all-1.18.3.jar dump config --bundle=<final-aab>
+java -jar bundletool-all-1.18.3.jar build-apks --connected-device --bundle=<final-aab> --output=<apks>
+java -jar bundletool-all-1.18.3.jar install-apks --apks=<apks>
+llvm-readelf -lW <each-native-library>
+adb shell am start -W -S -n com.sidelinesquad.app/.MainActivity
 adb logcat
 ```
 
-## Build artifacts
+## Final artifacts
 
-Debug install APK:
+Production upload candidate:
 
-`C:\Dev\Sideline_Social_Code\android\app\build\outputs\apk\debug\app-debug.apk`
+`C:\Dev\Sideline_Social_Code\build\google-play-release\sideline-social-v1.0.0-code5-sdk57.aab`
 
+- Size: 156,488,103 bytes
+- SHA-256: `C4D3B377F8F32F0403D0184EFD747F9E26DD91DF4E90E23208A165FA6AFF194A`
 - Package: `com.sidelinesquad.app`
-- Version name: `1.0.0`
-- Version code: `1`
-- Minimum SDK: 23
-- Target SDK: 35
-- Signed with the standard Android debug certificate
-- Architectures: arm64-v8a, armeabi-v7a, x86, x86_64
+- Version name/code: `1.0.0` / `5`
+- Min/target SDK: 24 / 36
+- Production signing: existing EAS remote upload keystore
+- EAS build: `329ba1d6-a432-4642-9af7-664abc0f2b09`
+- EAS build logs: <https://expo.dev/accounts/paciencia1990/projects/sideline-squad/builds/329ba1d6-a432-4642-9af7-664abc0f2b09>
 
-Final production AAB:
+Final emulator APK set generated from that exact AAB:
 
-`C:\Dev\Sideline_Social_Code\android\app\build\outputs\bundle\production\sideline-social-1.0.0-3.aab`
+`C:\Dev\Sideline_Social_Code\build\google-play-release\sideline-social-code5-emulator.apks`
 
-- EAS production build uses remote version auto-increment.
-- Version name: `1.0.0`
-- Version code: `3`
-- Distribution: Google Play Store
-- Signing: managed EAS Android upload keystore
-- Architectures: arm64-v8a, armeabi-v7a, x86, x86_64
-- SHA-256: `42BDAE873582AD8F41F852DE6C8BC4CCE6B9D58F810FF7F8A4671D6CD0DE5FE2`
-- Bundletool structural validation: PASS
-- Clean AAB-derived install and cold launch: PASS
-- **Do not upload for review until the 16 KB page-size blocker is fixed.**
+- SHA-256: `0B10F5859BAAF52CA282FBDDD081EE96F26246505CB16C954B63776B7C1ADF72`
+- Locally debug-signed by bundletool only for emulator installation
 
-An earlier validation bundle, version code 2, was generated and installed successfully. It was superseded because its uploaded source snapshot preceded the obsolete-storage-permission cleanup.
+SDK 57 checkpoint APKs:
 
-## Device and emulator testing
+- All-ABI debug: `build/expo-upgrade-checkpoints/sdk57-stable/sdk57-all-abi-debug.apk`
+- x86_64 release smoke: `build/expo-upgrade-checkpoints/sdk57-stable/sdk57-x86_64-release-smoke.apk`
 
-### Physical device attempt
+The earlier versionCode 4 production AAB is superseded. Do not upload it.
 
-- Device: Samsung SM-S931U1
-- OS: Android 16
-- API level: 36
-- Result: inconclusive
-- The existing package was selected for clean uninstall/reinstall, but the device disconnected from ADB during the 157 MB APK transfer and did not reconnect during the test window.
-- The app may need to be reinstalled on this device from the saved debug APK.
+## 16 KB page-size and 64-bit verification
 
-### Completed emulator test
+**PASS**
+
+- Bundle configuration: `PAGE_ALIGNMENT_16K`
+- AAB ZIP alignment: PASS with Android build-tools 36 `zipalign -P 16`
+- Final release AAB ELF audit: 50/50 libraries pass
+  - arm64-v8a: 25/25 at minimum `0x4000`
+  - x86_64: 25/25 at minimum `0x4000`
+- 64-bit ABIs included: arm64-v8a and x86_64
+- Full evidence: `build/google-play-release/code5-aab-elf-alignment.json`
+
+Every `PT_LOAD` segment in every arm64-v8a and x86_64 `.so` extracted directly from the final AAB was checked with NDK `llvm-readelf`.
+
+## Device/emulator tested
 
 - AVD: Pixel 9
-- Reported model: `sdk_gphone16k_x86_64`
-- OS: Android 17
-- API level: 37
-- RAM for successful run: 4 GB
-- Page size environment: 16 KB compatibility testing
-
-The first 2 GB emulator run was killed by Android's low-memory killer before startup completed. This was an emulator resource condition, not an application exception. After restarting with 4 GB RAM, both the debug client and the AAB-derived production app launched successfully.
+- Device/model: `sdk_gphone16k_x86_64`
+- Android/API: Android 17 / API 37
+- Memory page size: 16,384 bytes
+- Resolution/density: 1080 x 2424 / 420 dpi
+- Install source: APK set generated from the final code-5 production AAB
+- Install method: clean uninstall, bundletool `install-apks`, cold launch
+- Physical device: not retested after the SDK 57 upgrade
 
 ## Smoke-test results
 
 | Check | Result | Notes |
 | --- | --- | --- |
-| Clean uninstall/reinstall | PASS on emulator | Package was removed and reinstalled from scratch. Physical device disconnected during its attempt. |
-| Cold launch | PASS | Main activity launched and remained foreground. |
-| Splash/loading completes | PASS | Branded welcome screen appeared. |
-| Production JavaScript embedded | PASS | AAB-derived app launched without Metro or a development server. |
-| Home screen | NOT TESTED | Requires an authenticated account and completed onboarding. |
-| Login UI | PASS | Email/password screen rendered with Sign In and Forgot Password actions. |
-| Signup UI | PASS | First name, last name, email, password, zip code, optional sport, and Create Account controls rendered. |
-| Actual login/signup backend | NOT TESTED | No dedicated test credentials; no production Firebase account was created during the audit. |
-| Guest/demo mode | NOT AVAILABLE | Authentication is required. |
-| Main tab navigation | NOT TESTED | Requires authenticated onboarding. |
-| First unauthenticated actions | PASS | Get Started, Sign in with Email, Create Account, and Android Back navigation worked. |
-| Offline handling | PASS, limited | Offline sign-in stayed in-app and displayed a generic credential error; no crash occurred. The message does not distinguish offline from invalid credentials. |
-| Android Back | PASS for tested auth routes | Back returned from email login/signup to the auth choice without trapping the user. |
-| Startup permission prompts | PASS | Microphone, fine location, and notification permissions remained denied after cold launch. |
-| Microphone permission flow | PASS automated test | Permission is requested only after the user taps Record; denial and Settings handling remain covered. |
-| Privacy policy/link | FAIL | No privacy-policy URL or in-app policy link found. |
-| Account deletion | FAIL | No in-app deletion flow or deletion web URL found. |
+| Clean uninstall/reinstall | PASS | Superseded build removed; code-5 AAB-derived APK set installed cleanly |
+| Package/version/API | PASS | `com.sidelinesquad.app`, code 5, target 36 |
+| Cold launch | PASS | 3.881 s immediately after clean install; 1.712 s after session cleanup |
+| Splash/loading | PASS | Get Started screen rendered without Metro/dev server |
+| Login UI | PASS | Email/password and Forgot Password rendered |
+| Signup UI | PASS | First/last name, email, password, zip, optional sport rendered |
+| Authenticated Home | PASS | Temporary Auth-only account reached real Home; account deleted afterward |
+| Home tab | PASS | My Teams and first-level cards rendered |
+| Squad tab | PASS | Nearby sidelines/search/create UI rendered |
+| Games tab | PASS | Games list and join-code UI rendered |
+| Friends tab | PASS | Friends, requests, chat, and empty state rendered |
+| Profile tab | PASS | My Profile, identity, current mode card, and settings rendered |
+| Offline handling | PASS | Airplane-mode sign-in stayed in-app and showed a generic friendly message |
+| Android Back | PASS | Public auth routes return to launcher without trapping the user |
+| Startup permissions | PASS | Microphone, fine location, and notifications remain denied/unrequested on clean launch |
+| App-specific log scan | PASS | No fatal, JS, native-load, permission-denial, or missing-asset match |
+| Temporary test cleanup | PASS | Auth-only accounts deleted; emulator app session/data cleared |
 
-Authenticated Home, tab navigation, team/squad flows, notification permission timing after login, location request timing, voice recording on a real device, and privacy/account actions still require a dedicated reviewer account and physical-device test.
+The temporary smoke accounts had no Firestore profile and were deleted in the same guarded test operation.
 
-## Crash and logcat findings
+## Automated verification
 
-- No `FATAL EXCEPTION`, AndroidRuntime crash, React Native fatal startup error, Firebase startup error, security exception, permission denial, missing asset error, or missing JavaScript bundle error occurred in the successful 4 GB emulator runs.
-- The production AAB-derived process stayed foreground and rendered the welcome screen.
-- Microphone, location, and notification runtime permissions were not granted or requested during startup.
-- The initial emulator process termination was explicitly reported by Android's low-memory killer while the 2 GB emulator was below its memory watermark.
-- Android 17 displayed a compatibility warning because the native libraries are not 16 KB aligned. This is a real Google Play blocker, not an emulator-only cosmetic warning.
-- A debug-only React Native LogBox showed the underlying Firebase network error during the offline test. The user-facing app message remained generic, and the AAB-derived production install did not contain the developer menu.
+- `npx expo install --fix`: PASS, dependencies up to date
+- Expo Doctor: 19/20; only the expected maintained-native config synchronization warning
+- TypeScript: PASS
+- ESLint: PASS with zero warnings (legacy-config migration notice only)
+- Existing regression suites: 23/23 PASS
+- Android production JavaScript export: PASS
+- All-ABI debug native build: PASS
+- x86_64 embedded-JS release smoke build: PASS
+- EAS production AAB: PASS
+- Bundletool structural validation: PASS
+- Normal Android bundle signature verification: PASS
+- AAB ZIP alignment: PASS
+- 16 KB release ELF audit: 50/50 PASS
+- Clean AAB-derived install/startup: PASS
+- Authenticated first-level navigation: PASS
+- Production npm audit: 0 critical, 0 high, 11 moderate
 
-## Google Play readiness
+The remaining moderate npm advisories are in Expo build/config tooling through the `xcode`/`uuid` chain. npm's forced repair proposes a breaking, incompatible Expo package change, so it was not applied.
 
-### Target SDK
+## Crash and log findings
 
-- Current checked-in target: API 35
-- Current Google Play phone-app minimum on July 17, 2026: API 35
-- Starting August 31, 2026, new apps and updates must target API 36.
-- Because the framework must be upgraded for 16 KB support anyway, the replacement build should target API 36 now.
+- No `FATAL EXCEPTION` or app `AndroidRuntime` crash.
+- No React Native JavaScript error match.
+- No `UnsatisfiedLinkError` or `dlopen` failure.
+- No permission-denial/security exception from Sideline Social.
+- No missing asset or missing JavaScript bundle error.
+- Sensitive permissions were not requested during clean unauthenticated launch.
+- Offline authentication failed gracefully without exposing raw Firebase/native errors.
+- Authenticated Home showed a graceful Challenge unavailable state for the temporary profile-less account.
 
-Official policy:
+## Permissions review
 
-https://support.google.com/googleplay/android-developer/answer/11926878
+Release-sensitive permissions map to visible features:
 
-### 16 KB memory-page support
+- Approximate/fine location: nearby Squad discovery
+- Microphone: user-initiated voice messages
+- Notifications: team, friend, and app alerts
 
-**FAIL**
+`RECORD_AUDIO` appears exactly once in the final manifest. Obsolete external-storage permissions and release `SYSTEM_ALERT_WINDOW` are absent. Microphone permission remains deferred until Record; that behavior is covered by automated tests. Final grant/deny/Don't ask again testing on a physical Android device is still required.
 
-- Google Play has required 16 KB page-size support for API 35+ submissions since November 1, 2025.
-- Android 17 displayed the native compatibility warning.
-- ELF audit: 49 arm64 libraries checked, 0 passed 16 KB LOAD-segment alignment.
-- React Native first added full 16 KB support in React Native 0.77. This project uses React Native 0.74.5.
-
-Official guidance:
-
-https://developer.android.com/guide/practices/page-sizes
-
-### App Bundle and signing
-
-- Production format: Android App Bundle (`.aab`) — PASS
-- Bundletool structural validation — PASS
-- EAS managed upload keystore used — PASS
-- 64-bit arm64-v8a and x86_64 native libraries included — PASS
-- Google Play App Signing enrollment/verification — must be confirmed in Play Console
-- The checked-in Gradle release block still references the debug keystore for direct local release builds. The documented production path is EAS, which injects and uses the managed remote keystore. Do not upload a direct local `bundleRelease` artifact unless proper local release signing is configured.
-
-### Application identity and versions
+## Signing and identity
 
 - App name: Sideline Social
 - Android package/application ID: `com.sidelinesquad.app`
 - Native namespace: `com.sidelinesquad.app`
-- Firebase Android client package: expected to match `com.sidelinesquad.app`
-- Version name: `1.0.0`
-- Native local version code: `1`
+- Firebase Android client package: unchanged
+- EAS project ID: unchanged
+- Production signing: existing managed EAS upload keystore
 - EAS remote version source: enabled
 - EAS production auto-increment: enabled
-- Latest final audit build version code: `3`
+- Final code: 5
+- Google Play App Signing enrollment/upload-certificate match: confirm in Play Console
 
-### Permissions
+The checked-in local Gradle release type still uses the debug keystore for local smoke builds. The upload candidate is only the remotely signed EAS AAB listed above.
 
-Release permissions with user-facing sensitive access:
+## Production content/security audit
 
-- Approximate/fine location: used to find nearby squads
-- Microphone: used for user-initiated voice messages
-- Notifications: used for team/friend/app notifications
+- No runtime localhost/emulator endpoint found outside test code.
+- No Maps production secret is tracked in git.
+- The Maps key is stored as an EAS production secret and was confirmed present/matching in the final AAB without displaying it.
+- Firebase client config files contain Firebase web/mobile API identifiers as expected; these are not the Maps production secret.
+- Four runtime files contain `console.log` diagnostics. They were not visible in production UI and did not produce a startup failure, but they should be reviewed in a later logging-hardening pass.
+- No sample/demo branding was observed.
+- No Expo developer menu or Metro dependency appeared in the production install.
+- Production npm audit has no critical/high advisories after the undici override.
 
-These permissions map to visible app features. Location, microphone, and notification permission timing still needs complete authenticated physical-device testing.
+## Remaining review blockers
 
-Obsolete external-storage permissions were removed from the final merged source manifest. `SYSTEM_ALERT_WINDOW` is debug-only and is absent from the release merged manifest.
+### 1. Privacy policy
 
-### Privacy policy and account deletion
+**Not found.** The app collects account, communication, location, audio, child/team association, and device/push data. Before review:
 
-**FAIL**
+- Publish a legally reviewed privacy policy at a public HTTPS URL.
+- Add a clearly labeled in-app privacy-policy link.
+- Configure the same URL in Play Console.
 
-- No public privacy-policy URL is configured.
-- No in-app privacy-policy text or link was found.
-- No in-app account-deletion flow was found.
-- No public account-deletion request URL was found.
+### 2. Account deletion
 
-Google Play requires every app to supply a privacy-policy link. Apps that allow account creation must also provide an in-app deletion path and a web deletion path.
+**Not found.** The app supports account creation, so before review:
 
-Official requirements:
+- Implement authenticated in-app account deletion.
+- Publish a public account-deletion request URL.
+- Define and disclose deletion/retention behavior for Authentication, Firestore, Storage, chats, messages, children, teams, squads, and safety records.
 
-https://support.google.com/googleplay/android-developer/answer/17105854
+These items require product/legal decisions and an external public URL; they were not invented or implemented during a framework/build upgrade.
 
-https://support.google.com/googleplay/android-developer/answer/13327111
+## Data Safety answers to prepare
 
-### Data Safety answers to prepare
+Confirm the final declaration against the privacy policy, retention policy, Firebase contracts, and production behavior. Audited categories include:
 
-The Play Console declaration must be confirmed against production Firebase configuration, retention policy, service-provider contracts, and final privacy policy. Based on the audited code, prepare answers for at least:
+- Personal information: name, email, optional phone, profile photo/URL, user ID
+- Child information entered by a parent: display names and team associations
+- Approximate/precise location: nearby Squad discovery
+- User content: friend chat, team messages/replies, announcements, Squad names, reports
+- Audio: team-wide and private voice messages
+- App activity: teams/Squads, sessions/scores, challenges, rewards, friend requests, blocks, notification state
+- Device/other identifiers: Firebase installation and FCM push tokens
+- Diagnostics: no app-owned Crashlytics integration was found; confirm all provider behavior
 
-- Personal information: name, email address, optional phone number, profile image/URL, account/user ID
-- Child information entered by a parent: child display names and team associations
-- Approximate and precise location: nearby-squad discovery
-- User content: friend chats, team messages/replies, announcements, group names, reports
-- Audio files: team-wide and private voice messages
-- App activity: squads/teams joined, game sessions/scores, challenges, rewards, friend requests, blocks, notification read state
-- Device or other identifiers: Firebase/FCM installation and push tokens
-- Crash/diagnostic data: no app-owned Crashlytics integration was found, but final SDK behavior must be verified
+Likely purposes: app functionality, account management, communication, safety/security, personalization, and notifications. Confirm encryption in transit, retention, deletion, optional vs required collection, data sharing/service-provider treatment, and whether Families/child-directed policy applies.
 
-Likely purposes include app functionality, account management, communications, safety/security, personalization of sports/community content, and notifications. Confirm whether any data is considered “shared” under Play's definitions, how Firebase acts as a service provider, whether all data is encrypted in transit, retention periods, deletion behavior, optional versus required collection, and whether child-directed/Families policies apply.
+Official guidance: <https://support.google.com/googleplay/android-developer/answer/10787469>
 
-Official Data Safety guidance:
+## Store-listing assets and Play Console setup
 
-https://support.google.com/googleplay/android-developer/answer/10787469
+Present in the repository:
 
-### Store-listing assets and metadata
-
-Present:
-
-- App name: Sideline Social
-- 1024 × 1024 standard icon
-- 1024 × 1024 adaptive foreground icon
+- App name
+- Standard/adaptive icons
 - Splash artwork
 
-Not found and still required/preparation needed:
+Still required or not verified:
 
 - Phone screenshots
-- 7-inch and 10-inch tablet screenshots if tablet distribution remains enabled
+- Tablet screenshots if tablet distribution remains enabled
 - Feature graphic
-- Short description
-- Full description
+- Final short description (80 characters maximum)
+- Final full description
 - Public privacy-policy URL
-- Support email/website/phone as applicable
-- App category and tags
+- Support contact/website
+- App category/tags
 - Content rating questionnaire
-- Target audience and Families-policy determination
+- Target audience/Families determination
 - Ads declaration
-- App access instructions and dedicated reviewer credentials
 - Data Safety form
 - Account-deletion URL
+- Dedicated non-personal reviewer credentials and App access instructions
 - Release notes
 
-Suggested placeholders for planning only:
+Planning placeholders only:
 
-- Short description: `[TODO: final Play short description, maximum 80 characters]`
-- Full description: `[TODO: final feature-focused Play description]`
+- Short description: `[TODO: final Play short description]`
+- Full description: `[TODO: final Play description]`
 - Privacy policy: `[TODO: public HTTPS URL]`
-- Account deletion: `[TODO: public HTTPS deletion-request URL]`
-- Reviewer credentials: `[TODO: dedicated non-personal review account]`
+- Account deletion: `[TODO: public HTTPS deletion URL]`
+- Reviewer account: `[TODO: dedicated non-personal account]`
 
-### Production content audit
+## Exact next steps
 
-- No localhost or emulator endpoint is used by normal application runtime code; localhost references found were confined to test scripts.
-- Production AAB install launched the app directly without the Expo developer menu.
-- Google Maps key is provided to EAS as a production secret. Restrict the key in Google Cloud to the Android application ID and production signing-certificate SHA-1/SHA-256 values.
-- Firebase configuration points to the Sideline project rather than an emulator.
-- Source-level console logging remains in several app/service files. Most entries are error diagnostics and are not visible in the production UI, but debug instrumentation logs should be removed or guarded during the framework-upgrade pass.
-- Google and Apple sign-in methods currently log “not configured” if called; no first-level buttons for those providers were observed in the tested Android auth flow.
-- No sample/demo branding was observed in the production welcome/auth screens.
+1. Publish the privacy policy and add its in-app link.
+2. Implement in-app deletion and publish the deletion-request URL.
+3. Create a dedicated Parent/Coach reviewer account and App access instructions.
+4. Complete Data Safety, content rating, audience/Families, ads, category/tags, support contact, and store descriptions.
+5. Produce phone/tablet screenshots and a feature graphic from the final build.
+6. Confirm Play App Signing enrollment and that the registered upload certificate matches the EAS credential.
+7. Restrict the Maps key to `com.sidelinesquad.app` and the production signing certificate fingerprints in Google Cloud.
+8. Run physical-device tests for notification, location, and microphone grant/deny/Settings flows, Parent/Coach switching, voice upload/playback, chats, teams, and Squads.
+9. Upload `sideline-social-v1.0.0-code5-sdk57.aab` to Internal testing.
+10. Resolve every Play Console warning and pre-launch report issue before review/promotion.
 
-## Exact next steps before Google Play submission
+Official policy references:
 
-1. Create a dedicated upgrade branch and upgrade from Expo SDK 51 / React Native 0.74 to at least Expo SDK 54 / React Native 0.81. SDK 54 targets API 36, supports 16 KB pages, and is the final Expo release that permits the legacy architecture. A move to current stable Expo SDK 56 is preferable but also requires New Architecture migration.
-2. Regenerate or carefully merge the maintained Android native project during the Expo upgrade. Preserve the package ID, Firebase setup, Maps manifest placeholder, microphone permission, deferred audio compatibility behavior, and the storage-permission removal directives.
-3. Rebuild a production AAB and rerun bundletool validation, arm64 ELF alignment checks, and a 16 KB emulator launch with compatibility mode disabled/fatal.
-4. Re-run all TypeScript, ESLint, authentication, navigation, profile, notification, squad/team, chat, voice, and Android JavaScript export tests after the framework upgrade.
-5. Publish a legally reviewed privacy policy at a public HTTPS URL. Include developer identity/contact, collected and shared data, purposes, Firebase/processor disclosures, security, retention, deletion, children's data, and policy-change handling.
-6. Add a clearly labeled privacy-policy link inside the app and configure the same URL in Play Console.
-7. Implement authenticated in-app account deletion and publish a web deletion-request URL. Verify associated Firebase Authentication and stored user data are deleted or retained exactly as disclosed.
-8. Create a dedicated Play-review account with representative Parent and Coach access. Do not use a personal account. Supply exact navigation instructions in App access.
-9. Complete authenticated physical-device smoke tests, including Home/tabs, Parent/Coach switching, teams/squads, friend chat, notifications, location denial/grant, microphone denial/grant/Settings, offline behavior, and Android Back.
-10. Prepare screenshots, feature graphic, short/full descriptions, category/tags, support contact, content rating, target audience, ads declaration, Data Safety form, and release notes.
-11. Confirm Google Play App Signing enrollment and that the EAS upload certificate matches the registered upload certificate. Restrict the Google Maps API key to the final production signing fingerprints.
-12. Upload the replacement 16 KB-compatible API 36 AAB to Internal testing first. Resolve every Play Console warning and pre-launch report issue before promoting to closed or production review.
+- Target API: <https://support.google.com/googleplay/android-developer/answer/11926878>
+- 16 KB support: <https://developer.android.com/guide/practices/page-sizes>
+- Privacy policy: <https://support.google.com/googleplay/android-developer/answer/17105854>
+- Account deletion: <https://support.google.com/googleplay/android-developer/answer/13327111>
 
-## Automated verification
+## Tracked files modified
 
-- Debug APK build: PASS
-- Debug and release merged-manifest generation: PASS
-- Production EAS App Bundle build: PASS
-- Bundletool validation: PASS
-- AAB-derived production install: PASS
-- Cold launch and splash completion: PASS
-- TypeScript: PASS
-- ESLint: PASS
-- Voice microphone-permission regression test: PASS
-- Target API 35: PASS for current policy, temporary
-- 64-bit support: PASS
-- 16 KB native alignment: FAIL
-- Privacy policy: FAIL
-- Account deletion: FAIL
-- Full authenticated smoke test: NOT TESTED
+- `.eslintrc.js`
+- `GOOGLE_PLAY_REVIEW_CHECKLIST.md`
+- `android/app/build.gradle`
+- `android/app/src/main/AndroidManifest.xml`
+- `android/app/src/main/java/com/sidelinesquad/app/MainApplication.kt`
+- `android/app/src/main/res/values/styles.xml`
+- `android/build.gradle`
+- `android/gradle.properties`
+- `android/gradle/wrapper/gradle-wrapper.properties`
+- `android/settings.gradle`
+- `app.config.js`
+- `app/_layout.tsx`
+- `components/CoachResourceHeader.tsx`
+- `components/GluestackInitializer.tsx`
+- `components/NotificationCoordinator.tsx`
+- `components/VoiceMemoComposer.tsx`
+- `components/VoiceMemoPlayer.tsx`
+- `eas.json`
+- `i18n/polyfills.ts`
+- `metro.config.js`
+- `package-lock.json`
+- `package.json`
+- `scripts/test-coach-communication-regressions.cjs`
+- `scripts/test-friend-chat-core.cjs` (pre-existing unrelated change preserved)
+- `scripts/test-team-voice-private-core.cjs`
+- `scripts/test-voice-microphone-permission.cjs`
+- `services/teamVoiceAudioCapability.ts`
+- `services/voiceMemoFileService.ts`
+- `services/voiceMemoPermissionService.ts`
+- `src/game/spotDifference/SpotDifferenceScreen.tsx`
+- `tsconfig.json`
+
+Generated checkpoints, native references, exports, logs, screenshots, APKs, APK sets, AABs, and alignment JSON are under ignored `build/` paths and are not tracked.
+
+## Final status
+
+**PARTIAL: the final code-5 AAB builds, signs, aligns, installs, launches, works offline, and passes authenticated first-level navigation. Complete privacy policy, account deletion, store listing, Data Safety, reviewer access, and physical-device testing before submitting it for Google Play review.**

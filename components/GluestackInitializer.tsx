@@ -4,7 +4,7 @@ import {
   DarkTheme,
   DefaultTheme,
   ThemeProvider,
-} from "@react-navigation/native";
+} from "expo-router/react-navigation";
 import React from "react";
 import "react-native-reanimated";
 

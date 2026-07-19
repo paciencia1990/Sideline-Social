@@ -10,7 +10,7 @@ module.exports = ({ config }) => ({
   icon: "./assets/images/icon.png",
   scheme: "sidelinesquad",
   userInterfaceStyle: "automatic",
-  newArchEnabled: false,
+  newArchEnabled: true,
 
   ios: {
     supportsTablet: true,
@@ -22,7 +22,7 @@ module.exports = ({ config }) => ({
 
   android: {
     package: "com.sidelinesquad.app",
-    versionCode: 1,
+    versionCode: 5,
     googleServicesFile: "./google-services.json",
     permissions: ["android.permission.RECORD_AUDIO"],
     config: {
@@ -43,12 +43,20 @@ module.exports = ({ config }) => ({
   },
 
   plugins: [
+    "expo-router",
+    "expo-web-browser",
+    "expo-asset",
+    "expo-image",
     "expo-font",
+    "expo-status-bar",
     "expo-notifications",
     [
-      "expo-av",
+      "expo-audio",
       {
         microphonePermission: "Sideline Social uses your microphone only when you choose to record a team voice message.",
+        recordAudioAndroid: true,
+        enableBackgroundRecording: false,
+        enableBackgroundPlayback: false,
       },
     ],
     [
