@@ -7,6 +7,8 @@ import * as functions from 'firebase-functions';
 import { formatSuggestedConnectionName, resolvePublicProfileName } from './friendSuggestionCore';
 import { friendRequestIdFor } from './friendRequestCore';
 import { resolveFriendRequestNotification } from './friendRequestNotifications';
+import { sendPushToUser } from './pushNotificationDelivery';
+import { assertUserContentAllowed } from './contentSafety';
 import {
   CHAT_SEND_COOLDOWN_MS,
   MAX_CHAT_PARTICIPANTS,
@@ -534,6 +536,7 @@ export const sendFriendChatMessage = chatFunctions.https.onCall(async (data, con
   if (!conversationId || !clientMessageId) invalid('Conversation and clientMessageId are required.');
   let text: string;
   try { text = sanitizeChatMessage(data?.text); } catch (error) { invalid((error as Error).message); }
+  assertUserContentAllowed(text);
   const messageId = messageIdFor(uid, clientMessageId);
   const messageRef = conversationRef(conversationId).collection('messages').doc(messageId);
   let conversationType: 'direct' | 'group' = 'direct';
@@ -656,6 +659,14 @@ export const getBlockedFriendChatUserIds = chatFunctions.https.onCall(async (_da
   return { blockedUserIds: snapshot.docs.map((document) => document.id) };
 });
 
+export const unblockFriendChatUser = chatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const blockedUserId = normalizeChatUserId(data?.blockedUserId);
+  if (!blockedUserId || blockedUserId === uid) invalid('A blocked user is required.');
+  await blockRef(uid, blockedUserId).delete();
+  return { unblocked: true };
+});
+
 export const reportFriendChatUser = chatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const reportedUserId = normalizeChatUserId(data?.reportedUserId);
@@ -713,20 +724,11 @@ async function createGroupInvitationNotification(
     return true;
   });
   if (!created) return;
-  const tokens = await firestore().collection('notificationTokens').where('uid', '==', invitation.userId).limit(10).get();
-  await Promise.allSettled(tokens.docs.map((tokenDocument) => {
-    const token = tokenDocument.data()?.token;
-    if (typeof token !== 'string' || !token) return Promise.resolve();
-    return admin.messaging().send({
-      token,
-      notification: {
-        title: 'Chat invitation',
-        body: invitation.groupName ? `${invitation.inviterName || 'A friend'} invited you to ${invitation.groupName}.` : `${invitation.inviterName || 'A friend'} invited you to a group chat.`,
-      },
-      data: { type: 'chatGroupInvitation', conversationId, notificationId: eventId },
-      android: { notification: { channelId: 'chat-messages' } },
-    });
-  }));
+  await sendPushToUser(
+    invitation.userId,
+    { type: 'chatGroupInvitation', conversationId, notificationId: eventId },
+    'chat-messages',
+  );
 }
 
 async function sendMessagePushes(conversationId: string, senderUserId: string, text: string, conversationType: 'direct' | 'group') {
@@ -743,17 +745,11 @@ async function sendMessagePushes(conversationId: string, senderUserId: string, t
         blockRef(senderUserId, member.id).get(), blockRef(member.id, senderUserId).get(),
       ]);
       if (blockedBySender.exists || blockedByRecipient.exists) return;
-      const tokens = await firestore().collection('notificationTokens').where('uid', '==', member.id).limit(10).get();
-      await Promise.allSettled(tokens.docs.map((tokenDocument) => {
-        const token = tokenDocument.data()?.token;
-        if (typeof token !== 'string' || !token) return Promise.resolve();
-        return admin.messaging().send({
-          token,
-          notification: { title: senderName, body: sanitizeMessagePreview(text) },
-          data: { type: 'friendChatMessage', conversationId, conversationType },
-          android: { notification: { channelId: 'chat-messages' } },
-        });
-      }));
+      await sendPushToUser(
+        member.id,
+        { type: 'friendChatMessage', conversationId, conversationType },
+        'chat-messages',
+      );
     }));
   } catch (error) {
     const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : 'unknown';

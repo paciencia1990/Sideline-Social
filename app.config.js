@@ -1,29 +1,54 @@
+const IOS_BUNDLE_IDENTIFIER = "com.sidelinesocial.app";
+const APP_VARIANT = process.env.APP_VARIANT === "development" ? "development" : "production";
+const IS_DEVELOPMENT = APP_VARIANT === "development";
+const ANDROID_PACKAGE = IS_DEVELOPMENT ? "com.sidelinesquad.app.dev" : "com.sidelinesquad.app";
+const APP_NAME = IS_DEVELOPMENT ? "Sideline Social Dev" : "Sideline Social";
+const APP_SCHEME = IS_DEVELOPMENT ? "sidelinesquad-dev" : "sidelinesquad";
+
 module.exports = ({ config }) => ({
   ...config,
 
   owner: "paciencia1990",
   slug: "sideline-squad",
-  name: "Sideline Social",
+  name: APP_NAME,
   version: "1.0.0",
 
   orientation: "portrait",
   icon: "./assets/images/icon.png",
-  scheme: "sidelinesquad",
+  scheme: APP_SCHEME,
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
 
+  locales: {
+    en: "./config/locales/en.json",
+    es: "./config/locales/es.json",
+  },
+
   ios: {
-    supportsTablet: true,
-    bundleIdentifier: "com.sidelinesquad.app",
+    supportsTablet: false,
+    bundleIdentifier: IOS_BUNDLE_IDENTIFIER,
+    buildNumber: "1",
+    icon: "./assets/images/icon-ios.png",
+    ...(process.env.GOOGLE_SERVICES_INFO_PLIST
+      ? { googleServicesFile: process.env.GOOGLE_SERVICES_INFO_PLIST }
+      : {}),
     infoPlist: {
+      CFBundleAllowMixedLocalizations: true,
+      CFBundleDevelopmentRegion: "en",
       ITSAppUsesNonExemptEncryption: false,
+      NSLocationWhenInUseUsageDescription: "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.",
+      NSMicrophoneUsageDescription: "Sideline Social uses your microphone only when you choose to record a team voice message.",
     },
   },
 
   android: {
-    package: "com.sidelinesquad.app",
+    package: ANDROID_PACKAGE,
     versionCode: 5,
-    googleServicesFile: "./google-services.json",
+    ...(IS_DEVELOPMENT
+      ? (process.env.GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT
+        ? { googleServicesFile: process.env.GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT }
+        : {})
+      : { googleServicesFile: "./google-services.json" }),
     permissions: ["android.permission.RECORD_AUDIO"],
     config: {
       googleMaps: {
@@ -68,8 +93,8 @@ module.exports = ({ config }) => ({
     [
       "expo-splash-screen",
       {
-        image: "./assets/images/splash-icon.png",
-        imageWidth: 200,
+        image: "./assets/branding/sideline-social-logo.png",
+        imageWidth: 220,
         resizeMode: "contain",
         backgroundColor: "#ffffff",
       },

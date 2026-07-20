@@ -20,6 +20,7 @@ import {
   type SquadMembershipAuthorizationData,
 } from './squadAdminCore';
 import { resolveSelectionAfterLeave } from './squadCore';
+import { sendPushToUser } from './pushNotificationDelivery';
 
 const MAX_ACTIVE_MEMBERS = 250;
 // Each invitation may also update one notification in the same atomic batch.
@@ -249,33 +250,14 @@ async function createSquadNotificationAndPush(input: SquadNotificationInput) {
   });
   if (!created) return false;
 
-  const tokenSnapshot = await db.collection('notificationTokens')
-    .where('uid', '==', input.recipientUserId)
-    .get();
-  const results = await Promise.allSettled(tokenSnapshot.docs.map(async (tokenDocument) => {
-    const token = tokenDocument.data()?.token;
-    if (typeof token !== 'string' || !token) return;
-    try {
-      await admin.messaging().send({
-        token,
-        notification: { title: input.pushTitle, body: input.pushBody },
-        data: {
-          notificationId: input.eventId,
-          type: input.type,
-          squadId: input.squadId,
-          ...(input.invitationId ? { squadAdminInvitationId: input.invitationId } : {}),
-        },
-        android: { notification: { channelId: 'coach-updates' } },
-      });
-    } catch (error) {
-      const code = typeof error === 'object' && error && 'code' in error ? String(codeFrom(error)) : '';
-      if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token') {
-        await tokenDocument.ref.delete();
-        return;
-      }
-      throw error;
-    }
-  }));
+  const results = await Promise.allSettled([
+    sendPushToUser(input.recipientUserId, {
+      notificationId: input.eventId,
+      type: input.type,
+      squadId: input.squadId,
+      ...(input.invitationId ? { squadAdminInvitationId: input.invitationId } : {}),
+    }),
+  ]);
   const failures = results.filter((result) => result.status === 'rejected').length;
   if (failures) console.warn('[squadAdminNotification] push delivery failures', { type: input.type, failures });
   return true;

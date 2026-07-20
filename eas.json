@@ -6,14 +6,34 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "environment": "development",
+      "node": "24.16.0",
+      "env": {
+        "APP_VARIANT": "development"
+      },
+      "android": {
+        "buildType": "apk"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "developmentClient": false,
+      "distribution": "internal",
+      "environment": "preview",
+      "node": "24.16.0"
     },
     "production": {
       "autoIncrement": true,
-      "node": "24.16.0"
+      "developmentClient": false,
+      "distribution": "store",
+      "environment": "production",
+      "node": "24.16.0",
+      "env": {
+        "APP_VARIANT": "production"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      }
     }
   },
   "submit": {

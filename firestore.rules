@@ -434,6 +434,10 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /contentModerationReports/{reportId} {
+      allow read, write: if false;
+    }
+
     // -----------------------------------------------------------------------
     // Friend requests
     // Participants may read request state. All identity, duplicate, response,
@@ -558,17 +562,9 @@ service cloud.firestore {
       match /announcements/{announcementId} {
         allow get, list: if canReadTeamAnnouncement(teamId);
 
-        allow create: if isTeamActive(teamId) &&
-          isCoachStaff(teamId) &&
-          request.resource.data.createdBy == request.auth.uid &&
-          request.resource.data.audience in ["parents", "staff", "all"] &&
-          request.resource.data.allowReplies is bool &&
-          (!("contentType" in request.resource.data) || request.resource.data.contentType == "text") &&
-          !("voiceMemo" in request.resource.data);
-
-        allow update: if isTeamActive(teamId) &&
-          isCoachStaff(teamId) &&
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(["contentType", "voiceMemo"]);
+        // Text and voice announcements are created by authenticated callables
+        // so identity, rate limiting, and content safety checks cannot be bypassed.
+        allow create, update: if false;
 
         // Announcement deletion recursively removes protected descendants and
         // notification inbox entries through deleteTeamAnnouncement only.

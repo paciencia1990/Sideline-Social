@@ -30,6 +30,30 @@ async function run() {
     db.collection("teams").doc("team-1").collection("members").doc(parent.uid).set({ userId: parent.uid, teamId: "team-1", status: "active", role: "parent", roles: { coach: false, parent: true, staff: false }, displayName: "Parent P." }),
     db.collection("teams").doc("team-1").collection("members").doc(secondCoach.uid).set({ userId: secondCoach.uid, teamId: "team-1", status: "active", role: "coach", roles: { coach: true, parent: false, staff: false }, displayName: "Coach S." }),
   ]);
+
+  const textAnnouncement = await coach.call("createTeamAnnouncement", {
+    teamId: "team-1", title: "Practice update", body: "Practice starts at six.", audience: "all", allowReplies: true,
+  });
+  assert.equal(textAnnouncement.status, "created");
+  assert.equal((await db.collection("teams").doc("team-1").collection("announcements").doc(textAnnouncement.announcementId).get()).data().createdBy, coach.uid);
+  await assert.rejects(() => parent.call("createTeamAnnouncement", {
+    teamId: "team-1", title: "Unauthorized", body: "No", audience: "all", allowReplies: true,
+  }), hasCode("permission-denied"));
+  await assert.rejects(() => coach.call("createTeamAnnouncement", {
+    teamId: "team-1", title: "Unsafe", body: "Go die", audience: "all", allowReplies: true,
+  }), hasCode("failed-precondition"));
+
+  const firstReport = await parent.call("reportTeamContent", {
+    kind: "announcement", teamId: "team-1", parentId: textAnnouncement.announcementId,
+    contentId: textAnnouncement.announcementId, reason: "offensive",
+  });
+  assert.equal(firstReport.reported, true);
+  assert.equal(firstReport.alreadyReported, false);
+  const duplicateReport = await parent.call("reportTeamContent", {
+    kind: "announcement", teamId: "team-1", parentId: textAnnouncement.announcementId,
+    contentId: textAnnouncement.announcementId, reason: "spam",
+  });
+  assert.equal(duplicateReport.alreadyReported, true, "one reporter cannot flood duplicate reports for the same content");
   await Promise.all([
     db.collection("users").doc(coach.uid).set({ displayName: "Coach C." }),
     db.collection("users").doc(parent.uid).set({ displayName: "Parent P." }),
@@ -49,6 +73,17 @@ async function run() {
   assert.equal((await coach.call("sendPrivateTeamTextMessage", { conversationId: first.conversationId, text: "Private hello", clientMessageId: "client_001" })).status, "alreadySent");
   await assert.rejects(() => outsider.call("sendPrivateTeamTextMessage", { conversationId: first.conversationId, text: "Injected", clientMessageId: "outside_001" }), hasCode("permission-denied"));
   await parent.call("sendPrivateTeamTextMessage", { conversationId: first.conversationId, text: "Private reply", clientMessageId: "client_002" });
+  await assert.rejects(() => coach.call("sendPrivateTeamTextMessage", {
+    conversationId: first.conversationId, text: "Kill yourself", clientMessageId: "blocked_content_001",
+  }), hasCode("failed-precondition"));
+  assert.equal((await parent.call("reportTeamContent", {
+    kind: "privateTeamMessage", teamId: "team-1", parentId: first.conversationId,
+    contentId: sent.messageId, reason: "harassment",
+  })).reported, true);
+  await assert.rejects(() => outsider.call("reportTeamContent", {
+    kind: "privateTeamMessage", teamId: "team-1", parentId: first.conversationId,
+    contentId: sent.messageId, reason: "other",
+  }), hasCode("permission-denied"));
 
   const voiceMemo = { durationMilliseconds: 1000, sizeBytes: 1024, mimeType: "audio/mp4" };
   await assert.rejects(() => parent.call("createTeamVoiceMemoUpload", {
@@ -104,7 +139,7 @@ async function run() {
   await db.collection("teams").doc("team-1").update({ status: "archived" });
   await assert.rejects(() => coach.call("sendPrivateTeamTextMessage", { conversationId: first.conversationId, text: "Blocked", clientMessageId: "client_003" }), hasCode("failed-precondition"));
   assert.equal((await db.collection("teamPrivateConversations").doc(first.conversationId).get()).data().status, "readOnly");
-  console.log("Team Messages callable authorization, determinism, idempotency, reserved voice finalize, inbox, read state, and archived-team tests passed.");
+  console.log("Team Messages callable authorization, content safety/reporting, determinism, idempotency, reserved voice finalize, inbox, read state, and archived-team tests passed.");
 }
 async function waitForDocument(reference) {
   for (let attempt = 0; attempt < 30; attempt += 1) {

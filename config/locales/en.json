@@ -1,0 +1,10 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "Sideline Social",
+    "NSLocationWhenInUseUsageDescription": "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.",
+    "NSMicrophoneUsageDescription": "Sideline Social uses your microphone only when you choose to record a team voice message."
+  },
+  "android": {
+    "app_name": "Sideline Social"
+  }
+}

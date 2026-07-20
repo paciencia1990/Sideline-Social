@@ -29,9 +29,9 @@
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="sidelinesquad"/>
-        <data android:scheme="com.sidelinesquad.app"/>
-        <data android:scheme="exp+sideline-squad"/>
+        <data android:scheme="${APP_SCHEME}"/>
+        <data android:scheme="${applicationId}"/>
+        <data android:scheme="${EXPO_SCHEME}"/>
       </intent-filter>
     </activity>
     <uses-library android:name="org.apache.http.legacy" android:required="false"/>

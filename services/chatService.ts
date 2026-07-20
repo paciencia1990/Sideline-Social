@@ -407,6 +407,10 @@ export async function reportFriendChatMessage(conversationId: string, messageId:
   return call("reportFriendChatMessage", { conversationId, messageId });
 }
 
+export async function unblockFriendChatUser(blockedUserId: string) {
+  return call("unblockFriendChatUser", { blockedUserId });
+}
+
 export function createChatClientMessageId() {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
 }

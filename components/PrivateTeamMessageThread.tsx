@@ -20,6 +20,8 @@ import {
 } from "@/services/teamPrivateMessageService";
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
+import { reportTeamContent, type TeamContentReportReason } from "@/services/contentModerationService";
+import { showContentReportPrompt } from "@/utils/contentReporting";
 import type { LocalVoiceMemoDraft, TeamPrivateConversation, TeamPrivateMessage } from "@/types/teamVoiceMessaging";
 
 export function PrivateTeamMessageThread({ conversationId, role }: { conversationId: string; role: "coach" | "parent" }) {
@@ -35,6 +37,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [sendPhase, setSendPhase] = useState<"uploading" | "finalizing" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reportingMessageId, setReportingMessageId] = useState<string | null>(null);
   const voiceAudioAvailable = isTeamVoiceAudioAvailable();
   const clientId = useRef(createClientMessageId());
   const uploadCancel = useRef<(() => boolean) | null>(null);
@@ -113,6 +116,26 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
     }
   }, [caption, conversation, conversationId, readOnly, sending, t, voiceDraft]);
 
+  const submitReport = useCallback(async (messageId: string, reason: TeamContentReportReason) => {
+    if (!conversation?.teamId || reportingMessageId) return;
+    setReportingMessageId(messageId);
+    setError(null);
+    try {
+      await reportTeamContent({
+        kind: "privateTeamMessage",
+        teamId: conversation.teamId,
+        parentId: conversationId,
+        contentId: messageId,
+        reason,
+      });
+      setError(t("moderation.reportSentBody"));
+    } catch {
+      setError(t("moderation.reportError"));
+    } finally {
+      setReportingMessageId(null);
+    }
+  }, [conversation?.teamId, conversationId, reportingMessageId, t]);
+
   return (
     <View style={styles.container}>
       <Card style={styles.identityCard}>
@@ -136,6 +159,16 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
                 <VoiceMemoPlayer durationMilliseconds={message.voiceMemo.durationMilliseconds} storagePath={message.voiceMemo.storagePath} />
               ) : <Text style={styles.messageText}>{message.text}</Text>}
               {message.caption ? <Text style={styles.caption}>{message.caption}</Text> : null}
+              {!mine ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  disabled={Boolean(reportingMessageId)}
+                  onPress={() => showContentReportPrompt(t, (reason) => { void submitReport(message.id, reason); })}
+                  style={styles.report}
+                >
+                  <Text style={styles.reportText}>{reportingMessageId === message.id ? t("moderation.reporting") : t("moderation.reportContent")}</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           );
         })}
@@ -207,4 +240,6 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.5 },
   cancel: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   hidden: { display: "none" },
+  report: { alignSelf: "flex-start", justifyContent: "center", minHeight: 44, paddingRight: Spacing.md },
+  reportText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 12 },
 });

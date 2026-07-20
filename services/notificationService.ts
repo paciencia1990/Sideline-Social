@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import {
   collection,
@@ -244,27 +245,51 @@ export async function getPendingCoachUpdateRoute() {
 }
 
 export async function registerDeviceNotificationToken(token?: Notifications.DevicePushToken) {
-  if (Platform.OS !== "android") return;
-  const nextToken = token ?? await Notifications.getDevicePushTokenAsync();
-  if (nextToken.type !== "android" || typeof nextToken.data !== "string" || !nextToken.data) return;
+  if (Platform.OS !== "android" && Platform.OS !== "ios") return;
+  const nextToken = Platform.OS === "ios"
+    ? await Notifications.getExpoPushTokenAsync({ projectId: getEasProjectId() })
+    : token ?? await Notifications.getDevicePushTokenAsync();
+  if (typeof nextToken.data !== "string" || !nextToken.data) return;
 
   const callable = httpsCallable<
-    { token: string; platform: "android" },
+    { token: string; platform: "android" | "ios" },
     { registered: boolean }
   >(functions, "registerDeviceNotificationToken");
-  await callable({ token: nextToken.data, platform: "android" });
+  await callable({ token: nextToken.data, platform: Platform.OS });
 }
 
 export async function unregisterCurrentDeviceNotificationToken() {
-  if (Platform.OS !== "android") return;
-  const token = await Notifications.getDevicePushTokenAsync();
-  if (token.type !== "android" || typeof token.data !== "string" || !token.data) return;
+  if (Platform.OS !== "android" && Platform.OS !== "ios") return;
+  const token = Platform.OS === "ios"
+    ? await Notifications.getExpoPushTokenAsync({ projectId: getEasProjectId() })
+    : await Notifications.getDevicePushTokenAsync();
+  if (typeof token.data !== "string" || !token.data) return;
 
   const callable = httpsCallable<
     { token: string },
     { unregistered: boolean }
   >(functions, "unregisterDeviceNotificationToken");
   await callable({ token: token.data });
+}
+
+export async function requestNotificationPermissionAndRegister() {
+  const current = await Notifications.getPermissionsAsync();
+  const permission = current.status === "granted" ? current : await Notifications.requestPermissionsAsync();
+  if (permission.status !== "granted") return false;
+  await registerDeviceNotificationToken();
+  return true;
+}
+
+export async function getNotificationPermissionStatus() {
+  return (await Notifications.getPermissionsAsync()).status;
+}
+
+function getEasProjectId() {
+  const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+  if (typeof projectId !== "string" || !projectId) {
+    throw new Error("EAS project ID is unavailable for push notification registration.");
+  }
+  return projectId;
 }
 
 function logNotificationIssue(operation: string, error: unknown) {

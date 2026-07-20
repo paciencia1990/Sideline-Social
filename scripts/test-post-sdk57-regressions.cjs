@@ -28,6 +28,21 @@ const {
   screenPointToSourcePoint,
 } = require(path.join(root, "src", "game", "spotDifference", "geometry.ts"));
 
+const transformedGeometry = require("@babel/core").transformFileSync(
+  path.join(root, "src", "game", "spotDifference", "geometry.ts"),
+  { configFile: path.join(root, "babel.config.js") },
+).code;
+const transformedGeometryModule = { exports: {} };
+new Function("exports", "module", "require", transformedGeometry)(
+  transformedGeometryModule.exports,
+  transformedGeometryModule,
+  require,
+);
+const {
+  clampSpotDifferenceTranslation: transformedClampSpotDifferenceTranslation,
+  screenPointToSourcePoint: transformedScreenPointToSourcePoint,
+} = transformedGeometryModule.exports;
+
 function seededRandom(seed) {
   let state = seed >>> 0;
   return () => {
@@ -136,6 +151,29 @@ assert.deepEqual(
   clampSpotDifferenceTranslation({ scale: 2, translateX: 500, translateY: -500 }, viewport, imageRect, 1, 4, 0.01),
   { scale: 2, translateX: 100, translateY: -50 },
   "Zoomed image translation must remain clamped to the viewport.",
+);
+assert.deepEqual(
+  transformedClampSpotDifferenceTranslation(
+    { scale: 2, translateX: 500, translateY: -500 },
+    viewport,
+    imageRect,
+    1,
+    4,
+    0.01,
+  ),
+  { scale: 2, translateX: 100, translateY: -50 },
+  "Babel-transformed worklet helpers must capture an initialized clamp function.",
+);
+assert.deepEqual(
+  transformedScreenPointToSourcePoint(
+    50,
+    25,
+    viewport,
+    imageRect,
+    { scale: 1, translateX: 0, translateY: 0 },
+  ),
+  { x: 0.25, y: 0.25 },
+  "Babel-transformed tap conversion must capture an initialized viewport helper.",
 );
 
 const spotScreen = read("src", "game", "spotDifference", "SpotDifferenceScreen.tsx");

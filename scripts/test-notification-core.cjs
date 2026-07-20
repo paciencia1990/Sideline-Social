@@ -69,6 +69,7 @@ const inbox = read("app", "notifications.tsx");
 const service = read("services", "notificationService.ts");
 const coordinator = read("components", "NotificationCoordinator.tsx");
 const functionsSource = read("functions", "src", "index.ts");
+const notificationService = read("services", "notificationService.ts");
 const dismissalFunctions = read("functions", "src", "userNotificationDismissal.ts");
 const announcementDestination = read("app", "teams", "[teamId]", "announcements", "[announcementId].tsx");
 const friendsDestination = read("app", "(tabs)", "friends.tsx");
@@ -118,7 +119,7 @@ const friendCreated = functionsSource.slice(
 );
 const actorNameResolver = functionsSource.slice(
   functionsSource.indexOf("async function getPrivateNotificationActorName"),
-  functionsSource.indexOf("// ---------------------------------------------------------------------------\n// 1. updateActiveMemberCount"),
+  functionsSource.indexOf("export const updateActiveMemberCount"),
 );
 const friendAccepted = functionsSource.slice(
   functionsSource.indexOf("export const onFriendRequestAccepted"),
@@ -152,6 +153,12 @@ assert.equal(requestNotificationResolver.includes("dismissReason: 'resolved'"), 
 assert.equal(requestNotificationResolver.includes("status: 'dismissed'"), true);
 assert.equal(actorNameResolver.toLowerCase().includes("email"), false);
 assert.equal(teamAnnouncement.includes("memberSnapshot.id === authorUserId"), true);
+assert.equal(notificationService.includes('Platform.OS === "ios"'), true);
+assert.equal(notificationService.includes("getExpoPushTokenAsync"), true);
+assert.equal(functionsSource.includes("cleanupExpoPushReceipts"), true);
+const pushDelivery = read("functions", "src", "pushNotificationDelivery.ts");
+assert.equal(pushDelivery.includes("You have a new update."), true);
+assert.equal(pushDelivery.includes("DeviceNotRegistered"), true);
 
 for (const key of [
   "allCaughtUp", "clearAll", "clearing", "clearedTitle", "clearedBody", "clearAllError",

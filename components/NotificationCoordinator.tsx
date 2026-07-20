@@ -100,10 +100,7 @@ async function registerDeviceToken() {
       });
     }
 
-    const currentPermission = await Notifications.getPermissionsAsync();
-    const permission = currentPermission.status === "granted"
-      ? currentPermission
-      : await Notifications.requestPermissionsAsync();
+    const permission = await Notifications.getPermissionsAsync();
     if (permission.status !== "granted") return;
 
     await registerDeviceNotificationToken();

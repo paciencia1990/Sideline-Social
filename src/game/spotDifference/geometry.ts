@@ -19,6 +19,16 @@ export type NormalizedPoint = {
   y: number;
 };
 
+function clamp(value: number, minimum: number, maximum: number) {
+  "worklet";
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+export function getViewportCenter(viewport: SceneSize) {
+  "worklet";
+  return { x: viewport.width / 2, y: viewport.height / 2 };
+}
+
 export function screenPointToSourcePoint(
   locationX: number,
   locationY: number,
@@ -62,14 +72,4 @@ export function clampSpotDifferenceTranslation(
     translateX: clamp(transform.translateX, -maxTranslateX, maxTranslateX),
     translateY: clamp(transform.translateY, -maxTranslateY, maxTranslateY),
   };
-}
-
-export function getViewportCenter(viewport: SceneSize) {
-  "worklet";
-  return { x: viewport.width / 2, y: viewport.height / 2 };
-}
-
-function clamp(value: number, minimum: number, maximum: number) {
-  "worklet";
-  return Math.min(maximum, Math.max(minimum, value));
 }

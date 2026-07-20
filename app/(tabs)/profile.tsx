@@ -238,6 +238,20 @@ export default function ProfileScreen() {
           </View>
         </Card>
 
+        <TouchableOpacity
+          accessibilityHint={t("profile.accountSettingsDescription")}
+          accessibilityRole="button"
+          activeOpacity={0.82}
+          onPress={() => router.push("/settings" as never)}
+          style={styles.settingsLink}
+        >
+          <View style={styles.languageCopy}>
+            <Text style={styles.cardTitle}>{t("profile.accountSettings")}</Text>
+            <Text style={styles.cardText}>{t("profile.accountSettingsDescription")}</Text>
+          </View>
+          <Text accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.settingsChevron}>›</Text>
+        </TouchableOpacity>
+
         <View style={styles.signOutSection}>
           <PrimaryButton
             disabled={isSigningOut}
@@ -288,6 +302,20 @@ const styles = StyleSheet.create({
   signOutSection: {
     gap: Spacing.sm,
     marginTop: Spacing.lg,
+  },
+  settingsLink: {
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.card,
+    flexDirection: "row",
+    gap: Spacing.md,
+    justifyContent: "space-between",
+    minHeight: 64,
+    padding: Spacing.md,
+  },
+  settingsChevron: {
+    color: Colors.textPrimary,
+    fontSize: 28,
   },
   sectionHeader: {
     marginTop: Spacing.xs,

@@ -97,6 +97,7 @@ export default function RootLayout() {
                     <Stack.Screen name="coach" />
                     <Stack.Screen name="teams" />
                     <Stack.Screen name="notifications" />
+                    <Stack.Screen name="settings" />
                     <Stack.Screen
                       name="leaderboard"
                       options={{

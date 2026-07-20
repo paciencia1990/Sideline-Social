@@ -1,12 +1,10 @@
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
   where,
   type Unsubscribe,
 } from "firebase/firestore";
@@ -14,7 +12,6 @@ import { httpsCallable } from "firebase/functions";
 
 import { auth, db, functions } from "@/config/firebase";
 import { getTeamRosterProfiles } from "@/services/teamRosterService";
-import { canSendTeamMessages, getTeamById, isTeamActive, resolveTeamRoles, type TeamRoleFlags } from "@/services/teamService";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
 import { resolveAnnouncementContentType } from "@/utils/teamAnnouncementCore";
 import type { StoredVoiceMemo } from "@/types/teamVoiceMessaging";
@@ -53,30 +50,11 @@ export type AnnouncementInput = {
 };
 
 export async function createTeamAnnouncement(teamId: string, input: AnnouncementInput) {
-  const user = requireUser();
-  const [membership, team] = await Promise.all([
-    getCurrentMembership(teamId, user.uid),
-    getTeamById(teamId),
-  ]);
-  if (!team || !isTeamActive(team)) {
-    const error = new Error("This team is no longer active.");
-    (error as { code?: string }).code = "team-archived";
-    throw error;
-  }
-  if (!canSendTeamMessages(membership)) {
-    throw new Error("Only team staff can send announcements.");
-  }
-
-  await addDoc(collection(db, "teams", teamId, "announcements"), {
-    title: input.title.trim(),
-    body: input.body.trim(),
-    audience: input.audience,
-    allowReplies: input.allowReplies,
-    createdBy: user.uid,
-    createdByName: resolveSafeDisplayName(membership?.displayName, resolveDisplayName()),
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+  const callable = httpsCallable<
+    { teamId: string } & AnnouncementInput,
+    { announcementId: string; status: "created" }
+  >(functions, "createTeamAnnouncement");
+  await callable({ teamId, ...input });
 }
 
 export function listenToTeamAnnouncements(
@@ -261,33 +239,12 @@ export async function deleteTeamAnnouncement(teamId: string, announcementId: str
   return response.data.status;
 }
 
-async function getCurrentMembership(teamId: string, userId: string): Promise<{ roles: TeamRoleFlags; displayName: string } | null> {
-  try {
-    const snapshot = await getDoc(doc(db, "teams", teamId, "members", userId));
-    if (!snapshot.exists()) return null;
-    const data = snapshot.data();
-    if (data.status !== "active") return null;
-    return {
-      roles: resolveTeamRoles(data.roles, data.role),
-      displayName: typeof data.displayName === "string" ? data.displayName : "",
-    };
-  } catch (error) {
-    console.warn("[TeamMessageService] get membership error:", error);
-    return null;
-  }
-}
-
 function requireUser() {
   const user = auth.currentUser;
   if (!user) {
     throw new Error("Please sign in to use team messages.");
   }
   return user;
-}
-
-function resolveDisplayName() {
-  const user = auth.currentUser;
-  return formatPublicUserName(user?.displayName) ?? "Team Parent";
 }
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamAnnouncement {

@@ -165,7 +165,7 @@ async function run() {
 
     const newAnnouncement = { title: "New", body: "Body", createdBy: "multi-role", createdByName: "Multi", audience: "parents", allowReplies: true, createdAt: now(), updatedAt: now() };
     await assertFails(setDoc(doc(parentDb, "teams", "team-1", "announcements", "parent-created"), newAnnouncement));
-    await assertSucceeds(setDoc(doc(multiDb, "teams", "team-1", "announcements", "multi-created"), newAnnouncement));
+    await assertFails(setDoc(doc(multiDb, "teams", "team-1", "announcements", "multi-created"), newAnnouncement));
     await assertFails(setDoc(doc(coachDb, "teams", "team-archived", "announcements", "blocked-new"), newAnnouncement));
     await assertFails(getDoc(doc(otherParentDb, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply")));
     await assertSucceeds(getDoc(doc(coachDb, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply")));

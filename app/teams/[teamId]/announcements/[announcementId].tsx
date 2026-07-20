@@ -26,6 +26,8 @@ import {
   type TeamAnnouncement,
 } from "@/services/teamMessageService";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
+import { reportTeamContent, type TeamContentReportReason } from "@/services/contentModerationService";
+import { showContentReportPrompt } from "@/utils/contentReporting";
 
 export default function ParentAnnouncementScreen() {
   const { i18n, t } = useTranslation();
@@ -45,6 +47,7 @@ export default function ParentAnnouncementScreen() {
   const [sending, setSending] = useState(false);
   const [sendingQuickReplyId, setSendingQuickReplyId] = useState<QuickReplyId | null>(null);
   const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
+  const [reportingContentId, setReportingContentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
   const replyDeletionInFlight = useRef(false);
@@ -193,6 +196,29 @@ export default function ParentAnnouncementScreen() {
     );
   }, [announcementId, t, teamId]);
 
+  const submitReport = useCallback(async (
+    kind: "announcement" | "announcementReply",
+    contentId: string,
+    reason: TeamContentReportReason,
+  ) => {
+    if (reportingContentId) return;
+    setReportingContentId(contentId);
+    setError(null);
+    try {
+      await reportTeamContent({ kind, teamId, parentId: announcementId, contentId, reason });
+      Alert.alert(t("moderation.reportSentTitle"), t("moderation.reportSentBody"));
+    } catch (nextError) {
+      logOperationError("reportContent", nextError);
+      setError(t("moderation.reportError"));
+    } finally {
+      setReportingContentId(null);
+    }
+  }, [announcementId, reportingContentId, t, teamId]);
+
+  const confirmReport = useCallback((kind: "announcement" | "announcementReply", contentId: string) => {
+    showContentReportPrompt(t, (reason) => { void submitReport(kind, contentId, reason); });
+  }, [submitReport, t]);
+
   const childNames = summary ? getTeamChildNames(summary) : [];
   const childName = childNames.length === 0
     ? t("myTeams.childNotSpecified")
@@ -243,6 +269,16 @@ export default function ParentAnnouncementScreen() {
                 <Text style={styles.metaText}>{announcement.createdByName || t("myTeams.coachFallback")}</Text>
                 <Text style={styles.metaText}>{formatDateTime(announcement.createdAt, i18n.language)}</Text>
               </View>
+              {announcement.createdBy !== auth.currentUser?.uid ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  disabled={Boolean(reportingContentId)}
+                  onPress={() => confirmReport("announcement", announcement.id)}
+                  style={styles.reportButton}
+                >
+                  <Text style={styles.reportButtonText}>{t("moderation.reportContent")}</Text>
+                </TouchableOpacity>
+              ) : null}
             </Card>
 
             <Card style={styles.repliesCard}>
@@ -258,16 +294,16 @@ export default function ParentAnnouncementScreen() {
                       <Text style={styles.replyName}>{reply.displayName || t("teamReplies.teamParentFallback")}</Text>
                       <Text style={styles.replyTime}>{formatDateTime(reply.createdAt, i18n.language)}</Text>
                     </View>
-                    {reply.userId === auth.currentUser?.uid ? (
+                    {reply.userId ? (
                       <TouchableOpacity
-                        accessibilityLabel={t("teamReplies.deleteMenuOwn")}
+                        accessibilityLabel={reply.userId === auth.currentUser?.uid ? t("teamReplies.deleteMenuOwn") : t("moderation.reportContent")}
                         accessibilityRole="button"
-                        accessibilityState={{ busy: deletingReplyId === reply.id, disabled: Boolean(deletingReplyId) }}
-                        disabled={Boolean(deletingReplyId)}
-                        onPress={() => confirmDeleteReply(reply)}
+                        accessibilityState={{ busy: deletingReplyId === reply.id || reportingContentId === reply.id, disabled: Boolean(deletingReplyId || reportingContentId) }}
+                        disabled={Boolean(deletingReplyId || reportingContentId)}
+                        onPress={() => reply.userId === auth.currentUser?.uid ? confirmDeleteReply(reply) : confirmReport("announcementReply", reply.id)}
                         style={styles.replyMenuButton}
                       >
-                        {deletingReplyId === reply.id
+                        {deletingReplyId === reply.id || reportingContentId === reply.id
                           ? <ActivityIndicator color={Colors.primary} size="small" />
                           : <MoreVertical color={Colors.primary} size={20} />}
                       </TouchableOpacity>
@@ -400,4 +436,6 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold },
   disabledButton: { opacity: 0.55 },
   repliesOffCard: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderWidth: 1 },
+  reportButton: { alignItems: "center", alignSelf: "flex-start", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.md },
+  reportButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold },
 });

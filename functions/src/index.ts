@@ -34,6 +34,11 @@ import {
   resolveFriendRequestNotification,
 } from './friendRequestNotifications';
 import {
+  processPendingExpoPushReceipts,
+  sendPushToUser,
+} from './pushNotificationDelivery';
+import { assertUserContentAllowed } from './contentSafety';
+import {
   resolveCanonicalPublicName,
   resolveCanonicalPublicProfile,
 } from './publicUserProfileCore';
@@ -134,6 +139,8 @@ export {
   clearUserNotifications,
 } from './userNotificationDismissal';
 export { generateCoachResourceHelp } from './coachResourceHelp';
+export { deleteOwnAccount } from './accountDeletion';
+export { reportTeamContent } from './contentModeration';
 export {
   blockFriendChatUser,
   createFriendGroupConversation,
@@ -152,6 +159,7 @@ export {
   setFriendConversationMuted,
   setFriendGroupAdminRole,
   transferFriendGroupOwnership,
+  unblockFriendChatUser,
 } from './friendChat';
 
 admin.initializeApp();
@@ -225,37 +233,13 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
   });
 
   if (!created) return false;
-  const tokenSnapshot = await firestore.collection('notificationTokens')
-    .where('uid', '==', input.recipientUserId)
-    .get();
-  if (tokenSnapshot.empty) return true;
-
-  const results = await Promise.allSettled(tokenSnapshot.docs.map(async (tokenDocument) => {
-    const token = tokenDocument.data()?.token;
-    if (typeof token !== 'string' || !token) return;
-    try {
-      await admin.messaging().send({
-        token,
-        notification: { title: input.pushTitle, body: input.pushBody },
-        data: {
-          ...input.pushData,
-          notificationId: input.eventId,
-          type: input.type,
-        },
-        android: { notification: { channelId: 'coach-updates' } },
-      });
-    } catch (error) {
-      const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
-      if (
-        code === 'messaging/registration-token-not-registered' ||
-        code === 'messaging/invalid-registration-token'
-      ) {
-        await tokenDocument.ref.delete();
-        return;
-      }
-      throw error;
-    }
-  }));
+  const results = await Promise.allSettled([
+    sendPushToUser(input.recipientUserId, {
+      ...input.pushData,
+      notificationId: input.eventId,
+      type: input.type,
+    }),
+  ]);
 
   const failures = results.filter((result) => result.status === 'rejected').length;
   if (failures > 0) {
@@ -1926,8 +1910,11 @@ export const registerDeviceNotificationToken = functions.https.onCall(async (dat
 
   const token = typeof data?.token === 'string' ? data.token.trim() : '';
   const platform = data?.platform;
-  if (platform !== 'android' || token.length < 20 || token.length > 4096) {
-    throw new functions.https.HttpsError('invalid-argument', 'A valid Android notification token is required.');
+  if ((platform !== 'android' && platform !== 'ios') || token.length < 20 || token.length > 4096) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid notification token is required.');
+  }
+  if (platform === 'ios' && !/^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/.test(token)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid Expo push token is required on iOS.');
   }
 
   const firestore = admin.firestore();
@@ -1967,6 +1954,13 @@ export const unregisterDeviceNotificationToken = functions.https.onCall(async (d
   }
   return { unregistered: false };
 });
+
+export const cleanupExpoPushReceipts = functions.pubsub
+  .schedule('every 15 minutes')
+  .onRun(async () => {
+    await processPendingExpoPushReceipts();
+    return null;
+  });
 
 // ---------------------------------------------------------------------------
 // Coach update notifications
@@ -2130,6 +2124,7 @@ export const sendPrivateTeamTextMessage = teamMessagingFunctions.https.onCall(as
     const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
     const clientMessageId = readClientIdentifier(data?.clientMessageId);
     const text = readBoundedText(data?.text, 1, 2000, 'invalid_message_text');
+    assertUserContentAllowed(text);
     const firestore = admin.firestore();
     await enforceTeamMessageRateLimit(firestore, uid, 'privateText', 60);
     const result = await createPrivateTeamMessageTransaction(firestore, {
@@ -2166,6 +2161,7 @@ export const createTeamVoiceMemoUpload = teamMessagingFunctions.https.onCall(asy
     if (kind === 'announcement') {
       const title = readBoundedText(data?.title, 1, 160, 'announcement_title_required');
       const summary = readBoundedText(data?.summary, 1, 2000, 'announcement_summary_required');
+      assertUserContentAllowed(title, summary);
       const audience = readAnnouncementAudience(data?.audience);
       const allowReplies = data?.allowReplies !== false;
       const teamRef = firestore.collection('teams').doc(teamId);
@@ -2182,6 +2178,7 @@ export const createTeamVoiceMemoUpload = teamMessagingFunctions.https.onCall(asy
       const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
       const clientMessageId = readClientIdentifier(data?.clientMessageId);
       const caption = readOptionalBoundedText(data?.caption, 500, 'invalid_caption');
+      assertUserContentAllowed(caption);
       const conversation = await requireActivePrivateConversation(firestore, conversationId, uid);
       if (conversation.teamId !== teamId) throw new Error('conversation_not_found');
       targetId = teamPrivateMessageId(conversationId, uid, clientMessageId);
@@ -2975,6 +2972,47 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
 // author, timestamp, or role-based deletion permission.
 // ---------------------------------------------------------------------------
 
+export const createTeamAnnouncement = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to create an announcement.');
+  try {
+    const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
+    const title = readBoundedText(data?.title, 1, 160, 'announcement_title_required');
+    const body = readBoundedText(data?.body, 1, 2000, 'announcement_body_required');
+    const audience = readAnnouncementAudience(data?.audience);
+    const allowReplies = data?.allowReplies !== false;
+    assertUserContentAllowed(title, body);
+    const firestore = admin.firestore();
+    const teamRef = firestore.collection('teams').doc(teamId);
+    const announcementRef = teamRef.collection('announcements').doc();
+    await enforceTeamMessageRateLimit(firestore, uid, 'textAnnouncement', 20);
+    await firestore.runTransaction(async (transaction) => {
+      const [team, member, profile] = await transaction.getAll(
+        teamRef,
+        teamRef.collection('members').doc(uid),
+        firestore.collection('users').doc(uid),
+      );
+      if (!team.exists || !isTeamActive(team.data())) throw new Error('team_not_found');
+      if (!member.exists || !canManageTeamAnnouncements(member.data())) throw new Error('not_authorized_coach');
+      transaction.create(announcementRef, {
+        title,
+        body,
+        audience,
+        allowReplies,
+        contentType: 'text',
+        voiceMemo: null,
+        createdBy: uid,
+        createdByName: resolveReplyAuthorName(profile.data(), member.data(), context.auth?.token?.name),
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+    return { announcementId: announcementRef.id, status: 'created' };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
 export const createTeamAnnouncementReply = functions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to reply.');
@@ -2986,6 +3024,7 @@ export const createTeamAnnouncementReply = functions.https.onCall(async (data, c
   if (!body || body.length > 2000) {
     throw new functions.https.HttpsError('invalid-argument', 'Reply text must be between 1 and 2,000 characters.');
   }
+  assertUserContentAllowed(body);
 
   const firestore = admin.firestore();
   const teamRef = firestore.collection('teams').doc(teamId);

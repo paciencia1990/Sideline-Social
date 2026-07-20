@@ -29,3 +29,7 @@ codex-write-test.tmp
 tree.txt
 functions/lib/
 
+# Firebase Android development app config is injected from an EAS file variable.
+android/app/src/debug/google-services.json
+GoogleService-Info.ios.plist
+

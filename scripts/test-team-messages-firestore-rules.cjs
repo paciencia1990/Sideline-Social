@@ -70,7 +70,7 @@ async function run() {
     assert.equal(Object.hasOwn(legacySnapshot.data(), "contentType"), false, "legacy reads must not rewrite contentType");
 
     const baseAnnouncement = { title: "Text", body: "Allowed legacy text", audience: "all", allowReplies: true, createdBy: "coach", createdAt: now(), updatedAt: now() };
-    await assertSucceeds(setDoc(doc(coach, "teams", "team-1", "announcements", "text"), baseAnnouncement));
+    await assertFails(setDoc(doc(coach, "teams", "team-1", "announcements", "text"), baseAnnouncement));
     await assertFails(setDoc(doc(coach, "teams", "team-1", "announcements", "forged-voice"), { ...baseAnnouncement, contentType: "voice", voiceMemo: { storagePath: "forged" } }));
     await assertFails(updateDoc(doc(coach, "teams", "team-1", "announcements", "text"), { contentType: "voice", voiceMemo: { storagePath: "forged" } }));
     console.log("Private Messages isolation plus legacy/text/voice announcement visibility, ordering, and voice-forgery rules tests passed.");
