@@ -34,6 +34,7 @@ import {
   type Coordinates,
   type Squad,
 } from "@/services/squadService";
+import { getParentTabScrollBottomPadding } from "@/utils/safeAreaLayout";
 
 type LocationPhase = "idle" | "loading" | "granted" | "denied" | "permanent" | "unavailable" | "error";
 
@@ -193,104 +194,115 @@ export default function SquadScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.kicker}>{t("app.name")}</Text>
-          <Text style={styles.title}>{t("squad.nearbyTitle")}</Text>
-        </View>
-        <TouchableOpacity accessibilityLabel={t("squad.createThisSquad")} onPress={openCreate} style={styles.headerButton}>
-          <Plus color={Colors.surface} size={21} />
-        </TouchableOpacity>
-      </View>
-
-      <SquadSelector />
-
-      <View style={styles.actionsCard}>
-        <Text style={styles.actionTitle}>{t("squad.findNearby")}</Text>
-        <Text style={styles.actionBody}>{t("squad.locationDisclosure")}</Text>
-        <TouchableOpacity
-          accessibilityLabel={t("squad.useMyLocationAccessibility")}
-          accessibilityRole="button"
-          activeOpacity={0.85}
-          onPress={() => void handleUseMyLocation()}
-          style={styles.locationButton}
-        >
-          <MapPin color={Colors.surface} size={18} />
-          <Text style={styles.locationButtonText}>{t("squad.useMyLocation")}</Text>
-        </TouchableOpacity>
-        {locationPhase === "permanent" ? (
-          <TouchableOpacity accessibilityRole="button" onPress={() => void Linking.openSettings()} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>{t("squad.openSettings")}</Text>
-          </TouchableOpacity>
-        ) : null}
-        {locationPhase === "denied" || locationPhase === "permanent" ? (
-          <Text accessibilityLiveRegion="polite" style={styles.stateText}>{t("squad.permissionDeniedManual")}</Text>
-        ) : locationPhase === "unavailable" ? (
-          <Text accessibilityLiveRegion="assertive" style={styles.stateText}>{t("squad.locationServicesDisabled")}</Text>
-        ) : locationPhase === "error" ? (
-          <Text accessibilityLiveRegion="assertive" style={styles.stateText}>{t("squad.locationUnavailable")}</Text>
-        ) : null}
-
-        <View style={styles.searchRow}>
-          <TextInput
-            accessibilityLabel={t("squad.searchByVenue")}
-            onChangeText={setVenueQuery}
-            onSubmitEditing={() => void handleVenueSearch()}
-            placeholder={t("squad.searchByVenue")}
-            returnKeyType="search"
-            style={styles.searchInput}
-            value={venueQuery}
-          />
-          <TouchableOpacity accessibilityLabel={t("squad.searchByVenue")} accessibilityRole="button" onPress={() => void handleVenueSearch()} style={styles.searchButton}>
-            <Search color={Colors.surface} size={20} />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {mapRegion && searchMode === "nearby" ? (
-        <MapView
-          accessibilityElementsHidden
-          customMapStyle={SIDELINE_MAP_STYLE}
-          initialRegion={mapRegion}
-          provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
-          region={mapRegion}
-          showsMyLocationButton={false}
-          showsUserLocation={false}
-          style={styles.map}
-          toolbarEnabled={false}
-        >
-          {nearbySquads.map((squad) => (
-            <Marker
-              accessibilityLabel={`${squad.venueName}, ${squad.sportDisplayName}`}
-              anchor={{ x: 0.5, y: 1 }}
-              coordinate={squad.venueLocation}
-              key={squad.squadId}
-              onPress={() => handleMarkerPress(squad)}
-              tracksViewChanges={false}
-            >
-              <SquadMarker isSelected={selectedMapSquadId === squad.squadId} squad={squad} />
-            </Marker>
-          ))}
-        </MapView>
-      ) : null}
-
-      <View style={styles.listHeader}>
-        <Text style={styles.listTitle} accessibilityLiveRegion="polite">
-          {isBusy ? t("squad.loadingSquads") : t("squad.nearbyCount", { count: nearbySquads.length })}
-        </Text>
-        {coords && nearbySquads.length === 0 && !isBusy && radiusMiles < 10 ? (
-          <TouchableOpacity accessibilityRole="button" onPress={() => void expandSearch()}>
-            <Text style={styles.expandText}>{t("squad.expandSearch")}</Text>
-          </TouchableOpacity>
-        ) : null}
-      </View>
-
-      {error ? <Text accessibilityLiveRegion="assertive" style={styles.errorText}>{t("squad.loadNearbyError")}</Text> : null}
       <FlatList
         ref={listRef}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[
+          styles.list,
+          { paddingBottom: getParentTabScrollBottomPadding(insets.bottom) },
+        ]}
         data={nearbySquads}
         keyExtractor={(item) => item.squadId}
+        ListHeaderComponent={(
+          <>
+            <View style={styles.header}>
+              <View style={styles.headerCopy}>
+                <Text style={styles.kicker}>{t("app.name")}</Text>
+                <Text style={styles.title}>{t("squad.nearbyTitle")}</Text>
+              </View>
+              <TouchableOpacity accessibilityLabel={t("squad.createThisSquad")} onPress={openCreate} style={styles.headerButton}>
+                <Plus color={Colors.surface} size={21} />
+              </TouchableOpacity>
+            </View>
+
+            <SquadSelector />
+
+            <View style={styles.actionsCard}>
+              <Text style={styles.actionTitle}>{t("squad.findNearby")}</Text>
+              <Text style={styles.actionBody}>{t("squad.locationDisclosure")}</Text>
+              <TouchableOpacity
+                accessibilityLabel={t("squad.useMyLocationAccessibility")}
+                accessibilityRole="button"
+                activeOpacity={0.85}
+                onPress={() => void handleUseMyLocation()}
+                style={styles.locationButton}
+              >
+                <MapPin color={Colors.surface} size={18} />
+                <Text style={styles.locationButtonText}>{t("squad.useMyLocation")}</Text>
+              </TouchableOpacity>
+              {locationPhase === "permanent" ? (
+                <TouchableOpacity accessibilityRole="button" onPress={() => void Linking.openSettings()} style={styles.secondaryButton}>
+                  <Text style={styles.secondaryButtonText}>{t("squad.openSettings")}</Text>
+                </TouchableOpacity>
+              ) : null}
+              {locationPhase === "denied" || locationPhase === "permanent" ? (
+                <Text accessibilityLiveRegion="polite" style={styles.stateText}>{t("squad.permissionDeniedManual")}</Text>
+              ) : locationPhase === "unavailable" ? (
+                <Text accessibilityLiveRegion="assertive" style={styles.stateText}>{t("squad.locationServicesDisabled")}</Text>
+              ) : locationPhase === "error" ? (
+                <Text accessibilityLiveRegion="assertive" style={styles.stateText}>{t("squad.locationUnavailable")}</Text>
+              ) : null}
+
+              <View style={styles.searchRow}>
+                <TextInput
+                  accessibilityLabel={t("squad.searchByVenue")}
+                  onChangeText={setVenueQuery}
+                  onSubmitEditing={() => void handleVenueSearch()}
+                  placeholder={t("squad.searchByVenue")}
+                  returnKeyType="search"
+                  style={styles.searchInput}
+                  value={venueQuery}
+                />
+                <TouchableOpacity accessibilityLabel={t("squad.searchByVenue")} accessibilityRole="button" onPress={() => void handleVenueSearch()} style={styles.searchButton}>
+                  <Search color={Colors.surface} size={20} />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {mapRegion && searchMode === "nearby" ? (
+              <MapView
+                accessibilityElementsHidden
+                customMapStyle={SIDELINE_MAP_STYLE}
+                initialRegion={mapRegion}
+                pitchEnabled={false}
+                provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
+                region={mapRegion}
+                rotateEnabled={false}
+                scrollEnabled={false}
+                showsMyLocationButton={false}
+                showsUserLocation={false}
+                style={styles.map}
+                toolbarEnabled={false}
+                zoomEnabled={false}
+              >
+                {nearbySquads.map((squad) => (
+                  <Marker
+                    accessibilityLabel={`${squad.venueName}, ${squad.sportDisplayName}`}
+                    anchor={{ x: 0.5, y: 1 }}
+                    coordinate={squad.venueLocation}
+                    key={squad.squadId}
+                    onPress={() => handleMarkerPress(squad)}
+                    tracksViewChanges={false}
+                  >
+                    <SquadMarker isSelected={selectedMapSquadId === squad.squadId} squad={squad} />
+                  </Marker>
+                ))}
+              </MapView>
+            ) : null}
+
+            <View style={styles.listHeader}>
+              <Text style={styles.listTitle} accessibilityLiveRegion="polite">
+                {isBusy ? t("squad.loadingSquads") : t("squad.nearbyCount", { count: nearbySquads.length })}
+              </Text>
+              {coords && nearbySquads.length === 0 && !isBusy && radiusMiles < 10 ? (
+                <TouchableOpacity accessibilityRole="button" onPress={() => void expandSearch()}>
+                  <Text style={styles.expandText}>{t("squad.expandSearch")}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            {error ? <Text accessibilityLiveRegion="assertive" style={styles.errorText}>{t("squad.loadNearbyError")}</Text> : null}
+          </>
+        )}
         ListEmptyComponent={isBusy ? <ActivityIndicator color={Colors.primary} style={styles.loader} /> : (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>{t("squad.noNearbyTitle")}</Text>
@@ -351,7 +363,7 @@ const styles = StyleSheet.create({
   listTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 15 },
   expandText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   errorText: { color: Colors.primary, fontFamily: Typography.bodyRegular, paddingHorizontal: Spacing.md, paddingTop: Spacing.sm },
-  list: { flexGrow: 1, paddingBottom: Spacing.xxl, paddingTop: Spacing.xs },
+  list: { flexGrow: 1, paddingTop: Spacing.xs },
   loader: { marginTop: Spacing.lg },
   empty: { gap: Spacing.sm, margin: Spacing.md, padding: Spacing.lg },
   emptyTitle: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 18, textAlign: "center" },

@@ -1,6 +1,7 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { weeklyChallengeTranslations } from '@/content/weeklyChallenges';
 
 const resources = {
   en: {
@@ -594,6 +595,11 @@ const resources = {
         errorTitle: 'Could not load Home',
         errorBody: 'Home updates are unavailable right now. Pull to refresh and try again.',
       },
+      weeklyChallenges: {
+        fallbackTitle: 'Weekly Challenge',
+        fallbackDescription: 'Open this challenge again later for more details.',
+        catalog: weeklyChallengeTranslations.en,
+      },
       notifications: {
         title: 'Notifications',
         noUnread: 'No unread notifications',
@@ -812,7 +818,7 @@ const resources = {
         viewSquad: 'View Squad',
         findNearby: 'Find nearby Squads',
         useMyLocationAccessibility: 'Use my current location to find nearby Squads',
-        locationDisclosure: 'Sideline Social uses your current location to find sports communities near you. Your precise location is not shown to other parents.',
+        locationDisclosure: 'Sideline Social uses your current location to find communities near you. Your precise location is not shown to others.',
         notNow: 'Not Now',
         searchByVenue: 'Search by venue',
         permissionDeniedManual: 'Location permission was not granted. You can still search by venue.',
@@ -1352,8 +1358,8 @@ const resources = {
         selectSportOptional: 'Select a sport (optional)',
         phoneNumber: 'Phone Number',
         phoneHelper: "Optional, but recommended for squad joining. We'll never spam you.",
-        showPassword: 'Show',
-        hidePassword: 'Hide',
+        showPassword: 'Show password',
+        hidePassword: 'Hide password',
         sendResetLink: 'Send Reset Link',
         resetPassword: 'Reset Password',
         resetPasswordSubtitle: "Enter your email and we'll send you a reset link.",
@@ -1982,6 +1988,11 @@ const resources = {
         errorTitle: 'No se pudo cargar Inicio',
         errorBody: 'Inicio no esta disponible ahora. Desliza para actualizar e intenta de nuevo.',
       },
+      weeklyChallenges: {
+        fallbackTitle: 'Reto semanal',
+        fallbackDescription: 'Vuelve a abrir este reto más tarde para ver más detalles.',
+        catalog: weeklyChallengeTranslations.es,
+      },
       notifications: {
         title: 'Notificaciones',
         noUnread: 'No hay notificaciones sin leer',
@@ -2199,7 +2210,7 @@ const resources = {
         viewSquad: 'Ver equipo',
         findNearby: 'Encontrar Squads cercanos',
         useMyLocationAccessibility: 'Usar mi ubicación actual para encontrar Squads cercanos',
-        locationDisclosure: 'Sideline Social usa tu ubicación actual para encontrar comunidades deportivas cercanas. Tu ubicación precisa no se muestra a otros padres.',
+        locationDisclosure: 'Sideline Social usa tu ubicación actual para encontrar comunidades cerca de ti. Tu ubicación precisa no se muestra a otras personas.',
         notNow: 'Ahora no',
         searchByVenue: 'Buscar por lugar',
         permissionDeniedManual: 'No se otorgó el permiso de ubicación. Aún puedes buscar por lugar.',
@@ -2739,8 +2750,8 @@ const resources = {
         selectSportOptional: 'Selecciona un deporte (opcional)',
         phoneNumber: 'Número de teléfono',
         phoneHelper: 'Opcional, pero útil para unirte a equipos. Nunca te enviaremos spam.',
-        showPassword: 'Mostrar',
-        hidePassword: 'Ocultar',
+        showPassword: 'Mostrar contraseña',
+        hidePassword: 'Ocultar contraseña',
         sendResetLink: 'Enviar enlace',
         resetPassword: 'Restablecer contraseña',
         resetPasswordSubtitle:

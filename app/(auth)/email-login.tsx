@@ -3,6 +3,7 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleShe
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
+import { PasswordInput } from "@/components/PasswordInput";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { FORGOT_PASSWORD_ROUTE } from "@/constants/routes";
 import { useAuth } from "@/context/AuthContext";
@@ -44,7 +45,15 @@ export default function EmailLoginScreen() {
           </TouchableOpacity>
           <Text style={styles.title}>Sign in</Text>
           <TextInput style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-          <TextInput style={styles.input} placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
+          <PasswordInput
+            autoCapitalize="none"
+            autoComplete="current-password"
+            containerStyle={styles.input}
+            onChangeText={setPassword}
+            placeholder="Password"
+            textContentType="password"
+            value={password}
+          />
           {!!error && <Text style={styles.error}>{error}</Text>}
           <TouchableOpacity style={styles.button} onPress={handleSignIn} disabled={loading}>
             {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>Sign in</Text>}

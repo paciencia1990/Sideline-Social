@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
+import { PasswordInput } from "@/components/PasswordInput";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { CHOOSE_START_MODE_ROUTE } from "@/constants/routes";
 import { useAuth } from "@/context/AuthContext";
@@ -59,7 +60,15 @@ export default function SignUpScreen() {
             <TextInput style={[styles.input, styles.half]} placeholder="Last name" value={lastName} onChangeText={setLastName} />
           </View>
           <TextInput style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-          <TextInput style={styles.input} placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
+          <PasswordInput
+            autoCapitalize="none"
+            autoComplete="new-password"
+            containerStyle={styles.input}
+            onChangeText={setPassword}
+            placeholder="Password"
+            textContentType="newPassword"
+            value={password}
+          />
           <TextInput style={styles.input} placeholder="Zip code" value={zipCode} onChangeText={setZipCode} keyboardType="number-pad" />
           <TextInput style={styles.input} placeholder={t("auth.selectSportOptional")} value={sport} onChangeText={setSport} />
           {!!error && <Text style={styles.error}>{error}</Text>}

@@ -13,19 +13,6 @@ import {
   type Theme,
 } from "expo-router/react-navigation";
 import { useFonts } from "expo-font";
-import {
-  PlayfairDisplay_400Regular,
-  PlayfairDisplay_700Bold,
-  PlayfairDisplay_400Regular_Italic,
-  PlayfairDisplay_700Bold_Italic,
-} from "@expo-google-fonts/playfair-display";
-import {
-  Montserrat_400Regular,
-  Montserrat_500Medium,
-  Montserrat_600SemiBold,
-  Montserrat_700Bold,
-} from "@expo-google-fonts/montserrat";
-import { Caveat_400Regular, Caveat_700Bold } from "@expo-google-fonts/caveat";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { NotificationCoordinator } from "@/components/NotificationCoordinator";
@@ -33,6 +20,14 @@ import { AppProvider } from "@/context/AppContext";
 import { AuthProvider } from "@/context/AuthContext";
 import { SquadProvider } from "@/context/SquadContext";
 import { Colors, Typography } from "@/constants/theme";
+
+const PlayfairDisplay_700Bold = require("@expo-google-fonts/playfair-display/PlayfairDisplay_700Bold.ttf");
+const PlayfairDisplay_700Bold_Italic = require("@expo-google-fonts/playfair-display/PlayfairDisplay_700Bold_Italic.ttf");
+const Montserrat_400Regular = require("@expo-google-fonts/montserrat/Montserrat_400Regular.ttf");
+const Montserrat_500Medium = require("@expo-google-fonts/montserrat/Montserrat_500Medium.ttf");
+const Montserrat_600SemiBold = require("@expo-google-fonts/montserrat/Montserrat_600SemiBold.ttf");
+const Montserrat_700Bold = require("@expo-google-fonts/montserrat/Montserrat_700Bold.ttf");
+const Caveat_400Regular = require("@expo-google-fonts/caveat/Caveat_400Regular.ttf");
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
@@ -59,16 +54,13 @@ export default function RootLayout() {
 
   const [fontsLoaded, fontError] = useFonts({
     SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
-    PlayfairDisplay_400Regular,
     PlayfairDisplay_700Bold,
-    PlayfairDisplay_400Regular_Italic,
     PlayfairDisplay_700Bold_Italic,
     Montserrat_400Regular,
     Montserrat_500Medium,
     Montserrat_600SemiBold,
     Montserrat_700Bold,
     Caveat_400Regular,
-    Caveat_700Bold,
   });
 
   useEffect(() => {

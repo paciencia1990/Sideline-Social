@@ -1,7 +1,9 @@
 import React from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Colors, Typography } from "@/constants/theme";
+import { getFixedFooterBottomPadding } from "@/utils/safeAreaLayout";
 
 type LobbyPlayer = {
   id: string;
@@ -29,11 +31,12 @@ export default function LobbyBase({
   onReadyToggle,
   onStart,
 }: LobbyBaseProps) {
+  const insets = useSafeAreaInsets();
   const readyCount = players.list.filter((player) => player.ready).length;
   const totalPlayers = players.list.length;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: Math.max(insets.top, 28) }]}>
       <View style={styles.header}>
         <Text style={styles.title}>{gameName}</Text>
         <View style={styles.joinCodePanel}>
@@ -82,34 +85,41 @@ export default function LobbyBase({
         })}
       </ScrollView>
 
-      <View style={styles.actions}>
-        <Pressable
-          accessibilityRole="button"
-          style={[
-            styles.button,
-            players.self.ready ? styles.secondaryButton : styles.primaryButton,
-          ]}
-          onPress={onReadyToggle}
-        >
-          <Text
-            style={[
-              styles.buttonText,
-              players.self.ready ? styles.secondaryButtonText : styles.primaryButtonText,
-            ]}
-          >
-            {players.self.ready ? "Unready" : "Ready"}
-          </Text>
-        </Pressable>
-
-        {players.isHost && (
+      <View
+        style={[
+          styles.actionFooter,
+          { paddingBottom: getFixedFooterBottomPadding(insets.bottom) },
+        ]}
+      >
+        <View style={styles.actions}>
           <Pressable
             accessibilityRole="button"
-            style={[styles.button, styles.primaryButton]}
-            onPress={onStart}
+            style={[
+              styles.button,
+              players.self.ready ? styles.secondaryButton : styles.primaryButton,
+            ]}
+            onPress={onReadyToggle}
           >
-            <Text style={[styles.buttonText, styles.primaryButtonText]}>Start Game</Text>
+            <Text
+              style={[
+                styles.buttonText,
+                players.self.ready ? styles.secondaryButtonText : styles.primaryButtonText,
+              ]}
+            >
+              {players.self.ready ? "Unready" : "Ready"}
+            </Text>
           </Pressable>
-        )}
+
+          {players.isHost && (
+            <Pressable
+              accessibilityRole="button"
+              style={[styles.button, styles.primaryButton]}
+              onPress={onStart}
+            >
+              <Text style={[styles.buttonText, styles.primaryButtonText]}>Start Game</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
     </View>
   );
@@ -121,13 +131,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
-    paddingHorizontal: 20,
-    paddingTop: 28,
-    paddingBottom: 20,
   },
   header: {
     alignItems: "center",
     gap: 12,
+    paddingHorizontal: 20,
   },
   title: {
     color: Colors.textHeading,
@@ -167,6 +175,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     gap: 10,
     justifyContent: "center",
+    paddingHorizontal: 20,
     paddingVertical: 24,
   },
   playerRow: {
@@ -215,6 +224,13 @@ const styles = StyleSheet.create({
   readyBadgeTextInactive: {
     color: Colors.textHeading,
   },
+  actionFooter: {
+    backgroundColor: Colors.background,
+    borderTopColor: Colors.secondary,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+  },
   actions: {
     flexDirection: "row",
     gap: 12,
@@ -223,10 +239,13 @@ const styles = StyleSheet.create({
   button: {
     alignItems: "center",
     borderRadius: 8,
+    flex: 1,
     justifyContent: "center",
     minHeight: 52,
-    minWidth: 132,
+    maxWidth: 220,
+    minWidth: 0,
     paddingHorizontal: 18,
+    paddingVertical: 12,
   },
   primaryButton: {
     backgroundColor: Colors.primary,

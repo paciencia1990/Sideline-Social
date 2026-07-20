@@ -40,6 +40,7 @@ import {
   getCurrentWeeklyChallenge,
   type UserWeeklyChallenge,
 } from "@/services/weeklyChallengeService";
+import { localizeWeeklyChallenge } from "@/services/weeklyChallengeLocalization";
 import { type Squad } from "@/services/squadService";
 
 const logoSource = require("@/assets/branding/sideline-social-logo.png");
@@ -570,11 +571,13 @@ function ChallengeCard({
     );
   }
 
+  const localizedChallenge = localizeWeeklyChallenge(challenge, t);
+
   return (
     <Card style={[styles.challengeCard, challenge.completed && styles.challengeCardCompleted]}>
       <Text style={styles.cardEyebrow}>{t("home.thisWeeksChallenge")}</Text>
-      <Text style={styles.cardTitle}>{challenge.title}</Text>
-      <Text style={styles.cardText}>{challenge.description}</Text>
+      <Text style={styles.cardTitle}>{localizedChallenge.title}</Text>
+      <Text style={styles.cardText}>{localizedChallenge.description}</Text>
       {challenge.completed ? (
         <View style={styles.challengeCompletedRow}>
           <CheckCircle2 size={22} color={Colors.accentGreen} />

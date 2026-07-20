@@ -1,19 +1,31 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { Redirect, Tabs } from "expo-router";
 import { Gamepad2, Heart, Home, MapPin, User } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { TabIcon } from "@/components/TabIcon";
 import { CHOOSE_START_MODE_ROUTE, COACH_MODE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
+import { PARENT_TAB_BAR_CONTENT_HEIGHT } from "@/utils/safeAreaLayout";
+
+const TAB_BAR_CONTENT_HEIGHT = PARENT_TAB_BAR_CONTENT_HEIGHT;
 
 export default function TabLayout() {
   const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
   const { activeMode, modeHydrated } = useApp();
   const { loading: authLoading, user } = useAuth();
+  const tabBarStyle = useMemo(() => [
+    styles.tabBar,
+    {
+      height: TAB_BAR_CONTENT_HEIGHT + insets.bottom,
+      paddingBottom: insets.bottom,
+    },
+  ], [insets.bottom]);
 
   if (authLoading || !modeHydrated) {
     return (
@@ -37,9 +49,11 @@ export default function TabLayout() {
 
   return (
     <Tabs
+      safeAreaInsets={{ bottom: 0 }}
       screenOptions={{
         headerShown: false,
-        tabBarStyle: styles.tabBar,
+        tabBarHideOnKeyboard: true,
+        tabBarStyle,
         tabBarActiveTintColor: Colors.primary,
         tabBarInactiveTintColor: Colors.textPrimary,
         tabBarLabelStyle: styles.tabLabel,

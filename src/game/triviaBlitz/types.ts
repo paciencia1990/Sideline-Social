@@ -1,6 +1,7 @@
 export type TriviaStatus = "lobby" | "playing" | "results";
 
 export type TriviaQuestion = {
+  id: string;
   category: string;
   question_en: string;
   question_es: string;

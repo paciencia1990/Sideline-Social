@@ -11,6 +11,8 @@ import {
 } from "firebase/firestore";
 
 import questions from "@/assets/triviaBlitz/questions.json";
+import { getRecentTriviaQuestionIds, setRecentTriviaQuestionIds } from "./questionHistory";
+import { selectTriviaQuestions } from "./questionSelection";
 import {
   getCurrentPlayer,
   getFirebaseErrorCode,
@@ -35,12 +37,7 @@ import type {
 const SESSION_CODE_CHARACTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DEFAULT_QUESTION_COUNT = 10;
 
-const questionBank = questions as TriviaQuestion[];
-
-export function getRandomQuestions(count = DEFAULT_QUESTION_COUNT): TriviaQuestion[] {
-  const shuffledQuestions = [...questionBank].sort(() => Math.random() - 0.5);
-  return shuffledQuestions.slice(0, Math.min(count, shuffledQuestions.length));
-}
+const questionBank = questions as Omit<TriviaQuestion, "id">[];
 
 export function generateSessionCode() {
   let code = "";
@@ -189,6 +186,16 @@ export async function initializeFirestoreSession(sessionId: string, host: Player
   await createFirestoreSessionParent(normalizedSessionId, host);
   const childSnapshot = await getDoc(sessionRef);
 
+  if (childSnapshot.exists()) {
+    return normalizedSessionId;
+  }
+
+  const recentQuestionIds = await getRecentTriviaQuestionIds(host.id);
+  const { nextRecentQuestionIds, selectedQuestions } = selectTriviaQuestions({
+    count: DEFAULT_QUESTION_COUNT,
+    questions: questionBank,
+    recentQuestionIds,
+  });
   const session: TriviaSession = {
     status: "lobby",
     turnIndex: 0,
@@ -198,7 +205,7 @@ export async function initializeFirestoreSession(sessionId: string, host: Player
     correctAnswers: 0,
     answeredQuestions: 0,
     totalPlayers: 1,
-    selectedQuestions: getRandomQuestions(),
+    selectedQuestions,
     allReady: false,
     currentSelection: null,
     selectionRevealed: false,
@@ -208,12 +215,9 @@ export async function initializeFirestoreSession(sessionId: string, host: Player
     updatedAt: serverTimestamp(),
   };
 
-  if (childSnapshot.exists()) {
-    return normalizedSessionId;
-  }
-
   try {
     await setDoc(sessionRef, session);
+    await setRecentTriviaQuestionIds(host.id, nextRecentQuestionIds);
   } catch (error) {
     logTriviaFirebaseError("createChild", {}, error);
     throw new Error("Trivia Blitz could not create the game session. Please try again.");
@@ -246,6 +250,18 @@ export async function resetGameSession(sessionId: string) {
   const sessionRef = getTriviaSessionRef(sessionId);
 
   try {
+    const sessionSnapshot = await getDoc(sessionRef);
+    if (!sessionSnapshot.exists()) {
+      throw new Error("Trivia Blitz session was not found.");
+    }
+    const session = sessionSnapshot.data() as TriviaSession;
+    const hostPlayerId = session.hostPlayerId ?? "local-host";
+    const recentQuestionIds = await getRecentTriviaQuestionIds(hostPlayerId);
+    const { nextRecentQuestionIds, selectedQuestions } = selectTriviaQuestions({
+      count: DEFAULT_QUESTION_COUNT,
+      questions: questionBank,
+      recentQuestionIds,
+    });
     const players = await getPlayers(sessionId);
     const batch = writeBatch(sessionRef.firestore);
 
@@ -257,7 +273,7 @@ export async function resetGameSession(sessionId: string) {
       totalPoints: 0,
       correctAnswers: 0,
       answeredQuestions: 0,
-      selectedQuestions: getRandomQuestions(),
+      selectedQuestions,
       allReady: false,
       currentSelection: null,
       selectionRevealed: false,
@@ -277,6 +293,7 @@ export async function resetGameSession(sessionId: string) {
     });
 
     await batch.commit();
+    await setRecentTriviaQuestionIds(hostPlayerId, nextRecentQuestionIds);
   } catch (error) {
     logTriviaFirebaseError("resetGameSession", { sessionId, path: getTriviaSessionPath(sessionId) }, error);
     throw error;
