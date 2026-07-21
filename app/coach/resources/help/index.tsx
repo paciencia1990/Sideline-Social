@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -77,6 +78,19 @@ export default function CoachResourceHelpScreen() {
       setGenerating(false);
     }
   }, [ageGroup, category, desiredOutcome, equipment, generating, locale, playerCount, practiceMinutes, situation, sport, t, tone, user?.uid]);
+
+  if (!FEATURE_FLAGS.coachAiEnabled) {
+    return (
+      <ScreenWrapper>
+        <View style={styles.unavailableContent}>
+          <CoachResourceHeader subtitle={t("coach.resources.coachAiUnavailableBody")} title={t("coach.resources.coachAiUnavailableTitle")} />
+          <TouchableOpacity accessibilityRole="button" onPress={() => router.replace("/coach/resources" as never)} style={styles.backToResourcesButton}>
+            <Text style={styles.backToResourcesText}>{t("coach.resources.backToResources")}</Text>
+          </TouchableOpacity>
+        </View>
+      </ScreenWrapper>
+    );
+  }
 
   return (
     <ScreenWrapper>
@@ -167,6 +181,9 @@ function Field({ keyboardType, label, maxLength, multiline, onChangeText, value 
 }
 
 const styles = StyleSheet.create({
+  unavailableContent: { gap: Spacing.lg, padding: Spacing.lg },
+  backToResourcesButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 52, paddingHorizontal: Spacing.lg },
+  backToResourcesText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 15, textAlign: "center" },
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
   sectionTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, lineHeight: 24 },
   categoryList: { gap: Spacing.sm },

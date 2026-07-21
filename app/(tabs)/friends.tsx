@@ -38,7 +38,7 @@ import {
 } from "@/services/friendsService";
 import { createOrOpenDirectConversation } from "@/services/chatService";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
-import { formatFullPublicName, getFriendNameInitials } from "@/utils/friendPrivacy";
+import { formatPublicUserName, getFriendNameInitials } from "@/utils/friendPrivacy";
 
 function SectionTitle({ title, count }: { title: string; count?: number }) {
   return (
@@ -175,7 +175,7 @@ function SuggestedConnectionRow({
   onAdd: () => void;
 }) {
   const { t } = useTranslation();
-  const displayName = formatFullPublicName(profile.displayName) ?? t("friends.publicNameUnavailable");
+  const displayName = formatPublicUserName(profile.displayName) ?? t("friends.publicNameUnavailable");
   const context = profile.sharedSquadName || profile.sharedActivity || t("friends.suggestedParentContext");
 
   return (

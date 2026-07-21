@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -111,6 +112,19 @@ export default function CoachHelpResultScreen() {
     router.push({ pathname: "/coach/messages", params: { draftTitle: result.title, draftBody: formatCoachHelpResultForSharing(result, locale) } } as never);
   }, [locale, result]);
 
+  if (!FEATURE_FLAGS.coachAiEnabled) {
+    return (
+      <ScreenWrapper>
+        <View style={styles.unavailableContent}>
+          <CoachResourceHeader subtitle={t("coach.resources.coachAiUnavailableBody")} title={t("coach.resources.coachAiUnavailableTitle")} />
+          <TouchableOpacity accessibilityRole="button" onPress={() => router.replace("/coach/resources" as never)} style={styles.backToResourcesButton}>
+            <Text style={styles.backToResourcesText}>{t("coach.resources.backToResources")}</Text>
+          </TouchableOpacity>
+        </View>
+      </ScreenWrapper>
+    );
+  }
+
   if (loading) return <ScreenWrapper><View style={styles.center}><Text accessibilityLiveRegion="polite" style={styles.body}>{t("common.loading")}</Text></View></ScreenWrapper>;
   if (!result) return <ScreenWrapper><View style={styles.center}><Text style={styles.error}>{t("coach.resources.resultNotFound")}</Text></View></ScreenWrapper>;
 
@@ -167,6 +181,9 @@ function Action({ Icon, label, onPress, primary }: { Icon: typeof Edit3; label: 
 }
 
 const styles = StyleSheet.create({
+  unavailableContent: { gap: Spacing.lg, padding: Spacing.lg },
+  backToResourcesButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 52, paddingHorizontal: Spacing.lg },
+  backToResourcesText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 15, textAlign: "center" },
   center: { alignItems: "center", flex: 1, justifyContent: "center", padding: Spacing.lg },
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
   cardGap: { gap: Spacing.md },

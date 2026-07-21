@@ -27,7 +27,7 @@ if (!projectId || !/^[a-z0-9:-]{3,100}$/u.test(projectId)) {
 
 admin.initializeApp({ projectId });
 const firestore = admin.firestore();
-const { isCanonicalPublicProfile, resolveCanonicalPublicProfile } = loadPublicProfileCore();
+const { isCanonicalPublicProfile, resolveCanonicalPublicProfile, toMinimalPublicUserProfile } = loadPublicProfileCore();
 const counts = {
   scanned: 0,
   valid: 0,
@@ -57,7 +57,8 @@ async function run() {
     page.docs.forEach((privateDocument, index) => {
       counts.scanned += 1;
       const projection = projections[index];
-      const expected = resolveCanonicalPublicProfile(privateDocument.id, privateDocument.data());
+      const canonical = resolveCanonicalPublicProfile(privateDocument.id, privateDocument.data());
+      const expected = canonical ? toMinimalPublicUserProfile(canonical) : null;
       const projectionValid = projection.exists && isCanonicalPublicProfile(projection.data(), privateDocument.id);
       if (!expected) {
         counts.sourceWithoutValidName += 1;

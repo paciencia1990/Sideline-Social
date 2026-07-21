@@ -13,6 +13,15 @@ assert.equal(core.resolveCanonicalPublicName({ FirstName: "Maria", LastName: "Ga
 assert.equal(core.resolveCanonicalPublicName({ displayName: "Joann Pollard" }).displayName, "Joann Pollard");
 assert.equal(core.resolveCanonicalPublicName({ name: "D’Andre Smith" }).displayName, "D’Andre Smith");
 assert.equal(core.resolveCanonicalPublicName({ displayName: "private@example.test" }), null);
+assert.deepEqual(core.toMinimalPublicUserProfile(core.resolveCanonicalPublicProfile("uid", {
+  firstName: "Maria", lastName: "Garcia", photoURL: null,
+})), { userId: "uid", firstName: "Maria", lastName: "G.", displayName: "Maria G.", photoURL: null });
+assert.equal(core.isCanonicalPublicProfile({
+  userId: "uid", firstName: "Maria", lastName: "G.", displayName: "Maria G.", photoURL: null,
+}, "uid"), true);
+assert.equal(core.isCanonicalPublicProfile({
+  userId: "uid", firstName: "Maria", lastName: "Garcia", displayName: "Maria Garcia", photoURL: null,
+}, "uid"), false);
 
 const source = read("functions", "src", "index.ts");
 const callable = source.slice(source.indexOf("export const getPublicUserProfiles"), source.indexOf("export const getSuggestedConnections"));
@@ -34,10 +43,11 @@ assert.equal(callable.toLowerCase().includes("child"), false);
 assert.equal(callable.toLowerCase().includes("location"), false);
 assert.equal(callable.toLowerCase().includes("notificationtoken"), false);
 assert.ok(sync.includes("resolveCanonicalPublicProfile"));
+assert.ok(sync.includes("toMinimalPublicUserProfile"));
 assert.ok(sync.includes("transaction.set(publicRef"));
 assert.ok(sync.includes("admin.auth().updateUser"));
 assert.ok(client.includes("MAX_PUBLIC_PROFILE_IDS = 50"));
-assert.ok(client.includes("formatFullPublicName(profile.displayName) === profile.displayName"));
+assert.ok(client.includes("formatPublicUserName(profile.displayName) === profile.displayName"));
 assert.equal(client.toLowerCase().includes("email"), false);
 
 const publicRules = rules.slice(rules.indexOf("match /publicUserProfiles/{userId}"), rules.indexOf("notificationTokens collection"));

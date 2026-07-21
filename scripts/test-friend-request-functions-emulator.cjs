@@ -48,8 +48,8 @@ async function run() {
   assert.equal(sent.status, "pending");
   const requestRef = db.collection("friendRequests").doc(sent.requestId);
   let request = (await requestRef.get()).data();
-  assert.equal(request.fromDisplayName, "Alex Anderson");
-  assert.equal(request.toDisplayName, "Bailey Brown", "legacy field casing resolves");
+  assert.equal(request.fromDisplayName, "Alex A.");
+  assert.equal(request.toDisplayName, "Bailey B.", "legacy field casing resolves and is minimized");
   assert.equal(request.expiresAt.toMillis() - request.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1000);
   for (const field of ["respondedAt", "acceptedAt", "declinedAt", "canceledAt", "expiredAt"]) assert.equal(request[field], null);
   assert.equal((await a.call("getActiveFriendRequests")).outgoing.length, 1);
@@ -109,7 +109,7 @@ async function run() {
   await assert.rejects(() => c.call("createOrOpenDirectConversation", { friendUserId: outsider.uid }), hasCode("permission-denied"));
 
   const publicNames = await a.call("getPublicUserProfiles", { userIds: [b.uid, c.uid] });
-  assert.deepEqual(publicNames.profiles.map((profile) => profile.displayName).sort(), ["Bailey Brown", "Casey Carter"]);
+  assert.deepEqual(publicNames.profiles.map((profile) => profile.displayName).sort(), ["Bailey B.", "Casey C."]);
   publicNames.profiles.forEach((profile) => {
     for (const privateField of ["email", "phoneNumber", "children", "location", "friendIds"]) assert.equal(Object.hasOwn(profile, privateField), false);
   });

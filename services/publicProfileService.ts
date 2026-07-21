@@ -6,7 +6,7 @@ import {
   inspectPublicUserProfiles,
   type PublicFriendProfileRecord,
 } from "@/utils/friendRequestMapping";
-import { formatFullPublicName } from "@/utils/friendPrivacy";
+import { formatPublicUserName } from "@/utils/friendPrivacy";
 
 export type PublicUserProfile = PublicFriendProfileRecord;
 
@@ -38,7 +38,7 @@ export async function getPublicUserProfiles(userIds: string[]) {
     const response = await loadProfiles({ userIds: batchUserIds });
     const inspectedProfiles = inspectPublicUserProfiles(response.data.profiles);
     const privacySafeProfiles = inspectedProfiles.profiles.filter((profile) => (
-      profile.displayName === null || formatFullPublicName(profile.displayName) === profile.displayName
+      profile.displayName === null || formatPublicUserName(profile.displayName) === profile.displayName
     ));
     profiles.push(...privacySafeProfiles);
     returnedProfileCount += inspectedProfiles.counts.returnedProfileCount;

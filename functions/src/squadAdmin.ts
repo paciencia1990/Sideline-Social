@@ -2,7 +2,7 @@ import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import * as functions from 'firebase-functions';
 
-import { resolveCanonicalPublicProfile } from './publicUserProfileCore';
+import { isCanonicalPublicProfile, resolveCanonicalPublicProfile, toMinimalPublicUserProfile } from './publicUserProfileCore';
 import {
   SQUAD_ADMIN_INVITATION_MS,
   activeSquadAdminIds,
@@ -186,15 +186,17 @@ async function loadPublicMemberProfiles(userIds: string[]) {
   const resolved = new Map<string, ReturnType<typeof resolveCanonicalPublicProfile>>();
   const missingIds: string[] = [];
   publicSnapshots.forEach((snapshot) => {
-    const profile = resolveCanonicalPublicProfile(snapshot.id, snapshot.data() as Record<string, unknown> | undefined);
-    if (profile) resolved.set(snapshot.id, profile);
+    const profile = snapshot.data();
+    if (isCanonicalPublicProfile(profile, snapshot.id)) {
+      resolved.set(snapshot.id, profile as NonNullable<ReturnType<typeof resolveCanonicalPublicProfile>>);
+    }
     else missingIds.push(snapshot.id);
   });
   if (missingIds.length) {
     const privateSnapshots = await db.getAll(...missingIds.map((userId) => db.collection('users').doc(userId)));
     privateSnapshots.forEach((snapshot) => {
       const profile = resolveCanonicalPublicProfile(snapshot.id, snapshot.data() as Record<string, unknown> | undefined);
-      if (profile) resolved.set(snapshot.id, profile);
+      if (profile) resolved.set(snapshot.id, toMinimalPublicUserProfile(profile));
     });
   }
   return resolved;
@@ -206,7 +208,8 @@ async function publicActorName(userId: string): Promise<string> {
   if (profile) return profile.displayName;
   try {
     const authUser = await admin.auth().getUser(userId);
-    return resolveCanonicalPublicProfile(userId, undefined, authUser.displayName)?.displayName ?? 'Squad member';
+    const profile = resolveCanonicalPublicProfile(userId, undefined, authUser.displayName);
+    return profile ? toMinimalPublicUserProfile(profile).displayName : 'Squad member';
   } catch {
     return 'Squad member';
   }

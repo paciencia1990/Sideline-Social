@@ -39,8 +39,10 @@ import {
 } from './pushNotificationDelivery';
 import { assertUserContentAllowed } from './contentSafety';
 import {
+  isCanonicalPublicProfile,
   resolveCanonicalPublicName,
   resolveCanonicalPublicProfile,
+  toMinimalPublicUserProfile,
 } from './publicUserProfileCore';
 import {
   deleteTeamAnnouncementData,
@@ -1119,14 +1121,16 @@ export const sendFriendRequest = functions.https.onCall(async (data, context) =>
     });
     if (outcome !== 'pending') return { status: outcome, expiredReverseRequest: null };
 
-    const senderProfile = resolveCanonicalPublicProfile(senderUserId, senderSnapshot.data());
-    if (!senderProfile) {
+    const senderCanonicalProfile = resolveCanonicalPublicProfile(senderUserId, senderSnapshot.data());
+    if (!senderCanonicalProfile) {
       throw new functions.https.HttpsError('failed-precondition', 'Add your first and last name before sending friend requests.');
     }
-    const targetProfile = resolveCanonicalPublicProfile(targetUserId, targetSnapshot.data());
-    if (!targetProfile) {
+    const targetCanonicalProfile = resolveCanonicalPublicProfile(targetUserId, targetSnapshot.data());
+    if (!targetCanonicalProfile) {
       throw new functions.https.HttpsError('failed-precondition', 'That parent does not have a public name yet.');
     }
+    const senderProfile = toMinimalPublicUserProfile(senderCanonicalProfile);
+    const targetProfile = toMinimalPublicUserProfile(targetCanonicalProfile);
 
     let expiredReverseRequest: { recipientUserId: string; requestId: string; notificationId: string | null } | null = null;
     const incomingExpiresAt = requestExpiresAtMillis(incoming);
@@ -2688,7 +2692,7 @@ export const syncPublicUserProfile = functions.firestore
       await publicRef.delete();
       return null;
     }
-    await publicRef.set({ ...profile, updatedAt: FieldValue.serverTimestamp() });
+    await publicRef.set({ ...toMinimalPublicUserProfile(profile), updatedAt: FieldValue.serverTimestamp() });
     return null;
   });
 
@@ -2723,17 +2727,18 @@ export const updatePublicUserProfile = functions.https.onCall(async (data, conte
       photoURL: next.photoURL,
       updatedAt: now,
     }, { merge: true });
-    transaction.set(publicRef, { ...next, updatedAt: now });
-    return next;
+    const publicProfile = toMinimalPublicUserProfile(next);
+    transaction.set(publicRef, { ...publicProfile, updatedAt: now });
+    return { privateProfile: next, publicProfile };
   });
   try {
-    await admin.auth().updateUser(userId, { displayName: profile.displayName, photoURL: profile.photoURL ?? undefined });
+    await admin.auth().updateUser(userId, { displayName: profile.privateProfile.displayName, photoURL: profile.privateProfile.photoURL ?? undefined });
   } catch (error) {
     console.warn('[updatePublicUserProfile] auth projection unavailable', {
       code: typeof error === 'object' && error && 'code' in error ? String(error.code) : 'unknown',
     });
   }
-  return { profile };
+  return { profile: profile.publicProfile };
 });
 
 export const getPublicUserProfiles = functions.https.onCall(async (data, context) => {
@@ -2751,10 +2756,10 @@ export const getPublicUserProfiles = functions.https.onCall(async (data, context
   const resolved = new Map<string, ReturnType<typeof resolveCanonicalPublicProfile>>();
   let projectionNameCount = 0;
   publicSnapshots.forEach((snapshot) => {
-    const profile = resolveCanonicalPublicProfile(snapshot.id, snapshot.data());
-    if (profile) {
+    const profile = snapshot.data();
+    if (isCanonicalPublicProfile(profile, snapshot.id)) {
       projectionNameCount += 1;
-      resolved.set(snapshot.id, profile);
+      resolved.set(snapshot.id, profile as NonNullable<ReturnType<typeof resolveCanonicalPublicProfile>>);
     }
   });
 
@@ -2784,7 +2789,7 @@ export const getPublicUserProfiles = functions.https.onCall(async (data, context
   await Promise.allSettled(selfHealingProfiles.map((profile) => firestore
     .collection('publicUserProfiles')
     .doc(profile.userId)
-    .set({ ...profile, updatedAt: FieldValue.serverTimestamp() })));
+    .set({ ...toMinimalPublicUserProfile(profile), updatedAt: FieldValue.serverTimestamp() })));
 
   const resolvedProfiles: {
     userId: string;
@@ -2796,7 +2801,7 @@ export const getPublicUserProfiles = functions.https.onCall(async (data, context
   userIds.forEach((userId) => {
     const profile = resolved.get(userId);
     if (profile) {
-      resolvedProfiles.push(profile);
+      resolvedProfiles.push(toMinimalPublicUserProfile(profile));
       return;
     }
     if (existingUserIds.has(userId)) {
@@ -2853,7 +2858,10 @@ export const getSuggestedConnections = functions.https.onCall(async (data, conte
     .map((snapshot) => ({
       snapshot,
       profile: snapshot.data(),
-      publicProfile: resolveCanonicalPublicProfile(snapshot.id, snapshot.data()),
+      publicProfile: (() => {
+        const profile = resolveCanonicalPublicProfile(snapshot.id, snapshot.data());
+        return profile ? toMinimalPublicUserProfile(profile) : null;
+      })(),
     }))
     .filter((candidate) => Boolean(candidate.publicProfile))
     .filter((candidate) => !normalizedQuery || candidate.publicProfile?.displayName.toLocaleLowerCase().includes(normalizedQuery));

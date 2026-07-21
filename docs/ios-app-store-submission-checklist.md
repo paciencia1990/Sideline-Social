@@ -8,8 +8,8 @@ Legend: `[x]` repository-verified, `[ ]` required external/manual action, `[~]` 
 - [ ] Register App ID `com.sidelinesocial.app` in the correct Apple Developer team.
 - [ ] Confirm no pre-existing App Store record requires iPad support.
 - [x] Add an iOS app with bundle ID `com.sidelinesocial.app` to Firebase project `sideline-squad`.
-- [x] Download a fresh `GoogleService-Info.plist`; verify `BUNDLE_ID` exactly.
-- [x] Store it as an EAS **file** environment variable named `GOOGLE_SERVICES_INFO_PLIST`; do not commit it.
+- [~] Firebase iOS registration exists; re-download/verify the exact `GoogleService-Info.plist` because the project contains two iOS registrations.
+- [ ] Confirm it is stored as the EAS **file** environment variable `GOOGLE_SERVICES_INFO_PLIST` and embedded in the final archive; do not commit it.
 - [x] Existing Android package and Google services file remain unchanged.
 
 ## Build configuration
@@ -27,10 +27,10 @@ Legend: `[x]` repository-verified, `[ ]` required external/manual action, `[~]` 
 
 - [ ] Configure Apple distribution certificate and App Store provisioning profile in EAS.
 - [ ] Configure APNs key/certificate for the project.
-- [~] iOS push token/ticket/receipt implementation compiled; deploy Functions.
+- [~] iOS push token/ticket/receipt implementation compiled and deployed endpoint names exist; confirm exact deployed revision.
 - [ ] Send production-like remote pushes to a physical iPhone; validate foreground/background/terminated open routes.
 - [ ] Verify invalid token and Expo receipt cleanup in production logs without logging raw tokens.
-- [ ] Deploy `deleteOwnAccount`, `unblockFriendChatUser`, `reportTeamContent`, `createTeamAnnouncement`, and `cleanupExpoPushReceipts`.
+- [ ] Compare deployed revisions for `deleteOwnAccount`, `unblockFriendChatUser`, `reportTeamContent`, `createTeamAnnouncement`, and `cleanupExpoPushReceipts`; deploy reviewed differences only.
 - [ ] Deploy any changed rules/indexes needed by the release and confirm no missing-index errors.
 
 ## Privacy, legal, and safety
@@ -49,7 +49,7 @@ Legend: `[x]` repository-verified, `[ ]` required external/manual action, `[~]` 
 
 - [x] Static TypeScript and Cloud Functions build.
 - [x] Local config, auth, game, team, chat, notification, Squad, and privacy regression tests.
-- [x] Disposable emulator account deletion cleanup and sole-owner blocker test.
+- [~] Disposable emulator deletion test exists; rerun it for the 2026-07-20 season/conversation cleanup before release.
 - [ ] Fresh install → sign up → onboarding → parent/coach mode switching.
 - [ ] Email verification behavior decision and test; it is not currently enforced.
 - [ ] Password reset, sign-in/out, and denied permission paths.

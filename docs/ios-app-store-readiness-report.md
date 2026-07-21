@@ -1,7 +1,7 @@
 # Sideline Social iOS App Store Readiness Report
 
 Audit date: 2026-07-20  
-Source baseline: `main` at `7e48b423de241319461d5c0a456daa0caec696fe`  
+Original readiness baseline: `main` at `7e48b423de241319461d5c0a456daa0caec696fe`; privacy re-verification baseline: `8d784e96d966d5df97f71c733b0be32f9800ecbc`
 Overall status: **PARTIAL — repository work is substantially complete, but submission is blocked by owner credentials, public legal/support endpoints, deployment, and physical-device validation.**
 
 ## Release identity
@@ -41,7 +41,7 @@ Overall status: **PARTIAL — repository work is substantially complete, but sub
 ## Repository changes made
 
 - Configured iPhone-only iOS identity, build number, icon, localized permission strings, encryption declaration, and optional Firebase plist injection.
-- Registered Firebase iOS app `Sideline Social iOS` for `com.sidelinesocial.app`; stored its matching plist only in an ignored local file and the secret EAS production file variable `GOOGLE_SERVICES_INFO_PLIST`.
+- Firebase lists an iOS app for `com.sidelinesocial.app`, but the 2026-07-20 local resolved config did not include `GOOGLE_SERVICES_INFO_PLIST`. Confirm the exact EAS file variable and final archive; a second older iOS Firebase registration also exists.
 - Replaced the placeholder iOS icon with an opaque 1024×1024 Sideline Social brand icon and changed the splash image to the existing brand mark.
 - Retained the installed Firebase JS SDK 10.14.1 after `expo install --check` confirmed the dependency set is aligned; no unsupported dependency upgrade was introduced.
 - Added contextual notification opt-in. The root coordinator no longer prompts immediately after sign-in.
@@ -64,9 +64,9 @@ No camera, photo-library, contacts, Bluetooth, local-network, motion, HealthKit,
 
 - User-facing authentication is Firebase email/password only. Placeholder Google/Apple context methods are not exposed in the sign-in UI. Sign in with Apple is therefore not required solely for the current authentication offering.
 - Password reset, secure password visibility, sign-in, sign-up, sign-out, and auth persistence exist.
-- Account deletion now removes or anonymizes Auth, private/public profiles, child profiles, memberships, notifications/tokens, friendships/requests/blocks, chats and voice files, squad administration requests, gameplay participation, rewards, activity, and AI request records.
+- Account deletion removes or anonymizes Auth, private/public profiles, child profiles, memberships, notifications/tokens, friendships/requests/blocks, chats and voice files, squad administration requests, gameplay participation, rewards, activity, and historical AI request records. The 2026-07-20 audit added missing Squad-season and denormalized conversation UID cleanup locally; deploy and verify it before relying on this statement for production.
 - Active sole team owners or Squad administrators must transfer responsibility or add another administrator first. Moderation reports are retained in anonymized form pending final legal retention approval.
-- A disposable Auth/Firestore/Realtime Database/Functions emulator test validates cleanup, moderation and notification anonymization, Auth deletion last, game-session cleanup, and the sole-owner block.
+- A disposable Auth/Firestore/Realtime Database/Functions emulator test covers cleanup, moderation/notification anonymization, season and conversation references, Auth deletion last, game-session cleanup, and the sole-owner block.
 - **Deployment of the new callable and its rules/index prerequisites remains an owner-controlled production action.** Test deletion with a disposable production-like account before review.
 
 ## User-generated content and safety
@@ -108,7 +108,7 @@ No camera, photo-library, contacts, Bluetooth, local-network, motion, HealthKit,
 
 ## Production iOS build status
 
-No EAS iOS production build was started. The matching `com.sidelinesocial.app` Firebase app/plist is now configured, but the submission gate correctly fails while owner-approved public legal/support endpoints are absent. Apple App ID/signing access and physical-device validation also remain. No build ID, URL, `.ipa`, archive checksum, Xcode version, or iOS SDK build-log evidence exists yet.
+No EAS iOS production build was started. The matching Firebase app registration exists, but the exact production plist/EAS file variable and final archive still require confirmation. The submission gate also correctly fails while owner-approved public legal/support endpoints are absent. Apple App ID/signing access and physical-device validation remain. No build ID, URL, `.ipa`, archive checksum, Xcode version, or iOS SDK build-log evidence exists yet.
 
 ## Submission blockers
 

@@ -57,7 +57,7 @@ const rules = fs.readFileSync(path.join(process.cwd(), "firestore.rules"), "utf8
 const translations = fs.readFileSync(path.join(process.cwd(), "i18n", "index.ts"), "utf8");
 
 assert.equal(friendsScreen.includes("profile.email"), false);
-assert.equal(friendsScreen.includes("formatFullPublicName"), true);
+assert.equal(friendsScreen.includes("formatPublicUserName"), true);
 assert.equal(friendsScreen.includes("profile.sharedSquadName || profile.sharedActivity"), true);
 assert.equal(friendsScreen.includes('t("friends.mutualConnections"'), true);
 assert.equal(friendsScreen.includes('<UserPlus size={18} color={Colors.surface} />'), true);
@@ -84,6 +84,7 @@ const suggestionsCallable = functionsSource.slice(
 assert.equal(publicProfilesCallable.includes("context.auth?.uid"), true);
 assert.equal(publicProfilesCallable.includes("admin.auth().getUsers"), true);
 assert.equal(publicProfilesCallable.includes("resolveCanonicalPublicProfile"), true);
+assert.equal(publicProfilesCallable.includes("toMinimalPublicUserProfile"), true);
 assert.equal(publicProfilesCallable.includes("email"), false);
 assert.equal(suggestionsCallable.includes("context.auth?.uid"), true);
 assert.equal(suggestionsCallable.includes("sharedSquadName"), true);

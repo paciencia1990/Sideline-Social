@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { httpsCallable } from "firebase/functions";
 
+import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { functions } from "@/config/firebase";
 import { COACH_CHECKLISTS } from "@/content/coachResources/checklists";
 import { COACH_COMMUNICATION_TEMPLATES } from "@/content/coachResources/communicationTemplates";
@@ -120,6 +121,7 @@ export function getDailyCoachProTip(date = new Date(), tips = getCoachProTips())
 }
 
 export async function generateCoachResourceHelp(request: CoachHelpRequest) {
+  if (!FEATURE_FLAGS.coachAiEnabled) throw new Error("coach_ai_feature_disabled");
   const callable = httpsCallable<CoachHelpRequest, CoachHelpResult>(functions, "generateCoachResourceHelp", { timeout: 30_000 });
   return (await callable(request)).data;
 }

@@ -8,6 +8,7 @@ const checklists = read("content/coachResources/checklists.ts");
 const templates = read("content/coachResources/communicationTemplates.ts");
 const tips = read("content/coachResources/proTips.ts");
 const service = read("services/coachResourcesService.ts");
+const featureFlags = read("config/featureFlags.ts");
 const hub = read("app/coach/resources/index.tsx");
 const checklistLibrary = read("app/coach/resources/checklists/index.tsx");
 const checklistDetail = read("app/coach/resources/checklists/[checklistId].tsx");
@@ -16,6 +17,8 @@ const help = read("app/coach/resources/help/index.tsx");
 const helpResult = read("app/coach/resources/help/result.tsx");
 const composer = read("app/coach/messages.tsx");
 const functionsSource = read("functions/src/coachResourceHelp.ts");
+const isolatedFunctionsSource = read("functions/src/disabled/coachResourceHelp.ts");
+const functionsIndex = read("functions/src/index.ts");
 const translations = read("i18n/index.ts");
 
 for (const id of ["first-time-setup", "before-season", "practice-day", "game-day", "player-safety", "end-season"]) {
@@ -38,12 +41,19 @@ assert.match(checklistDetail, /accessibilityRole="checkbox"[\s\S]*accessibilityS
 assert.match(checklistDetail, /Alert\.alert[\s\S]*resetCoachChecklistProgress/, "reset must require confirmation");
 assert.match(communicationDetail, /TextInput[\s\S]*findUnresolvedCoachPlaceholders[\s\S]*\/coach\/messages/, "templates must be editable, validated, and routed to the composer");
 assert.match(composer, /draftBody[\s\S]*draftTitle[\s\S]*selectedTeamId/, "announcement composer must accept drafts and require explicit team context");
-assert.match(help, /CATEGORIES\.map/, "AI help must use guided categories");
-assert.match(help, /privacyReminder/, "AI help must show a privacy reminder");
-assert.match(help, /generateCoachResourceHelp/, "AI help must use the trusted callable boundary");
+assert.match(featureFlags, /coachAiEnabled:\s*false/, "Coach AI must be disabled through the central typed feature flag");
+assert.match(hub, /disabled=\{!FEATURE_FLAGS\.coachAiEnabled\}/, "Coach Resources must disable the AI entry point");
+assert.match(hub, /coachAiComingSoon/, "Coach Resources must show the coming-soon label");
+assert.match(help, /if \(!FEATURE_FLAGS\.coachAiEnabled\)[\s\S]*coachAiUnavailableTitle/, "direct help links must render a safe unavailable state");
+assert.match(helpResult, /if \(!FEATURE_FLAGS\.coachAiEnabled\)[\s\S]*coachAiUnavailableTitle/, "direct result links must render a safe unavailable state");
 assert.doesNotMatch(help, /apiKey|COACH_AI_API_KEY|provider/i, "the client help route must not contain provider credentials");
 assert.match(helpResult, /result\.sections[\s\S]*result\.canSendAsAnnouncement/, "structured results must render natively and gate announcements");
-assert.match(functionsSource, /context\.auth[\s\S]*validateCoachHelpRequest[\s\S]*enforceRateLimit[\s\S]*COACH_AI_API_KEY/, "server boundary must authenticate, validate, rate-limit, and keep credentials server-side");
+assert.ok(service.indexOf("if (!FEATURE_FLAGS.coachAiEnabled)") < service.indexOf("httpsCallable<CoachHelpRequest"), "client service must stop before constructing a callable");
+assert.match(functionsSource, /context\.auth[\s\S]*feature_disabled/, "active compatibility callable must authenticate and return a stable disabled reason");
+assert.doesNotMatch(functionsSource, /COACH_AI_API_KEY|COACH_AI_ENDPOINT|process\.env|fetch\(|admin\.firestore|coachAiRequests|coachAiRateLimits/, "active callable must not bind secrets, call a provider, or access AI storage");
+assert.match(isolatedFunctionsSource, /ISOLATED \/ NOT EXPORTED[\s\S]*secrets:\s*\['COACH_AI_API_KEY', 'COACH_AI_ENDPOINT'\][\s\S]*validateCoachHelpRequest[\s\S]*enforceRateLimit/, "unfinished provider code must remain isolated with its safeguards and secret bindings documented");
+assert.match(functionsIndex, /from '\.\/coachResourceHelp'/, "Functions entry must export the non-secret compatibility callable");
+assert.doesNotMatch(functionsIndex, /disabled\/coachResourceHelp/, "Functions entry must not import the isolated provider implementation");
 
 const request = core.validateCoachHelpRequest({
   category: "parent_concern",
@@ -61,8 +71,8 @@ assert.equal(core.createCoachHelpSafetyResult("es").canSendAsAnnouncement, false
 assert.equal(core.validateCoachHelpResult({ resultType: "message", title: "Draft", body: "A calm private reply.", canSendAsAnnouncement: true }, "parent_concern").canSendAsAnnouncement, false);
 assert.equal(core.validateCoachHelpResult({ resultType: "message", title: "Draft", body: "A team update.", canSendAsAnnouncement: true }, "parent_message").canSendAsAnnouncement, true);
 
-for (const key of ["checklists", "communicationCardBody", "proTip", "needHelp", "privacyReminder", "generateHelp", "resultNotFound"]) {
+for (const key of ["checklists", "communicationCardBody", "proTip", "needHelp", "coachAiComingSoon", "coachAiUnavailableTitle", "coachAiUnavailableBody", "backToResources", "privacyReminder", "generateHelp", "resultNotFound"]) {
   assert.ok((translations.match(new RegExp(`\\b${key}:`, "g")) ?? []).length >= 2, `${key} must resolve in English and Spanish`);
 }
 
-console.log("Coach Resources content, persistence, navigation, privacy, and AI-boundary tests passed.");
+console.log("Coach Resources content, persistence, navigation, privacy, and disabled AI-boundary tests passed.");

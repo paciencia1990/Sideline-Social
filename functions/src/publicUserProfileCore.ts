@@ -6,6 +6,8 @@ export type CanonicalPublicUserProfile = {
   photoURL: string | null;
 };
 
+export type MinimalPublicUserProfile = CanonicalPublicUserProfile;
+
 const PLACEHOLDER_NAMES = new Set([
   'sideline parent',
   'a sideline parent',
@@ -69,19 +71,31 @@ export function resolveCanonicalPublicProfile(
   return { userId, ...name, photoURL };
 }
 
+export function toMinimalPublicUserProfile(
+  profile: CanonicalPublicUserProfile,
+): MinimalPublicUserProfile {
+  const lastInitial = Array.from(profile.lastName)[0]?.toLocaleUpperCase() ?? '';
+  const publicLastName = lastInitial ? `${lastInitial}.` : '';
+  return {
+    ...profile,
+    lastName: publicLastName,
+    displayName: publicLastName ? `${profile.firstName} ${publicLastName}` : profile.firstName,
+  };
+}
+
 export function isCanonicalPublicProfile(value: unknown, userId?: string) {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
   if (userId && record.userId !== userId) return false;
-  const resolved = resolveCanonicalPublicProfile(
-    typeof record.userId === 'string' ? record.userId : '',
-    record,
-  );
+  const firstName = normalizeNamePart(record.firstName);
+  const lastName = typeof record.lastName === 'string' ? record.lastName.trim() : '';
+  const photoURL = typeof record.photoURL === 'string' && record.photoURL.trim() ? record.photoURL.trim() : null;
   return Boolean(
-    resolved &&
-    record.firstName === resolved.firstName &&
-    record.lastName === resolved.lastName &&
-    record.displayName === resolved.displayName &&
-    (record.photoURL === resolved.photoURL || (record.photoURL == null && resolved.photoURL === null)),
+    typeof record.userId === 'string' && record.userId &&
+    firstName && /^\p{L}\.$/u.test(lastName) &&
+    record.firstName === firstName &&
+    record.lastName === lastName &&
+    record.displayName === `${firstName} ${lastName}` &&
+    (record.photoURL === photoURL || (record.photoURL == null && photoURL === null)),
   );
 }

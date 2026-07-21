@@ -8,7 +8,7 @@ Branch: `main`
 
 ## Overall result
 
-**PARTIAL: the signed production AAB is technically uploadable, but the app is not ready to submit for Google Play review until the privacy-policy and account-deletion requirements are completed.**
+**PARTIAL: the existing signed production AAB is technically uploadable, but it predates the 2026-07-20 privacy corrections and is not ready to submit. Publish the privacy policy/deletion web resource, deploy and verify backend corrections, then create and inspect a replacement AAB.**
 
 The framework, Android build, API targeting, versioning, signing, 16 KB compatibility, clean install, cold launch, offline handling, and authenticated first-level navigation all pass. Remaining product/Play Console work is listed under **Remaining review blockers** and **Exact next steps**.
 
@@ -266,19 +266,19 @@ The checked-in local Gradle release type still uses the debug keystore for local
 
 ### 2. Account deletion
 
-**Not found.** The app supports account creation, so before review:
+**In-app deletion is implemented and emulator tested; the required public web resource is not found.** Before review:
 
-- Implement authenticated in-app account deletion.
+- Rerun and deploy/verify the reviewed in-app/backend deletion revision, including the 2026-07-20 season and conversation reference cleanup.
 - Publish a public account-deletion request URL.
 - Define and disclose deletion/retention behavior for Authentication, Firestore, Storage, chats, messages, children, teams, squads, and safety records.
 
-These items require product/legal decisions and an external public URL; they were not invented or implemented during a framework/build upgrade.
+The public URL, retention periods and operational verification require product/legal decisions. The in-app flow must not be described as absent.
 
 ## Data Safety answers to prepare
 
 Confirm the final declaration against the privacy policy, retention policy, Firebase contracts, and production behavior. Audited categories include:
 
-- Personal information: name, email, optional phone, profile photo/URL, user ID
+- Personal information: name, email and user ID. Phone/profile-photo schema support exists, but no active collection UI/upload flow was found; do not declare those solely from schema presence
 - Child information entered by a parent: display names and team associations
 - Approximate/precise location: nearby Squad discovery
 - User content: friend chat, team messages/replies, announcements, Squad names, reports
@@ -328,14 +328,14 @@ Planning placeholders only:
 ## Exact next steps
 
 1. Publish the privacy policy and add its in-app link.
-2. Implement in-app deletion and publish the deletion-request URL.
+2. Deploy/verify the reviewed deletion corrections and publish the deletion-request URL.
 3. Create a dedicated Parent/Coach reviewer account and App access instructions.
 4. Complete Data Safety, content rating, audience/Families, ads, category/tags, support contact, and store descriptions.
 5. Produce phone/tablet screenshots and a feature graphic from the final build.
 6. Confirm Play App Signing enrollment and that the registered upload certificate matches the EAS credential.
 7. Restrict the Maps key to `com.sidelinesquad.app` and the production signing certificate fingerprints in Google Cloud.
 8. Run physical-device tests for notification, location, and microphone grant/deny/Settings flows, Parent/Coach switching, voice upload/playback, chats, teams, and Squads.
-9. Upload `sideline-social-v1.0.0-code5-sdk57.aab` to Internal testing.
+9. Build and inspect a replacement production AAB containing the reviewed privacy corrections, then upload it to Internal testing; do not use the pre-correction code-5 artifact for review.
 10. Resolve every Play Console warning and pre-launch report issue before review/promotion.
 
 Official policy references:

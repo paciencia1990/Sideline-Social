@@ -45,6 +45,7 @@
     "test:coach-resources": "npm --prefix functions run build && node scripts/test-coach-resources-core.cjs",
     "test:coach-back-navigation": "node scripts/test-coach-back-navigation.cjs",
     "test:emulator:coach-resources": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-coach-resources-functions-test --only auth,firestore,functions \"node scripts/test-coach-resources-functions-emulator.cjs\"",
+    "test:firestore:coach-ai-rules": "firebase.cmd emulators:exec --project sideline-coach-ai-rules-test --only firestore \"node scripts/test-coach-ai-firestore-rules.cjs\"",
     "test:weekly-challenge": "npm --prefix functions run build && node scripts/test-weekly-challenge-core.cjs",
     "test:weekly-challenge-localization": "npm --prefix functions run build && node scripts/test-weekly-challenge-localization.cjs",
     "test:sideline-stars": "npm --prefix functions run build && node scripts/test-sideline-stars-core.cjs",

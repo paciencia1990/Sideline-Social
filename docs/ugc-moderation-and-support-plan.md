@@ -1,6 +1,6 @@
 # User-Generated Content Moderation and Support Plan
 
-Status: **Repository controls implemented; operator staffing, final policy, support endpoint, and production deployment remain required.**
+Status: **Repository controls implemented; deployed callable names exist, but exact deployed revision/rules parity, operator staffing, final policy, and a monitored support endpoint remain required.**
 
 ## Covered content
 
@@ -31,8 +31,7 @@ Server-side severe-content screening covers friend chat, text/voice team announc
 - Publish final Community Guidelines, Terms, Privacy Policy, and a monitored support/safety contact.
 - Assign trained report reviewers and an escalation owner.
 - Define retention, appeals, law-enforcement, and child-safety procedures with counsel.
-- Deploy and emulator/physical-device test all report, block, unblock, filtering, deletion, and coach moderation functions.
+- Compare deployed Functions/rules to the reviewed source, deploy any differences through the owner-controlled release process, and emulator/physical-device test reporting, blocking, filtering, deletion, and coach moderation.
 - Confirm the review backend remains monitored throughout TestFlight and App Review.
 
 Support URL/email: **[OWNER REQUIRED]**.
-

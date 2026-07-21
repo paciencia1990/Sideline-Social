@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import * as functions from 'firebase-functions';
 
 import { activeSquadAdminIds, isActiveSquadAdmin } from './squadAdminCore';
@@ -57,9 +57,11 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (_data, con
 
   await removeTeamMemberships(firestore, uid, summary);
   await removeSquadMemberships(firestore, uid, summary);
+  await removeSquadSeasonIdentity(firestore, uid, summary);
   await removeFriendRelationships(firestore, uid, summary);
   await removeFriendConversationMemberships(firestore, uid, summary);
   await removePrivateTeamConversationMemberships(firestore, uid, summary);
+  await removeMessageVisibilityReferences(firestore, uid, summary);
   await removeTriviaParticipation(firestore, uid, summary);
 
   summary.deletedDocuments += await deleteMatchingDocuments(
@@ -286,6 +288,31 @@ async function removeSquadMemberships(
   }
 }
 
+async function removeSquadSeasonIdentity(
+  firestore: FirebaseFirestore.Firestore,
+  uid: string,
+  summary: DeletionSummary,
+) {
+  summary.deletedDocuments += await deleteMatchingDocuments(
+    firestore.collectionGroup('memberTotals').where('userId', '==', uid),
+    true,
+  );
+
+  for (const fieldName of ['createdBy', 'closedBy'] as const) {
+    while (true) {
+      const snapshot = await firestore.collectionGroup('seasons').where(fieldName, '==', uid).limit(200).get();
+      if (snapshot.empty) break;
+      const writer = firestore.bulkWriter();
+      snapshot.docs.forEach((season) => writer.set(season.ref, {
+        [fieldName]: null,
+        accountDeletionAnonymizedAt: FieldValue.serverTimestamp(),
+      }, { merge: true }));
+      await writer.close();
+      summary.anonymizedDocuments += snapshot.size;
+    }
+  }
+}
+
 async function removeFriendRelationships(
   firestore: FirebaseFirestore.Firestore,
   uid: string,
@@ -320,6 +347,9 @@ async function removeFriendConversationMemberships(
       await firestore.recursiveDelete(conversationRef);
     } else {
       const update: Record<string, unknown> = {
+        activeParticipantIds: FieldValue.arrayRemove(uid),
+        invitedParticipantIds: FieldValue.arrayRemove(uid),
+        adminUserIds: FieldValue.arrayRemove(uid),
         activeMemberIds: FieldValue.arrayRemove(uid),
         memberIds: FieldValue.arrayRemove(uid),
         updatedAt: FieldValue.serverTimestamp(),
@@ -328,8 +358,15 @@ async function removeFriendConversationMemberships(
         update.ownerUserId = remaining[0].id;
         await remaining[0].ref.set({ role: 'owner', updatedAt: FieldValue.serverTimestamp() }, { merge: true });
       }
+      if (conversation.data()?.createdBy === uid) update.createdBy = null;
       if (conversation.data()?.conversationType === 'direct') update.status = 'readOnly';
       await conversationRef.set(update, { merge: true });
+      if (Object.prototype.hasOwnProperty.call(conversation.data()?.participantNameSnapshots ?? {}, uid)) {
+        await conversationRef.update(
+          new FieldPath('participantNameSnapshots', uid),
+          FieldValue.delete(),
+        );
+      }
       await Promise.all([
         firestore.recursiveDelete(member.ref),
         conversationRef.collection('memberProfiles').doc(uid).delete(),
@@ -352,6 +389,7 @@ async function removePrivateTeamConversationMemberships(
       const conversation = await conversationRef.get();
       const update: Record<string, unknown> = {
         lastMessagePreview: null,
+        participantUserIds: FieldValue.arrayRemove(uid),
         status: 'readOnly',
         updatedAt: FieldValue.serverTimestamp(),
       };
@@ -367,6 +405,26 @@ async function removePrivateTeamConversationMemberships(
     }
     await member.ref.delete();
     summary.deletedDocuments += 1;
+  }
+}
+
+async function removeMessageVisibilityReferences(
+  firestore: FirebaseFirestore.Firestore,
+  uid: string,
+  summary: DeletionSummary,
+) {
+  while (true) {
+    const snapshot = await firestore.collectionGroup('messages')
+      .where('visibleToUserIds', 'array-contains', uid)
+      .limit(200)
+      .get();
+    if (snapshot.empty) return;
+    const writer = firestore.bulkWriter();
+    snapshot.docs.forEach((message) => writer.set(message.ref, {
+      visibleToUserIds: FieldValue.arrayRemove(uid),
+    }, { merge: true }));
+    await writer.close();
+    summary.anonymizedDocuments += snapshot.size;
   }
 }
 

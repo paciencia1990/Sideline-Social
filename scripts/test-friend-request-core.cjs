@@ -81,6 +81,10 @@ assert.deepEqual(projected, {
   photoURL: "https://example.test/photo.jpg",
 });
 assert.equal(Object.hasOwn(projected, "email"), false);
+assert.deepEqual(publicProfiles.toMinimalPublicUserProfile(projected), {
+  userId: "uid", firstName: "Joann", lastName: "P.", displayName: "Joann P.",
+  photoURL: "https://example.test/photo.jpg",
+});
 
 const functionsSource = read("functions", "src", "index.ts");
 const friendChatSource = read("functions", "src", "friendChat.ts");
@@ -94,6 +98,7 @@ assert.ok(send.includes("Timestamp.now()"));
 assert.ok(send.includes("friendRequestExpiresAtMillis(now.toMillis())"));
 assert.ok(send.includes("respondedAt: null"));
 assert.ok(send.includes("resolveCanonicalPublicProfile(senderUserId"));
+assert.ok(send.includes("toMinimalPublicUserProfile(senderCanonicalProfile)"));
 assert.ok(send.includes("Add your first and last name"));
 assert.ok(send.includes("priorOutcomes: preserveTerminalRequestOutcomes(outgoing)"));
 assert.equal(send.toLowerCase().includes("email"), false);

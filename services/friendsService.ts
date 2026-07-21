@@ -27,7 +27,7 @@ import {
   type PublicFriendProfileRecord,
   type PublicProfileInspectionCounts,
 } from "@/utils/friendRequestMapping";
-import { formatFullPublicName, getSafeProfileName } from "@/utils/friendPrivacy";
+import { formatFullPublicName, formatPublicUserName, getSafeProfileName } from "@/utils/friendPrivacy";
 import { getPersistedDisplayName } from "@/utils/profileName";
 
 export type FriendRequestStatus = "pending" | "accepted" | "declined" | "canceled" | "expired";
@@ -148,7 +148,7 @@ function dataToRequest(value: unknown): FriendRequest | null {
   return {
     id,
     fromUserId,
-    fromDisplayName: formatFullPublicName(
+    fromDisplayName: formatPublicUserName(
       typeof data.fromDisplayName === "string" ? data.fromDisplayName : null,
     ) ?? "",
     fromPhotoURL: typeof data.fromPhotoURL === "string" ? data.fromPhotoURL : null,
@@ -157,7 +157,7 @@ function dataToRequest(value: unknown): FriendRequest | null {
     senderNameResolved: false,
     senderProfileState: "loading",
     toUserId,
-    toDisplayName: formatFullPublicName(
+    toDisplayName: formatPublicUserName(
       typeof data.toDisplayName === "string" ? data.toDisplayName : null,
     ) ?? "",
     toPhotoURL: typeof data.toPhotoURL === "string" ? data.toPhotoURL : null,
@@ -191,7 +191,7 @@ export async function searchUsers(queryText: string): Promise<SuggestedFriendPro
     const suggestions = await getSuggestedConnections(queryText);
     return suggestions.map((profile) => ({
       id: profile.userId,
-      displayName: formatFullPublicName(profile.displayName) ?? "",
+      displayName: formatPublicUserName(profile.displayName) ?? "",
       photoURL: profile.photoURL,
       sharedSquadName: profile.sharedSquadName,
       sharedActivity: profile.sharedActivity,
@@ -212,7 +212,7 @@ export async function getFriends(userId: string): Promise<FriendProfile[]> {
     const publicProfiles = await getPublicUserProfiles(friendIds);
     return publicProfiles.map((friendProfile) => ({
       id: friendProfile.userId,
-      displayName: formatFullPublicName(friendProfile.displayName) ?? "",
+      displayName: formatPublicUserName(friendProfile.displayName) ?? "",
       photoURL: friendProfile.photoURL ?? null,
     }));
   } catch (error) {
@@ -385,7 +385,7 @@ function hydrateFriendRequestGroups(
 }
 
 export function formatPublicFriendName(value?: string | null): string | null {
-  return formatFullPublicName(value);
+  return formatPublicUserName(value);
 }
 
 async function loadPublicProfilesWithRetry(userIds: string[]) {
