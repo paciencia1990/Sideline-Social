@@ -24,6 +24,10 @@ export function getTriviaParentSessionRef(sessionId: string) {
   return doc(db, "sessions", sessionId);
 }
 
+export function createTriviaSessionId() {
+  return doc(collection(db, "sessions")).id;
+}
+
 export function getTriviaSessionRef(sessionId: string) {
   return doc(db, "sessions", sessionId, "games", "triviaBlitz");
 }

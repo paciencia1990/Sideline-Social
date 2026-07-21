@@ -15,6 +15,7 @@ import { getRecentTriviaQuestionIds, setRecentTriviaQuestionIds } from "./questi
 import { selectTriviaQuestions } from "./questionSelection";
 import {
   getCurrentPlayer,
+  createTriviaSessionId,
   getFirebaseErrorCode,
   getTriviaParentSessionPath,
   getTriviaParentSessionRef,
@@ -34,19 +35,12 @@ import type {
   TriviaSession,
 } from "./types";
 
-const SESSION_CODE_CHARACTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DEFAULT_QUESTION_COUNT = 10;
 
 const questionBank = questions as Omit<TriviaQuestion, "id">[];
 
 export function generateSessionCode() {
-  let code = "";
-
-  for (let index = 0; index < 5; index += 1) {
-    code += SESSION_CODE_CHARACTERS[Math.floor(Math.random() * SESSION_CODE_CHARACTERS.length)];
-  }
-
-  return code;
+  return createTriviaSessionId();
 }
 
 export async function createGameSession(hostName: string, requestedSessionId?: string) {

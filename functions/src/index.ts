@@ -142,6 +142,15 @@ export { generateCoachResourceHelp } from './coachResourceHelp';
 export { deleteOwnAccount } from './accountDeletion';
 export { reportTeamContent } from './contentModeration';
 export {
+  cleanupExpiredGameJoinCodes,
+  createGameJoinCode,
+  getGameJoinCodeForSession,
+  recordSpotDifferenceFound,
+  releaseGameJoinCode,
+  resolveAndJoinGameByCode,
+  updateGameJoinCodeStatus,
+} from './gameJoinCodes';
+export {
   blockFriendChatUser,
   createFriendGroupConversation,
   createOrOpenDirectConversation,

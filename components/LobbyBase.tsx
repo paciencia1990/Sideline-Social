@@ -1,9 +1,13 @@
 import React from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useTranslation } from "react-i18next";
 
 import { Colors, Typography } from "@/constants/theme";
+import type { GameCodeState } from "@/hooks/useGameLobby";
+import type { GameJoinCodeFailureReason } from "@/services/gameJoinCodeService";
 import { getFixedFooterBottomPadding } from "@/utils/safeAreaLayout";
+import { spokenGameJoinCode } from "@/utils/gameJoinCode";
 
 type LobbyPlayer = {
   id: string;
@@ -21,6 +25,11 @@ type LobbyPlayers = {
 type LobbyBaseProps = {
   gameName: string;
   players: LobbyPlayers;
+  codeState: GameCodeState;
+  codeError: GameJoinCodeFailureReason | null;
+  isLocal: boolean;
+  onRetryCode: () => void;
+  onCancel: () => void;
   onReadyToggle: () => void;
   onStart: () => void;
 };
@@ -28,23 +37,80 @@ type LobbyBaseProps = {
 export default function LobbyBase({
   gameName,
   players,
+  codeState,
+  codeError,
+  isLocal,
+  onRetryCode,
+  onCancel,
   onReadyToggle,
   onStart,
 }: LobbyBaseProps) {
+  const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const readyCount = players.list.filter((player) => player.ready).length;
   const totalPlayers = players.list.length;
+  const spokenCode = spokenGameJoinCode(players.joinCode);
+
+  const handleShareCode = async () => {
+    if (codeState !== "ready" || !players.joinCode) return;
+    await Share.share({ message: t("games.joinCode.shareText", { code: players.joinCode }) });
+  };
+
+  const handleCancel = () => {
+    Alert.alert(
+      t("games.joinCode.cancelLobbyTitle"),
+      t("games.joinCode.cancelLobbyBody"),
+      [
+        { text: t("games.joinCode.keepLobby"), style: "cancel" },
+        { text: t("games.joinCode.cancelLobby"), style: "destructive", onPress: onCancel },
+      ],
+    );
+  };
 
   return (
     <View style={[styles.container, { paddingTop: Math.max(insets.top, 28) }]}>
       <View style={styles.header}>
         <Text style={styles.title}>{gameName}</Text>
         <View style={styles.joinCodePanel}>
-          <Text style={styles.joinCodeLabel}>Join Code</Text>
-          <Text style={styles.joinCode}>{players.joinCode}</Text>
+          <Text style={styles.joinCodeLabel}>{t("games.joinCode.gameCode")}</Text>
+          {codeState === "loading" ? (
+            <View accessibilityLabel={t("games.joinCode.waiting")} style={styles.codeLoading}>
+              <ActivityIndicator color={Colors.primary} size="small" />
+              <Text style={styles.codeStatus}>{t("games.joinCode.waiting")}</Text>
+            </View>
+          ) : codeState === "error" ? (
+            <View style={styles.codeErrorWrap}>
+              <Text style={styles.codeError}>
+                {t(`games.joinCode.errors.${codeError ?? "code_reservation_failed"}`)}
+              </Text>
+              <Pressable accessibilityRole="button" onPress={onRetryCode} style={styles.retryButton}>
+                <Text style={styles.retryButtonText}>{t("games.joinCode.retry")}</Text>
+              </Pressable>
+            </View>
+          ) : isLocal ? (
+            <Text accessibilityLabel={t("games.joinCode.localTest")} style={styles.localTest}>
+              {t("games.joinCode.localTest")}
+            </Text>
+          ) : (
+            <>
+              <Text
+                accessibilityLabel={t("games.joinCode.accessibilityLabel", { code: spokenCode })}
+                adjustsFontSizeToFit
+                maxFontSizeMultiplier={1.5}
+                numberOfLines={1}
+                style={styles.joinCode}
+              >
+                {spokenCode}
+              </Text>
+              <Text style={styles.codeHelp}>{t("games.joinCode.shareHelp")}</Text>
+              <Pressable accessibilityRole="button" onPress={() => void handleShareCode()} style={styles.shareButton}>
+                <Text style={styles.shareButtonText}>{t("games.joinCode.shareCode")}</Text>
+              </Pressable>
+            </>
+          )}
         </View>
         <Text style={styles.readySummary}>
-          {readyCount} of {totalPlayers} ready
+          {t("games.joinCode.readySummary", { ready: readyCount, total: totalPlayers })}
         </Text>
       </View>
 
@@ -60,7 +126,7 @@ export default function LobbyBase({
               <View style={styles.playerIdentity}>
                 <Text style={styles.playerName} numberOfLines={1}>
                   {player.name}
-                  {isSelf ? " (You)" : ""}
+                  {isSelf ? ` ${t("games.joinCode.youSuffix")}` : ""}
                 </Text>
               </View>
               <View
@@ -77,7 +143,7 @@ export default function LobbyBase({
                       : styles.readyBadgeTextInactive,
                   ]}
                 >
-                  {player.ready ? "Ready" : "Not Ready"}
+                  {player.ready ? t("games.joinCode.ready") : t("games.joinCode.notReady")}
                 </Text>
               </View>
             </View>
@@ -106,7 +172,7 @@ export default function LobbyBase({
                 players.self.ready ? styles.secondaryButtonText : styles.primaryButtonText,
               ]}
             >
-              {players.self.ready ? "Unready" : "Ready"}
+              {players.self.ready ? t("games.joinCode.unready") : t("games.joinCode.ready")}
             </Text>
           </Pressable>
 
@@ -116,10 +182,15 @@ export default function LobbyBase({
               style={[styles.button, styles.primaryButton]}
               onPress={onStart}
             >
-              <Text style={[styles.buttonText, styles.primaryButtonText]}>Start Game</Text>
+              <Text style={[styles.buttonText, styles.primaryButtonText]}>{t("games.joinCode.startGame")}</Text>
             </Pressable>
           )}
         </View>
+        {players.isHost && !isLocal && (
+          <Pressable accessibilityRole="button" onPress={handleCancel} style={styles.cancelLobbyButton}>
+            <Text style={styles.cancelLobbyButtonText}>{t("games.joinCode.cancelLobby")}</Text>
+          </Pressable>
+        )}
       </View>
     </View>
   );
@@ -163,7 +234,71 @@ const styles = StyleSheet.create({
     color: Colors.textHeading,
     fontFamily: Typography.bodyBold,
     fontSize: 26,
+    letterSpacing: 5,
     marginTop: 2,
+    textAlign: "center",
+  },
+  codeLoading: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    minHeight: 46,
+  },
+  codeStatus: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.bodyMedium,
+    fontSize: 13,
+  },
+  codeErrorWrap: {
+    alignItems: "center",
+    gap: 8,
+    maxWidth: 280,
+    paddingTop: 8,
+  },
+  codeError: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyMedium,
+    fontSize: 13,
+    textAlign: "center",
+  },
+  retryButton: {
+    borderColor: Colors.primary,
+    borderRadius: 8,
+    borderWidth: 1,
+    minHeight: 40,
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
+  retryButtonText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyBold,
+    fontSize: 13,
+  },
+  localTest: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodyBold,
+    fontSize: 22,
+    marginTop: 8,
+  },
+  codeHelp: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.bodyRegular,
+    fontSize: 12,
+    marginTop: 6,
+    textAlign: "center",
+  },
+  shareButton: {
+    backgroundColor: Colors.primary,
+    borderRadius: 8,
+    justifyContent: "center",
+    marginTop: 10,
+    minHeight: 42,
+    paddingHorizontal: 18,
+  },
+  shareButtonText: {
+    color: Colors.surface,
+    fontFamily: Typography.bodyBold,
+    fontSize: 13,
   },
   readySummary: {
     color: Colors.textPrimary,
@@ -235,6 +370,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
     justifyContent: "center",
+  },
+  cancelLobbyButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
+    marginTop: 4,
+  },
+  cancelLobbyButtonText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 14,
   },
   button: {
     alignItems: "center",

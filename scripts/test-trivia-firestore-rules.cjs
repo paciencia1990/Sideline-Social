@@ -103,10 +103,16 @@ async function run() {
       await setDoc(childRef(db), triviaPayload("TEST1", "host-uid"));
     });
 
-    await assertSucceeds(updateDoc(parentRef(playerDb), {
+    await assertFails(updateDoc(parentRef(playerDb), {
       playerIds: ["host-uid", "player-uid"],
       updatedAt: 2,
     }));
+    await seed(testEnv, async (db) => {
+      await updateDoc(parentRef(db), {
+        playerIds: ["host-uid", "player-uid"],
+        updatedAt: 2,
+      });
+    });
     await assertSucceeds(getDoc(childRef(playerDb)));
     await assertFails(updateDoc(childRef(playerDb), {
       status: "results",

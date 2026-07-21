@@ -1,9 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { router, useLocalSearchParams } from "expo-router";
-import { onValue, ref, update } from "firebase/database";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { onSnapshot, orderBy, query } from 'firebase/firestore';
+import { onValue, ref, update } from 'firebase/database';
 
-import { rtdb } from "@/config/firebase";
-import { useAuth } from "@/context/AuthContext";
+import { rtdb } from '@/config/firebase';
+import { useAuth } from '@/context/AuthContext';
+import { useSquad } from '@/context/SquadContext';
+import {
+  createGameJoinCode,
+  createGameJoinIdempotencyKey,
+  getGameJoinCodeForSession,
+  readGameJoinCodeFailureReason,
+  releaseGameJoinCode,
+  updateGameJoinCodeStatus,
+  type GameJoinCodeFailureReason,
+  type GameJoinCodeType,
+} from '@/services/gameJoinCodeService';
+import { createGameSession as createTriviaSession, startGameSession as startTriviaSession, togglePlayerReady } from '@/src/game/triviaBlitz/gameState';
+import { getTriviaParentSessionRef, getTriviaPlayersRef } from '@/src/game/triviaBlitz/firebaseUtils';
+
+type LobbyGameId = 'bomb-defusal' | 'trivia-blitz' | 'spot-the-difference';
 
 type LobbyPlayer = {
   id: string;
@@ -18,194 +34,244 @@ type LobbyPlayers = {
   isHost: boolean;
 };
 
+type GameCodeState = 'loading' | 'ready' | 'error' | 'local';
+
 type GameLobbyState = {
   sessionId: string;
   players: LobbyPlayers;
+  codeState: GameCodeState;
+  codeError: GameJoinCodeFailureReason | null;
+  isLocal: boolean;
+  retryCode: () => void;
+  cancelGame: () => void;
   toggleReady: () => void;
   startGame: () => void;
   showCountdown: boolean;
   setShowCountdown: (value: boolean) => void;
 };
 
-type LobbyPlayerRecord = {
-  id?: string;
-  uid?: string;
-  name?: string;
-  displayName?: string;
-  ready?: boolean;
-  isReady?: boolean;
-};
-
-type GameLobbyRecord = {
-  players?: Record<string, LobbyPlayerRecord> | LobbyPlayerRecord[];
-  starting?: boolean;
-  countdownStartedAt?: number;
-  countdownDurationMs?: number;
+type RealtimeLobbyRecord = {
+  hostUserId?: string;
+  status?: string;
+  players?: Record<string, {
+    displayName?: string;
+    name?: string;
+    isReady?: boolean;
+    ready?: boolean;
+  }>;
 };
 
 const COUNTDOWN_DURATION_MS = 3000;
-const LOCAL_JOIN_CODE = "LOCAL";
 
-export function useGameLobby(gameId: string): GameLobbyState {
-  const { user } = useAuth();
-  const params = useLocalSearchParams<{ sessionId?: string | string[] }>();
-  const sessionId = normalizeParam(params.sessionId);
-  const currentUserId = user?.uid ?? "local-player";
+export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
+  const { user, loading: authLoading } = useAuth();
+  const { selectedSquadId } = useSquad();
+  const params = useLocalSearchParams<{
+    sessionId?: string | string[];
+    local?: string | string[];
+    host?: string | string[];
+  }>();
+  const routeSessionId = normalizeParam(params.sessionId);
+  const isLocal = normalizeParam(params.local) === '1';
+  const isHostRoute = normalizeParam(params.host) === '1';
+  const shouldHostSession = isHostRoute || !routeSessionId;
+  const gameType = joinCodeGameType(gameId);
+  const currentUserId = user?.uid ?? '';
   const currentUserName = getUserName(user?.displayName, user?.email);
 
-  const [joinCode, setJoinCode] = useState("");
+  const [sessionId, setSessionId] = useState(routeSessionId);
+  const [joinCode, setJoinCode] = useState('');
+  const [codeState, setCodeState] = useState<GameCodeState>(isLocal ? 'local' : 'loading');
+  const [codeError, setCodeError] = useState<GameJoinCodeFailureReason | null>(null);
   const [playerList, setPlayerList] = useState<LobbyPlayer[]>([]);
-  const [gameState, setGameState] = useState<GameLobbyRecord | null>(null);
+  const [hostUserId, setHostUserId] = useState('');
   const [showCountdown, setShowCountdown] = useState(false);
+  const [setupAttempt, setSetupAttempt] = useState(0);
   const [localPlayers, setLocalPlayers] = useState<LobbyPlayer[]>(() =>
-    createLocalPlayers(currentUserId, currentUserName),
+    createLocalPlayers(currentUserId || 'local-player', currentUserName),
   );
+  const creationInFlightRef = useRef(false);
+  const pendingSessionIdRef = useRef(routeSessionId);
+  const idempotencyKeyRef = useRef(createGameJoinIdempotencyKey());
 
   useEffect(() => {
-    if (sessionId) {
-      return;
-    }
+    if (!routeSessionId || routeSessionId === sessionId) return;
+    pendingSessionIdRef.current = routeSessionId;
+    setSessionId(routeSessionId);
+  }, [routeSessionId, sessionId]);
 
+  useEffect(() => {
+    if (!isLocal) return;
+    setCodeState('local');
     setLocalPlayers((players) => {
+      const nextId = currentUserId || 'local-player';
       const [self, ...rest] = players;
-      if (self?.id === currentUserId && self.name === currentUserName) {
-        return players;
-      }
-
-      return [
-        {
-          id: currentUserId,
-          name: currentUserName,
-          ready: self?.ready ?? false,
-        },
-        ...rest,
-      ];
+      if (self?.id === nextId && self.name === currentUserName) return players;
+      return [{ id: nextId, name: currentUserName, ready: self?.ready ?? false }, ...rest];
     });
-  }, [currentUserId, currentUserName, sessionId]);
-
-  const activePlayerList = sessionId ? playerList : localPlayers;
-  const activeJoinCode = sessionId ? joinCode : LOCAL_JOIN_CODE;
-
-  const self = useMemo<LobbyPlayer>(() => {
-    return (
-      activePlayerList.find((player) => player.id === currentUserId) ?? {
-        id: currentUserId,
-        name: currentUserName,
-        ready: false,
-      }
-    );
-  }, [activePlayerList, currentUserId, currentUserName]);
-
-  const players = useMemo<LobbyPlayers>(() => {
-    const hostId = activePlayerList[0]?.id;
-
-    return {
-      joinCode: activeJoinCode,
-      list: activePlayerList,
-      self,
-      isHost: Boolean(hostId === currentUserId),
-    };
-  }, [activeJoinCode, activePlayerList, currentUserId, self]);
+  }, [currentUserId, currentUserName, isLocal]);
 
   useEffect(() => {
-    if (!sessionId || !gameId) {
-      setJoinCode("");
-      setPlayerList([]);
-      setGameState(null);
-      return;
+    if (isLocal || authLoading || !currentUserId || creationInFlightRef.current || codeState === 'ready') return;
+    let active = true;
+    creationInFlightRef.current = true;
+    setCodeState('loading');
+    setCodeError(null);
+
+    async function prepareLobby() {
+      try {
+        let canonicalSessionId = pendingSessionIdRef.current || sessionId;
+        if (!canonicalSessionId && gameType === 'triviaBlitz') {
+          const created = await createTriviaSession(currentUserName);
+          canonicalSessionId = created.sessionId;
+          pendingSessionIdRef.current = canonicalSessionId;
+          if (active) setSessionId(canonicalSessionId);
+        }
+
+        const result = canonicalSessionId && !shouldHostSession
+          ? await getGameJoinCodeForSession({ gameType, sessionId: canonicalSessionId })
+          : await createGameJoinCode({
+              gameType,
+              sessionId: canonicalSessionId || null,
+              idempotencyKey: idempotencyKeyRef.current,
+              squadId: selectedSquadId,
+            });
+
+        if (!active) return;
+        const resolvedSessionId = 'sessionId' in result ? result.sessionId : canonicalSessionId;
+        if (!resolvedSessionId) throw new Error('Missing canonical game session.');
+        pendingSessionIdRef.current = resolvedSessionId;
+        setSessionId(resolvedSessionId);
+        setJoinCode(result.joinCode);
+        setCodeState('ready');
+        setCodeError(null);
+        if (!routeSessionId) router.setParams({ sessionId: resolvedSessionId, host: '1' });
+      } catch (error) {
+        if (!active) return;
+        setCodeError(readGameJoinCodeFailureReason(error));
+        setCodeState('error');
+      } finally {
+        creationInFlightRef.current = false;
+      }
     }
 
-    const gameRef = ref(rtdb, `/sessions/${sessionId}/games/${gameId}`);
-    const joinCodeRef = ref(rtdb, `/sessions/${sessionId}/joinCode`);
-
-    const unsubscribeGame = onValue(gameRef, (snapshot) => {
-      const nextGameState = snapshot.val() as GameLobbyRecord | null;
-      setGameState(nextGameState);
-      setPlayerList(normalizePlayers(nextGameState?.players, currentUserId, currentUserName));
-
-      if (nextGameState?.starting) {
-        setShowCountdown(true);
-      }
-    });
-
-    const unsubscribeJoinCode = onValue(joinCodeRef, (snapshot) => {
-      setJoinCode(String(snapshot.val() ?? ""));
-    });
-
+    void prepareLobby();
     return () => {
-      unsubscribeGame();
-      unsubscribeJoinCode();
+      active = false;
+      creationInFlightRef.current = false;
     };
-  }, [currentUserId, currentUserName, gameId, sessionId]);
+  }, [authLoading, codeState, currentUserId, currentUserName, gameType, isLocal, routeSessionId, selectedSquadId, sessionId, setupAttempt, shouldHostSession]);
 
   useEffect(() => {
-    if (!sessionId || !gameId || !gameState?.starting) {
-      return;
+    if (isLocal || !sessionId) return;
+    if (gameType === 'triviaBlitz') {
+      const unsubscribeParent = onSnapshot(getTriviaParentSessionRef(sessionId), (snapshot) => {
+        const data = snapshot.data();
+        setHostUserId(typeof data?.hostPlayerId === 'string' ? data.hostPlayerId : '');
+        if (data?.status === 'playing') setShowCountdown(true);
+      });
+      const playersQuery = query(getTriviaPlayersRef(sessionId), orderBy('playerIndex', 'asc'));
+      const unsubscribePlayers = onSnapshot(playersQuery, (snapshot) => {
+        setPlayerList(snapshot.docs.map((document) => ({
+          id: document.id,
+          name: String(document.data().name ?? 'Player'),
+          ready: Boolean(document.data().ready),
+        })));
+      });
+      return () => {
+        unsubscribeParent();
+        unsubscribePlayers();
+      };
     }
 
-    const startedAt = gameState.countdownStartedAt ?? Date.now();
-    const duration = gameState.countdownDurationMs ?? COUNTDOWN_DURATION_MS;
-    const remaining = Math.max(startedAt + duration - Date.now(), 0);
+    return onValue(ref(rtdb, `/gameSessions/${sessionId}`), (snapshot) => {
+      const session = snapshot.val() as RealtimeLobbyRecord | null;
+      setHostUserId(session?.hostUserId ?? '');
+      setPlayerList(normalizeRealtimePlayers(session?.players));
+      if (session?.status === 'active' || session?.status === 'countdown') setShowCountdown(true);
+    });
+  }, [gameType, isLocal, sessionId]);
 
-    const timeout = setTimeout(() => {
-      setShowCountdown(false);
-      router.replace({ pathname: `/games/${gameId}/play`, params: { sessionId } } as never);
-    }, remaining);
+  const activePlayerList = isLocal ? localPlayers : playerList;
+  const effectiveUserId = currentUserId || 'local-player';
+  const self = useMemo<LobbyPlayer>(() => (
+    activePlayerList.find((player) => player.id === effectiveUserId) ?? {
+      id: effectiveUserId,
+      name: currentUserName,
+      ready: false,
+    }
+  ), [activePlayerList, currentUserName, effectiveUserId]);
 
-    return () => clearTimeout(timeout);
-  }, [gameId, gameState, sessionId]);
+  const players = useMemo<LobbyPlayers>(() => ({
+    joinCode,
+    list: activePlayerList,
+    self,
+    isHost: isLocal || hostUserId === effectiveUserId,
+  }), [activePlayerList, effectiveUserId, hostUserId, isLocal, joinCode, self]);
+
+  const retryCode = useCallback(() => {
+    setCodeState('loading');
+    setCodeError(null);
+    setSetupAttempt((value) => value + 1);
+  }, []);
 
   const toggleReady = useCallback(() => {
-    if (!gameId) {
+    if (isLocal) {
+      setLocalPlayers((current) => current.map((player) => (
+        player.id === effectiveUserId ? { ...player, ready: !player.ready } : player
+      )));
       return;
     }
-
-    if (!sessionId) {
-      setLocalPlayers((players) =>
-        players.map((player) =>
-          player.id === currentUserId ? { ...player, ready: !player.ready } : player,
-        ),
-      );
+    if (!sessionId || !currentUserId) return;
+    if (gameType === 'triviaBlitz') {
+      void togglePlayerReady(sessionId, currentUserId, !self.ready);
       return;
     }
-
-    const playerRef = ref(
-      rtdb,
-      `/sessions/${sessionId}/games/${gameId}/players/${currentUserId}`,
-    );
-
-    update(playerRef, {
-      id: currentUserId,
-      name: self.name || currentUserName,
-      ready: !self.ready,
+    void update(ref(rtdb, `/gameSessions/${sessionId}/players/${currentUserId}`), {
+      displayName: self.name || currentUserName,
+      isReady: !self.ready,
+      isConnected: true,
     });
-  }, [currentUserId, currentUserName, gameId, self.name, self.ready, sessionId]);
+  }, [currentUserId, currentUserName, effectiveUserId, gameType, isLocal, self.name, self.ready, sessionId]);
 
   const startGame = useCallback(() => {
-    if (!gameId || !players.isHost) {
-      return;
-    }
-
-    const countdownStartedAt = Date.now();
+    if (!players.isHost) return;
     setShowCountdown(true);
+    if (isLocal || !sessionId) return;
+    void (async () => {
+      if (gameType === 'triviaBlitz') {
+        await startTriviaSession(sessionId);
+      } else {
+        await update(ref(rtdb, `/gameSessions/${sessionId}`), {
+          status: 'active',
+          startedAt: Date.now(),
+        });
+      }
+      await updateGameJoinCodeStatus({ gameType, sessionId, status: 'started' });
+    })().catch(() => setShowCountdown(false));
+  }, [gameType, isLocal, players.isHost, sessionId]);
 
-    if (!sessionId) {
-      return;
-    }
-
-    const gameRef = ref(rtdb, `/sessions/${sessionId}/games/${gameId}`);
-
-    update(gameRef, {
-      starting: true,
-      countdownStartedAt,
-      countdownDurationMs: COUNTDOWN_DURATION_MS,
-      startedBy: currentUserId,
+  const cancelGame = useCallback(() => {
+    if (!players.isHost) return;
+    void (async () => {
+      if (!isLocal && sessionId) {
+        await releaseGameJoinCode({ gameType, sessionId });
+      }
+      router.replace('/(tabs)/games');
+    })().catch((error) => {
+      setCodeError(readGameJoinCodeFailureReason(error));
+      setCodeState('error');
     });
-  }, [currentUserId, gameId, players.isHost, sessionId]);
+  }, [gameType, isLocal, players.isHost, sessionId]);
 
   return {
     sessionId,
     players,
+    codeState,
+    codeError,
+    isLocal,
+    retryCode,
+    cancelGame,
     toggleReady,
     startGame,
     showCountdown,
@@ -213,75 +279,35 @@ export function useGameLobby(gameId: string): GameLobbyState {
   };
 }
 
-export type { GameLobbyState, LobbyPlayer, LobbyPlayers };
+export type { GameCodeState, GameLobbyState, LobbyGameId, LobbyPlayer, LobbyPlayers };
 
 function normalizeParam(value?: string | string[]) {
-  if (Array.isArray(value)) {
-    return value[0] ?? "";
-  }
+  return Array.isArray(value) ? value[0] ?? '' : value ?? '';
+}
 
-  return value ?? "";
+function joinCodeGameType(gameId: LobbyGameId): GameJoinCodeType {
+  if (gameId === 'bomb-defusal') return 'bombDefusal';
+  if (gameId === 'spot-the-difference') return 'spotTheDifferences';
+  return 'triviaBlitz';
 }
 
 function createLocalPlayers(currentUserId: string, currentUserName: string): LobbyPlayer[] {
-  return [
-    {
-      id: currentUserId,
-      name: currentUserName,
-      ready: false,
-    },
-    {
-      id: "local-teammate",
-      name: "Teammate",
-      ready: true,
-    },
-  ];
+  return [{ id: currentUserId, name: currentUserName, ready: false }];
 }
 
-function normalizePlayers(
-  players: GameLobbyRecord["players"],
-  currentUserId: string,
-  currentUserName: string,
-): LobbyPlayer[] {
-  if (!players) {
-    return createLocalPlayers(currentUserId, currentUserName);
-  }
-
-  const normalizedPlayers = Array.isArray(players)
-    ? players
-        .map((player, index) => normalizePlayer(String(player.id ?? player.uid ?? index), player))
-        .filter(Boolean)
-    : Object.entries(players)
-        .map(([id, player]) => normalizePlayer(id, player))
-        .filter(Boolean);
-
-  if (normalizedPlayers.length === 0) {
-    return createLocalPlayers(currentUserId, currentUserName);
-  }
-
-  return normalizedPlayers as LobbyPlayer[];
-}
-
-function normalizePlayer(id: string, player?: LobbyPlayerRecord): LobbyPlayer | null {
-  if (!player) {
-    return null;
-  }
-
-  return {
-    id: player.id ?? player.uid ?? id,
-    name: player.name ?? player.displayName ?? "Player",
-    ready: Boolean(player.ready ?? player.isReady),
-  };
+function normalizeRealtimePlayers(players: RealtimeLobbyRecord['players']): LobbyPlayer[] {
+  if (!players) return [];
+  return Object.entries(players).map(([id, player]) => ({
+    id,
+    name: player.displayName ?? player.name ?? 'Player',
+    ready: Boolean(player.isReady ?? player.ready),
+  }));
 }
 
 function getUserName(displayName?: string | null, email?: string | null) {
-  if (displayName?.trim()) {
-    return displayName.trim();
-  }
-
-  if (email?.trim()) {
-    return email.split("@")[0] || "Player";
-  }
-
-  return "Player";
+  if (displayName?.trim()) return displayName.trim();
+  if (email?.trim()) return email.split('@')[0] || 'Player';
+  return 'Player';
 }
+
+export { COUNTDOWN_DURATION_MS };

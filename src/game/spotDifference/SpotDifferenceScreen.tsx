@@ -21,7 +21,7 @@ import Animated, {
   type SharedValue,
 } from "react-native-reanimated";
 import { useTranslation } from "react-i18next";
-import { useFocusEffect, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 
 import { GameEndActions } from "@/components/GameEndActions";
 import { GameRewardSummary } from "@/components/GameRewardSummary";
@@ -34,6 +34,8 @@ import {
   recordGameSessionResult,
   type GameRewardResult,
 } from "@/services/sidelineStarsService";
+import { recordSpotDifferenceFound, updateGameJoinCodeStatus } from "@/services/gameJoinCodeService";
+import { subscribeToSession } from "@/services/gameService";
 import {
   playableSpotDifferenceScenes,
   spotDifferenceScenes,
@@ -105,6 +107,7 @@ export default function SpotDifferenceScreen() {
   const [rewardLoading, setRewardLoading] = useState(false);
   const [rewardError, setRewardError] = useState<string | null>(null);
   const finalizedRewardKeyRef = useRef("");
+  const lifecycleEndedRef = useRef("");
   const [sceneLayouts, setSceneLayouts] = useState<SceneLayouts>({
     A: { width: 0, height: 0 },
     B: { width: 0, height: 0 },
@@ -123,6 +126,24 @@ export default function SpotDifferenceScreen() {
   const zoomControls = useSpotDifferenceZoom(currentScene, zoomViewport, zoomImageRect, secondsLeft, foundIds.length, differences.length, roundInstance);
   const resetZoomView = zoomControls.resetView;
   const scrollGesture = useMemo(() => Gesture.Native(), []);
+
+  useEffect(() => {
+    if (!requestedSessionId) return;
+    return subscribeToSession(requestedSessionId, (session) => {
+      if (!session) return;
+      const sceneId = typeof session.gameState?.sceneId === "string" ? session.gameState.sceneId : "";
+      const sharedScene = spotDifferenceScenes.find((scene) => scene.id === sceneId) ?? null;
+      if (sharedScene) setCurrentScene((current) => current?.id === sharedScene.id ? current : sharedScene);
+      const sharedFoundIds = Array.isArray(session.gameState?.foundDifferenceIds)
+        ? session.gameState.foundDifferenceIds.filter((value): value is string => typeof value === "string")
+        : [];
+      setFoundIds(sharedFoundIds);
+      if (typeof session.startedAt === "number") {
+        const remaining = Math.max(0, ROUND_SECONDS - Math.floor((Date.now() - session.startedAt) / 1000));
+        setSecondsLeft((current) => Math.min(current, remaining));
+      }
+    });
+  }, [requestedSessionId]);
 
   useFocusEffect(useCallback(() => () => {
     resetZoomView(false);
@@ -202,6 +223,24 @@ export default function SpotDifferenceScreen() {
     if (rewardSessionId && (isComplete || secondsLeft <= 0)) void awardCurrentResult();
   }, [awardCurrentResult, isComplete, rewardSessionId, secondsLeft]);
 
+  useEffect(() => {
+    if (!requestedSessionId || (!isComplete && secondsLeft > 0) || lifecycleEndedRef.current === requestedSessionId) return;
+    lifecycleEndedRef.current = requestedSessionId;
+    void updateGameJoinCodeStatus({
+      gameType: "spotTheDifferences",
+      sessionId: requestedSessionId,
+      status: "ended",
+    }).catch(() => undefined);
+  }, [isComplete, requestedSessionId, secondsLeft]);
+
+  const handlePlayAgain = useCallback(() => {
+    if (requestedSessionId) {
+      router.replace({ pathname: "/(games)/spot-the-difference/Lobby", params: { host: "1" } } as never);
+      return;
+    }
+    resetGame();
+  }, [requestedSessionId, resetGame]);
+
   const handleSceneLayout = useCallback((side: ImageSide, size: SceneSize) => {
     setSceneLayouts((current) => {
       const previous = current[side];
@@ -250,8 +289,11 @@ export default function SpotDifferenceScreen() {
     }
 
     setFoundIds((current) => [...current, match.id]);
+    if (requestedSessionId) {
+      void recordSpotDifferenceFound({ sessionId: requestedSessionId, differenceId: match.id }).catch(() => undefined);
+    }
     setFeedback(t("spot.found", { label: match.label ?? match.id.replace("difference_", "#") }));
-  }, [currentScene, foundSet, imageRects, isComplete, sceneLayouts, t]);
+  }, [currentScene, foundSet, imageRects, isComplete, requestedSessionId, sceneLayouts, t]);
 
   if (!currentScene) {
     return (
@@ -352,7 +394,7 @@ export default function SpotDifferenceScreen() {
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/spot-the-difference/Lobby" />
+            <GameEndActions onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/spot-the-difference/Lobby" />
           </View>
         ) : secondsLeft <= 0 ? (
           <View style={styles.resultPanel}>
@@ -368,7 +410,7 @@ export default function SpotDifferenceScreen() {
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/spot-the-difference/Lobby" />
+            <GameEndActions onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/spot-the-difference/Lobby" />
           </View>
         ) : null}
         </ScrollView>

@@ -3,37 +3,22 @@
     ".read": false,
     ".write": false,
     "gameSessions": {
-      ".indexOn": ["joinCode", "squadId"],
-      ".read": "auth != null && ((query.orderByChild == 'joinCode' && query.equalTo != null) || (query.orderByChild == 'squadId' && query.equalTo != null))",
+      ".indexOn": ["squadId"],
+      ".read": "auth != null && query.orderByChild == 'squadId' && query.equalTo != null",
       "$sessionId": {
         ".read": "auth != null && (data.child('hostUserId').val() == auth.uid || data.child('players').child(auth.uid).exists())",
         ".write": "auth != null && ((!data.exists() && newData.child('hostUserId').val() == auth.uid && newData.child('players').child(auth.uid).exists()) || (data.exists() && data.child('hostUserId').val() == auth.uid))",
         "players": {
           "$uid": {
             ".read": "auth != null && (auth.uid == $uid || root.child('gameSessions').child($sessionId).child('hostUserId').val() == auth.uid || root.child('gameSessions').child($sessionId).child('players').child(auth.uid).exists())",
-            ".write": "auth != null && (auth.uid == $uid || root.child('gameSessions').child($sessionId).child('hostUserId').val() == auth.uid)"
+            ".write": "auth != null && (root.child('gameSessions').child($sessionId).child('hostUserId').val() == auth.uid || (auth.uid == $uid && data.exists()))"
           }
         }
       }
     },
     "sessions": {
-      "$sessionId": {
-        ".read": "auth != null",
-        "joinCode": {
-          ".write": "auth != null"
-        },
-        "games": {
-          "$gameId": {
-            ".read": "auth != null",
-            ".write": "auth != null && (!data.exists() || data.child('players').child(auth.uid).exists() || newData.child('players').child(auth.uid).exists())",
-            "players": {
-              "$uid": {
-                ".write": "auth != null && auth.uid == $uid"
-              }
-            }
-          }
-        }
-      }
+      ".read": false,
+      ".write": false
     }
   }
 }

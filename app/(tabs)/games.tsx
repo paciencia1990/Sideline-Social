@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,11 +19,17 @@ import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
   fetchActiveSquadSession,
-  fetchSessionByCode,
   getGameLabel,
   type GameSession,
   type GameType,
 } from "@/services/gameService";
+import {
+  readGameJoinCodeFailureReason,
+  resolveAndJoinGameByCode,
+  type GameJoinCodeFailureReason,
+  type GameJoinCodeType,
+} from "@/services/gameJoinCodeService";
+import { isCompleteGameJoinCode, normalizeGameJoinCodeInput } from "@/utils/gameJoinCode";
 
 type GameCardConfig = {
   gameType: GameType;
@@ -34,6 +39,7 @@ type GameCardConfig = {
   players: string;
   duration: string;
   Icon: LucideIcon;
+  supportsLocalTest?: boolean;
 };
 
 const GAME_CARDS: GameCardConfig[] = [
@@ -63,6 +69,7 @@ const GAME_CARDS: GameCardConfig[] = [
     players: "3-20",
     duration: "5-15 min",
     Icon: Zap,
+    supportsLocalTest: true,
   },
 ];
 
@@ -70,6 +77,12 @@ const ROUTE_BY_GAME: Record<GameType, string> = {
   bomb_defusal: "/(games)/bomb-defusal/Lobby",
   spot_difference: "/(games)/spot-the-difference/Lobby",
   trivia_blitz: "/(games)/trivia-blitz/Lobby",
+};
+
+const ROUTE_BY_JOIN_CODE_GAME: Record<GameJoinCodeType, string> = {
+  bombDefusal: "/(games)/bomb-defusal/Lobby",
+  spotTheDifferences: "/(games)/spot-the-difference/Lobby",
+  triviaBlitz: "/(games)/trivia-blitz/Lobby",
 };
 
 export default function GamesScreen() {
@@ -80,6 +93,7 @@ export default function GamesScreen() {
   const [loadingSession, setLoadingSession] = useState(false);
   const [joinCode, setJoinCode] = useState("");
   const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<GameJoinCodeFailureReason | null>(null);
   const [showJoinCode, setShowJoinCode] = useState(params.join === "1");
 
   const activeGameName = useMemo(() => {
@@ -113,38 +127,32 @@ export default function GamesScreen() {
     }
   }, [params.join]);
 
-  const openGameLobby = useCallback((route: string, sessionId?: string) => {
+  const openGameLobby = useCallback((route: string, sessionId?: string, local = false) => {
     if (sessionId) {
       router.push({ pathname: route as never, params: { sessionId } });
       return;
     }
 
-    router.push(route as never);
+    router.push({ pathname: route as never, params: local ? { local: "1" } : { host: "1" } });
   }, []);
 
   const handleJoinCode = useCallback(async () => {
-    const code = joinCode.trim().toUpperCase();
-    if (code.length !== 4) {
-      Alert.alert(t("games.invalidCode"), t("games.codeHint"));
+    if (!isCompleteGameJoinCode(joinCode) || joining) {
+      setJoinError("invalid_code_format");
       return;
     }
 
     setJoining(true);
+    setJoinError(null);
     try {
-      const session = await fetchSessionByCode(code);
-      if (!session) {
-        Alert.alert(t("games.codeNotFound"), t("games.checkCode"));
-        return;
-      }
-
-      openGameLobby(ROUTE_BY_GAME[session.gameType], session.sessionId);
+      const session = await resolveAndJoinGameByCode(joinCode);
+      openGameLobby(ROUTE_BY_JOIN_CODE_GAME[session.gameType], session.sessionId);
     } catch (error) {
-      console.warn("[GamesScreen] join code error:", error);
-      Alert.alert(t("games.errorJoining"), t("games.tryAgain"));
+      setJoinError(readGameJoinCodeFailureReason(error));
     } finally {
       setJoining(false);
     }
-  }, [joinCode, openGameLobby, t]);
+  }, [joinCode, joining, openGameLobby]);
 
   return (
     <ScreenWrapper>
@@ -189,25 +197,49 @@ export default function GamesScreen() {
           {showJoinCode ? (
             <View style={styles.joinRow}>
               <TextInput
+                accessibilityLabel={t("games.joinCode.enterGameCode")}
                 autoCapitalize="characters"
                 autoCorrect={false}
-                maxLength={4}
-                onChangeText={(value) => setJoinCode(value.toUpperCase())}
+                maxLength={9}
+                onChangeText={(value) => {
+                  setJoinCode(normalizeGameJoinCodeInput(value));
+                  setJoinError(null);
+                }}
+                onSubmitEditing={() => {
+                  if (isCompleteGameJoinCode(joinCode) && !joining) void handleJoinCode();
+                }}
                 placeholder="A3KX"
                 placeholderTextColor={Colors.textPrimary}
+                returnKeyType="go"
                 style={styles.joinInput}
                 value={joinCode}
               />
-              <TouchableOpacity activeOpacity={0.86} disabled={joining} onPress={handleJoinCode} style={styles.joinButton}>
-                {joining ? <ActivityIndicator color={Colors.surface} size="small" /> : <Text style={styles.joinButtonText}>{t("games.join")}</Text>}
+              <TouchableOpacity
+                accessibilityRole="button"
+                activeOpacity={0.86}
+                disabled={joining || !isCompleteGameJoinCode(joinCode)}
+                onPress={() => void handleJoinCode()}
+                style={[styles.joinButton, (joining || !isCompleteGameJoinCode(joinCode)) && styles.joinButtonDisabled]}
+              >
+                {joining ? <ActivityIndicator color={Colors.surface} size="small" /> : <Text style={styles.joinButtonText}>{t("games.joinCode.joinGame")}</Text>}
               </TouchableOpacity>
+              {joinError ? (
+                <Text accessibilityRole="alert" style={styles.joinError}>
+                  {t(`games.joinCode.errors.${joinError}`)}
+                </Text>
+              ) : null}
             </View>
           ) : null}
         </Card>
 
         <View style={styles.gameList}>
           {GAME_CARDS.map((game) => (
-            <GameCard key={game.gameType} config={game} onOpen={() => openGameLobby(game.route)} />
+            <GameCard
+              key={game.gameType}
+              config={game}
+              onLocalTest={() => openGameLobby(game.route, undefined, true)}
+              onOpen={() => openGameLobby(game.route)}
+            />
           ))}
         </View>
 
@@ -225,7 +257,7 @@ export default function GamesScreen() {
   );
 }
 
-function GameCard({ config, onOpen }: { config: GameCardConfig; onOpen: () => void }) {
+function GameCard({ config, onLocalTest, onOpen }: { config: GameCardConfig; onLocalTest: () => void; onOpen: () => void }) {
   const { t } = useTranslation();
   const Icon = config.Icon;
 
@@ -254,6 +286,11 @@ function GameCard({ config, onOpen }: { config: GameCardConfig; onOpen: () => vo
       <TouchableOpacity activeOpacity={0.86} onPress={onOpen} style={styles.primaryButton}>
         <Text style={styles.primaryButtonText}>{t("games.playNow")}</Text>
       </TouchableOpacity>
+      {config.supportsLocalTest ? (
+        <TouchableOpacity activeOpacity={0.86} onPress={onLocalTest} style={styles.localTestButton}>
+          <Text style={styles.localTestButtonText}>{t("games.joinCode.localTest")}</Text>
+        </TouchableOpacity>
+      ) : null}
     </Card>
   );
 }
@@ -386,6 +423,16 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodySemiBold,
     fontSize: 14,
   },
+  joinButtonDisabled: {
+    opacity: 0.5,
+  },
+  joinError: {
+    color: Colors.primary,
+    flexBasis: "100%",
+    fontFamily: Typography.bodyMedium,
+    fontSize: 13,
+    lineHeight: 18,
+  },
   gameList: {
     gap: Spacing.md,
   },
@@ -454,6 +501,20 @@ const styles = StyleSheet.create({
     color: Colors.surface,
     fontFamily: Typography.bodySemiBold,
     fontSize: 15,
+  },
+  localTestButton: {
+    alignItems: "center",
+    borderColor: Colors.primary,
+    borderRadius: Radius.button,
+    borderWidth: 1,
+    minHeight: 44,
+    justifyContent: "center",
+    paddingHorizontal: Spacing.md,
+  },
+  localTestButtonText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 14,
   },
   leaderboardCard: {
     alignItems: "center",

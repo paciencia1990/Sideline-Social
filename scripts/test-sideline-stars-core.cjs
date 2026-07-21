@@ -58,7 +58,11 @@ const seasonFunctionsSource = fs.readFileSync(path.join(process.cwd(), "function
 const leaderboardSource = fs.readFileSync(path.join(process.cwd(), "app/leaderboard.tsx"), "utf8");
 const leaderboardService = fs.readFileSync(path.join(process.cwd(), "services/leaderboardService.ts"), "utf8");
 const triviaSource = fs.readFileSync(path.join(process.cwd(), "src/game/triviaBlitz/TriviaBlitzScreen.tsx"), "utf8");
-const lobbySource = fs.readFileSync(path.join(process.cwd(), "hooks/useGameLobby.ts"), "utf8");
+const lobbySources = [
+  "bomb-defusal",
+  "trivia-blitz",
+  "spot-the-difference",
+].map((game) => fs.readFileSync(path.join(process.cwd(), "app", "(games)", game, "Lobby.tsx"), "utf8"));
 
 assert.doesNotMatch(functionsSource, /export const awardGameStars\s*=/, "unsafe legacy callable is not exported");
 assert.match(functionsSource, /export const finalizeGameReward/);
@@ -73,7 +77,13 @@ assert.match(leaderboardSource, /currentUserLifetimeStars/);
 assert.match(leaderboardSource, /noSquadTitle/);
 assert.doesNotMatch(leaderboardService, /collection\(|getDocs\(|users/, "client does not query complete user profiles");
 assert.doesNotMatch(triviaSource, /Team Points|pointsAwarded\} points|Trivia Score/, "Trivia does not expose another score currency");
-assert.match(lobbySource, /params: \{ sessionId \}/, "canonical lobby session reaches the game route");
+lobbySources.forEach((lobbySource) => {
+  assert.match(
+    lobbySource,
+    /params:\s*sessionId\s*\?\s*\{\s*sessionId\s*\}/,
+    "each canonical lobby session reaches its game route",
+  );
+});
 assert.doesNotMatch(functionsSource, /dailyGame|dailyStars|subscription|entitlement|advertisement/i, "no reward cap or monetization gate was introduced");
 
 console.log("Sideline Stars reward and Squad leaderboard core tests passed.");

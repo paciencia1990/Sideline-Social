@@ -82,6 +82,14 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (_data, con
     firestore.collection('gameRewardSessions').where('userId', '==', uid),
     true,
   );
+  for (const collectionName of ['gameJoinCodes', 'gameJoinSessionLinks', 'gameJoinRequests']) {
+    summary.deletedDocuments += await deleteMatchingDocuments(
+      firestore.collection(collectionName).where('hostUserId', '==', uid),
+      true,
+    );
+  }
+  await firestore.collection('gameJoinRateLimits').doc(hashIdentifier(uid)).delete();
+  summary.deletedDocuments += 1;
 
   await deleteSquadAdministrationRequests(firestore, uid, summary);
   await deleteUserBlocks(firestore, uid, summary);
@@ -509,4 +517,8 @@ function safeLabel(value: unknown, fallback: string) {
 
 function hashForLog(uid: string) {
   return createHash('sha256').update(uid).digest('hex').slice(0, 12);
+}
+
+function hashIdentifier(value: string) {
+  return createHash('sha256').update(value).digest('hex');
 }

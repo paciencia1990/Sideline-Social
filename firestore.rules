@@ -613,6 +613,24 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Short game codes are routing credentials. All lookup, reservation,
+    // joining, lifecycle, and throttling operations run through callables.
+    match /gameJoinCodes/{code} {
+      allow read, write: if false;
+    }
+
+    match /gameJoinSessionLinks/{linkId} {
+      allow read, write: if false;
+    }
+
+    match /gameJoinRequests/{requestId} {
+      allow read, write: if false;
+    }
+
+    match /gameJoinRateLimits/{rateLimitId} {
+      allow read, write: if false;
+    }
+
     // -----------------------------------------------------------------------
     // Trivia Blitz game sessions
     // A parent sessions/{sessionId} document establishes host ownership and
@@ -622,7 +640,7 @@ service cloud.firestore {
       allow create: if isTriviaParentCreate(sessionId);
       allow get: if isSessionPlayer(sessionId);
       allow list: if false;
-      allow update: if isTriviaParentHostUpdate(sessionId) || isTriviaParentJoinUpdate();
+      allow update: if isTriviaParentHostUpdate(sessionId);
       allow delete: if false;
 
       match /games/{gameId} {

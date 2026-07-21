@@ -28,7 +28,6 @@ export interface GameSession {
   gameType: GameType;
   squadId: string;
   hostUserId: string;
-  joinCode: string;
   players: Record<string, GamePlayer>;
   status: SessionStatus;
   startedAt: number | null;
@@ -37,14 +36,6 @@ export interface GameSession {
   minPlayers: number;
   maxPlayers: number;
   settings: Record<string, unknown>;
-}
-
-export interface CreateSessionInput {
-  gameType: GameType;
-  squadId: string;
-  hostUserId: string;
-  hostDisplayName: string;
-  hostAvatarUrl: string | null;
 }
 
 export const GAME_CONFIG: Record<
@@ -56,21 +47,6 @@ export const GAME_CONFIG: Record<
   trivia_blitz: { minPlayers: 2, maxPlayers: 20, defaultSettings: { questionCount: 10, timeLimitSeconds: 20 } },
 };
 
-function generateJoinCode(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-
-  for (let i = 0; i < 4; i += 1) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-
-  return code;
-}
-
-function generateSessionId(): string {
-  return `session_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-}
-
 function snapshotToSession(snapshot: DataSnapshot): GameSession | null {
   if (!snapshot.exists()) return null;
   return snapshot.val() as GameSession;
@@ -81,66 +57,6 @@ function getSessionsFromSnapshot(snapshot: DataSnapshot): GameSession[] {
 
   const data = snapshot.val() as Record<string, GameSession> | null;
   return data ? Object.values(data) : [];
-}
-
-export async function createGameSession(input: CreateSessionInput): Promise<GameSession> {
-  try {
-    const sessionId = generateSessionId();
-    const joinCode = generateJoinCode();
-    const config = GAME_CONFIG[input.gameType];
-
-    const hostPlayer: GamePlayer = {
-      displayName: input.hostDisplayName,
-      avatarUrl: input.hostAvatarUrl,
-      isReady: false,
-      score: 0,
-      isConnected: true,
-    };
-
-    const session: GameSession = {
-      sessionId,
-      gameType: input.gameType,
-      squadId: input.squadId,
-      hostUserId: input.hostUserId,
-      joinCode,
-      players: { [input.hostUserId]: hostPlayer },
-      status: "lobby",
-      startedAt: null,
-      completedAt: null,
-      gameState: {},
-      minPlayers: config.minPlayers,
-      maxPlayers: config.maxPlayers,
-      settings: config.defaultSettings,
-    };
-
-    await set(ref(rtdb, `gameSessions/${sessionId}`), session);
-    return session;
-  } catch (error) {
-    console.error("[GameService] createGameSession error:", error);
-    throw error;
-  }
-}
-
-export async function joinGameSession(
-  sessionId: string,
-  userId: string,
-  displayName: string,
-  avatarUrl: string | null
-): Promise<void> {
-  try {
-    const player: GamePlayer = {
-      displayName,
-      avatarUrl,
-      isReady: false,
-      score: 0,
-      isConnected: true,
-    };
-
-    await set(ref(rtdb, `gameSessions/${sessionId}/players/${userId}`), player);
-  } catch (error) {
-    console.error("[GameService] joinGameSession error:", error);
-    throw error;
-  }
 }
 
 export async function setPlayerReady(sessionId: string, userId: string, ready: boolean): Promise<void> {
@@ -200,24 +116,6 @@ export async function completeGame(
   } catch (error) {
     console.error("[GameService] completeGame error:", error);
     throw error;
-  }
-}
-
-export async function fetchSessionByCode(joinCode: string): Promise<GameSession | null> {
-  try {
-    const sessionsQuery = query(
-      ref(rtdb, "gameSessions"),
-      orderByChild("joinCode"),
-      equalTo(joinCode.toUpperCase())
-    );
-    const snapshot = await get(sessionsQuery);
-    const sessions = getSessionsFromSnapshot(snapshot);
-    const active = sessions.find((session) => session.status === "lobby");
-
-    return active ?? sessions[0] ?? null;
-  } catch (error) {
-    console.error("[GameService] fetchSessionByCode error:", error);
-    return null;
   }
 }
 

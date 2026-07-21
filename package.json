@@ -63,7 +63,11 @@
     "test:firestore:notification-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-notification-firestore-rules.cjs\"",
     "test:firestore:friend-request-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-friend-request-firestore-rules.cjs\"",
     "test:firestore:weekly-challenge-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-weekly-challenge-firestore-rules.cjs\"",
-    "test:firestore:trivia-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-trivia-firestore-rules.cjs\""
+    "test:firestore:trivia-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-trivia-firestore-rules.cjs\"",
+    "test:game-join-code": "npm --prefix functions run build && node scripts/test-game-join-code-core.cjs",
+    "test:firestore:game-join-code-rules": "firebase.cmd emulators:exec --project sideline-game-join-code-rules-test --only firestore \"node scripts/test-game-join-code-firestore-rules.cjs\"",
+    "test:rtdb:game-join-code-rules": "firebase.cmd emulators:exec --project sideline-game-join-code-rtdb-rules-test --only database \"node scripts/test-game-join-code-rtdb-rules.cjs\"",
+    "test:emulator:game-join-code": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-game-join-code-functions-test --only auth,database,firestore,functions \"node scripts/test-game-join-code-functions-emulator.cjs\""
   },
   "engines": {
     "node": ">=22.13 <25",

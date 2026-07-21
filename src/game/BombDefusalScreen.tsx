@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import LottieView from "lottie-react-native";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 import { GameEndActions } from "@/components/GameEndActions";
 import { GameRewardSummary } from "@/components/GameRewardSummary";
@@ -21,6 +21,8 @@ import {
   recordGameSessionResult,
   type GameRewardResult,
 } from "@/services/sidelineStarsService";
+import { updateGameJoinCodeStatus } from "@/services/gameJoinCodeService";
+import { subscribeToSession } from "@/services/gameService";
 import {
   generateBombPattern,
   STEP_TYPES,
@@ -55,8 +57,26 @@ export default function BombDefusalScreen() {
   const [rewardLoading, setRewardLoading] = useState(false);
   const [rewardError, setRewardError] = useState<string | null>(null);
   const finalizedRewardKeyRef = useRef("");
+  const multiplayerStateLoadedRef = useRef(false);
+  const lifecycleEndedRef = useRef("");
   const dialRotation = useRef(new Animated.Value(0)).current;
   const currentStep = steps[currentStepIndex];
+
+  useEffect(() => {
+    if (!requestedSessionId) return;
+    return subscribeToSession(requestedSessionId, (session) => {
+      if (!session) return;
+      const sharedSteps = session.gameState?.bombSteps;
+      if (!multiplayerStateLoadedRef.current && Array.isArray(sharedSteps) && sharedSteps.length === 5) {
+        multiplayerStateLoadedRef.current = true;
+        setSteps(sharedSteps as BombStep[]);
+      }
+      if (typeof session.startedAt === "number") {
+        const remaining = Math.max(0, STARTING_TIME - Math.floor((Date.now() - session.startedAt) / 1000));
+        setTimeLeft((current) => Math.min(current, remaining));
+      }
+    });
+  }, [requestedSessionId]);
 
   useEffect(() => {
     let active = true;
@@ -147,6 +167,24 @@ export default function BombDefusalScreen() {
   useEffect(() => {
     if (rewardSessionId && status !== "playing") void awardCurrentResult();
   }, [awardCurrentResult, rewardSessionId, status]);
+
+  useEffect(() => {
+    if (!requestedSessionId || status === "playing" || lifecycleEndedRef.current === requestedSessionId) return;
+    lifecycleEndedRef.current = requestedSessionId;
+    void updateGameJoinCodeStatus({
+      gameType: "bombDefusal",
+      sessionId: requestedSessionId,
+      status: "ended",
+    }).catch(() => undefined);
+  }, [requestedSessionId, status]);
+
+  const handlePlayAgain = useCallback(() => {
+    if (requestedSessionId) {
+      router.replace({ pathname: "/(games)/bomb-defusal/Lobby", params: { host: "1" } } as never);
+      return;
+    }
+    resetGame();
+  }, [requestedSessionId]);
 
   const submitStep = (input: Record<string, string | number>) => {
     if (!currentStep || status !== "playing") {
@@ -324,7 +362,7 @@ export default function BombDefusalScreen() {
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/bomb-defusal/Lobby" />
+            <GameEndActions onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/bomb-defusal/Lobby" />
           </View>
         ) : status === "exploded" ? (
           <View style={styles.resultPanel}>
@@ -340,7 +378,7 @@ export default function BombDefusalScreen() {
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onPlayAgain={resetGame} lobbyRoute="/(games)/bomb-defusal/Lobby" />
+            <GameEndActions onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/bomb-defusal/Lobby" />
           </View>
         ) : (
           renderControls()

@@ -1,13 +1,15 @@
 import { router } from "expo-router";
 import React, { useCallback } from "react";
 import { StyleSheet, View } from "react-native";
+import { useTranslation } from "react-i18next";
 
 import CountdownOverlay from "@/components/CountdownOverlay";
 import LobbyBase from "@/components/LobbyBase";
 import { useGameLobby } from "@/hooks/useGameLobby";
 
 export default function SpotTheDifferenceLobby() {
-  const { sessionId, players, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const { t } = useTranslation();
+  const { sessionId, players, codeState, codeError, isLocal, retryCode, cancelGame, toggleReady, startGame, showCountdown, setShowCountdown } =
     useGameLobby("spot-the-difference");
 
   const handleComplete = useCallback(() => {
@@ -18,8 +20,13 @@ export default function SpotTheDifferenceLobby() {
   return (
     <View style={styles.container}>
       <LobbyBase
-        gameName="Spot the Differences"
+        gameName={t("games.spotDifference.title")}
         players={players}
+        codeState={codeState}
+        codeError={codeError}
+        isLocal={isLocal}
+        onRetryCode={retryCode}
+        onCancel={cancelGame}
         onReadyToggle={toggleReady}
         onStart={startGame}
       />

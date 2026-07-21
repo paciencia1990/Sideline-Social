@@ -36,6 +36,7 @@ import {
 } from "./firebaseUtils";
 import { scoreSessionAnswer, type ScoreResult } from "./scoring";
 import { finalizeGameReward, type GameRewardResult } from "@/services/sidelineStarsService";
+import { updateGameJoinCodeStatus } from "@/services/gameJoinCodeService";
 import { advanceTurn } from "./turnManager";
 import type { TriviaPlayer, TriviaQuestion, TriviaSession } from "./types";
 
@@ -74,6 +75,7 @@ export default function TriviaBlitzScreen() {
   const scoringInFlightRef = useRef(false);
   const scoredSelectionRef = useRef<string | null>(null);
   const rewardRequestKeyRef = useRef("");
+  const lifecycleEndedRef = useRef("");
 
   const resolvedPlayerName = useMemo(
     () => resolvePlayerName(user?.displayName, firebaseUser?.displayName, user?.email ?? firebaseUser?.email),
@@ -392,6 +394,10 @@ export default function TriviaBlitzScreen() {
     ],
   );
   const handleReset = useCallback(() => {
+    if (requestedSessionId) {
+      router.replace({ pathname: "/(games)/trivia-blitz/Lobby", params: { host: "1" } } as never);
+      return;
+    }
     setPlayerId("");
     setSessionId("");
     setSession(null);
@@ -404,7 +410,7 @@ export default function TriviaBlitzScreen() {
     setupInFlightRef.current = false;
     setSetupAttempt((value) => value + 1);
     router.replace({ pathname: "/games/trivia-blitz/play", params: { start: "1", replay: String(Date.now()) } } as never);
-  }, []);
+  }, [requestedSessionId]);
 
   const handleEnd = useCallback(() => {
     if (!sessionId) {
@@ -434,6 +440,16 @@ export default function TriviaBlitzScreen() {
   useEffect(() => {
     if (session?.status === "results") void awardTriviaResult();
   }, [awardTriviaResult, session?.status]);
+
+  useEffect(() => {
+    if (!requestedSessionId || session?.status !== "results" || lifecycleEndedRef.current === requestedSessionId) return;
+    lifecycleEndedRef.current = requestedSessionId;
+    void updateGameJoinCodeStatus({
+      gameType: "triviaBlitz",
+      sessionId: requestedSessionId,
+      status: "ended",
+    }).catch(() => undefined);
+  }, [requestedSessionId, session?.status]);
 
   return (
     <ScreenWrapper>
@@ -472,7 +488,7 @@ export default function TriviaBlitzScreen() {
 
         {session?.status === "lobby" ? (
           <View style={styles.panel}>
-            <Text style={styles.sectionTitle}>Lobby Code: {sessionId}</Text>
+            <Text style={styles.sectionTitle}>{t("games.joinCode.localTest")}</Text>
             {players.map((player) => (
               <View key={player.id} style={styles.playerRow}>
                 <Text style={styles.playerName}>{player.name}</Text>
