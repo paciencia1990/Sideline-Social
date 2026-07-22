@@ -17,7 +17,7 @@ import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import { useCoachBackNavigation } from "@/hooks/useCoachBackNavigation";
-import { getTeamRosterProfiles } from "@/services/teamRosterService";
+import { getTeamRosterProfiles, type TeamRosterProfile } from "@/services/teamRosterService";
 import { getOrCreatePrivateTeamConversation } from "@/services/teamPrivateMessageService";
 import {
   canManageTeamRoles,
@@ -33,7 +33,7 @@ import {
   type TeamMembership,
 } from "@/services/teamService";
 
-type RosterProfiles = Record<string, string | null>;
+type RosterProfiles = Record<string, TeamRosterProfile>;
 type StaffRoleFeedback = { message: string; isError: boolean };
 
 export default function CoachTeamScreen() {
@@ -113,7 +113,7 @@ export default function CoachTeamScreen() {
   }, [loadTeam]);
 
   const getRosterName = useCallback(
-    (member: TeamMembership) => profiles[member.userId] ?? t("coach.team.teamParentFallback"),
+    (member: TeamMembership) => resolveRosterName(profiles[member.userId], t),
     [profiles, t],
   );
 
@@ -450,7 +450,7 @@ function RosterSection({
       <Text accessibilityRole="header" style={styles.sectionTitle}>{title}</Text>
       {members.length === 0 ? <Text style={styles.emptyText}>{emptyText}</Text> : null}
       {members.map((member) => {
-        const name = profiles[member.userId] ?? t("coach.team.teamParentFallback");
+        const name = resolveRosterName(profiles[member.userId], t);
         return (
           <MemberRow
             key={member.userId}
@@ -465,6 +465,12 @@ function RosterSection({
       })}
     </View>
   );
+}
+
+function resolveRosterName(profile: TeamRosterProfile | undefined, t: (key: string) => string) {
+  return profile?.displayName ?? t(profile?.profileState === "deleted"
+    ? "common.formerMember"
+    : "common.sidelineSocialMember");
 }
 
 function MemberRow({

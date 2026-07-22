@@ -62,11 +62,15 @@ export default function FriendChatInvitationScreen() {
   }, [authLoading, conversationId, notificationId, user?.uid]);
 
   const title = useMemo(() => access && user?.uid
-    ? getConversationDisplayTitle(access.conversation, user.uid, t("chat.unnamedGroup"))
+    ? getConversationDisplayTitle(access.conversation, user.uid, t("chat.unnamedGroup"), t("common.formerMember"), t("common.sidelineSocialMember"))
     : t("chat.groupInvitation"), [access, t, user?.uid]);
   const inviterName = access?.member.invitedBy
-    ? access.conversation.participantNameSnapshots[access.member.invitedBy] || t("chat.aFriend")
-    : t("chat.aFriend");
+    ? access.conversation.participantNameSnapshots[access.member.invitedBy] || t(
+      access.conversation.participantProfileStates[access.member.invitedBy] === "deleted"
+        ? "common.formerMember"
+        : "common.sidelineSocialMember",
+    )
+    : t("common.sidelineSocialMember");
   const participantNames = members.map((member) => member.displayNameSnapshot).filter(Boolean).join(", ");
 
   const respond = async (response: "accept" | "decline") => {

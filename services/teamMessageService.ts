@@ -25,6 +25,7 @@ export type TeamAnnouncement = {
   body: string;
   createdBy: string;
   createdByName: string;
+  authorProfileState?: "available" | "unnamed" | "deleted";
   audience: AnnouncementAudience;
   allowReplies: boolean;
   contentType: "text" | "voice";
@@ -37,6 +38,7 @@ export type AnnouncementReply = {
   id: string;
   userId: string;
   displayName: string;
+  profileState?: "available" | "unnamed" | "deleted";
   body: string;
   replyType: ReplyType;
   createdAt?: unknown;
@@ -68,10 +70,16 @@ export function listenToTeamAnnouncements(
   }
 
   const announcementsQuery = query(collection(db, "teams", teamId, "announcements"), orderBy("createdAt", "desc"));
-  return onSnapshot(
+  let disposed = false;
+  let resolutionVersion = 0;
+  const unsubscribe = onSnapshot(
     announcementsQuery,
     (snapshot) => {
-      callback(snapshot.docs.map((announcementDoc) => normalizeAnnouncement(announcementDoc.id, announcementDoc.data())));
+      const version = ++resolutionVersion;
+      const announcements = snapshot.docs.map((announcementDoc) => normalizeAnnouncement(announcementDoc.id, announcementDoc.data()));
+      void resolveAnnouncementDisplayNames(announcements).then((resolved) => {
+        if (!disposed && version === resolutionVersion) callback(resolved);
+      });
     },
     (error) => {
       console.warn("[TeamMessageService] listen announcements error:", error);
@@ -79,6 +87,10 @@ export function listenToTeamAnnouncements(
       onError?.(error);
     },
   );
+  return () => {
+    disposed = true;
+    unsubscribe();
+  };
 }
 
 export async function getTeamAnnouncement(
@@ -90,7 +102,8 @@ export async function getTeamAnnouncement(
 
   try {
     const snapshot = await getDoc(doc(db, "teams", teamId, "announcements", announcementId));
-    return snapshot.exists() ? normalizeAnnouncement(snapshot.id, snapshot.data()) : null;
+    if (!snapshot.exists()) return null;
+    return (await resolveAnnouncementDisplayNames([normalizeAnnouncement(snapshot.id, snapshot.data())]))[0] ?? null;
   } catch (error) {
     console.warn("[TeamMessageService] get announcement error:", error);
     if (options.throwOnError) throw error;
@@ -109,15 +122,30 @@ export function listenToTeamAnnouncement(
     return () => {};
   }
 
-  return onSnapshot(
+  let disposed = false;
+  let resolutionVersion = 0;
+  const unsubscribe = onSnapshot(
     doc(db, "teams", teamId, "announcements", announcementId),
-    (snapshot) => callback(snapshot.exists() ? normalizeAnnouncement(snapshot.id, snapshot.data()) : null),
+    (snapshot) => {
+      const version = ++resolutionVersion;
+      if (!snapshot.exists()) {
+        callback(null);
+        return;
+      }
+      void resolveAnnouncementDisplayNames([normalizeAnnouncement(snapshot.id, snapshot.data())]).then(([resolved]) => {
+        if (!disposed && version === resolutionVersion) callback(resolved ?? null);
+      });
+    },
     (error) => {
       logMessageServiceIssue("listenAnnouncement", error);
       callback(null);
       onError?.(error);
     },
   );
+  return () => {
+    disposed = true;
+    unsubscribe();
+  };
 }
 
 export function listenToAnnouncementReplies(
@@ -255,7 +283,7 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamA
     title: readString(data.title),
     body: readString(data.body),
     createdBy: readString(data.createdBy),
-    createdByName: formatPublicUserName(readString(data.createdByName)) ?? "Coach",
+    createdByName: formatPublicUserName(readString(data.createdByName)) ?? "",
     audience: readAudience(data.audience),
     allowReplies: data.allowReplies !== false,
     contentType,
@@ -285,16 +313,38 @@ async function resolveReplyDisplayNames(replies: AnnouncementReply[]) {
   if (replies.length === 0) return replies;
   try {
     const profiles = await getTeamRosterProfiles(replies.map((reply) => reply.userId));
-    return replies.map((reply) => ({
-      ...reply,
-      displayName: resolveSafeDisplayName(profiles[reply.userId], reply.displayName, ""),
-    }));
+    return replies.map((reply) => {
+      const profile = profiles[reply.userId];
+      return {
+        ...reply,
+        displayName: profile?.displayName ?? (profile ? "" : resolveSafeDisplayName(reply.displayName, "")),
+        profileState: profile?.profileState,
+      };
+    });
   } catch (error) {
     logMessageServiceIssue("resolveReplyNames", error);
     return replies.map((reply) => ({
       ...reply,
       displayName: resolveSafeDisplayName(reply.displayName, ""),
     }));
+  }
+}
+
+async function resolveAnnouncementDisplayNames(announcements: TeamAnnouncement[]) {
+  if (announcements.length === 0) return announcements;
+  try {
+    const profiles = await getTeamRosterProfiles(announcements.map((announcement) => announcement.createdBy));
+    return announcements.map((announcement) => {
+      const profile = profiles[announcement.createdBy];
+      return {
+        ...announcement,
+        createdByName: profile?.displayName ?? (profile ? "" : resolveSafeDisplayName(announcement.createdByName, "")),
+        authorProfileState: profile?.profileState,
+      };
+    });
+  } catch (error) {
+    logMessageServiceIssue("resolveAnnouncementNames", error);
+    return announcements;
   }
 }
 

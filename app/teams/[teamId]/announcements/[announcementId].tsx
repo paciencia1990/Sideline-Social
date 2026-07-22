@@ -266,7 +266,7 @@ export default function ParentAnnouncementScreen() {
                 <VoiceMemoPlayer durationMilliseconds={announcement.voiceMemo.durationMilliseconds} storagePath={announcement.voiceMemo.storagePath} />
               ) : null}
               <View style={styles.metaPanel}>
-                <Text style={styles.metaText}>{announcement.createdByName || t("myTeams.coachFallback")}</Text>
+                <Text style={styles.metaText}>{announcement.createdByName || t(announcement.authorProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
                 <Text style={styles.metaText}>{formatDateTime(announcement.createdAt, i18n.language)}</Text>
               </View>
               {announcement.createdBy !== auth.currentUser?.uid ? (
@@ -291,7 +291,7 @@ export default function ParentAnnouncementScreen() {
                 <View key={reply.id} style={styles.replyRow}>
                   <View style={styles.replyTopRow}>
                     <View style={styles.replyAuthorCopy}>
-                      <Text style={styles.replyName}>{reply.displayName || t("teamReplies.teamParentFallback")}</Text>
+                      <Text style={styles.replyName}>{reply.displayName || t(reply.profileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
                       <Text style={styles.replyTime}>{formatDateTime(reply.createdAt, i18n.language)}</Text>
                     </View>
                     {reply.userId ? (

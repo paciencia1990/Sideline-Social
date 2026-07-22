@@ -260,7 +260,7 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
   return true;
 }
 
-async function getPrivateNotificationActorName(userId: unknown, fallback = 'Sideline Parent') {
+async function getPrivateNotificationActorName(userId: unknown, fallback = 'Sideline Social member') {
   if (typeof userId !== 'string' || !userId) return fallback;
   const snapshot = await admin.firestore().collection('users').doc(userId).get();
   const firestoreName = resolveCanonicalPublicName(snapshot.data())?.displayName;
@@ -1881,7 +1881,7 @@ export const completeWeeklyChallenge = functions.https.onCall(async (data, conte
       awardedAt: completedAt,
       seasonEligibleSquadIds,
     });
-    const displayName = userSnapshot.data()?.displayName || 'Sideline Parent';
+    const displayName = resolveCanonicalPublicName(userSnapshot.data())?.displayName || 'Sideline Social member';
     transaction.set(activityRef, {
       type: 'complete_challenge',
       userId: uid,
@@ -1999,7 +1999,7 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
     if (membersSnapshot.empty) return null;
 
     const authorUserId = typeof announcement.createdBy === 'string' ? announcement.createdBy : '';
-    const coachName = await getPrivateNotificationActorName(authorUserId, 'Coach');
+    const coachName = await getPrivateNotificationActorName(authorUserId, 'Sideline Social member');
     const teamName = resolvePublicProfileName({ displayName: teamSnapshot.data()?.name }) || 'your team';
     const deliveries = await Promise.allSettled(
       membersSnapshot.docs.map(async (memberSnapshot) => {
@@ -2063,8 +2063,8 @@ export const getOrCreatePrivateTeamConversation = teamMessagingFunctions.https.o
     const conversationId = teamPrivateConversationId(teamId, uid, parentUserId);
     const conversationRef = firestore.collection('teamPrivateConversations').doc(conversationId);
     const [coachName, parentName] = await Promise.all([
-      getPrivateNotificationActorName(uid, 'Coach'),
-      getPrivateNotificationActorName(parentUserId, 'Team Parent'),
+      getPrivateNotificationActorName(uid, 'Sideline Social member'),
+      getPrivateNotificationActorName(parentUserId, 'Sideline Social member'),
     ]);
     const result = await firestore.runTransaction(async (transaction) => {
       const [teamSnapshot, coachSnapshot, parentSnapshot, conversationSnapshot] = await transaction.getAll(
@@ -2579,7 +2579,7 @@ async function notifyPrivateTeamMessage(
   const parentUserId = String(conversation.parentUserId ?? '');
   const recipientUserId = senderUserId === coachUserId ? parentUserId : coachUserId;
   if (!recipientUserId) return;
-  const senderName = await getPrivateNotificationActorName(senderUserId, senderUserId === coachUserId ? 'Coach' : 'Team Parent');
+  const senderName = await getPrivateNotificationActorName(senderUserId, 'Sideline Social member');
   const teamName = resolvePublicProfileName({ displayName: conversation.teamName }) || 'your team';
   const recipientIsCoach = recipientUserId === coachUserId;
   await createPersonalNotificationAndPush({
@@ -2640,8 +2640,8 @@ function serializePrivateConversation(
     coachUserId: String(conversation.coachUserId ?? ''),
     parentUserId: String(conversation.parentUserId ?? ''),
     teamName: String(conversation.teamName ?? ''),
-    coachDisplayName: String(conversation.coachDisplayName ?? 'Coach'),
-    parentDisplayName: String(conversation.parentDisplayName ?? 'Team Parent'),
+    coachDisplayName: String(conversation.coachDisplayName ?? 'Sideline Social member'),
+    parentDisplayName: String(conversation.parentDisplayName ?? 'Sideline Social member'),
     status: conversation.status === 'readOnly' ? 'readOnly' : 'active',
     lastMessageAtMillis: timestampMillis(conversation.lastMessageAt) ?? 0,
     lastMessageType: conversation.lastMessageType === 'voice' ? 'voice' : conversation.lastMessageType === 'text' ? 'text' : null,
@@ -2798,16 +2798,19 @@ export const getPublicUserProfiles = functions.https.onCall(async (data, context
     lastName: string | null;
     displayName: string | null;
     photoURL: string | null;
+    profileState: 'available' | 'unnamed' | 'deleted';
   }[] = [];
   userIds.forEach((userId) => {
     const profile = resolved.get(userId);
     if (profile) {
-      resolvedProfiles.push(toMinimalPublicUserProfile(profile));
+      resolvedProfiles.push({ ...toMinimalPublicUserProfile(profile), profileState: 'available' });
       return;
     }
     if (existingUserIds.has(userId)) {
-      resolvedProfiles.push({ userId, firstName: null, lastName: null, displayName: null, photoURL: null });
+      resolvedProfiles.push({ userId, firstName: null, lastName: null, displayName: null, photoURL: null, profileState: 'unnamed' });
+      return;
     }
+    resolvedProfiles.push({ userId, firstName: null, lastName: null, displayName: null, photoURL: null, profileState: 'deleted' });
   });
   console.warn('[publicProfiles] resolution summary', {
     requestedCount,
@@ -2889,8 +2892,11 @@ export const getSuggestedConnections = functions.https.onCall(async (data, conte
       const mutualConnectionCount = countMutualConnections(viewerFriendIds, profile.friendIds);
       return {
         userId: snapshot.id,
+        firstName: publicProfile?.firstName ?? null,
+        lastName: publicProfile?.lastName ?? null,
         displayName: publicProfile?.displayName ?? null,
         photoURL: publicProfile?.photoURL ?? null,
+        profileState: 'available' as const,
         sharedSquadName: sharedSquadNames.get(snapshot.id) ?? null,
         sharedActivity: findSharedActivity(viewer.sports, profile.sports),
         mutualConnectionCount: mutualConnectionCount > 0 ? mutualConnectionCount : null,
@@ -3050,7 +3056,7 @@ export const createTeamAnnouncementReply = functions.https.onCall(async (data, c
   const announcementRef = teamRef.collection('announcements').doc(announcementId);
   const profileRef = firestore.collection('users').doc(uid);
   const replyRef = announcementRef.collection('replies').doc();
-  let displayName = 'Team Parent';
+  let displayName = 'Sideline Social member';
 
   await firestore.runTransaction(async (transaction) => {
     const [teamSnapshot, memberSnapshot, announcementSnapshot, profileSnapshot] = await transaction.getAll(
@@ -3228,10 +3234,9 @@ export const joinParentTeamByInviteCode = functions.https.onCall(async (data, co
 
     const roles = mergeParentRole(member?.roles, member?.role);
     const linkedChildIds = mergeChildIds(linkSnapshot.data()?.childIds, childIds);
-    const displayName = userSnapshot.data()?.displayName
-      || context.auth?.token?.name
-      || context.auth?.token?.email
-      || 'Sideline Parent';
+    const displayName = (resolveCanonicalPublicName(userSnapshot.data())
+      ?? resolveCanonicalPublicName({ displayName: context.auth?.token?.name }))?.displayName
+      || 'Sideline Social member';
     transaction.set(memberRef, {
       userId: uid,
       teamId: teamRef.id,

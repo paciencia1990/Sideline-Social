@@ -233,7 +233,7 @@ export default function ParentTeamHubScreen() {
                 <Fact label={t("myTeams.sport")} value={summary.team.sport} />
                 {summary.team.season ? <Fact label={t("myTeams.season")} value={summary.team.season} /> : null}
                 {summary.team.division ? <Fact label={t("myTeams.division")} value={summary.team.division} /> : null}
-                <Fact label={t("myTeams.coach")} value={summary.coachName ?? t("myTeams.coachFallback")} />
+                <Fact label={t("myTeams.coach")} value={summary.coachName ?? t(summary.coachProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")} />
               </View>
               <TouchableOpacity
                 accessibilityRole="button"
@@ -289,7 +289,7 @@ export default function ParentTeamHubScreen() {
                   <View style={styles.announcementTopRow}>
                     <LockKeyhole color={Colors.primary} size={20} />
                     <View style={styles.announcementCopy}>
-                      <Text style={styles.announcementTitle}>{conversation.coachDisplayName}</Text>
+                      <Text style={styles.announcementTitle}>{conversation.coachDisplayName || t(conversation.coachProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
                       <Text numberOfLines={2} style={styles.announcementBody}>{conversation.lastMessageType === "voice" ? t("teamMessages.voicePreview") : conversation.lastMessagePreview || t("teamMessages.noMessagesYet")}</Text>
                     </View>
                     <ChevronRight color={Colors.textPrimary} size={20} />
@@ -345,7 +345,7 @@ export default function ParentTeamHubScreen() {
                     <ChevronRight color={Colors.textPrimary} size={20} />
                   </View>
                   <View style={styles.announcementMetaRow}>
-                    <Text style={styles.announcementMeta}>{announcement.createdByName || t("myTeams.coachFallback")}</Text>
+                    <Text style={styles.announcementMeta}>{announcement.createdByName || t(announcement.authorProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
                     <Text style={styles.announcementMeta}>{formatUpdateTime(announcement.createdAtDate, i18n.language)}</Text>
                     <Text style={styles.announcementMeta}>
                       {announcement.allowReplies ? t("myTeams.repliesEnabled") : t("myTeams.repliesDisabledShort")}

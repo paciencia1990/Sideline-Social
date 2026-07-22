@@ -73,7 +73,7 @@ export default function FriendConversationScreen() {
   }, [authLoading, chatId, user?.uid]);
 
   const title = useMemo(() => access && user?.uid
-    ? getConversationDisplayTitle(access.conversation, user.uid, t("chat.unnamedGroup"))
+    ? getConversationDisplayTitle(access.conversation, user.uid, t("chat.unnamedGroup"), t("common.formerMember"), t("common.sidelineSocialMember"))
     : t("chat.title"), [access, t, user?.uid]);
   const canSend = Boolean(access && (access.conversation.conversationType === "group" || access.directFriendshipActive));
   const trimmedLength = draft.trim().length;
@@ -151,7 +151,9 @@ function MessageBubble({ message, isMine, onPress }: { message: FriendChatMessag
   const { t } = useTranslation();
   if (message.messageType === "system") return <Text style={styles.systemMessage}>{message.text}</Text>;
   const time = message.createdAt?.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) ?? "";
-  const sender = isMine ? t("chat.you") : message.senderDisplayName || t("chat.aFriend");
+  const sender = isMine
+    ? t("chat.you")
+    : message.senderDisplayName || t(message.senderProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember");
   const text = message.status === "removed" ? t("chat.messageRemoved") : message.text;
   return <TouchableOpacity accessibilityLabel={t("chat.messageAccessibility", { sender, text, time })} accessibilityHint={message.status === "active" ? t("chat.messageActionsHint") : undefined} accessibilityRole="button" activeOpacity={0.8} disabled={message.status === "removed"} onLongPress={onPress} style={[styles.messageRow, isMine && styles.mineRow]}><View style={[styles.bubble, isMine && styles.mineBubble]}>{!isMine && message.senderDisplayName ? <Text style={styles.sender}>{message.senderDisplayName}</Text> : null}<Text style={[styles.messageText, isMine && styles.mineText, message.status === "removed" && styles.removed]}>{text}</Text><Text style={[styles.time, isMine && styles.mineTime]}>{time}</Text></View></TouchableOpacity>;
 }

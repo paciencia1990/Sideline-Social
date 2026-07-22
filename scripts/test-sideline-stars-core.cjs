@@ -26,8 +26,8 @@ assert.equal(core.getSidelineStarsTier(500), "silver");
 assert.equal(core.getSidelineStarsTier(1500), "gold");
 assert.equal(core.getSidelineStarsTier(3000), "platinum");
 assert.equal(core.getSidelineStarsTier(5000), "legend");
-assert.equal(formatPublicUserName("Joann Pollard"), "Joann P.");
-assert.equal(formatPublicUserName("D’Andre Smith"), "D’Andre S.");
+assert.equal(formatPublicUserName("Joann Pollard"), "Joann Pollard");
+assert.equal(formatPublicUserName("D’Andre Smith"), "D’Andre Smith");
 assert.equal(formatPublicUserName("Madonna"), "Madonna");
 assert.equal(formatPublicUserName("parent@example.com"), null, "emails are never public display names");
 

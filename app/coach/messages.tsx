@@ -276,7 +276,7 @@ export default function CoachMessagesScreen() {
                 <Text style={styles.announcementTitle}>{announcement.title}</Text>
                 {announcement.contentType === "voice" ? <Text style={styles.voiceLabel}>{t("teamMessages.voicePreview")}</Text> : null}
                 <Text style={styles.announcementBody} numberOfLines={2}>{announcement.body}</Text>
-                <Text style={styles.announcementMeta}>{announcement.createdByName} • {t(`coach.messages.audience${capitalize(announcement.audience)}`)}</Text>
+                <Text style={styles.announcementMeta}>{announcement.createdByName || t(announcement.authorProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")} • {t(`coach.messages.audience${capitalize(announcement.audience)}`)}</Text>
               </TouchableOpacity>
             ))}
           </Card>

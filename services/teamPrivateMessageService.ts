@@ -10,6 +10,7 @@ import { httpsCallable } from "firebase/functions";
 import { ref, uploadBytesResumable, type UploadTask } from "firebase/storage";
 
 import { auth, db, functions, storage } from "@/config/firebase";
+import { getPublicUserProfiles } from "@/services/publicProfileService";
 import type {
   LocalVoiceMemoDraft,
   StoredVoiceMemo,
@@ -38,7 +39,11 @@ export async function getTeamPrivateMessageInboxPage(
     { role: "coach" | "parent"; teamId?: string; offset: number; pageSize: number },
     { conversations: TeamPrivateConversation[]; hasMore: boolean; nextOffset: number }
   >(functions, "getTeamPrivateMessageInbox");
-  return (await call({ role, ...(teamId ? { teamId } : {}), offset, pageSize })).data;
+  const page = (await call({ role, ...(teamId ? { teamId } : {}), offset, pageSize })).data;
+  return {
+    ...page,
+    conversations: await hydrateConversationNames(page.conversations).catch(() => page.conversations),
+  };
 }
 
 export async function getTeamPrivateMessageInbox(role: "coach" | "parent", teamId?: string) {
@@ -59,8 +64,19 @@ export function listenToPrivateTeamConversation(
   onValue: (conversation: TeamPrivateConversation | null) => void,
   onError?: (error: Error) => void,
 ): Unsubscribe {
+  let generation = 0;
   return onSnapshot(doc(db, "teamPrivateConversations", conversationId), (snapshot) => {
-    onValue(snapshot.exists() ? normalizeConversation(snapshot.id, snapshot.data()) : null);
+    const currentGeneration = ++generation;
+    if (!snapshot.exists()) {
+      onValue(null);
+      return;
+    }
+    const conversation = normalizeConversation(snapshot.id, snapshot.data());
+    void hydrateConversationNames([conversation]).then(([hydrated]) => {
+      if (currentGeneration === generation) onValue(hydrated ?? conversation);
+    }).catch(() => {
+      if (currentGeneration === generation) onValue(conversation);
+    });
   }, (error) => onError?.(error));
 }
 
@@ -158,8 +174,8 @@ function normalizeConversation(id: string, data: Record<string, unknown>): TeamP
     coachUserId: readString(data.coachUserId),
     parentUserId: readString(data.parentUserId),
     teamName: readString(data.teamName),
-    coachDisplayName: readString(data.coachDisplayName, "Coach"),
-    parentDisplayName: readString(data.parentDisplayName, "Team Parent"),
+    coachDisplayName: readString(data.coachDisplayName),
+    parentDisplayName: readString(data.parentDisplayName),
     status: data.status === "readOnly" ? "readOnly" : "active",
     lastMessageAtMillis: readMillis(data.lastMessageAt),
     lastMessageType: data.lastMessageType === "voice" ? "voice" : data.lastMessageType === "text" ? "text" : null,
@@ -167,6 +183,26 @@ function normalizeConversation(id: string, data: Record<string, unknown>): TeamP
     lastSenderUserId: typeof data.lastSenderUserId === "string" ? data.lastSenderUserId : null,
     unreadCount: 0,
   };
+}
+
+async function hydrateConversationNames(conversations: TeamPrivateConversation[]) {
+  const userIds = Array.from(new Set(conversations.flatMap((conversation) => [
+    conversation.coachUserId,
+    conversation.parentUserId,
+  ]).filter(Boolean)));
+  if (userIds.length === 0) return conversations;
+  const profiles = new Map((await getPublicUserProfiles(userIds)).map((profile) => [profile.userId, profile]));
+  return conversations.map((conversation) => {
+    const coach = profiles.get(conversation.coachUserId);
+    const parent = profiles.get(conversation.parentUserId);
+    return {
+      ...conversation,
+      coachDisplayName: coach?.displayName ?? (coach ? "" : conversation.coachDisplayName),
+      parentDisplayName: parent?.displayName ?? (parent ? "" : conversation.parentDisplayName),
+      coachProfileState: coach?.profileState,
+      parentProfileState: parent?.profileState,
+    };
+  });
 }
 
 function normalizeMessage(id: string, data: Record<string, unknown>): TeamPrivateMessage {

@@ -53,7 +53,11 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   }, [conversationId]));
   useEffect(() => () => { uploadCancel.current?.(); }, []);
 
-  const otherName = useMemo(() => role === "coach" ? conversation?.parentDisplayName : conversation?.coachDisplayName, [conversation, role]);
+  const otherName = useMemo(() => {
+    const displayName = role === "coach" ? conversation?.parentDisplayName : conversation?.coachDisplayName;
+    const profileState = role === "coach" ? conversation?.parentProfileState : conversation?.coachProfileState;
+    return displayName || t(profileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember");
+  }, [conversation, role, t]);
   const readOnly = conversation?.status === "readOnly";
 
   const sendText = useCallback(async () => {
@@ -140,7 +144,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
     <View style={styles.container}>
       <Card style={styles.identityCard}>
         <Text style={styles.name}>{conversation?.teamName ?? t("teamMessages.teamFallback")}</Text>
-        <Text style={styles.team}>{otherName ?? t("teamMessages.participantFallback")}</Text>
+        <Text style={styles.team}>{otherName}</Text>
         <Text style={styles.privateLabel}>{t("teamMessages.privateLabel")}</Text>
         <Text style={styles.privacy}>{t("teamMessages.privacy")}</Text>
       </Card>

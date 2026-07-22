@@ -112,7 +112,7 @@ export default function ChatListScreen() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}><BellRing color={Colors.primary} size={20} /><Text style={styles.sectionTitle}>{t("chat.invitations")}</Text></View>
             {invitations.map((conversation) => {
-              const title = getConversationDisplayTitle(conversation, user?.uid ?? "", t("chat.unnamedGroup"));
+              const title = getConversationDisplayTitle(conversation, user?.uid ?? "", t("chat.unnamedGroup"), t("common.formerMember"), t("common.sidelineSocialMember"));
               return (
                 <TouchableOpacity
                   key={conversation.conversationId}
@@ -155,7 +155,7 @@ export default function ChatListScreen() {
 function ConversationRow({ conversation, locale }: { conversation: FriendConversationListItem; locale: string }) {
   const { t } = useTranslation();
   const uid = useAuth().user?.uid ?? "";
-  const title = getConversationDisplayTitle(conversation, uid, t("chat.unnamedGroup"));
+  const title = getConversationDisplayTitle(conversation, uid, t("chat.unnamedGroup"), t("common.formerMember"), t("common.sidelineSocialMember"));
   const typeLabel = conversation.conversationType === "group" ? t("chat.groupConversation") : t("chat.directConversation");
   const preview = conversation.lastMessageRemoved
     ? t("chat.messageRemoved")

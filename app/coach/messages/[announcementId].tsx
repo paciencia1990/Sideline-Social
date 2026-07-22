@@ -270,7 +270,7 @@ export default function AnnouncementThreadScreen() {
             {announcement.contentType === "voice" && announcement.voiceMemo ? (
               <VoiceMemoPlayer durationMilliseconds={announcement.voiceMemo.durationMilliseconds} storagePath={announcement.voiceMemo.storagePath} />
             ) : null}
-            <Text style={styles.metaText}>{announcement.createdByName}</Text>
+            <Text style={styles.metaText}>{announcement.createdByName || t(announcement.authorProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
           </Card>
         ) : !loading ? (
           <Card style={styles.centerCard}>
@@ -286,7 +286,7 @@ export default function AnnouncementThreadScreen() {
             {replies.map((reply) => (
               <View key={reply.id} style={styles.replyRow}>
                 <View style={styles.replyTopRow}>
-                  <Text style={styles.replyName}>{reply.displayName || t("teamReplies.teamParentFallback")}</Text>
+                  <Text style={styles.replyName}>{reply.displayName || t(reply.profileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
                   {reply.userId === auth.currentUser?.uid || canModerateReplies ? (
                     <TouchableOpacity
                       accessibilityLabel={t(reply.userId === auth.currentUser?.uid ? "teamReplies.deleteMenuOwn" : "teamReplies.deleteMenuModerate")}

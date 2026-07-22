@@ -14,6 +14,7 @@ import {
   type GameJoinCodeStatus,
   type GameJoinCodeType,
 } from './gameJoinCodeCore';
+import { resolveCanonicalPublicName } from './publicUserProfileCore';
 
 const JOIN_CODE_TTL_MS = 2 * 60 * 60 * 1000;
 const JOIN_ATTEMPT_WINDOW_MS = 60 * 1000;
@@ -635,14 +636,9 @@ async function readAuthorizedSquadId(uid: string, value: unknown) {
 
 async function resolvePlayerDisplayName(uid: string, token?: Record<string, unknown>) {
   const profile = await admin.firestore().collection('users').doc(uid).get();
-  const data = profile.data();
-  const firstName = typeof data?.firstName === 'string' ? data.firstName.trim() : '';
-  const lastName = typeof data?.lastName === 'string' ? data.lastName.trim() : '';
-  if (firstName) return lastName ? `${firstName} ${[...lastName][0]}.` : firstName;
-  const displayName = typeof data?.displayName === 'string' ? data.displayName.trim() : '';
-  if (displayName) return displayName.split(/\s+/).slice(0, 2).join(' ');
-  const tokenName = typeof token?.name === 'string' ? token.name.trim() : '';
-  return tokenName || 'Player';
+  return (resolveCanonicalPublicName(profile.data())
+    ?? resolveCanonicalPublicName({ displayName: token?.name }))?.displayName
+    || 'Sideline Social member';
 }
 
 function createBombPattern() {

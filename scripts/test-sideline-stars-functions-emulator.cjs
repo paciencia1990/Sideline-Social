@@ -93,7 +93,7 @@ async function run() {
   assert.equal(initial.squad.venueName, "Dr. Phillips Little League");
   assert.equal(initial.squad.sportDisplayName, "Baseball");
   assert.equal(initial.season.name, "Spring Test");
-  assert.deepEqual(initial.entries.map((entry) => entry.displayName), ["Joann P.", "Maria G."]);
+  assert.deepEqual(initial.entries.map((entry) => entry.displayName), ["Joann Pollard", "Maria Garcia"]);
   assert.ok(initial.entries.every((entry) => entry.seasonStars === 0), "a new season begins at zero");
   assert.equal(initial.currentUserLifetimeStars, 10, "lifetime Stars remain separate");
   assert.ok(initial.entries.some((entry) => entry.isCurrentUser), "current user is highlighted");

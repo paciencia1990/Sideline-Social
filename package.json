@@ -26,6 +26,7 @@
     "test:friend-request-mapping": "node scripts/test-friend-request-mapping-core.cjs",
     "test:friend-requests": "node scripts/test-friend-request-core.cjs",
     "test:public-profile-authorization": "node scripts/test-public-profile-authorization-core.cjs",
+    "test:parent-name-visibility": "node scripts/test-parent-name-visibility-core.cjs",
     "test:notifications": "node scripts/test-notification-core.cjs",
     "test:coach-communication-regressions": "node scripts/test-coach-communication-regressions.cjs",
     "test:voice-microphone-permission": "node scripts/test-voice-microphone-permission.cjs",

@@ -1,7 +1,7 @@
 export type CanonicalPublicUserProfile = {
   userId: string;
-  firstName: string;
-  lastName: string;
+  firstName: string | null;
+  lastName: string | null;
   displayName: string;
   photoURL: string | null;
 };
@@ -12,8 +12,18 @@ const PLACEHOLDER_NAMES = new Set([
   'sideline parent',
   'a sideline parent',
   'padre o madre de sideline',
+  'sideline social member',
+  'miembro de sideline social',
+  'former member',
+  'miembro anterior',
   'public name unavailable',
   'nombre público no disponible',
+  'team parent',
+  'suggested parent',
+  'parent',
+  'member',
+  'user',
+  'unknown',
 ]);
 
 function normalizeNamePart(value: unknown): string | null {
@@ -21,6 +31,7 @@ function normalizeNamePart(value: unknown): string | null {
   const normalized = value.trim().replace(/\s+/gu, ' ');
   if (!normalized || normalized.length > 80) return null;
   if (PLACEHOLDER_NAMES.has(normalized.toLocaleLowerCase())) return null;
+  if (/(?:^|\s)\p{L}\.(?:\s|$)/u.test(normalized)) return null;
   if (/@/u.test(normalized) || /\d/u.test(normalized) || !/\p{L}/u.test(normalized)) return null;
   return normalized;
 }
@@ -38,21 +49,21 @@ function splitFullName(value: unknown): { firstName: string; lastName: string } 
   if (!normalized) return null;
   const segments = normalized.split(/\s+/u).filter(Boolean);
   if (segments.length < 2) return null;
-  const lastName = segments.slice(1).join(' ');
-  if ((lastName.match(/\p{L}/gu) ?? []).length < 2) return null;
-  return { firstName: segments[0], lastName };
+  return { firstName: segments[0], lastName: segments.slice(1).join(' ') };
 }
 
 export function resolveCanonicalPublicName(profile?: Record<string, unknown>) {
   const firstName = readFirstValid(profile, ['firstName', 'FirstName']);
   const lastName = readFirstValid(profile, ['lastName', 'LastName']);
-  if (firstName && lastName && (lastName.match(/\p{L}/gu) ?? []).length >= 2) {
-    return { firstName, lastName, displayName: `${firstName} ${lastName}` };
-  }
-
-  const fullName = splitFullName(profile?.displayName) ?? splitFullName(profile?.name);
-  if (!fullName) return null;
-  return { ...fullName, displayName: `${fullName.firstName} ${fullName.lastName}` };
+  const preferredDisplayName = readFirstValid(profile, ['displayName', 'name']);
+  const displayParts = splitFullName(preferredDisplayName);
+  const displayName = preferredDisplayName ?? [firstName, lastName].filter(Boolean).join(' ');
+  if (!displayName) return null;
+  return {
+    firstName: firstName ?? displayParts?.firstName ?? null,
+    lastName: lastName ?? displayParts?.lastName ?? null,
+    displayName,
+  };
 }
 
 export function resolveCanonicalPublicProfile(
@@ -74,13 +85,7 @@ export function resolveCanonicalPublicProfile(
 export function toMinimalPublicUserProfile(
   profile: CanonicalPublicUserProfile,
 ): MinimalPublicUserProfile {
-  const lastInitial = Array.from(profile.lastName)[0]?.toLocaleUpperCase() ?? '';
-  const publicLastName = lastInitial ? `${lastInitial}.` : '';
-  return {
-    ...profile,
-    lastName: publicLastName,
-    displayName: publicLastName ? `${profile.firstName} ${publicLastName}` : profile.firstName,
-  };
+  return { ...profile };
 }
 
 export function isCanonicalPublicProfile(value: unknown, userId?: string) {
@@ -88,14 +93,19 @@ export function isCanonicalPublicProfile(value: unknown, userId?: string) {
   const record = value as Record<string, unknown>;
   if (userId && record.userId !== userId) return false;
   const firstName = normalizeNamePart(record.firstName);
-  const lastName = typeof record.lastName === 'string' ? record.lastName.trim() : '';
+  const lastName = normalizeNamePart(record.lastName);
+  const displayName = normalizeNamePart(record.displayName);
   const photoURL = typeof record.photoURL === 'string' && record.photoURL.trim() ? record.photoURL.trim() : null;
+  const legacyInitialProjection = Boolean(
+    firstName && lastName && /^\p{L}\.$/u.test(lastName) && displayName === `${firstName} ${lastName}`,
+  );
+  const canonicalName = resolveCanonicalPublicName(record);
   return Boolean(
     typeof record.userId === 'string' && record.userId &&
-    firstName && /^\p{L}\.$/u.test(lastName) &&
-    record.firstName === firstName &&
-    record.lastName === lastName &&
-    record.displayName === `${firstName} ${lastName}` &&
+    displayName && !legacyInitialProjection &&
+    (record.firstName === firstName || (record.firstName == null && firstName === null)) &&
+    (record.lastName === lastName || (record.lastName == null && lastName === null)) &&
+    record.displayName === displayName && canonicalName?.displayName === displayName &&
     (record.photoURL === photoURL || (record.photoURL == null && photoURL === null)),
   );
 }

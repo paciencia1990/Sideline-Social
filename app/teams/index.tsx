@@ -141,7 +141,7 @@ function ParentTeamCard({ locale, summary }: { locale: string; summary: ParentTe
         </View>
         <View style={styles.metaRow}>
           <Text style={styles.metaLabel}>{t("myTeams.child")}: {formatChildLabel(summary, t)}</Text>
-          <Text style={styles.metaLabel}>{t("myTeams.coach")}: {summary.coachName ?? t("myTeams.coachFallback")}</Text>
+          <Text style={styles.metaLabel}>{t("myTeams.coach")}: {summary.coachName ?? t(summary.coachProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
         </View>
         {summary.privateUnreadCount > 0 ? <Text style={styles.privateUnread}>{t("teamMessages.unread", { count: summary.privateUnreadCount })} · {t("teamMessages.title")}</Text> : null}
         {latest ? (

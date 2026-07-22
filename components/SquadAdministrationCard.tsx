@@ -350,7 +350,9 @@ function confirmAction(
 }
 
 function memberName(member: SquadAdminMember, t: (key: string) => string) {
-  return member.displayName?.trim() || t("squadAdmin.memberNameUnavailable");
+  return member.displayName?.trim() || t(member.profileState === "deleted"
+    ? "common.formerMember"
+    : "common.sidelineSocialMember");
 }
 
 function adminErrorMessage(error: unknown, t: (key: string) => string) {

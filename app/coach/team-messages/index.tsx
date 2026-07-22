@@ -59,12 +59,16 @@ export default function CoachTeamMessagesInboxScreen() {
             </TouchableOpacity>
           </Card>
         ) : null}
-        {conversations.map((conversation) => (
+        {conversations.map((conversation) => {
+          const parentName = conversation.parentDisplayName || t(conversation.parentProfileState === "deleted"
+            ? "common.formerMember"
+            : "common.sidelineSocialMember");
+          return (
           <TouchableOpacity accessibilityRole="button" key={conversation.conversationId} onPress={() => router.push(`/coach/team-messages/${conversation.conversationId}` as never)}>
             <Card style={styles.row}>
               <View style={styles.rowHeader}>
-                <View importantForAccessibility="no" style={styles.avatar}><Text style={styles.avatarText}>{conversation.parentDisplayName.charAt(0).toUpperCase() || "P"}</Text></View>
-                <View style={styles.rowCopy}><Text style={styles.name}>{conversation.parentDisplayName}</Text><Text style={styles.team}>{conversation.teamName}</Text></View>
+                <View importantForAccessibility="no" style={styles.avatar}><Text style={styles.avatarText}>{parentName.charAt(0).toUpperCase() || "S"}</Text></View>
+                <View style={styles.rowCopy}><Text style={styles.name}>{parentName}</Text><Text style={styles.team}>{conversation.teamName}</Text></View>
                 <Text style={styles.time}>{formatTime(conversation.lastMessageAtMillis)}</Text>
               </View>
               <Text numberOfLines={2} style={styles.preview}>{formatPreview(conversation, t)}{conversation.lastMessageType === "voice" && conversation.lastMessagePreview?.startsWith("voice:") ? ` · ${formatDuration(conversation.lastMessagePreview)}` : ""}</Text>
@@ -72,7 +76,8 @@ export default function CoachTeamMessagesInboxScreen() {
               <ChevronRight color={Colors.primary} size={20} style={styles.chevron} />
             </Card>
           </TouchableOpacity>
-        ))}
+          );
+        })}
         {hasMore ? (
           <TouchableOpacity accessibilityRole="button" disabled={loadingMore} onPress={() => { void loadMore(); }} style={styles.loadMore}>
             {loadingMore ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.loadMoreText}>{t("teamMessages.loadMore")}</Text>}

@@ -15,13 +15,17 @@ assert.equal(core.resolveCanonicalPublicName({ name: "D’Andre Smith" }).displa
 assert.equal(core.resolveCanonicalPublicName({ displayName: "private@example.test" }), null);
 assert.deepEqual(core.toMinimalPublicUserProfile(core.resolveCanonicalPublicProfile("uid", {
   firstName: "Maria", lastName: "Garcia", photoURL: null,
-})), { userId: "uid", firstName: "Maria", lastName: "G.", displayName: "Maria G.", photoURL: null });
+})), { userId: "uid", firstName: "Maria", lastName: "Garcia", displayName: "Maria Garcia", photoURL: null });
 assert.equal(core.isCanonicalPublicProfile({
   userId: "uid", firstName: "Maria", lastName: "G.", displayName: "Maria G.", photoURL: null,
-}, "uid"), true);
+}, "uid"), false);
 assert.equal(core.isCanonicalPublicProfile({
   userId: "uid", firstName: "Maria", lastName: "Garcia", displayName: "Maria Garcia", photoURL: null,
-}, "uid"), false);
+}, "uid"), true);
+assert.equal(core.resolveCanonicalPublicName({ displayName: "Preferred Name", firstName: "Maria", lastName: "Garcia" }).displayName, "Preferred Name");
+assert.equal(core.resolveCanonicalPublicName({ firstName: "Prince" }).displayName, "Prince");
+assert.equal(core.resolveCanonicalPublicName({ lastName: "Madonna" }).displayName, "Madonna");
+assert.equal(core.resolveCanonicalPublicName({ displayName: "Sideline Social member" }), null);
 
 const source = read("functions", "src", "index.ts");
 const callable = source.slice(source.indexOf("export const getPublicUserProfiles"), source.indexOf("export const getSuggestedConnections"));

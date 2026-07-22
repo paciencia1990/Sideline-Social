@@ -25,6 +25,9 @@ async function seed(testEnv) {
       userId: "sender", firstName: "Sam", lastName: "Sender", displayName: "Sam Sender",
       photoURL: null, updatedAt: now(),
     });
+    await setDoc(doc(db, "users", "sender"), {
+      displayName: "Sam Sender", email: "sam.private@example.test", phone: "+15555550100",
+    });
   });
 }
 
@@ -36,6 +39,7 @@ async function run() {
     const senderDb = testEnv.authenticatedContext("sender").firestore();
     const recipientDb = testEnv.authenticatedContext("recipient").firestore();
     const outsiderDb = testEnv.authenticatedContext("outsider").firestore();
+    const guestDb = testEnv.unauthenticatedContext().firestore();
     const requestRef = (db) => doc(db, "friendRequests", "sender__recipient");
 
     await assertSucceeds(getDoc(requestRef(senderDb)));
@@ -56,7 +60,12 @@ async function run() {
     await assertFails(deleteDoc(requestRef(senderDb)));
 
     await assertSucceeds(getDoc(doc(recipientDb, "publicUserProfiles", "sender")));
+    await assertSucceeds(getDoc(doc(outsiderDb, "publicUserProfiles", "sender")));
+    await assertFails(getDoc(doc(guestDb, "publicUserProfiles", "sender")));
     await assertFails(getDocs(collection(recipientDb, "publicUserProfiles")));
+    await assertSucceeds(getDoc(doc(senderDb, "users", "sender")));
+    await assertFails(getDoc(doc(outsiderDb, "users", "sender")));
+    await assertFails(getDocs(collection(senderDb, "users")));
     await assertFails(setDoc(doc(recipientDb, "publicUserProfiles", "recipient"), {
       userId: "recipient", firstName: "Riley", lastName: "Recipient", displayName: "Riley Recipient",
       photoURL: null, updatedAt: now(),

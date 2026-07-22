@@ -32,7 +32,7 @@ import { getPersistedDisplayName } from "@/utils/profileName";
 
 export type FriendRequestStatus = "pending" | "accepted" | "declined" | "canceled" | "expired";
 export type SendFriendRequestStatus = "pending" | "alreadyPending" | "reversePending" | "alreadyFriends";
-export type RequestProfileState = "loading" | "resolved" | "unresolved";
+export type RequestProfileState = "loading" | "resolved" | "unresolved" | "deleted";
 
 export type SendFriendRequestResult = {
   requestId: string;
@@ -44,6 +44,7 @@ export interface FriendProfile {
   displayName: string;
   photoURL: string | null;
   hasValidPublicIdentity?: boolean;
+  profileState?: PublicFriendProfileRecord["profileState"];
 }
 
 export type SuggestedFriendProfile = FriendProfile & Pick<
@@ -109,7 +110,7 @@ function requireCurrentUserId(): string {
 }
 
 function fallbackName(data: DocumentData | undefined): string {
-  return getSafeProfileName(getPersistedDisplayName(data), "Sideline Parent");
+  return getSafeProfileName(getPersistedDisplayName(data), "Sideline Social member");
 }
 
 function docToPrivateProfile(userDoc: { id: string; data: () => DocumentData | undefined }): PrivateFriendProfile {
@@ -122,7 +123,7 @@ function docToPrivateProfile(userDoc: { id: string; data: () => DocumentData | u
     id: userDoc.id,
     displayName: fallbackName(data),
     photoURL: typeof data?.photoURL === "string" ? data.photoURL : null,
-    hasValidPublicIdentity: Boolean(formatFullPublicName(getPersistedDisplayName(data))?.split(/\s+/u)[1]),
+    hasValidPublicIdentity: Boolean(formatFullPublicName(getPersistedDisplayName(data))),
     friendIds,
   };
 }
@@ -193,6 +194,7 @@ export async function searchUsers(queryText: string): Promise<SuggestedFriendPro
       id: profile.userId,
       displayName: formatPublicUserName(profile.displayName) ?? "",
       photoURL: profile.photoURL,
+      profileState: profile.profileState,
       sharedSquadName: profile.sharedSquadName,
       sharedActivity: profile.sharedActivity,
       mutualConnectionCount: profile.mutualConnectionCount,
@@ -214,6 +216,7 @@ export async function getFriends(userId: string): Promise<FriendProfile[]> {
       id: friendProfile.userId,
       displayName: formatPublicUserName(friendProfile.displayName) ?? "",
       photoURL: friendProfile.photoURL ?? null,
+      profileState: friendProfile.profileState,
     }));
   } catch (error) {
     logFriendsIssue("getFriends", error);
@@ -375,11 +378,15 @@ function hydrateFriendRequestGroups(
   return {
     incoming: hydrated.incoming.map((request) => ({
       ...request,
-      senderProfileState: request.senderNameResolved ? "resolved" : "unresolved",
+      senderProfileState: request.senderNameSource === "deleted"
+        ? "deleted"
+        : request.senderNameResolved ? "resolved" : "unresolved",
     })),
     outgoing: hydrated.outgoing.map((request) => ({
       ...request,
-      recipientProfileState: request.recipientNameResolved ? "resolved" : "unresolved",
+      recipientProfileState: request.recipientNameSource === "deleted"
+        ? "deleted"
+        : request.recipientNameResolved ? "resolved" : "unresolved",
     })),
   };
 }

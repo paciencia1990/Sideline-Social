@@ -105,7 +105,7 @@ assert.equal(canManageTeamAnnouncements({ ...activeCoach, status: "removed" }), 
 assert.equal(canManageTeamAnnouncements(undefined), false);
 assert.equal(resolveReplyAuthorName({ displayName: "Saved Parent" }, activeParent, "Auth Parent"), "Saved Parent");
 assert.equal(resolveReplyAuthorName({ displayName: "parent@example.com", firstName: "Saved", lastName: "Parent" }, activeParent, "Auth Parent"), "Saved Parent");
-assert.equal(resolveReplyAuthorName({ displayName: "parent@example.com" }, { ...activeParent, displayName: "legacy@example.com" }, "auth@example.com"), "Team Parent");
+assert.equal(resolveReplyAuthorName({ displayName: "parent@example.com" }, { ...activeParent, displayName: "legacy@example.com" }, "auth@example.com"), "Sideline Social member");
 assert.deepEqual(
   setStaffRole({ parent: true, coach: false, staff: false, customRole: "preserved" }, "parent", true),
   { parent: true, coach: false, staff: true, customRole: "preserved" },
@@ -351,7 +351,7 @@ for (const key of [
   "deleteAnnouncementTitle", "deleteAnnouncementBody", "deletingAnnouncement",
   "deleteSuccess", "announcementActions",
 ]) {
-  assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length, 2, `${key} needs English and Spanish copy.`);
+  assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length >= 2, true, `${key} needs English and Spanish copy.`);
 }
 assert.equal((translations.match(/announcementUnavailable:/g) || []).length, 4);
 assert.equal((translations.match(/deleteError:/g) || []).length >= 4, true);

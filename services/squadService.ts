@@ -106,6 +106,7 @@ export type SquadAdminMember = {
   userId: string;
   displayName: string | null;
   photoURL: string | null;
+  profileState: "available" | "unnamed" | "deleted";
   squadRole: "admin" | "member";
   isCurrentUser: boolean;
 };

@@ -16,23 +16,28 @@ assert.equal(mapping.getOutgoingRequestRecipientId({ toUserId: "recipient_uid" }
 assert.deepEqual(mapping.deduplicateFriendUserIds(["sender_uid", "sender_uid", null]), ["sender_uid"]);
 
 const profiles = mapping.inspectPublicUserProfiles([
-  { userId: "sender_uid", firstName: "Joann", lastName: "P.", displayName: "Joann P.", photoURL: "https://example.test/a.jpg" },
-  { userId: "recipient_uid", firstName: "Riley", lastName: "R.", displayName: "Riley R.", photoURL: null },
+  { userId: "sender_uid", firstName: "Joann", lastName: "Pollard", displayName: "Joann Pollard", photoURL: "https://example.test/a.jpg", profileState: "available" },
+  { userId: "recipient_uid", firstName: "Riley", lastName: "Rivera", displayName: "Riley Rivera", photoURL: null, profileState: "available" },
 ]);
 const incoming = [{ id: "sender_uid__viewer", fromUserId: "sender_uid", fromDisplayName: "Old Sender", fromPhotoURL: null, toUserId: "viewer" }];
 const outgoing = [{ id: "viewer__recipient_uid", fromUserId: "viewer", toUserId: "recipient_uid", toDisplayName: "Old Recipient", toPhotoURL: null }];
 const current = mapping.hydrateFriendRequestProfiles(incoming, outgoing, profiles.profilesByUserId, format);
-assert.equal(current.incoming[0].senderDisplayName, "Joann P.", "current minimized public name replaces stale snapshot");
+assert.equal(current.incoming[0].senderDisplayName, "Joann Pollard", "current full public name replaces stale snapshot");
 assert.equal(current.incoming[0].senderNameSource, "publicProfile");
 assert.equal(current.incoming[0].senderPhotoURL, "https://example.test/a.jpg");
-assert.equal(current.outgoing[0].recipientDisplayName, "Riley R.");
+assert.equal(current.outgoing[0].recipientDisplayName, "Riley Rivera");
 
 const snapshot = mapping.hydrateFriendRequestProfiles(incoming, outgoing, new Map(), format);
 const oldPublicOnlyName = new Map().get("sender_uid")?.displayName ?? null;
 assert.equal(oldPublicOnlyName, null, "reproduces the old placeholder path when the public lookup misses");
-assert.equal(snapshot.incoming[0].senderDisplayName, "Old S.", "trusted snapshot is minimized as the resilient fallback");
+assert.equal(snapshot.incoming[0].senderDisplayName, "Old Sender", "trusted snapshot is the resilient fallback");
 assert.equal(snapshot.incoming[0].senderNameSource, "requestSnapshot");
-assert.equal(snapshot.outgoing[0].recipientDisplayName, "Old R.");
+assert.equal(snapshot.outgoing[0].recipientDisplayName, "Old Recipient");
+const deleted = mapping.hydrateFriendRequestProfiles(incoming, [], new Map([["sender_uid", {
+  userId: "sender_uid", displayName: null, photoURL: null, profileState: "deleted",
+}]]), format);
+assert.equal(deleted.incoming[0].senderDisplayName, null);
+assert.equal(deleted.incoming[0].senderNameSource, "deleted");
 const unavailable = mapping.hydrateFriendRequestProfiles([{ ...incoming[0], fromDisplayName: "Sideline Parent" }], [], new Map(), format);
 assert.equal(unavailable.incoming[0].senderDisplayName, null);
 assert.equal(unavailable.incoming[0].senderNameSource, "unavailable");

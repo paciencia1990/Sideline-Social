@@ -22,8 +22,16 @@ export default function BlockedUsersScreen() {
     try {
       const ids = await getBlockedFriendChatUserIds();
       const profiles = await getPublicUserProfiles(ids);
-      const names = new Map(profiles.map((profile) => [profile.userId, profile.displayName]));
-      setUsers(ids.map((id) => ({ id, displayName: names.get(id) || t("settings.blockedUserFallback") })));
+      const profilesById = new Map(profiles.map((profile) => [profile.userId, profile]));
+      setUsers(ids.map((id) => {
+        const profile = profilesById.get(id);
+        return {
+          id,
+          displayName: profile?.displayName || t(profile?.profileState === "deleted"
+            ? "common.formerMember"
+            : "common.sidelineSocialMember"),
+        };
+      }));
     } catch {
       setError(t("settings.blockedLoadError"));
     } finally {

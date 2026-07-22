@@ -82,7 +82,7 @@ assert.deepEqual(projected, {
 });
 assert.equal(Object.hasOwn(projected, "email"), false);
 assert.deepEqual(publicProfiles.toMinimalPublicUserProfile(projected), {
-  userId: "uid", firstName: "Joann", lastName: "P.", displayName: "Joann P.",
+  userId: "uid", firstName: "Joann", lastName: "Pollard", displayName: "Joann Pollard",
   photoURL: "https://example.test/photo.jpg",
 });
 

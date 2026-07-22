@@ -227,7 +227,9 @@ function RequestRow({
   const declineBusy = busyAction === `decline:${request.id}`;
   const visibleSenderName = request.senderProfileState === "loading"
     ? t("friends.loadingParentName")
-    : request.senderDisplayName || t("friends.publicNameUnavailable");
+    : request.senderDisplayName || t(request.senderProfileState === "deleted"
+      ? "common.formerMember"
+      : "common.sidelineSocialMember");
 
   return (
     <Card style={styles.personCard}>
@@ -432,7 +434,9 @@ export default function FriendsScreen() {
   );
 
   const confirmCancelRequest = useCallback((request: FriendRequest) => {
-    const recipientName = request.recipientDisplayName || t("friends.publicNameUnavailable");
+    const recipientName = request.recipientDisplayName || t(request.recipientProfileState === "deleted"
+      ? "common.formerMember"
+      : "common.sidelineSocialMember");
     Alert.alert(t("friends.cancelRequest"), t("friends.cancelRequestConfirm"), [
       { text: t("friends.cancel"), style: "cancel" },
       {
@@ -593,7 +597,9 @@ export default function FriendsScreen() {
             {outgoingRequests.map((request) => {
               const recipientName = request.recipientProfileState === "loading"
                 ? t("friends.loadingParentName")
-                : request.recipientDisplayName || t("friends.publicNameUnavailable");
+                : request.recipientDisplayName || t(request.recipientProfileState === "deleted"
+                  ? "common.formerMember"
+                  : "common.sidelineSocialMember");
               return (
                 <Card key={request.id} style={styles.personCard}>
                   <Avatar name={recipientName} photoURL={request.recipientPhotoURL} />
@@ -626,7 +632,9 @@ export default function FriendsScreen() {
           friends.map((friend) => {
             const visibleFriend = {
               ...friend,
-              displayName: friend.displayName || t("friends.publicNameUnavailable"),
+              displayName: friend.displayName || t(friend.profileState === "deleted"
+                ? "common.formerMember"
+                : "common.sidelineSocialMember"),
             };
             return (
               <FriendRow

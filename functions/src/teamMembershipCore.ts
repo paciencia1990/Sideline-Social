@@ -75,10 +75,25 @@ export function canManageTeamAnnouncements(data: Record<string, unknown> | undef
   return Boolean(data && data.status === 'active' && hasCoachAccess(data));
 }
 
+const ACCOUNT_NAME_PLACEHOLDERS = new Set([
+  'team parent', 'sideline parent', 'sideline social member', 'miembro de sideline social',
+  'parent', 'coach', 'member', 'former member', 'miembro anterior',
+]);
+
 export function isSafeAccountDisplayName(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   const normalized = value.trim();
+  const placeholder = ACCOUNT_NAME_PLACEHOLDERS.has(normalized.replace(/\s+/gu, ' ').toLocaleLowerCase());
   return normalized.length > 0 && normalized.length <= 80 &&
+    !placeholder && !/(?:^|\s)\p{L}\.(?:\s|$)/u.test(normalized) &&
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized);
+}
+
+function isSafeAccountNamePart(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 80 &&
+    !/(?:^|\s)\p{L}\.(?:\s|$)/u.test(normalized) &&
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized);
 }
 
@@ -88,11 +103,11 @@ export function resolveReplyAuthorName(
   authName: unknown,
 ): string {
   const firstAndLastName = [profile?.firstName, profile?.lastName]
-    .filter(isSafeAccountDisplayName)
+    .filter(isSafeAccountNamePart)
     .join(' ')
     .trim();
   const candidates = [profile?.displayName, firstAndLastName, member?.displayName, authName];
-  return candidates.find(isSafeAccountDisplayName)?.trim() || 'Team Parent';
+  return candidates.find(isSafeAccountDisplayName)?.trim() || 'Sideline Social member';
 }
 
 export function canManageTeamRoles(

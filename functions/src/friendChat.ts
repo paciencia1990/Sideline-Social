@@ -738,7 +738,7 @@ async function sendMessagePushes(conversationId: string, senderUserId: string, t
       conversationRef(conversationId).collection('members').where('status', '==', 'active').limit(MAX_CHAT_PARTICIPANTS).get(),
     ]);
     if (!conversation.exists) return;
-    const senderName = conversation.data()?.participantNameSnapshots?.[senderUserId] || 'A friend';
+    const senderName = conversation.data()?.participantNameSnapshots?.[senderUserId] || 'Sideline Social member';
     const recipients = members.docs.filter((member) => member.id !== senderUserId && member.data()?.muted !== true);
     await Promise.allSettled(recipients.map(async (member) => {
       const [blockedBySender, blockedByRecipient] = await Promise.all([

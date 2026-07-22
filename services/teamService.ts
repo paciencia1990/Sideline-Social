@@ -421,7 +421,7 @@ function logCreateTeamDiagnostics(event: "commit-error" | "commit-start", detail
 
 function resolveDisplayName() {
   const user = auth.currentUser;
-  return formatPublicUserName(user?.displayName) ?? "Sideline Parent";
+  return formatPublicUserName(user?.displayName) ?? "Sideline Social member";
 }
 
 function generateInviteCode() {
@@ -473,7 +473,7 @@ function normalizeMembership(id: string, data: Record<string, unknown>): TeamMem
     id,
     teamId: readString(data.teamId),
     userId: readString(data.userId, id),
-    displayName: readString(data.displayName, "Sideline Parent"),
+    displayName: readString(data.displayName, "Sideline Social member"),
     childId: readNullableString(data.childId),
     childName: readString(data.childName),
     role: readRole(data.role),

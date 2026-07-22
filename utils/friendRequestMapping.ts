@@ -4,6 +4,7 @@ export type PublicFriendProfileRecord = {
   firstName?: string | null;
   lastName?: string | null;
   photoURL?: string | null;
+  profileState: "available" | "unnamed" | "deleted";
 };
 
 export type PublicProfileInspectionCounts = {
@@ -95,6 +96,9 @@ export function inspectPublicUserProfiles(value: unknown): {
       firstName: typeof record.firstName === "string" ? record.firstName : null,
       lastName: typeof record.lastName === "string" ? record.lastName : null,
       photoURL: typeof record.photoURL === "string" ? record.photoURL : null,
+      profileState: record.profileState === "deleted" || record.profileState === "unnamed"
+        ? record.profileState
+        : "available",
     });
   });
 
@@ -118,29 +122,37 @@ export function hydrateFriendRequestProfiles<
     incoming: incoming.map((request) => {
       const senderId = getIncomingRequestSenderId(request);
       const profile = senderId ? profilesByUserId.get(senderId) : undefined;
-      const currentName = profile ? formatPublicName(profile.displayName) : null;
-      const snapshotName = formatPublicName(typeof request.fromDisplayName === "string" ? request.fromDisplayName : null);
+      const currentName = profile && profile.profileState !== "deleted" && profile.profileState !== "unnamed"
+        ? formatPublicName(profile.displayName)
+        : null;
+      const snapshotName = !profile || profile.profileState === "available"
+        ? formatPublicName(typeof request.fromDisplayName === "string" ? request.fromDisplayName : null)
+        : null;
       const senderDisplayName = currentName ?? snapshotName;
       return {
         ...request,
         senderDisplayName,
-        senderPhotoURL: profile?.photoURL ?? (typeof request.fromPhotoURL === "string" ? request.fromPhotoURL : null),
+        senderPhotoURL: profile ? profile.photoURL ?? null : (typeof request.fromPhotoURL === "string" ? request.fromPhotoURL : null),
         senderNameResolved: Boolean(senderDisplayName),
-        senderNameSource: currentName ? "publicProfile" : snapshotName ? "requestSnapshot" : "unavailable",
+        senderNameSource: currentName ? "publicProfile" : snapshotName ? "requestSnapshot" : profile?.profileState === "deleted" ? "deleted" : "unavailable",
       };
     }),
     outgoing: outgoing.map((request) => {
       const recipientId = getOutgoingRequestRecipientId(request);
       const profile = recipientId ? profilesByUserId.get(recipientId) : undefined;
-      const currentName = profile ? formatPublicName(profile.displayName) : null;
-      const snapshotName = formatPublicName(typeof request.toDisplayName === "string" ? request.toDisplayName : null);
+      const currentName = profile && profile.profileState !== "deleted" && profile.profileState !== "unnamed"
+        ? formatPublicName(profile.displayName)
+        : null;
+      const snapshotName = !profile || profile.profileState === "available"
+        ? formatPublicName(typeof request.toDisplayName === "string" ? request.toDisplayName : null)
+        : null;
       const recipientDisplayName = currentName ?? snapshotName;
       return {
         ...request,
         recipientDisplayName,
-        recipientPhotoURL: profile?.photoURL ?? (typeof request.toPhotoURL === "string" ? request.toPhotoURL : null),
+        recipientPhotoURL: profile ? profile.photoURL ?? null : (typeof request.toPhotoURL === "string" ? request.toPhotoURL : null),
         recipientNameResolved: Boolean(recipientDisplayName),
-        recipientNameSource: currentName ? "publicProfile" : snapshotName ? "requestSnapshot" : "unavailable",
+        recipientNameSource: currentName ? "publicProfile" : snapshotName ? "requestSnapshot" : profile?.profileState === "deleted" ? "deleted" : "unavailable",
       };
     }),
   };

@@ -25,18 +25,19 @@ import {
 import { type TeamAnnouncement } from "@/services/teamMessageService";
 import {
   getParentTeams,
-  hasCoachAccess,
   type Team,
   type TeamMembership,
 } from "@/services/teamService";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
 import { getTeamPrivateMessageInbox } from "@/services/teamPrivateMessageService";
+import { getPublicUserProfiles } from "@/services/publicProfileService";
 import type { StoredVoiceMemo, TeamPrivateConversation } from "@/types/teamVoiceMessaging";
 import { resolveAnnouncementContentType } from "@/utils/teamAnnouncementCore";
 
 export type ParentTeamAnnouncement = TeamAnnouncement & {
   createdAtDate: Date | null;
   isRead: boolean;
+  authorProfileState?: "available" | "unnamed" | "deleted";
 };
 
 export type ParentTeamSummary = {
@@ -49,6 +50,7 @@ export type ParentTeamSummary = {
   legacyChildName: string | null;
   needsChildMigration: boolean;
   coachName: string | null;
+  coachProfileState?: "available" | "unnamed" | "deleted";
   announcements: ParentTeamAnnouncement[];
   unreadCount: number;
   latestAnnouncement: ParentTeamAnnouncement | null;
@@ -168,6 +170,10 @@ async function loadParentTeamSummary(
     .map((announcementDoc) => normalizeAnnouncement(announcementDoc.id, announcementDoc.data()))
     .filter((announcement) => announcement.audience !== "staff");
 
+  const authorProfiles = new Map((await getPublicUserProfiles(
+    visibleAnnouncements.map((announcement) => announcement.createdBy).filter(Boolean),
+  ).catch(() => [])).map((profile) => [profile.userId, profile]));
+
   const readStates = await Promise.all(
     visibleAnnouncements.map((announcement) =>
       getDoc(doc(db, "teams", team.id, "announcements", announcement.id, "reads", user.uid)),
@@ -175,9 +181,12 @@ async function loadParentTeamSummary(
   );
   const announcements = visibleAnnouncements.map((announcement, index) => ({
     ...announcement,
+    createdByName: authorProfiles.get(announcement.createdBy)?.displayName
+      ?? (authorProfiles.get(announcement.createdBy)?.profileState === "deleted" ? "" : announcement.createdByName),
+    authorProfileState: authorProfiles.get(announcement.createdBy)?.profileState,
     isRead: readStates[index]?.exists() ?? false,
   }));
-  const coachName = hasCoachAccess(membership) ? await resolveCoachName(team) : null;
+  const coachIdentity = await resolveCoachName(team);
 
   return {
     teamId: team.id,
@@ -188,7 +197,8 @@ async function loadParentTeamSummary(
     childName: childResolution.children[0]?.displayName ?? childResolution.legacyChildName,
     legacyChildName: childResolution.legacyChildName,
     needsChildMigration: childResolution.needsMigration,
-    coachName,
+    coachName: coachIdentity?.displayName ?? null,
+    coachProfileState: coachIdentity?.profileState,
     announcements,
     unreadCount: announcements.filter((announcement) => !announcement.isRead).length,
     latestAnnouncement: announcements[0] ?? null,
@@ -249,12 +259,19 @@ function resolveMembershipChildren(
     needsMigration,
   };
 }
-async function resolveCoachName(team: Team): Promise<string | null> {
+async function resolveCoachName(team: Team): Promise<{
+  displayName: string | null;
+  profileState?: "available" | "unnamed" | "deleted";
+} | null> {
+  const profiles = new Map((await getPublicUserProfiles(team.coachIds).catch(() => []))
+    .map((profile) => [profile.userId, profile]));
   for (const coachId of team.coachIds) {
+    const profile = profiles.get(coachId);
+    if (profile) return { displayName: profile.displayName, profileState: profile.profileState };
     const memberSnapshot = await getDoc(doc(db, "teams", team.id, "members", coachId));
     if (!memberSnapshot.exists()) continue;
     const displayName = formatPublicUserName(readString(memberSnapshot.data().displayName));
-    if (displayName) return displayName;
+    if (displayName) return { displayName };
   }
   return null;
 }

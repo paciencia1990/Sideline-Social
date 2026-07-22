@@ -183,21 +183,38 @@ async function loadPublicMemberProfiles(userIds: string[]) {
   const publicSnapshots = ids.length
     ? await db.getAll(...ids.map((userId) => db.collection('publicUserProfiles').doc(userId)))
     : [];
-  const resolved = new Map<string, ReturnType<typeof resolveCanonicalPublicProfile>>();
+  const resolved = new Map(ids.map((userId) => [userId, {
+    userId,
+    displayName: null as string | null,
+    photoURL: null as string | null,
+    profileState: 'deleted' as 'available' | 'unnamed' | 'deleted',
+  }]));
   const missingIds: string[] = [];
   publicSnapshots.forEach((snapshot) => {
     const profile = snapshot.data();
     if (isCanonicalPublicProfile(profile, snapshot.id)) {
-      resolved.set(snapshot.id, profile as NonNullable<ReturnType<typeof resolveCanonicalPublicProfile>>);
+      resolved.set(snapshot.id, { ...toMinimalPublicUserProfile(profile as NonNullable<ReturnType<typeof resolveCanonicalPublicProfile>>), profileState: 'available' });
     }
     else missingIds.push(snapshot.id);
   });
   if (missingIds.length) {
     const privateSnapshots = await db.getAll(...missingIds.map((userId) => db.collection('users').doc(userId)));
+    const authFallbackIds: string[] = [];
     privateSnapshots.forEach((snapshot) => {
       const profile = resolveCanonicalPublicProfile(snapshot.id, snapshot.data() as Record<string, unknown> | undefined);
-      if (profile) resolved.set(snapshot.id, toMinimalPublicUserProfile(profile));
+      if (profile) resolved.set(snapshot.id, { ...toMinimalPublicUserProfile(profile), profileState: 'available' });
+      else if (snapshot.exists) resolved.set(snapshot.id, { userId: snapshot.id, displayName: null, photoURL: null, profileState: 'unnamed' });
+      else authFallbackIds.push(snapshot.id);
     });
+    for (let index = 0; index < authFallbackIds.length; index += 100) {
+      const authUsers = await admin.auth().getUsers(authFallbackIds.slice(index, index + 100).map((uid) => ({ uid })));
+      authUsers.users.forEach((authUser) => {
+        const profile = resolveCanonicalPublicProfile(authUser.uid, undefined, authUser.displayName);
+        resolved.set(authUser.uid, profile
+          ? { ...toMinimalPublicUserProfile(profile), profileState: 'available' }
+          : { userId: authUser.uid, displayName: null, photoURL: null, profileState: 'unnamed' });
+      });
+    }
   }
   return resolved;
 }
@@ -205,14 +222,7 @@ async function loadPublicMemberProfiles(userIds: string[]) {
 async function publicActorName(userId: string): Promise<string> {
   const profiles = await loadPublicMemberProfiles([userId]);
   const profile = profiles.get(userId);
-  if (profile) return profile.displayName;
-  try {
-    const authUser = await admin.auth().getUser(userId);
-    const profile = resolveCanonicalPublicProfile(userId, undefined, authUser.displayName);
-    return profile ? toMinimalPublicUserProfile(profile).displayName : 'Squad member';
-  } catch {
-    return 'Squad member';
-  }
+  return profile?.displayName || 'Sideline Social member';
 }
 
 function squadLabel(squad: SquadData): string {
@@ -357,6 +367,7 @@ export const getSquadAdministration = functions.https.onCall(async (data, contex
       userId: memberUserId,
       displayName: profile?.displayName ?? null,
       photoURL: profile?.photoURL ?? null,
+      profileState: profile?.profileState ?? 'deleted',
       squadRole: currentAdminIds.includes(memberUserId) ? 'admin' as const : 'member' as const,
       isCurrentUser: memberUserId === userId,
     };

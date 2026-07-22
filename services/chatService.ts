@@ -17,6 +17,7 @@ import {
 import { httpsCallable } from "firebase/functions";
 
 import { auth, db, functions } from "@/config/firebase";
+import { getPublicUserProfiles, type PublicUserProfile } from "@/services/publicProfileService";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
 export { mapFriendChatError, type FriendChatUiError } from "@/utils/friendChatError";
 
@@ -36,6 +37,7 @@ export type FriendConversationMember = {
   status: FriendConversationMemberStatus;
   role: FriendConversationMemberRole;
   displayNameSnapshot: string;
+  profileState?: PublicUserProfile["profileState"];
   invitedBy: string | null;
   invitationId: string | null;
   invitedAt: Date | null;
@@ -53,6 +55,7 @@ export type FriendConversation = {
   activeParticipantIds: string[];
   invitedParticipantIds: string[];
   participantNameSnapshots: Record<string, string>;
+  participantProfileStates: Record<string, PublicUserProfile["profileState"]>;
   activeParticipantCount: number;
   invitedParticipantCount: number;
   createdBy: string;
@@ -77,6 +80,7 @@ export type FriendChatMessage = {
   messageType: "text" | "system";
   senderUserId: string | null;
   senderDisplayName: string | null;
+  senderProfileState?: PublicUserProfile["profileState"];
   text: string;
   createdAt: Date | null;
   createdAtTimestamp: Timestamp | null;
@@ -128,6 +132,7 @@ function toConversation(document: { id: string; data: () => DocumentData | undef
     activeParticipantIds: ids(data.activeParticipantIds),
     invitedParticipantIds: ids(data.invitedParticipantIds),
     participantNameSnapshots: names,
+    participantProfileStates: {},
     activeParticipantCount: Number.isFinite(data.activeParticipantCount) ? data.activeParticipantCount : ids(data.activeParticipantIds).length,
     invitedParticipantCount: Number.isFinite(data.invitedParticipantCount) ? data.invitedParticipantCount : ids(data.invitedParticipantIds).length,
     createdBy: typeof data.createdBy === "string" ? data.createdBy : "",
@@ -176,12 +181,19 @@ function toMessage(document: QueryDocumentSnapshot<DocumentData>): FriendChatMes
   };
 }
 
-export function getConversationDisplayTitle(conversation: FriendConversation, currentUid: string, fallback: string) {
+export function getConversationDisplayTitle(
+  conversation: FriendConversation,
+  currentUid: string,
+  fallback: string,
+  formerMemberFallback = fallback,
+  memberFallback = fallback,
+) {
   if (conversation.groupName) return conversation.groupName;
   const participantIds = conversation.conversationType === "direct"
     ? conversation.activeParticipantIds.filter((id) => id !== currentUid)
     : conversation.activeParticipantIds;
-  const names = participantIds.map((id) => conversation.participantNameSnapshots[id]).filter(Boolean);
+  const names = participantIds.map((id) => conversation.participantNameSnapshots[id]
+    || (conversation.participantProfileStates[id] === "deleted" ? formerMemberFallback : memberFallback));
   return names.slice(0, 3).join(", ") || fallback;
 }
 
@@ -215,9 +227,12 @@ export function subscribeToFriendConversations(
       const currentGeneration = ++generation;
       try {
         const conversations = snapshot.docs.map((item) => toConversation({ id: item.id, data: () => item.data() }));
-        const members = await Promise.all(conversations.map((item) => loadOwnMember(item.conversationId, uid)));
+        const [members, profiles] = await Promise.all([
+          Promise.all(conversations.map((item) => loadOwnMember(item.conversationId, uid))),
+          loadCurrentChatProfiles(conversations.flatMap((item) => [...item.activeParticipantIds, ...item.invitedParticipantIds])),
+        ]);
         if (currentGeneration !== generation) return;
-        onNext(conversations.flatMap((conversation, index) => {
+        onNext(conversations.map((conversation) => hydrateConversationNames(conversation, profiles)).flatMap((conversation, index) => {
           const ownMember = members[index];
           return ownMember?.status === "active"
             ? [{ ...conversation, ownMember, unread: isConversationUnread(conversation, ownMember, uid) }]
@@ -234,6 +249,7 @@ export function subscribeToFriendChatInvitations(
   onNext: (items: FriendConversation[]) => void,
   onError: (error: unknown) => void,
 ): Unsubscribe {
+  let generation = 0;
   return onSnapshot(
     query(
       collection(db, "friendConversations"),
@@ -241,7 +257,15 @@ export function subscribeToFriendChatInvitations(
       orderBy("updatedAt", "desc"),
       limit(CHAT_LIST_LIMIT),
     ),
-    (snapshot) => onNext(snapshot.docs.map((item) => toConversation({ id: item.id, data: () => item.data() }))),
+    (snapshot) => {
+      const currentGeneration = ++generation;
+      const conversations = snapshot.docs.map((item) => toConversation({ id: item.id, data: () => item.data() }));
+      void loadCurrentChatProfiles(conversations.flatMap((item) => [...item.activeParticipantIds, ...item.invitedParticipantIds]))
+        .then((profiles) => {
+          if (currentGeneration === generation) onNext(conversations.map((item) => hydrateConversationNames(item, profiles)));
+        })
+        .catch(onError);
+    },
     onError,
   );
 }
@@ -258,7 +282,9 @@ export async function getFriendConversationAccess(conversationId: string): Promi
     getBlockedFriendChatUserIds(),
   ]);
   if (!conversationSnapshot.exists() || !memberSnapshot.exists()) return null;
-  const conversation = toConversation({ id: conversationSnapshot.id, data: () => conversationSnapshot.data() });
+  const rawConversation = toConversation({ id: conversationSnapshot.id, data: () => conversationSnapshot.data() });
+  const profiles = await loadCurrentChatProfiles([...rawConversation.activeParticipantIds, ...rawConversation.invitedParticipantIds]);
+  const conversation = hydrateConversationNames(rawConversation, profiles);
   const member = toMember({ id: memberSnapshot.id, data: () => memberSnapshot.data() });
   const directFriendId = conversation.conversationType === "direct"
     ? conversation.activeParticipantIds.find((id) => id !== uid)
@@ -277,7 +303,16 @@ export async function getFriendConversationMembers(conversationId: string) {
     where("status", "==", "active"),
     limit(MAX_CHAT_PARTICIPANTS),
   ));
-  return snapshot.docs.map((item) => toMember({ id: item.id, data: () => item.data() }));
+  const members = snapshot.docs.map((item) => toMember({ id: item.id, data: () => item.data() }));
+  const profiles = await loadCurrentChatProfiles(members.map((member) => member.userId));
+  return members.map((member) => {
+    const profile = profiles.get(member.userId);
+    return {
+      ...member,
+      displayNameSnapshot: profile?.displayName ?? (profile ? "" : member.displayNameSnapshot),
+      profileState: profile?.profileState,
+    };
+  });
 }
 
 export function listenToFriendChatMessages(
@@ -295,7 +330,10 @@ export function listenToFriendChatMessages(
       orderBy("createdAt", "desc"),
       limit(CHAT_INITIAL_MESSAGE_LIMIT),
     ),
-    (snapshot) => onNext(snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse()),
+    (snapshot) => {
+      const messages = snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse();
+      void hydrateChatMessages(messages).then(onNext).catch(onError);
+    },
     onError,
   );
 }
@@ -315,9 +353,45 @@ export async function loadEarlierFriendChatMessages(
   ));
   const blocked = new Set(blockedUserIds);
   return {
-    messages: snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse(),
+    messages: await hydrateChatMessages(snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse()),
     hasMore: snapshot.size === CHAT_EARLIER_PAGE_SIZE,
   };
+}
+
+async function loadCurrentChatProfiles(userIds: string[]) {
+  const idsToLoad = Array.from(new Set(userIds.filter(Boolean)));
+  if (idsToLoad.length === 0) return new Map<string, PublicUserProfile>();
+  try {
+    return new Map((await getPublicUserProfiles(idsToLoad)).map((profile) => [profile.userId, profile]));
+  } catch {
+    return new Map<string, PublicUserProfile>();
+  }
+}
+
+function hydrateConversationNames(conversation: FriendConversation, profiles: ReadonlyMap<string, PublicUserProfile>) {
+  const participantNameSnapshots = { ...conversation.participantNameSnapshots };
+  const participantProfileStates = { ...conversation.participantProfileStates };
+  [...conversation.activeParticipantIds, ...conversation.invitedParticipantIds].forEach((userId) => {
+    const profile = profiles.get(userId);
+    if (!profile) return;
+    participantProfileStates[userId] = profile.profileState;
+    if (profile.displayName) participantNameSnapshots[userId] = profile.displayName;
+    else participantNameSnapshots[userId] = "";
+  });
+  return { ...conversation, participantNameSnapshots, participantProfileStates };
+}
+
+async function hydrateChatMessages(messages: FriendChatMessage[]) {
+  const profiles = await loadCurrentChatProfiles(messages.flatMap((message) => message.senderUserId ? [message.senderUserId] : []));
+  return messages.map((message) => {
+    if (!message.senderUserId) return message;
+    const profile = profiles.get(message.senderUserId);
+    return {
+      ...message,
+      senderDisplayName: profile?.displayName ?? (profile ? null : message.senderDisplayName),
+      senderProfileState: profile?.profileState,
+    };
+  });
 }
 
 export function setActiveFriendConversation(conversationId: string | null) {

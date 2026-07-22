@@ -22,10 +22,10 @@ function hasCode(code) { return (error) => String(error?.code).includes(code); }
 async function run() {
   const [a, b, c, outsider] = await Promise.all(["chat-a", "chat-b", "chat-c", "chat-outsider"].map(createClient));
   await Promise.all([
-    db.collection("users").doc(a.uid).set({ displayName: "Alex A.", friendIds: [b.uid, c.uid] }),
-    db.collection("users").doc(b.uid).set({ displayName: "Bailey B.", friendIds: [a.uid] }),
-    db.collection("users").doc(c.uid).set({ displayName: "Casey C.", friendIds: [a.uid] }),
-    db.collection("users").doc(outsider.uid).set({ displayName: "Other O.", friendIds: [] }),
+    db.collection("users").doc(a.uid).set({ displayName: "Alex Anderson", friendIds: [b.uid, c.uid] }),
+    db.collection("users").doc(b.uid).set({ displayName: "Bailey Brown", friendIds: [a.uid] }),
+    db.collection("users").doc(c.uid).set({ displayName: "Casey Carter", friendIds: [a.uid] }),
+    db.collection("users").doc(outsider.uid).set({ displayName: "Other Olson", friendIds: [] }),
   ]);
 
   const direct = await a.call("createOrOpenDirectConversation", { friendUserId: b.uid });

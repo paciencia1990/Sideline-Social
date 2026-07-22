@@ -32,8 +32,8 @@ async function waitFor(check, timeout = 7000) {
 }
 
 async function run() {
-  const [a, b, c, outsider, incomplete] = await Promise.all(
-    ["request-a", "request-b", "request-c", "request-outsider", "request-incomplete"].map(createClient),
+  const [a, b, c, outsider, incomplete, unnamed] = await Promise.all(
+    ["request-a", "request-b", "request-c", "request-outsider", "request-incomplete", "request-unnamed"].map(createClient),
   );
   await Promise.all([
     db.collection("users").doc(a.uid).set({ firstName: "Alex", lastName: "Anderson", displayName: "Alex Anderson", friendIds: [] }),
@@ -41,15 +41,18 @@ async function run() {
     db.collection("users").doc(c.uid).set({ name: "Casey Carter", friendIds: [] }),
     db.collection("users").doc(outsider.uid).set({ displayName: "Other Olson", friendIds: [] }),
     db.collection("users").doc(incomplete.uid).set({ firstName: "Single", lastName: "", displayName: "Single", friendIds: [] }),
+    db.collection("users").doc(unnamed.uid).set({ friendIds: [] }),
   ]);
 
-  await assert.rejects(() => incomplete.call("sendFriendRequest", { targetUserId: c.uid }), hasCode("failed-precondition"));
+  const singleNameRequest = await incomplete.call("sendFriendRequest", { targetUserId: c.uid });
+  assert.equal(singleNameRequest.status, "pending", "a valid single name is public identity");
+  await incomplete.call("cancelFriendRequest", { requestId: singleNameRequest.requestId });
   const sent = await a.call("sendFriendRequest", { targetUserId: b.uid });
   assert.equal(sent.status, "pending");
   const requestRef = db.collection("friendRequests").doc(sent.requestId);
   let request = (await requestRef.get()).data();
-  assert.equal(request.fromDisplayName, "Alex A.");
-  assert.equal(request.toDisplayName, "Bailey B.", "legacy field casing resolves and is minimized");
+  assert.equal(request.fromDisplayName, "Alex Anderson");
+  assert.equal(request.toDisplayName, "Bailey Brown", "legacy field casing resolves to a full name");
   assert.equal(request.expiresAt.toMillis() - request.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1000);
   for (const field of ["respondedAt", "acceptedAt", "declinedAt", "canceledAt", "expiredAt"]) assert.equal(request[field], null);
   assert.equal((await a.call("getActiveFriendRequests")).outgoing.length, 1);
@@ -109,10 +112,17 @@ async function run() {
   await assert.rejects(() => c.call("createOrOpenDirectConversation", { friendUserId: outsider.uid }), hasCode("permission-denied"));
 
   const publicNames = await a.call("getPublicUserProfiles", { userIds: [b.uid, c.uid] });
-  assert.deepEqual(publicNames.profiles.map((profile) => profile.displayName).sort(), ["Bailey B.", "Casey C."]);
+  assert.deepEqual(publicNames.profiles.map((profile) => profile.displayName).sort(), ["Bailey Brown", "Casey Carter"]);
   publicNames.profiles.forEach((profile) => {
     for (const privateField of ["email", "phoneNumber", "children", "location", "friendIds"]) assert.equal(Object.hasOwn(profile, privateField), false);
   });
+  await db.collection("users").doc(c.uid).update({ name: "Casey Updated" });
+  await waitFor(async () => (await db.collection("publicUserProfiles").doc(c.uid).get()).data()?.displayName === "Casey Updated");
+  const updatedUnrelatedProfile = await a.call("getPublicUserProfiles", { userIds: [c.uid] });
+  assert.equal(updatedUnrelatedProfile.profiles[0].displayName, "Casey Updated", "profile edits propagate without friendship or shared-team state");
+  const fallbackProfiles = await a.call("getPublicUserProfiles", { userIds: [unnamed.uid, "deleted_fixture_uid"] });
+  assert.equal(fallbackProfiles.profiles.find((profile) => profile.userId === unnamed.uid).profileState, "unnamed");
+  assert.equal(fallbackProfiles.profiles.find((profile) => profile.userId === "deleted_fixture_uid").profileState, "deleted");
 
   await waitFor(async () => {
     const notifications = await db.collection("userNotifications").doc(a.uid).collection("notifications")

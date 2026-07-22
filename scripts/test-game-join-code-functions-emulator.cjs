@@ -161,7 +161,7 @@ async function run() {
     status: 'lobby', hostPlayerId: hostA.uid, selectedQuestions: questionOrder, totalPlayers: 1, allReady: false,
   });
   await firestore.collection('sessions').doc(triviaSessionId).collection('games').doc('triviaBlitz').collection('players').doc(hostA.uid).set({
-    name: 'Host A.', playerIndex: 0, score: 0, ready: false,
+    name: 'Host Alpha', playerIndex: 0, score: 0, ready: false,
   });
   const triviaCode = await hostA.call('createGameJoinCode', {
     gameType: 'triviaBlitz', sessionId: triviaSessionId, idempotencyKey: 'trivia-host-request-1',

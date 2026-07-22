@@ -23,6 +23,8 @@ export type TeamPrivateConversation = {
   teamName: string;
   coachDisplayName: string;
   parentDisplayName: string;
+  coachProfileState?: "available" | "unnamed" | "deleted";
+  parentProfileState?: "available" | "unnamed" | "deleted";
   status: "active" | "readOnly";
   lastMessageAtMillis: number;
   lastMessageType: "text" | "voice" | null;

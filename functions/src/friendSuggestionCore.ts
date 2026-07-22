@@ -2,6 +2,16 @@ const PUBLIC_NAME_PLACEHOLDERS = new Set([
   'sideline parent',
   'a sideline parent',
   'padre o madre de sideline',
+  'sideline social member',
+  'miembro de sideline social',
+  'former member',
+  'miembro anterior',
+  'team parent',
+  'suggested parent',
+  'parent',
+  'member',
+  'user',
+  'unknown',
 ]);
 
 export function isSafePublicName(value: unknown): value is string {
@@ -9,6 +19,7 @@ export function isSafePublicName(value: unknown): value is string {
   const normalized = value.trim();
   return normalized.length > 0 && normalized.length <= 80 &&
     !PUBLIC_NAME_PLACEHOLDERS.has(normalized.replace(/\s+/gu, ' ').toLocaleLowerCase()) &&
+    !/(?:^|\s)\p{L}\.(?:\s|$)/u.test(normalized) &&
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized);
 }
 
@@ -21,20 +32,9 @@ export function resolvePublicProfileName(profile?: Record<string, unknown>): str
   return fullName || null;
 }
 
-const MULTI_PART_LAST_NAME_STARTS = new Set(['van', 'von']);
-
 export function formatPublicUserName(value: string | null): string | null {
   if (!isSafePublicName(value)) return null;
-  const segments = value.trim().split(/\s+/u).filter(Boolean);
-  if (segments.length <= 1) return segments[0] ?? null;
-
-  const firstName = segments[0];
-  const multiPartLastNameStart = segments.slice(1, -1).find((segment) => (
-    MULTI_PART_LAST_NAME_STARTS.has(segment.toLocaleLowerCase())
-  ));
-  const lastNameStart = multiPartLastNameStart ?? segments[segments.length - 1];
-  const lastInitial = Array.from(lastNameStart)[0];
-  return lastInitial ? `${firstName} ${lastInitial}.` : firstName;
+  return value.trim().replace(/\s+/gu, ' ');
 }
 
 export const formatSuggestedConnectionName = formatPublicUserName;
