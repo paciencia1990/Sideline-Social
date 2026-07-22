@@ -146,6 +146,7 @@ export { reportTeamContent } from './contentModeration';
 export {
   cleanupExpiredGameJoinCodes,
   createGameJoinCode,
+  getActiveSquadGameSession,
   getGameJoinCodeForSession,
   recordSpotDifferenceFound,
   releaseGameJoinCode,

@@ -4,7 +4,6 @@
     ".write": false,
     "gameSessions": {
       ".indexOn": ["squadId"],
-      ".read": "auth != null && query.orderByChild == 'squadId' && query.equalTo != null",
       "$sessionId": {
         ".read": "auth != null && (data.child('hostUserId').val() == auth.uid || data.child('players').child(auth.uid).exists())",
         ".write": "auth != null && ((!data.exists() && newData.child('hostUserId').val() == auth.uid && newData.child('players').child(auth.uid).exists()) || (data.exists() && data.child('hostUserId').val() == auth.uid))",

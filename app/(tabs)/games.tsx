@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   ScrollView,
@@ -15,12 +15,13 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SquadSelector } from "@/components/SquadSelector";
+import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
   fetchActiveSquadSession,
   getGameLabel,
-  type GameSession,
+  type ActiveGameSession,
   type GameType,
 } from "@/services/gameService";
 import {
@@ -30,6 +31,10 @@ import {
   type GameJoinCodeType,
 } from "@/services/gameJoinCodeService";
 import { isCompleteGameJoinCode, normalizeGameJoinCodeInput } from "@/utils/gameJoinCode";
+import {
+  createActiveSessionLoadCoordinator,
+  type ActiveSessionLoadState,
+} from "@/utils/activeSessionLoadState";
 
 type GameCardConfig = {
   gameType: GameType;
@@ -87,39 +92,50 @@ const ROUTE_BY_JOIN_CODE_GAME: Record<GameJoinCodeType, string> = {
 
 export default function GamesScreen() {
   const { t } = useTranslation();
-  const { selectedSquadId } = useSquad();
+  const { loading: authLoading, user } = useAuth();
+  const { membershipLoading, selectedSquadId } = useSquad();
   const params = useLocalSearchParams<{ join?: string }>();
-  const [activeSession, setActiveSession] = useState<GameSession | null>(null);
-  const [loadingSession, setLoadingSession] = useState(false);
+  const [activeSessionState, setActiveSessionState] = useState<ActiveSessionLoadState<ActiveGameSession>>({ status: "idle" });
+  const activeSessionCoordinator = useRef<ReturnType<typeof createActiveSessionLoadCoordinator<ActiveGameSession>> | null>(null);
   const [joinCode, setJoinCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<GameJoinCodeFailureReason | null>(null);
   const [showJoinCode, setShowJoinCode] = useState(params.join === "1");
 
+  const activeSession = "session" in activeSessionState ? activeSessionState.session : null;
+  const loadingSession = activeSessionState.status === "loading" && !activeSession;
+  const sessionLoadFailed = activeSessionState.status === "permission-error" || activeSessionState.status === "network-error";
+
   const activeGameName = useMemo(() => {
     return activeSession ? getGameLabel(activeSession.gameType) : "";
   }, [activeSession]);
 
-  const loadActiveSession = useCallback(async () => {
-    if (!selectedSquadId) {
-      setActiveSession(null);
-      return;
-    }
-
-    setLoadingSession(true);
-    try {
-      setActiveSession(await fetchActiveSquadSession(selectedSquadId));
-    } catch (error) {
-      console.warn("[GamesScreen] active session error:", error);
-      setActiveSession(null);
-    } finally {
-      setLoadingSession(false);
-    }
-  }, [selectedSquadId]);
+  useEffect(() => {
+    const coordinator = createActiveSessionLoadCoordinator<ActiveGameSession>({
+      fetchSession: fetchActiveSquadSession,
+      onDiagnostic: (status) => {
+        if (__DEV__) console.info("[GamesScreen] active session lookup", { status });
+      },
+      onStateChange: setActiveSessionState,
+    });
+    activeSessionCoordinator.current = coordinator;
+    return () => {
+      coordinator.dispose();
+      if (activeSessionCoordinator.current === coordinator) activeSessionCoordinator.current = null;
+    };
+  }, []);
 
   useEffect(() => {
-    void loadActiveSession();
-  }, [loadActiveSession]);
+    void activeSessionCoordinator.current?.setContext({
+      enabled: !authLoading && !membershipLoading,
+      squadId: selectedSquadId,
+      userId: user?.uid ?? null,
+    });
+  }, [authLoading, membershipLoading, selectedSquadId, user?.uid]);
+
+  const retryActiveSession = useCallback(() => {
+    void activeSessionCoordinator.current?.retry();
+  }, []);
 
   useEffect(() => {
     if (params.join === "1") {
@@ -182,6 +198,20 @@ export default function GamesScreen() {
               <Text style={styles.bannerText}>{t("games.squadPlaying", { game: activeGameName })}</Text>
             </View>
           </TouchableOpacity>
+        ) : null}
+
+        {sessionLoadFailed ? (
+          <Card style={styles.serviceErrorCard}>
+            <Text accessibilityLiveRegion="polite" style={styles.cardText}>{t("games.servicesUnavailable")}</Text>
+            <TouchableOpacity
+              accessibilityLabel={t("games.retryServices")}
+              accessibilityRole="button"
+              onPress={retryActiveSession}
+              style={styles.serviceRetryButton}
+            >
+              <Text style={styles.serviceRetryText}>{t("common.retry")}</Text>
+            </TouchableOpacity>
+          </Card>
         ) : null}
 
         <Card style={styles.joinCard}>
@@ -329,6 +359,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: Spacing.sm,
+  },
+  serviceErrorCard: {
+    gap: Spacing.sm,
+  },
+  serviceRetryButton: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    borderColor: Colors.primary,
+    borderRadius: Radius.button,
+    borderWidth: 1,
+    minHeight: 44,
+    justifyContent: "center",
+    paddingHorizontal: Spacing.md,
+  },
+  serviceRetryText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 13,
   },
   activeBanner: {
     alignItems: "center",

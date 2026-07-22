@@ -6,6 +6,7 @@ const { equalTo, get, orderByChild, query, ref, set, update } = require('firebas
 
 const projectId = 'sideline-game-join-code-rtdb-rules-test';
 const rules = fs.readFileSync(path.join(process.cwd(), 'database.rules.json'), 'utf8');
+assert.match(rules, /"\.indexOn"\s*:\s*\["squadId"\]/, 'the trusted active-session query keeps its Squad index');
 if (!admin.apps.length) admin.initializeApp({ projectId, databaseURL: `https://${projectId}.firebaseio.com` });
 
 async function run() {
@@ -29,6 +30,7 @@ async function run() {
     await assertSucceeds(get(ref(playerDb, 'gameSessions/session-a')));
     await assertFails(get(ref(outsiderDb, 'gameSessions/session-a')));
     await assertFails(get(ref(anonDb, 'gameSessions/session-a')));
+    await assertFails(get(query(ref(hostDb, 'gameSessions'), orderByChild('squadId'), equalTo('squad-a'))));
     await assertFails(get(query(ref(outsiderDb, 'gameSessions'), orderByChild('joinCode'), equalTo('7KPM'))));
     await assertFails(get(ref(outsiderDb, 'gameSessions')));
     await assertFails(set(ref(outsiderDb, 'gameSessions/session-a/players/outsider'), { displayName: 'Outsider' }));

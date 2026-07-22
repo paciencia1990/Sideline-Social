@@ -12,7 +12,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { CalendarDays } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -27,6 +26,12 @@ import {
   type SquadSeasonSummary,
 } from "@/services/leaderboardService";
 import { getFixedFooterBottomPadding } from "@/utils/safeAreaLayout";
+import {
+  getSeasonDatePickerCapability,
+  openSeasonAndroidDatePicker,
+  type SeasonDatePickerCapability,
+  type SeasonDatePickerIssue,
+} from "@/services/seasonDatePickerCapability";
 import {
   createSeasonDateField,
   DEFAULT_SQUAD_TIME_ZONE,
@@ -68,8 +73,11 @@ export function SquadSeasonManager({ squadId }: { squadId: string }) {
   const [form, setForm] = useState<SeasonForm>(emptyForm());
   const [pickerField, setPickerField] = useState<PickerField | null>(null);
   const [pickerDraft, setPickerDraft] = useState<Date>(new Date());
+  const [pickerCapability, setPickerCapability] = useState<SeasonDatePickerCapability | null>(null);
+  const [pickerIssue, setPickerIssue] = useState<SeasonDatePickerIssue | null>(null);
   const [dateInstruction, setDateInstruction] = useState<string | null>(null);
   const submittingRef = useRef(false);
+  const androidPickerOpenRef = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -116,6 +124,7 @@ export function SquadSeasonManager({ squadId }: { squadId: string }) {
     });
     setDateInstruction(null);
     setPickerField(null);
+    setPickerIssue(null);
     setMode(nextMode);
   }, [result?.timeZone]);
 
@@ -129,17 +138,8 @@ export function SquadSeasonManager({ squadId }: { squadId: string }) {
     setEditingSeason(null);
     setForm(emptyForm());
     setDateInstruction(null);
+    setPickerIssue(null);
   }, [pickerField, saving]);
-
-  const openPicker = useCallback((field: PickerField) => {
-    if (pickerField || saving) return;
-    const selected = form[field].calendarDate;
-    const fallback = field === "endDate"
-      ? form.startDate.calendarDate ?? addDays(new Date(), 1)
-      : new Date();
-    setPickerDraft(selected ?? fallback);
-    setPickerField(field);
-  }, [form, pickerField, saving]);
 
   const applyPickedDate = useCallback((field: PickerField, selected: Date) => {
     const dateKey = localDateToDateKey(selected);
@@ -170,11 +170,48 @@ export function SquadSeasonManager({ squadId }: { squadId: string }) {
     setDateInstruction(null);
   }, [form.endDate.dateKey, form.startDate.dateKey, t]);
 
-  const onAndroidPickerChange = useCallback((event: DateTimePickerEvent, selected?: Date) => {
-    const field = pickerField;
-    setPickerField(null);
-    if (event.type === "set" && selected && field) applyPickedDate(field, selected);
-  }, [applyPickedDate, pickerField]);
+  const openPicker = useCallback((field: PickerField) => {
+    if (pickerField || saving || androidPickerOpenRef.current) return;
+    const loadResult = getSeasonDatePickerCapability();
+    if (loadResult.status === "unavailable") {
+      setPickerIssue(loadResult.issue);
+      return;
+    }
+    const capability = loadResult.capability;
+    const selected = form[field].calendarDate;
+    const fallback = field === "endDate"
+      ? form.startDate.calendarDate ?? addDays(new Date(), 1)
+      : new Date();
+    const value = selected ?? fallback;
+
+    if (Platform.OS === "android") {
+      androidPickerOpenRef.current = true;
+      const opened = openSeasonAndroidDatePicker({
+        capability,
+        minimumDate: field === "endDate" ? form.startDate.calendarDate ?? undefined : new Date(),
+        onDismiss: () => {
+          androidPickerOpenRef.current = false;
+        },
+        onFailure: (issue) => {
+          androidPickerOpenRef.current = false;
+          setPickerIssue(issue);
+        },
+        onSet: (date) => {
+          androidPickerOpenRef.current = false;
+          applyPickedDate(field, date);
+        },
+        value,
+      });
+      if (!opened) androidPickerOpenRef.current = false;
+      else setPickerIssue(null);
+      return;
+    }
+
+    setPickerDraft(value);
+    setPickerCapability(capability);
+    setPickerIssue(null);
+    setPickerField(field);
+  }, [applyPickedDate, form, pickerField, saving]);
 
   const cancelIosPicker = useCallback(() => setPickerField(null), []);
   const confirmIosPicker = useCallback(() => {
@@ -239,6 +276,7 @@ export function SquadSeasonManager({ squadId }: { squadId: string }) {
       setEditingSeason(null);
       setForm(emptyForm());
       setDateInstruction(null);
+      setPickerIssue(null);
       await load();
       Alert.alert("", t(submittedMode === "schedule"
         ? "season.seasonScheduled"
@@ -299,6 +337,7 @@ export function SquadSeasonManager({ squadId }: { squadId: string }) {
   const pickerMinimumDate = pickerField === "endDate"
     ? form.startDate.calendarDate ?? undefined
     : mode === "editUpcoming" ? new Date() : new Date();
+  const DateTimePicker = pickerCapability?.Picker ?? null;
 
   return (
     <View style={styles.card}>
@@ -402,6 +441,20 @@ export function SquadSeasonManager({ squadId }: { squadId: string }) {
                 selectLabel={t("season.selectEndDate")}
                 value={form.endDate}
               />
+              {pickerIssue ? (
+                <View accessibilityLiveRegion="polite" style={styles.pickerUnavailableCard}>
+                  <Text style={styles.unavailableTitle}>{t(pickerIssue === "missing-native-module"
+                    ? "season.calendarBuildRequired"
+                    : "season.calendarOpenError")}</Text>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    onPress={() => setPickerIssue(null)}
+                    style={styles.dismissButton}
+                  >
+                    <Text style={styles.dismissButtonText}>{t("common.dismiss")}</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
               {mode !== "extend" ? (
                 <View style={styles.field}>
                   <Text style={styles.label}>{t("season.timeZone")}</Text>
@@ -448,27 +501,19 @@ export function SquadSeasonManager({ squadId }: { squadId: string }) {
         </KeyboardAvoidingView>
       </Modal>
 
-      {Platform.OS === "android" && pickerField ? (
-        <DateTimePicker
-          display="calendar"
-          minimumDate={pickerMinimumDate}
-          mode="date"
-          onChange={onAndroidPickerChange}
-          value={pickerDraft}
-        />
-      ) : null}
-
-      <Modal animationType="fade" onRequestClose={cancelIosPicker} transparent visible={Platform.OS === "ios" && pickerField !== null}>
+      <Modal animationType="fade" onRequestClose={cancelIosPicker} transparent visible={Platform.OS === "ios" && pickerField !== null && DateTimePicker !== null}>
         <View style={styles.pickerBackdrop}>
           <View style={styles.pickerCard}>
             <Text style={styles.pickerTitle}>{t(pickerField === "startDate" ? "season.selectStartDate" : "season.selectEndDate")}</Text>
-            <DateTimePicker
-              display="inline"
-              minimumDate={pickerMinimumDate}
-              mode="date"
-              onChange={(_event, selected) => { if (selected) setPickerDraft(selected); }}
-              value={pickerDraft}
-            />
+            {DateTimePicker ? (
+              <DateTimePicker
+                display="inline"
+                minimumDate={pickerMinimumDate}
+                mode="date"
+                onChange={(_event, selected) => { if (selected) setPickerDraft(selected); }}
+                value={pickerDraft}
+              />
+            ) : null}
             <View style={[styles.pickerActions, { paddingBottom: bottomPadding }]}>
               <TouchableOpacity accessibilityRole="button" onPress={cancelIosPicker} style={styles.secondaryButton}>
                 <Text style={styles.secondaryButtonText}>{t("common.cancel")}</Text>
@@ -666,4 +711,7 @@ const styles = StyleSheet.create({
   pickerCard: { backgroundColor: Colors.surface, borderTopLeftRadius: Radius.card, borderTopRightRadius: Radius.card, gap: Spacing.md, paddingTop: Spacing.lg },
   pickerTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, paddingHorizontal: Spacing.lg },
   pickerActions: { borderTopColor: `${Colors.secondary}66`, borderTopWidth: StyleSheet.hairlineWidth, gap: Spacing.sm, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
+  pickerUnavailableCard: { backgroundColor: `${Colors.secondary}33`, borderRadius: Radius.sm, gap: Spacing.sm, padding: Spacing.md },
+  dismissButton: { alignItems: "center", alignSelf: "flex-start", minHeight: 44, justifyContent: "center", paddingHorizontal: Spacing.sm },
+  dismissButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
 });

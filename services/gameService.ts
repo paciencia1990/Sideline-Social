@@ -1,16 +1,13 @@
 import {
-  equalTo,
-  get,
   onValue,
-  orderByChild,
-  query,
   ref,
   remove,
   set,
   update,
   type DataSnapshot,
 } from "firebase/database";
-import { rtdb } from "@/config/firebase";
+import { httpsCallable } from "firebase/functions";
+import { functions, rtdb } from "@/config/firebase";
 
 export type GameType = "bomb_defusal" | "spot_difference" | "trivia_blitz";
 export type SessionStatus = "lobby" | "countdown" | "active" | "completed" | "failed";
@@ -38,6 +35,15 @@ export interface GameSession {
   settings: Record<string, unknown>;
 }
 
+export type ActiveGameSession = Pick<GameSession, "sessionId" | "gameType" | "status">;
+
+export type ActiveSquadSessionFetchResult =
+  | { status: "ready"; session: ActiveGameSession | null }
+  | { status: "permission-error" }
+  | { status: "network-error" };
+
+const activeSquadSessionRequests = new Map<string, Promise<ActiveSquadSessionFetchResult>>();
+
 export const GAME_CONFIG: Record<
   GameType,
   { minPlayers: number; maxPlayers: number; defaultSettings: Record<string, unknown> }
@@ -50,13 +56,6 @@ export const GAME_CONFIG: Record<
 function snapshotToSession(snapshot: DataSnapshot): GameSession | null {
   if (!snapshot.exists()) return null;
   return snapshot.val() as GameSession;
-}
-
-function getSessionsFromSnapshot(snapshot: DataSnapshot): GameSession[] {
-  if (!snapshot.exists()) return [];
-
-  const data = snapshot.val() as Record<string, GameSession> | null;
-  return data ? Object.values(data) : [];
 }
 
 export async function setPlayerReady(sessionId: string, userId: string, ready: boolean): Promise<void> {
@@ -119,17 +118,41 @@ export async function completeGame(
   }
 }
 
-export async function fetchActiveSquadSession(squadId: string): Promise<GameSession | null> {
-  try {
-    const sessionsQuery = query(ref(rtdb, "gameSessions"), orderByChild("squadId"), equalTo(squadId));
-    const snapshot = await get(sessionsQuery);
+export function fetchActiveSquadSession(squadId: string): Promise<ActiveSquadSessionFetchResult> {
+  const key = squadId.trim();
+  const existing = activeSquadSessionRequests.get(key);
+  if (existing) return existing;
 
-    return getSessionsFromSnapshot(snapshot).find(
-      (session) => session.status === "lobby" || session.status === "countdown" || session.status === "active"
-    ) ?? null;
+  const request = requestActiveSquadSession(key).finally(() => {
+    if (activeSquadSessionRequests.get(key) === request) activeSquadSessionRequests.delete(key);
+  });
+  activeSquadSessionRequests.set(key, request);
+  return request;
+}
+
+async function requestActiveSquadSession(squadId: string): Promise<ActiveSquadSessionFetchResult> {
+  if (!squadId) return { status: "ready", session: null };
+  try {
+    const callable = httpsCallable<{ squadId: string }, unknown>(functions, "getActiveSquadGameSession");
+    const rawResult = asRecord((await callable({ squadId })).data);
+    if (rawResult.session == null) return { status: "ready", session: null };
+    const session = asRecord(rawResult.session);
+    const sessionId = typeof session.sessionId === "string" ? session.sessionId.trim() : "";
+    const gameType = session.gameType;
+    const status = session.status;
+    if (
+      !sessionId ||
+      (gameType !== "bomb_defusal" && gameType !== "spot_difference") ||
+      (status !== "lobby" && status !== "countdown" && status !== "active")
+    ) {
+      return { status: "network-error" };
+    }
+    return { status: "ready", session: { sessionId, gameType, status } };
   } catch (error) {
-    console.error("[GameService] fetchActiveSquadSession error:", error);
-    return null;
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    return code.includes("permission-denied") || code.includes("unauthenticated")
+      ? { status: "permission-error" }
+      : { status: "network-error" };
   }
 }
 
@@ -201,5 +224,9 @@ export function getGameEmoji(gameType: GameType): string {
     case "trivia_blitz":
       return "\u26A1";
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 

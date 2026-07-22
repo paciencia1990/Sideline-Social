@@ -8,13 +8,17 @@ const manager = fs.readFileSync(path.join(process.cwd(), "components", "SquadSea
 const service = fs.readFileSync(path.join(process.cwd(), "services", "leaderboardService.ts"), "utf8");
 const boundary = fs.readFileSync(path.join(process.cwd(), "components", "ErrorBoundary.tsx"), "utf8");
 const config = fs.readFileSync(path.join(process.cwd(), "app.config.js"), "utf8");
+const pickerCapability = fs.readFileSync(path.join(process.cwd(), "services", "seasonDatePickerCapability.ts"), "utf8");
 
-assert.match(manager, /@react-native-community\/datetimepicker/);
+assert.doesNotMatch(manager, /from ["']@react-native-community\/datetimepicker["']/);
+assert.match(manager, /getSeasonDatePickerCapability/);
+assert.match(pickerCapability, /require\("@react-native-community\/datetimepicker"\)/);
+assert.match(pickerCapability, /catch \(error\)/);
 assert.match(manager, /testID={`season-\$\{props\.field\}-button`}/, "both calendar fields use one accessible pressable implementation");
 assert.match(manager, /accessibilityRole="button"/);
-assert.match(manager, /display="calendar"/, "Android uses calendar presentation");
+assert.match(pickerCapability, /display: "calendar"/, "Android uses the supported imperative calendar presentation");
 assert.match(manager, /display="inline"/, "iOS uses inline presentation with explicit actions");
-assert.match(manager, /event\.type === "set"/, "Android dismiss preserves the previous selection");
+assert.match(pickerCapability, /event\.type === "set"/, "Android dismiss preserves the previous selection");
 assert.match(manager, /cancelIosPicker/);
 assert.match(manager, /confirmIosPicker/);
 assert.match(manager, /minimumDate={pickerMinimumDate}/);

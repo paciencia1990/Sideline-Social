@@ -33,6 +33,7 @@ function hasReason(reason) {
 }
 
 async function run() {
+  const squadId = 'active-game-squad';
   const [hostA, hostB, player, outsider, brute, anonymous] = await Promise.all([
     createClient('join-host-a'),
     createClient('join-host-b'),
@@ -47,6 +48,9 @@ async function run() {
     firestore.collection('users').doc(player.uid).set({ firstName: 'Player', lastName: 'One' }),
     firestore.collection('users').doc(outsider.uid).set({ firstName: 'Player', lastName: 'Two' }),
     firestore.collection('users').doc(brute.uid).set({ firstName: 'Rate', lastName: 'Limit' }),
+    firestore.collection('squads').doc(squadId).set({ venueName: 'Fixture Field', isActive: true }),
+    firestore.collection('squadMemberships').doc(`${squadId}__${hostA.uid}`).set({ squadId, userId: hostA.uid, membershipStatus: 'active' }),
+    firestore.collection('squadMemberships').doc(`${squadId}__${player.uid}`).set({ squadId, userId: player.uid, membershipStatus: 'active' }),
   ]);
 
   await assert.rejects(
@@ -59,7 +63,7 @@ async function run() {
   );
 
   const createdBomb = await hostA.call('createGameJoinCode', {
-    gameType: 'bombDefusal', idempotencyKey: 'bomb-host-request-1',
+    gameType: 'bombDefusal', idempotencyKey: 'bomb-host-request-1', squadId,
   });
   assert.match(createdBomb.joinCode, /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}$/);
   assert.equal(/[01OI]/.test(createdBomb.joinCode), false);
@@ -76,9 +80,23 @@ async function run() {
   const bombSession = (await database.ref(`gameSessions/${createdBomb.sessionId}`).get()).val();
   assert.equal(bombSession.hostUserId, hostA.uid);
   assert.equal(bombSession.gameType, 'bomb_defusal');
+  assert.equal(bombSession.squadId, squadId);
   assert.equal('joinCode' in bombSession, false, 'short routing credentials are not stored in queryable RTDB sessions');
   assert.equal(Array.isArray(bombSession.gameState.bombSteps), true);
   assert.equal(bombSession.gameState.bombSteps.length, 5);
+
+  const activeForHost = await hostA.call('getActiveSquadGameSession', { squadId });
+  assert.deepEqual(Object.keys(activeForHost.session).sort(), ['gameType', 'sessionId', 'status']);
+  assert.equal(activeForHost.session.sessionId, createdBomb.sessionId);
+  assert.equal((await player.call('getActiveSquadGameSession', { squadId })).session.sessionId, createdBomb.sessionId);
+  await assert.rejects(
+    () => outsider.call('getActiveSquadGameSession', { squadId }),
+    (error) => String(error?.code).includes('permission-denied'),
+  );
+  await assert.rejects(
+    () => anonymous.call('getActiveSquadGameSession', { squadId }),
+    (error) => String(error?.code).includes('unauthenticated'),
+  );
 
   const mapping = (await firestore.collection('gameJoinCodes').doc(createdBomb.joinCode).get()).data();
   assert.deepEqual(

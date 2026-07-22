@@ -39,6 +39,12 @@ type ReservationResult = {
   expiresAt: number;
 };
 
+type ActiveSquadGameSession = {
+  sessionId: string;
+  gameType: 'bomb_defusal' | 'spot_difference';
+  status: 'lobby' | 'countdown' | 'active';
+};
+
 export const createGameJoinCode = functions.https.onCall(async (data, context): Promise<ReservationResult> => {
   const uid = requireUid(context);
   const gameType = requireGameType(data?.gameType);
@@ -229,6 +235,53 @@ export const getGameJoinCodeForSession = functions.https.onCall(async (data, con
     joinCode: code,
     status: mappingSnapshot.data()?.status as GameJoinCodeStatus,
     expiresAt: readTimestampMillis(mappingSnapshot.data()?.expiresAt),
+  };
+});
+
+export const getActiveSquadGameSession = functions.https.onCall(async (data, context): Promise<{
+  session: ActiveSquadGameSession | null;
+}> => {
+  const uid = requireUid(context);
+  const requestedSquadId = typeof data?.squadId === 'string' ? data.squadId.trim() : '';
+  const squadId = await readAuthorizedSquadId(uid, requestedSquadId);
+  if (!squadId) throw safeError('permission-denied', 'not_authorized');
+
+  const snapshot = await admin.database()
+    .ref('/gameSessions')
+    .orderByChild('squadId')
+    .equalTo(squadId)
+    .once('value');
+  const rawSessions = snapshot.val();
+  if (!rawSessions || typeof rawSessions !== 'object' || Array.isArray(rawSessions)) return { session: null };
+
+  const candidates = Object.entries(rawSessions as Record<string, unknown>)
+    .flatMap(([documentId, value]) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const session = value as Record<string, unknown>;
+      const gameType = session.gameType;
+      const status = session.status;
+      if (gameType !== 'bomb_defusal' && gameType !== 'spot_difference') return [];
+      if (status !== 'lobby' && status !== 'countdown' && status !== 'active') return [];
+      const sessionId = typeof session.sessionId === 'string' && session.sessionId.trim()
+        ? session.sessionId.trim()
+        : documentId;
+      const createdAt = typeof session.createdAt === 'number' && Number.isFinite(session.createdAt)
+        ? session.createdAt
+        : 0;
+      const candidate: ActiveSquadGameSession & { createdAt: number } = {
+        sessionId,
+        gameType,
+        status,
+        createdAt,
+      };
+      return [candidate];
+    })
+    .sort((left, right) => right.createdAt - left.createdAt);
+  const active = candidates[0];
+  return {
+    session: active
+      ? { sessionId: active.sessionId, gameType: active.gameType, status: active.status }
+      : null,
   };
 });
 

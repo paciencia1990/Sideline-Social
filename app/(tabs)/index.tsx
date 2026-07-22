@@ -28,7 +28,7 @@ import {
 } from "@/services/notificationService";
 import { formatUnreadBadgeCount } from "@/utils/notificationCore";
 import { subscribeToUnreadFriendConversationCount } from "@/services/chatService";
-import { fetchActiveSquadSession, getGameLabel, type GameSession } from "@/services/gameService";
+import { fetchActiveSquadSession, getGameLabel, type ActiveGameSession } from "@/services/gameService";
 import {
   getParentTeamsOverview,
   getTeamChildNames,
@@ -69,7 +69,7 @@ export default function HomeScreen() {
   const [activeChallenge, setActiveChallenge] = useState<UserWeeklyChallenge | null>(null);
   const [challengeError, setChallengeError] = useState<string | null>(null);
   const [challengeCompletionLoading, setChallengeCompletionLoading] = useState(false);
-  const [activeSession, setActiveSession] = useState<GameSession | null>(null);
+  const [activeSession, setActiveSession] = useState<ActiveGameSession | null>(null);
   const [squadSelectorOpen, setSquadSelectorOpen] = useState(false);
 
   const safeUnreadCount = Number.isFinite(unreadCount) ? Math.max(0, unreadCount) : 0;
@@ -117,12 +117,14 @@ export default function HomeScreen() {
                 return { challenge: null, failed: true };
               })
           : Promise.resolve({ challenge: null, failed: false }),
-        selectedSquadId ? fetchActiveSquadSession(selectedSquadId) : Promise.resolve(null),
+        selectedSquadId
+          ? fetchActiveSquadSession(selectedSquadId)
+          : Promise.resolve({ status: "ready", session: null } as const),
       ]);
 
       setActiveChallenge(challengeResult.challenge);
       setChallengeError(challengeResult.failed ? t("home.challengeError") : null);
-      setActiveSession(session);
+      setActiveSession(session.status === "ready" ? session.session : null);
 
     } catch (nextError) {
       console.warn("[HomeScreen] load error:", nextError);
