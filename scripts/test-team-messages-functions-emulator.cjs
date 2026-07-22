@@ -23,12 +23,19 @@ async function createClient(label) {
 function hasCode(code) { return (error) => String(error?.code).includes(code); }
 
 async function run() {
-  const [coach, parent, secondCoach, outsider] = await Promise.all(["team-coach", "team-parent", "team-second-coach", "team-outsider"].map(createClient));
-  await db.collection("teams").doc("team-1").set({ name: "Tigers", createdBy: coach.uid, coachIds: [coach.uid], parentIds: [parent.uid], status: "active" });
+  const [coach, parent, secondCoach, outsider, joannStaff] = await Promise.all([
+    "team-coach",
+    "team-parent",
+    "team-second-coach",
+    "team-outsider",
+    "team-joann-staff",
+  ].map(createClient));
+  await db.collection("teams").doc("team-1").set({ name: "Tigers", createdBy: coach.uid, coachIds: [coach.uid], parentIds: [parent.uid, joannStaff.uid], status: "active" });
   await Promise.all([
     db.collection("teams").doc("team-1").collection("members").doc(coach.uid).set({ userId: coach.uid, teamId: "team-1", status: "active", role: "coach", roles: { coach: true, parent: false, staff: false }, displayName: "Coach C." }),
     db.collection("teams").doc("team-1").collection("members").doc(parent.uid).set({ userId: parent.uid, teamId: "team-1", status: "active", role: "parent", roles: { coach: false, parent: true, staff: false }, displayName: "Parent P." }),
     db.collection("teams").doc("team-1").collection("members").doc(secondCoach.uid).set({ userId: secondCoach.uid, teamId: "team-1", status: "active", role: "coach", roles: { coach: true, parent: false, staff: false }, displayName: "Coach S." }),
+    db.collection("teams").doc("team-1").collection("members").doc(joannStaff.uid).set({ userId: joannStaff.uid, teamId: "team-1", status: "active", role: "parent", roles: { coach: false, parent: true, staff: true }, displayName: "Staff J." }),
   ]);
 
   const textAnnouncement = await coach.call("createTeamAnnouncement", {
@@ -57,7 +64,43 @@ async function run() {
   await Promise.all([
     db.collection("users").doc(coach.uid).set({ displayName: "Coach C." }),
     db.collection("users").doc(parent.uid).set({ displayName: "Parent P." }),
+    db.collection("users").doc(joannStaff.uid).set({ displayName: "Staff J." }),
   ]);
+
+  await assert.rejects(() => outsider.call("setTeamStaffRole", {
+    teamId: "team-1", targetUserId: parent.uid, isStaff: true,
+  }), hasCode("permission-denied"));
+  await assert.rejects(() => parent.call("setTeamStaffRole", {
+    teamId: "team-1", targetUserId: secondCoach.uid, isStaff: false,
+  }), hasCode("permission-denied"));
+  await assert.rejects(() => secondCoach.call("setTeamStaffRole", {
+    teamId: "team-1", targetUserId: coach.uid, isStaff: false,
+  }), hasCode("failed-precondition"));
+  const promoted = await coach.call("setTeamStaffRole", {
+    teamId: "team-1", targetUserId: parent.uid, isStaff: true,
+  });
+  assert.deepEqual(promoted.roles, { parent: true, coach: false, staff: true });
+  assert.equal((await db.collection("teams").doc("team-1").collection("members").doc(parent.uid).get()).data().roles.staff, true);
+  const repeatedPromotion = await coach.call("setTeamStaffRole", {
+    teamId: "team-1", targetUserId: parent.uid, isStaff: true,
+  });
+  assert.equal(repeatedPromotion.roles.staff, true, "repeated promotion remains idempotent");
+  const removed = await coach.call("setTeamStaffRole", {
+    teamId: "team-1", targetUserId: parent.uid, isStaff: false,
+  });
+  assert.deepEqual(removed.roles, { parent: true, coach: false, staff: false });
+  assert.equal(removed.role, "parent");
+  const parentMembershipAfterRemoval = (await db.collection("teams").doc("team-1").collection("members").doc(parent.uid).get()).data();
+  assert.equal(parentMembershipAfterRemoval.status, "active", "staff removal preserves active Team membership");
+  assert.deepEqual(parentMembershipAfterRemoval.roles, { parent: true, coach: false, staff: false });
+  const joannRemoved = await coach.call("setTeamStaffRole", {
+    teamId: "team-1", targetUserId: joannStaff.uid, isStaff: false,
+  });
+  assert.deepEqual(joannRemoved.roles, { parent: true, coach: false, staff: false });
+  const joannMembershipAfterRemoval = (await db.collection("teams").doc("team-1").collection("members").doc(joannStaff.uid).get()).data();
+  assert.equal(joannMembershipAfterRemoval.userId, joannStaff.uid, "the second staff mutation targets Joann's distinct UID");
+  assert.equal(joannMembershipAfterRemoval.status, "active", "the second staff removal preserves parent membership");
+  assert.equal((await db.collection("teams").doc("team-1").collection("members").doc(secondCoach.uid).get()).data().roles.coach, true, "staff changes never alter coach authority");
 
   const first = await coach.call("getOrCreatePrivateTeamConversation", { teamId: "team-1", parentUserId: parent.uid });
   const retry = await coach.call("getOrCreatePrivateTeamConversation", { teamId: "team-1", parentUserId: parent.uid });

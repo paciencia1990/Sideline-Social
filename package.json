@@ -29,6 +29,7 @@
     "test:parent-name-visibility": "node scripts/test-parent-name-visibility-core.cjs",
     "test:notifications": "node scripts/test-notification-core.cjs",
     "test:coach-communication-regressions": "node scripts/test-coach-communication-regressions.cjs",
+    "test:coach-roster-actions": "node scripts/test-coach-roster-actions.cjs",
     "test:voice-microphone-permission": "node scripts/test-voice-microphone-permission.cjs",
     "test:ios-release": "node scripts/test-ios-release-core.cjs",
     "test:emulator:account-deletion": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-account-deletion-functions-test --only auth,database,firestore,functions \"node scripts/test-account-deletion-functions-emulator.cjs\"",

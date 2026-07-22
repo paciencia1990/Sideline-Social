@@ -15,18 +15,23 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { auth } from "@/config/firebase";
 import { Colors, Radius, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import { useCoachBackNavigation } from "@/hooks/useCoachBackNavigation";
 import { getTeamRosterProfiles, type TeamRosterProfile } from "@/services/teamRosterService";
 import { getOrCreatePrivateTeamConversation } from "@/services/teamPrivateMessageService";
 import {
-  canManageTeamRoles,
+  getCoachRosterActionAvailability,
+  resolveCoachTeamAuthority,
+  resolveRosterActionTarget,
+  type RosterActionAvailability,
+} from "@/utils/coachCommunicationCore";
+import {
   getCurrentUserTeamMemberships,
   getTeamMembers,
   hasCoachAccess,
   hasTeamRole,
   isTeamActive,
-  isEligibleStaffRoleTarget,
   setTeamArchived,
   setTeamStaffRole,
   type Team,
@@ -35,6 +40,14 @@ import {
 
 type RosterProfiles = Record<string, TeamRosterProfile>;
 type StaffRoleFeedback = { message: string; isError: boolean };
+type RosterMenuAction = {
+  button: {
+    onPress: () => void;
+    style?: "default" | "destructive";
+    text: string;
+  };
+  key: "makeStaff" | "removeStaffAccess" | "sendPrivateMessage";
+};
 
 export default function CoachTeamScreen() {
   const { t } = useTranslation();
@@ -135,8 +148,65 @@ export default function CoachTeamScreen() {
     [getRosterName, members],
   );
 
-  const mayManageLifecycle = canManageTeamRoles(currentMembership, selectedTeam);
-  const mayManageRoles = mayManageLifecycle && isTeamActive(selectedTeam);
+  const authenticatedUserId = auth.currentUser?.uid ?? "";
+  const teamAuthority = resolveCoachTeamAuthority({
+    authenticatedUserId,
+    callerMembershipId: currentMembership?.id ?? "",
+    callerMembershipStatus: currentMembership?.status ?? "inactive",
+    callerMemberUserId: currentMembership?.userId ?? "",
+    callerRoles: {
+      coach: hasTeamRole(currentMembership, "coach"),
+      parent: hasTeamRole(currentMembership, "parent"),
+      staff: hasTeamRole(currentMembership, "staff"),
+    },
+    coachOwnerUserId: selectedTeam?.createdBy ?? "",
+    teamActive: isTeamActive(selectedTeam),
+  });
+  const mayManageLifecycle = teamAuthority.canManageTeamLifecycle;
+  const mayManageRoles = teamAuthority.canManageStaff;
+
+  const resolveMemberActions = useCallback((member: TeamMembership) =>
+    getCoachRosterActionAvailability({
+      authenticatedUserId,
+      callerCanManageTeam: mayManageRoles,
+      callerHasCoachAccess: teamAuthority.hasCoachAccess,
+      coachOwnerUserId: selectedTeam?.createdBy ?? "",
+      memberRoles: {
+        coach: hasTeamRole(member, "coach"),
+        parent: hasTeamRole(member, "parent"),
+        staff: hasTeamRole(member, "staff"),
+      },
+      membershipId: member.id,
+      membershipStatus: member.status,
+      memberUserId: member.userId,
+      teamActive: isTeamActive(selectedTeam),
+    }), [authenticatedUserId, mayManageRoles, selectedTeam, teamAuthority.hasCoachAccess]);
+
+  useEffect(() => {
+    if (!__DEV__ || members.length === 0) return;
+    members.forEach((member) => {
+      const actions = resolveMemberActions(member);
+      console.info("[CoachTeam] roster action policy", {
+        memberUserIdMatchesCaller: member.userId === authenticatedUserId,
+        memberUserIdMatchesOwner: member.userId === selectedTeam?.createdBy,
+        membershipRole: hasTeamRole(member, "coach")
+          ? "coach"
+          : hasTeamRole(member, "staff")
+            ? "staff"
+            : hasTeamRole(member, "parent")
+              ? "parent"
+              : member.role,
+        membershipStatus: member.status,
+        hasMembershipId: Boolean(member.id),
+        computedActions: {
+          showMenu: actions.showMenu,
+          makeStaff: actions.showMakeStaff,
+          removeStaffAccess: actions.showRemoveStaffAccess,
+          sendPrivateMessage: actions.showSendPrivateMessage,
+        },
+      });
+    });
+  }, [authenticatedUserId, members, resolveMemberActions, selectedTeam?.createdBy]);
 
   const changeArchivedState = useCallback(async (archived: boolean) => {
     if (!selectedTeam || !mayManageLifecycle || lifecycleAction) return;
@@ -189,13 +259,18 @@ export default function CoachTeamScreen() {
     isStaff: boolean,
   ) => {
     if (!selectedTeam || staffRoleUpdateInFlight.current || !mayManageRoles) return;
+    const target = resolveRosterActionTarget({ membershipId: member.id, memberUserId: member.userId });
+    if (!target) {
+      setFeedback({ isError: true, message: t("coach.team.staffRoleError") });
+      return;
+    }
     staffRoleUpdateInFlight.current = true;
-    setUpdatingUserId(member.userId);
+    setUpdatingUserId(target.membershipId);
     setFeedback(null);
     try {
-      const result = await setTeamStaffRole(selectedTeam.id, member.userId, isStaff);
+      const result = await setTeamStaffRole(selectedTeam.id, target.targetUserId, isStaff);
       setMembers((currentMembers) => currentMembers.map((currentMember) =>
-        currentMember.userId === member.userId
+        currentMember.id === target.membershipId
           ? { ...currentMember, role: result.role, roles: result.roles }
           : currentMember,
       ));
@@ -232,64 +307,57 @@ export default function CoachTeamScreen() {
     );
   }, [changeStaffRole, t]);
 
-  const openMemberActions = useCallback((member: TeamMembership, name: string) => {
+  const openMemberActions = useCallback((
+    member: TeamMembership,
+    name: string,
+    availability: RosterActionAvailability,
+  ) => {
     if (updatingUserId || openingMessageUserId || !selectedTeam) return;
-    const isStaff = hasTeamRole(member, "staff");
-    const nextStaffValue = !isStaff;
-    const mayChangeRole = Boolean(
-      mayManageRoles &&
-      currentMembership &&
-      member.userId !== currentMembership.userId &&
-      member.userId !== selectedTeam.createdBy &&
-      isEligibleStaffRoleTarget(member),
-    );
-    const maySendPrivateMessage = Boolean(
-      isTeamActive(selectedTeam) &&
-      currentMembership &&
-      member.userId !== currentMembership.userId &&
-      hasTeamRole(member, "parent"),
-    );
-    const actions = [] as { text: string; style?: "default" | "cancel" | "destructive"; onPress?: () => void }[];
-    if (maySendPrivateMessage) actions.push({
-      text: t("teamMessages.sendPrivateMessage"),
-      onPress: () => {
-        setOpeningMessageUserId(member.userId);
-        void getOrCreatePrivateTeamConversation(selectedTeam.id, member.userId)
-          .then((conversation) => router.push(`/coach/team-messages/${conversation.conversationId}` as never))
-          .catch((nextError) => {
-            console.warn("[CoachTeam] open private message", getErrorCode(nextError));
-            setFeedback({ isError: true, message: t("teamMessages.openError") });
-          })
-          .finally(() => setOpeningMessageUserId(null));
+    const target = resolveRosterActionTarget({ membershipId: member.id, memberUserId: member.userId });
+    if (!target) return;
+    const actions: RosterMenuAction[] = [];
+    if (availability.showMakeStaff) actions.push({
+      key: "makeStaff",
+      button: {
+        text: t("coach.team.makeStaff"),
+        style: "default",
+        onPress: () => confirmStaffRole(member, name, true),
       },
     });
-    if (mayChangeRole) actions.push({
-      text: nextStaffValue ? t("coach.team.makeStaff") : t("coach.team.removeStaffAccess"),
-      style: nextStaffValue ? "default" : "destructive",
-      onPress: () => confirmStaffRole(member, name, nextStaffValue),
+    if (availability.showRemoveStaffAccess) actions.push({
+      key: "removeStaffAccess",
+      button: {
+        text: t("coach.team.removeStaffAccess"),
+        style: "destructive",
+        onPress: () => confirmStaffRole(member, name, false),
+      },
     });
+    if (availability.showSendPrivateMessage) actions.push({
+      key: "sendPrivateMessage",
+      button: {
+        text: t("teamMessages.sendPrivateMessage"),
+        onPress: () => {
+          setOpeningMessageUserId(target.membershipId);
+          void getOrCreatePrivateTeamConversation(selectedTeam.id, target.targetUserId)
+            .then((conversation) => router.push(`/coach/team-messages/${conversation.conversationId}` as never))
+            .catch((nextError) => {
+              console.warn("[CoachTeam] open private message", getErrorCode(nextError));
+              setFeedback({ isError: true, message: t("teamMessages.openError") });
+            })
+            .finally(() => setOpeningMessageUserId(null));
+        },
+      },
+    });
+    if (actions.length === 0) return;
     Alert.alert(
       t("coach.team.memberActionsTitle", { name }),
       undefined,
       [
         { text: t("common.cancel"), style: "cancel" },
-        ...actions,
+        ...actions.map((action) => action.button),
       ],
     );
-  }, [confirmStaffRole, currentMembership, mayManageRoles, openingMessageUserId, selectedTeam, t, updatingUserId]);
-
-  const canManageMember = useCallback((member: TeamMembership) => Boolean(
-    mayManageRoles &&
-    currentMembership &&
-    selectedTeam &&
-    member.userId !== currentMembership.userId &&
-    member.userId !== selectedTeam.createdBy &&
-    isEligibleStaffRoleTarget(member),
-  ), [currentMembership, mayManageRoles, selectedTeam]);
-
-  const canOpenParentActions = useCallback((member: TeamMembership) => Boolean(
-    currentMembership && selectedTeam && isTeamActive(selectedTeam) && member.userId !== currentMembership.userId
-  ), [currentMembership, selectedTeam]);
+  }, [confirmStaffRole, openingMessageUserId, selectedTeam, t, updatingUserId]);
 
   return (
     <ScreenWrapper>
@@ -321,7 +389,9 @@ export default function CoachTeamScreen() {
             <Card style={styles.cardGap}>
               <Text style={styles.cardTitle}>{selectedTeam.name}</Text>
               <Text style={styles.cardText}>{formatTeamDetails(selectedTeam)}</Text>
-              <Text style={styles.successText}>{t("coach.team.youAreCoach")}</Text>
+              {teamAuthority.showCoachHeader ? (
+                <Text style={styles.successText}>{t("coach.team.youAreCoach")}</Text>
+              ) : null}
               {isTeamActive(selectedTeam) ? (
                 <View style={styles.invitePanel}>
                   <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
@@ -369,7 +439,7 @@ export default function CoachTeamScreen() {
                     profiles={profiles}
                     title={t("coach.team.staff")}
                     updatingUserId={updatingUserId ?? openingMessageUserId}
-                    canManageMember={canManageMember}
+                    resolveActions={resolveMemberActions}
                     onOpenActions={openMemberActions}
                   />
 
@@ -379,7 +449,7 @@ export default function CoachTeamScreen() {
                     profiles={profiles}
                     title={t("coach.team.parents")}
                     updatingUserId={updatingUserId ?? openingMessageUserId}
-                    canManageMember={canOpenParentActions}
+                    resolveActions={resolveMemberActions}
                     onOpenActions={openMemberActions}
                   />
 
@@ -428,19 +498,19 @@ export default function CoachTeamScreen() {
 }
 
 function RosterSection({
-  canManageMember,
   emptyText,
   members,
   onOpenActions,
   profiles,
+  resolveActions,
   title,
   updatingUserId,
 }: {
-  canManageMember: (member: TeamMembership) => boolean;
   emptyText: string;
   members: TeamMembership[];
-  onOpenActions: (member: TeamMembership, name: string) => void;
+  onOpenActions: (member: TeamMembership, name: string, actions: RosterActionAvailability) => void;
   profiles: RosterProfiles;
+  resolveActions: (member: TeamMembership) => RosterActionAvailability;
   title: string;
   updatingUserId: string | null;
 }) {
@@ -451,13 +521,14 @@ function RosterSection({
       {members.length === 0 ? <Text style={styles.emptyText}>{emptyText}</Text> : null}
       {members.map((member) => {
         const name = resolveRosterName(profiles[member.userId], t);
+        const actions = resolveActions(member);
         return (
           <MemberRow
-            key={member.userId}
-            canManage={canManageMember(member)}
-            isUpdating={updatingUserId === member.userId}
+            key={member.id}
+            canManage={actions.showMenu}
+            isUpdating={updatingUserId === member.id}
             name={name}
-            onOpenActions={() => onOpenActions(member, name)}
+            onOpenActions={() => onOpenActions(member, name, actions)}
             roleLabel={getRoleLabel(member, t)}
             updatesDisabled={Boolean(updatingUserId)}
           />

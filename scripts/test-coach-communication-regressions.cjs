@@ -17,11 +17,28 @@ function loadTypeScript(relativePath) {
 }
 
 const coachCore = loadTypeScript("utils/coachCommunicationCore.ts");
-assert.equal(coachCore.shouldShowPrivateMessagesCard({ conversationCount: 0, loadState: "loading", unreadCount: 0 }), false);
-assert.equal(coachCore.shouldShowPrivateMessagesCard({ conversationCount: 0, loadState: "loaded", unreadCount: 0 }), false);
-assert.equal(coachCore.shouldShowPrivateMessagesCard({ conversationCount: 1, loadState: "loaded", unreadCount: 0 }), true);
-assert.equal(coachCore.shouldShowPrivateMessagesCard({ conversationCount: 0, loadState: "loaded", unreadCount: 2 }), true);
-assert.equal(coachCore.shouldShowPrivateMessagesCard({ conversationCount: 1, loadState: "error", unreadCount: 1 }), false);
+assert.equal(coachCore.shouldShowPrivateMessagesCard({ hasActiveTeam: true, conversationCount: 0, loadState: "loading", unreadCount: 0 }), true);
+assert.equal(coachCore.shouldShowPrivateMessagesCard({ hasActiveTeam: true, conversationCount: 0, loadState: "loaded", unreadCount: 0 }), true);
+assert.equal(coachCore.shouldShowPrivateMessagesCard({ hasActiveTeam: true, conversationCount: 1, loadState: "error", unreadCount: 1 }), true);
+assert.equal(coachCore.shouldShowPrivateMessagesCard({ hasActiveTeam: false, conversationCount: 1, loadState: "loaded", unreadCount: 2 }), false);
+
+const acceptedParentActions = coachCore.getCoachRosterActionAvailability({
+  authenticatedUserId: "coach",
+  callerCanManageTeam: true,
+  callerHasCoachAccess: true,
+  coachOwnerUserId: "coach",
+  memberRoles: { coach: false, parent: true, staff: false },
+  membershipId: "parent",
+  membershipStatus: "active",
+  memberUserId: "parent",
+  teamActive: true,
+});
+assert.deepEqual(acceptedParentActions, {
+  showMakeStaff: true,
+  showMenu: true,
+  showRemoveStaffAccess: false,
+  showSendPrivateMessage: true,
+});
 
 const announcementCore = loadTypeScript("utils/teamAnnouncementCore.ts");
 const validVoice = {
@@ -45,6 +62,7 @@ assert.ok(sendTeamMessageIndex < privateMessagesIndex, "Send Team Message must b
 assert.ok(privateMessagesIndex < resourcesIndex, "Private Messages must precede Coach Resources when shown");
 assert.equal((coachHome.match(/label=\{t\("coach\.home\.viewTeam"\)\}/g) ?? []).length, 1, "View Team must not be duplicated");
 assert.match(coachHome, /showPrivateMessages \? <QuickAction/);
+assert.match(coachHome, /hasActiveTeam: Boolean\(selectedTeam\)/);
 assert.match(coachHome, /loadState: "loading"/);
 assert.match(coachHome, /loadState: "error"/);
 
@@ -90,8 +108,30 @@ assert.match(coachComposer, /const \[body, setBody\]/, "text drafts must remain 
 const privateThread = read("components", "PrivateTeamMessageThread.tsx");
 const coachTeam = read("app", "coach", "team.tsx");
 assert.match(coachTeam, /teamMessages\.sendPrivateMessage/);
+assert.match(coachTeam, /coach\.team\.makeStaff/);
+assert.match(coachTeam, /coach\.team\.removeStaffAccess/);
+assert.match(coachTeam, /getOrCreatePrivateTeamConversation\(selectedTeam\.id, target\.targetUserId\)/);
+assert.match(coachTeam, /router\.push\(`\/coach\/team-messages\/\$\{conversation\.conversationId\}`/);
+assert.match(coachTeam, /getCoachRosterActionAvailability/);
+assert.match(coachTeam, /<MoreVertical/);
+assert.match(coachTeam, /height: 44[\s\S]*width: 44/);
+assert.match(coachTeam, /accessibilityLabel=\{t\("coach\.team\.memberActionsTitle"/);
+assert.match(coachTeam, /resolveRosterName\(profiles\[member\.userId\], t\)/);
+assert.equal(/getCoachRosterActionAvailability\([\s\S]{0,700}profile/.test(coachTeam), false, "name hydration must not control roster actions");
 assert.match(privateThread, /teamPrivateConversations|listenToPrivateTeamConversation/);
 assert.equal(privateThread.includes("friendConversations"), false);
+assert.match(privateThread, /sendPrivateTeamTextMessage/);
+assert.match(privateThread, /<VoiceMemoComposer/);
+assert.match(privateThread, /reserveVoiceUpload/);
+assert.match(privateThread, /finalizePrivateVoiceMessage/);
+assert.match(privateThread, /<VoiceMemoPlayer/);
+
+assert.match(translations, /makeStaff: 'Make Staff'/);
+assert.match(translations, /removeStaffAccess: 'Remove Staff Access'/);
+assert.match(translations, /sendPrivateMessage: 'Send Private Message'/);
+assert.match(translations, /makeStaff: 'Hacer parte del staff'/);
+assert.match(translations, /removeStaffAccess: 'Quitar acceso de staff'/);
+assert.match(translations, /sendPrivateMessage: 'Enviar Mensaje Privado'/);
 
 const functionsSource = read("functions", "src", "index.ts");
 assert.match(functionsSource, /storedPath\.startsWith\(`teamVoiceMemos\/\$\{teamId\}\/announcements\/`\)/);

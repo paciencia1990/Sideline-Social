@@ -116,9 +116,11 @@ export function canManageTeamAnnouncements(
 export function canManageTeamRoles(
   membership: Pick<TeamMembership, "roles" | "status" | "userId"> | null | undefined,
   team?: Pick<Team, "createdBy"> | null,
+  authenticatedUserId = membership?.userId ?? "",
 ) {
   return Boolean(membership?.status === "active" &&
-    (hasTeamRole(membership, "coach") || team?.createdBy === membership.userId));
+    (hasTeamRole(membership, "coach") ||
+      (authenticatedUserId.trim() && team?.createdBy === authenticatedUserId.trim())));
 }
 
 export function isEligibleStaffRoleTarget(
@@ -472,7 +474,9 @@ function normalizeMembership(id: string, data: Record<string, unknown>): TeamMem
   return {
     id,
     teamId: readString(data.teamId),
-    userId: readString(data.userId, id),
+    // Team member documents are canonically keyed by Firebase UID. Never let a
+    // stale embedded userId remap one roster row onto another authenticated user.
+    userId: id,
     displayName: readString(data.displayName, "Sideline Social member"),
     childId: readNullableString(data.childId),
     childName: readString(data.childName),

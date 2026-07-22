@@ -92,7 +92,10 @@ export default function CoachHomeScreen() {
   const hasTeams = coachTeams.length > 0;
   const teamSectionTitle = hasTeams ? t("coach.home.addTeam") : t("coach.home.getStarted");
   const teamActionLabel = hasTeams ? t("coach.home.addTeam") : t("coach.team.createTeam");
-  const showPrivateMessages = shouldShowPrivateMessagesCard(privateInbox);
+  const showPrivateMessages = shouldShowPrivateMessagesCard({
+    ...privateInbox,
+    hasActiveTeam: Boolean(selectedTeam),
+  });
 
   useEffect(() => {
     if (!__DEV__ || loading || activeMode !== "coach") return;
