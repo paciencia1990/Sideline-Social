@@ -40,6 +40,24 @@ assert.throws(() => core.resolveSeasonBoundaries({
   startNow: false,
   nowMs: Date.parse("2027-02-01T00:00:00Z"),
 }), /END_NOT_AFTER_START/);
+const sameDay = core.resolveSeasonBoundaries({
+  startDate: "2027-03-03",
+  endDate: "2027-03-03",
+  timeZone: "America/New_York",
+  startNow: false,
+  nowMs: Date.parse("2027-02-01T00:00:00Z"),
+});
+assert.ok(sameDay.endAtMs > sameDay.startAtMs, "the inclusive end date may equal the start date");
+
+for (const timeZone of ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"]) {
+  for (const dateKey of ["2027-03-14", "2027-11-07"]) {
+    const instant = new Date(core.localMidnightToUtcMs(dateKey, timeZone));
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(instant).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+    assert.equal(`${parts.year}-${parts.month}-${parts.day}`, dateKey, `${timeZone} preserves ${dateKey} through DST`);
+  }
+}
 
 assert.equal(core.seasonRangesOverlap({ startAtMs: 0, endAtMs: 10 }, { startAtMs: 9, endAtMs: 20 }), true);
 assert.equal(core.seasonRangesOverlap({ startAtMs: 0, endAtMs: 10 }, { startAtMs: 10, endAtMs: 20 }), false);

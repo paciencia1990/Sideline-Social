@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import * as functions from 'firebase-functions';
@@ -11,6 +13,7 @@ import {
   normalizeIanaTimeZone,
   normalizeSeasonName,
   normalizeSeasonStars,
+  parseCalendarDate,
   planSeasonStateSynchronization,
   rankSeasonLeaderboardEntries,
   resolveSeasonBoundaries,
@@ -41,10 +44,17 @@ type SeasonData = FirebaseFirestore.DocumentData & {
   squadId?: string;
   name?: string;
   startAt?: Timestamp;
+  startsAt?: Timestamp;
   endAt?: Timestamp;
+  endsAt?: Timestamp;
+  startDate?: string;
+  endDate?: string;
+  startDateKey?: string;
+  endDateKey?: string;
   timeZone?: string;
   status?: SquadSeasonStatus;
   createdAt?: Timestamp;
+  updatedAt?: Timestamp;
 };
 
 type TrustedReward = {
@@ -71,6 +81,14 @@ function readSeasonId(value: unknown): string {
     throw new functions.https.HttpsError('invalid-argument', 'A valid season reference is required.');
   }
   return seasonId;
+}
+
+function readIdempotencyKey(value: unknown): string {
+  const key = typeof value === 'string' ? value.trim() : '';
+  if (!/^[A-Za-z0-9_-]{8,120}$/.test(key)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid season request reference is required.');
+  }
+  return key;
 }
 
 function isPlatformAdmin(context: functions.https.CallableContext): boolean {
@@ -215,6 +233,96 @@ function timestamp(value: unknown, field: string): Timestamp {
   return value;
 }
 
+function safeTimestamp(value: unknown): Timestamp | null {
+  if (value instanceof Timestamp) return value;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return Timestamp.fromDate(value);
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const milliseconds = Math.abs(value) < 100_000_000_000 ? value * 1000 : value;
+    return Timestamp.fromMillis(milliseconds);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
+  }
+  if (value && typeof value === 'object') {
+    const candidate = value as { _seconds?: unknown; seconds?: unknown; toDate?: unknown; toMillis?: unknown };
+    if (typeof candidate.toDate === 'function') {
+      try {
+        const date = candidate.toDate();
+        return date instanceof Date && !Number.isNaN(date.getTime()) ? Timestamp.fromDate(date) : null;
+      } catch {
+        return null;
+      }
+    }
+    if (typeof candidate.toMillis === 'function') {
+      try {
+        return safeTimestamp(candidate.toMillis());
+      } catch {
+        return null;
+      }
+    }
+    const secondsValue = candidate.seconds ?? candidate._seconds;
+    const seconds = typeof secondsValue === 'number'
+      ? secondsValue
+      : typeof secondsValue === 'string' ? Number(secondsValue) : NaN;
+    return Number.isFinite(seconds) ? Timestamp.fromMillis(seconds * 1000) : null;
+  }
+  return null;
+}
+
+function safeTimeZone(value: unknown, fallback?: unknown): string | null {
+  for (const candidate of [value, fallback]) {
+    try {
+      return normalizeIanaTimeZone(candidate);
+    } catch {
+      // Try the fallback without exposing malformed values to response formatters.
+    }
+  }
+  return null;
+}
+
+function safeDateKey(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const normalized = value.trim();
+    parseCalendarDate(normalized);
+    return normalized;
+  } catch {
+    return null;
+  }
+}
+
+function safeCalendarDateInTimeZone(value: Timestamp | null, timeZone: string | null, endExclusive = false): string | null {
+  if (!value || !timeZone) return null;
+  try {
+    const timestampValue = endExclusive ? Timestamp.fromMillis(value.toMillis() - 1) : value;
+    return calendarDateInTimeZone(timestampValue, timeZone);
+  } catch {
+    return null;
+  }
+}
+
+function safeSeasonBoundaries(season: SeasonData, fallbackTimeZone?: unknown) {
+  const timeZone = safeTimeZone(season.timeZone, fallbackTimeZone);
+  const startDateKey = safeDateKey(season.startDateKey ?? season.startDate);
+  const endDateKey = safeDateKey(season.endDateKey ?? season.endDate);
+  let startAt = safeTimestamp(season.startAt ?? season.startsAt);
+  let endAt = safeTimestamp(season.endAt ?? season.endsAt);
+  try {
+    if (!startAt && startDateKey && timeZone) startAt = Timestamp.fromMillis(localMidnightToUtcMs(startDateKey, timeZone));
+    if (!endAt && endDateKey && timeZone) endAt = Timestamp.fromMillis(localMidnightToUtcMs(addCalendarDays(endDateKey, 1), timeZone));
+  } catch {
+    return { startAt: null, endAt: null, startDateKey, endDateKey, timeZone };
+  }
+  return {
+    startAt,
+    endAt,
+    startDateKey: startDateKey ?? safeCalendarDateInTimeZone(startAt, timeZone),
+    endDateKey: endDateKey ?? safeCalendarDateInTimeZone(endAt, timeZone, true),
+    timeZone,
+  };
+}
+
 function translateSeasonCoreError(error: unknown): never {
   if (error instanceof functions.https.HttpsError) throw error;
   const code = error instanceof Error ? error.message : '';
@@ -236,17 +344,39 @@ function translateSeasonCoreError(error: unknown): never {
   throw error;
 }
 
-function serializeSeason(snapshot: FirebaseFirestore.DocumentSnapshot, currentSeasonId: string | null) {
+function serializeSeason(
+  snapshot: FirebaseFirestore.DocumentSnapshot,
+  currentSeasonId: string | null,
+  fallbackTimeZone?: unknown,
+) {
   const season = snapshot.data() as SeasonData;
+  const boundaries = safeSeasonBoundaries(season, fallbackTimeZone);
+  const status = season.status === 'upcoming' || season.status === 'active' || season.status === 'closed'
+    ? season.status
+    : null;
   return {
     seasonId: snapshot.id,
-    name: typeof season.name === 'string' ? season.name : 'Season',
-    startAt: timestamp(season.startAt, 'start date'),
-    endAt: timestamp(season.endAt, 'end date'),
-    timeZone: normalizeIanaTimeZone(season.timeZone),
-    status: season.status,
-    isCurrent: snapshot.id === currentSeasonId && season.status === 'active',
+    squadId: typeof season.squadId === 'string' ? season.squadId : snapshot.ref.parent.parent?.id ?? null,
+    name: typeof season.name === 'string' ? season.name.trim() : '',
+    startDateKey: boundaries.startDateKey,
+    endDateKey: boundaries.endDateKey,
+    startAtMs: boundaries.startAt?.toMillis() ?? null,
+    endAtMs: boundaries.endAt?.toMillis() ?? null,
+    timeZone: boundaries.timeZone,
+    status,
+    isCurrent: snapshot.id === currentSeasonId && status === 'active',
+    createdAtMs: safeTimestamp(season.createdAt)?.toMillis() ?? null,
+    updatedAtMs: safeTimestamp(season.updatedAt)?.toMillis() ?? null,
   };
+}
+
+function sortSerializedSeasons<T extends { seasonId: string; startAtMs: number | null }>(seasons: T[]): T[] {
+  return [...seasons].sort((left, right) => {
+    if (left.startAtMs !== null && right.startAtMs !== null) return right.startAtMs - left.startAtMs;
+    if (left.startAtMs !== null) return -1;
+    if (right.startAtMs !== null) return 1;
+    return left.seasonId.localeCompare(right.seasonId);
+  });
 }
 
 function calendarDateInTimeZone(value: Timestamp, timeZone: string): string {
@@ -273,15 +403,24 @@ export async function synchronizeSquadSeasonStates(squadId: string, now = Timest
     const currentSeasonId = typeof squadSnapshot.data()?.currentSeasonId === 'string'
       ? squadSnapshot.data()!.currentSeasonId
       : null;
-    const seasons = seasonsSnapshot.docs.map((document) => {
+    const normalizedSeasons = seasonsSnapshot.docs.map((document) => {
       const season = document.data() as SeasonData;
+      const boundaries = safeSeasonBoundaries(season, squadSnapshot.data()?.timeZone);
       return {
         seasonId: document.id,
         status: season.status ?? 'upcoming',
-        startAtMs: timestamp(season.startAt, 'start date').toMillis(),
-        endAtMs: timestamp(season.endAt, 'end date').toMillis(),
+        startAtMs: boundaries.startAt?.toMillis() ?? null,
+        endAtMs: boundaries.endAt?.toMillis() ?? null,
       };
     });
+    // A malformed legacy record must not crash the Squad page or be rewritten
+    // by lifecycle synchronization. It remains visible through scoped fallback UI.
+    if (normalizedSeasons.some((season) => season.startAtMs === null || season.endAtMs === null)) return false;
+    const seasons = normalizedSeasons.map((season) => ({
+      ...season,
+      startAtMs: season.startAtMs!,
+      endAtMs: season.endAtMs!,
+    }));
     const plan = planSeasonStateSynchronization(seasons, now.toMillis(), currentSeasonId);
     plan.changes.forEach((change) => {
       const update: FirebaseFirestore.UpdateData<FirebaseFirestore.DocumentData> = {
@@ -309,6 +448,7 @@ export async function synchronizeSquadSeasonStates(squadId: string, now = Timest
 export const createSquadSeason = regionalFunctions.https.onCall(async (data, context) => {
   const squadId = readSquadId(data?.squadId);
   const access = await assertSquadAccess({ context, squadId, requireAdmin: true });
+  const idempotencyKey = readIdempotencyKey(data?.idempotencyKey);
   await synchronizeSquadSeasonStates(squadId);
   const now = Timestamp.now();
   let name: string;
@@ -326,9 +466,14 @@ export const createSquadSeason = regionalFunctions.https.onCall(async (data, con
     translateSeasonCoreError(error);
   }
   const startNow = data?.startNow === true;
-  const seasonRef = access.firestore.collection('squads').doc(squadId).collection('seasons').doc();
+  const startDateKey = String(data.startDate).trim();
+  const endDateKey = String(data.endDate).trim();
+  const seasonId = createHash('sha256')
+    .update(`${squadId}:${access.userId}:${idempotencyKey}`)
+    .digest('hex');
+  const seasonRef = access.firestore.collection('squads').doc(squadId).collection('seasons').doc(seasonId);
 
-  await access.firestore.runTransaction(async (transaction) => {
+  const result = await access.firestore.runTransaction(async (transaction) => {
     const { squadRef } = await assertTransactionSeasonAdmin({
       transaction,
       firestore: access.firestore,
@@ -336,7 +481,18 @@ export const createSquadSeason = regionalFunctions.https.onCall(async (data, con
       userId: access.userId,
       platformAdmin: access.platformAdmin,
     });
-    const seasonsSnapshot = await transaction.get(squadRef.collection('seasons'));
+    const [requestSnapshot, seasonsSnapshot] = await Promise.all([
+      transaction.get(seasonRef),
+      transaction.get(squadRef.collection('seasons')),
+    ]);
+    if (requestSnapshot.exists) {
+      const existingStatus = requestSnapshot.data()?.status;
+      return {
+        seasonId: seasonRef.id,
+        status: existingStatus === 'active' || existingStatus === 'closed' ? existingStatus : 'upcoming',
+        alreadyCreated: true,
+      };
+    }
     const existing = seasonsSnapshot.docs.map((document) => {
       const season = document.data() as SeasonData;
       return {
@@ -356,6 +512,8 @@ export const createSquadSeason = regionalFunctions.https.onCall(async (data, con
       seasonId: seasonRef.id,
       squadId,
       name,
+      startDateKey,
+      endDateKey,
       startAt: Timestamp.fromMillis(boundaries.startAtMs),
       endAt: Timestamp.fromMillis(boundaries.endAtMs),
       timeZone: boundaries.timeZone,
@@ -367,15 +525,17 @@ export const createSquadSeason = regionalFunctions.https.onCall(async (data, con
       closedAt: null,
       closedBy: null,
       closeReason: null,
+      idempotencyKeyHash: createHash('sha256').update(idempotencyKey).digest('hex'),
     });
     transaction.update(squadRef, {
       ...(startNow ? { currentSeasonId: seasonRef.id } : {}),
       timeZone: boundaries.timeZone,
       updatedAt: now,
     });
+    return { seasonId: seasonRef.id, status, alreadyCreated: false };
   });
 
-  return { seasonId: seasonRef.id, status: startNow ? 'active' : 'upcoming' };
+  return result;
 });
 
 export const updateSquadSeason = regionalFunctions.https.onCall(async (data, context) => {
@@ -416,12 +576,17 @@ export const updateSquadSeason = regionalFunctions.https.onCall(async (data, con
     let startAt = existingStart;
     let endAt = existingEnd;
     let timeZone = existingTimeZone;
+    let startDateKey = safeDateKey(season.startDateKey ?? season.startDate) ?? calendarDateInTimeZone(existingStart, existingTimeZone);
+    let endDateKey = safeDateKey(season.endDateKey ?? season.endDate) ??
+      calendarDateInTimeZone(Timestamp.fromMillis(existingEnd.toMillis() - 1), existingTimeZone);
 
     if (season.status === 'upcoming') {
       try {
+        const nextStartDateKey = data?.startDate ?? startDateKey;
+        const nextEndDateKey = data?.endDate ?? endDateKey;
         const boundaries = resolveSeasonBoundaries({
-          startDate: data?.startDate ?? calendarDateInTimeZone(existingStart, existingTimeZone),
-          endDate: data?.endDate ?? calendarDateInTimeZone(Timestamp.fromMillis(existingEnd.toMillis() - 1), existingTimeZone),
+          startDate: nextStartDateKey,
+          endDate: nextEndDateKey,
           timeZone: data?.timeZone ?? existingTimeZone,
           startNow: false,
           nowMs: now.toMillis(),
@@ -429,6 +594,8 @@ export const updateSquadSeason = regionalFunctions.https.onCall(async (data, con
         startAt = Timestamp.fromMillis(boundaries.startAtMs);
         endAt = Timestamp.fromMillis(boundaries.endAtMs);
         timeZone = boundaries.timeZone;
+        startDateKey = nextStartDateKey;
+        endDateKey = nextEndDateKey;
       } catch (error) {
         translateSeasonCoreError(error);
       }
@@ -439,6 +606,7 @@ export const updateSquadSeason = regionalFunctions.https.onCall(async (data, con
       if (data?.endDate != null) {
         try {
           endAt = Timestamp.fromMillis(localMidnightToUtcMs(addCalendarDays(data.endDate, 1), existingTimeZone));
+          endDateKey = data.endDate;
         } catch (error) {
           translateSeasonCoreError(error);
         }
@@ -462,7 +630,7 @@ export const updateSquadSeason = regionalFunctions.https.onCall(async (data, con
     });
     if (overlaps) throw new functions.https.HttpsError('already-exists', 'Season dates overlap.');
 
-    transaction.update(seasonRef, { name, startAt, endAt, timeZone, updatedAt: now });
+    transaction.update(seasonRef, { name, startDateKey, endDateKey, startAt, endAt, timeZone, updatedAt: now });
     transaction.update(squadRef, { timeZone, updatedAt: now });
     return { seasonId, status: season.status };
   });
@@ -476,7 +644,7 @@ export const endSquadSeason = regionalFunctions.https.onCall(async (data, contex
   const now = Timestamp.now();
 
   await access.firestore.runTransaction(async (transaction) => {
-    const { squadRef } = await assertTransactionSeasonAdmin({
+    const { squad, squadRef } = await assertTransactionSeasonAdmin({
       transaction,
       firestore: access.firestore,
       squadId,
@@ -488,8 +656,10 @@ export const endSquadSeason = regionalFunctions.https.onCall(async (data, contex
     if (!seasonSnapshot.exists || seasonSnapshot.data()?.status !== 'active') {
       throw new functions.https.HttpsError('failed-precondition', 'Only the active season can be ended.');
     }
+    const timeZone = safeTimeZone(seasonSnapshot.data()?.timeZone, squad.timeZone);
     transaction.update(seasonRef, {
       status: 'closed',
+      endDateKey: safeCalendarDateInTimeZone(now, timeZone),
       endAt: now,
       closedAt: now,
       closedBy: access.userId,
@@ -506,10 +676,10 @@ export const getSquadSeasons = regionalFunctions.https.onCall(async (data, conte
   await assertSquadAccess({ context, squadId });
   await synchronizeSquadSeasonStates(squadId);
   const access = await assertSquadAccess({ context, squadId });
-  const snapshot = await access.firestore.collection('squads').doc(squadId).collection('seasons')
-    .orderBy('startAt', 'desc')
-    .get();
-  const squadSnapshot = await access.firestore.collection('squads').doc(squadId).get();
+  const [snapshot, squadSnapshot] = await Promise.all([
+    access.firestore.collection('squads').doc(squadId).collection('seasons').get(),
+    access.firestore.collection('squads').doc(squadId).get(),
+  ]);
   const currentSeasonId = typeof squadSnapshot.data()?.currentSeasonId === 'string'
     ? squadSnapshot.data()!.currentSeasonId
     : null;
@@ -518,7 +688,9 @@ export const getSquadSeasons = regionalFunctions.https.onCall(async (data, conte
     currentSeasonId,
     canManageSeasons: access.canManageSeasons,
     timeZone: typeof squadSnapshot.data()?.timeZone === 'string' ? squadSnapshot.data()!.timeZone : null,
-    seasons: snapshot.docs.map((document) => serializeSeason(document, currentSeasonId)),
+    seasons: sortSerializedSeasons(snapshot.docs.map((document) => (
+      serializeSeason(document, currentSeasonId, squadSnapshot.data()?.timeZone)
+    ))),
   };
 });
 
@@ -541,7 +713,7 @@ export const getSquadLeaderboard = regionalFunctions.https.onCall(async (data, c
   const squadRef = access.firestore.collection('squads').doc(squadId);
   const [squadSnapshot, seasonsSnapshot, currentUserSnapshot] = await Promise.all([
     squadRef.get(),
-    squadRef.collection('seasons').orderBy('startAt', 'desc').get(),
+    squadRef.collection('seasons').get(),
     access.firestore.collection('users').doc(access.userId).get(),
   ]);
   const squad = squadSnapshot.data() as SquadData;
@@ -614,10 +786,12 @@ export const getSquadLeaderboard = regionalFunctions.https.onCall(async (data, c
   const entries = ranked.slice(0, LEADERBOARD_RESPONSE_LIMIT);
   const currentUserEntry = ranked.find((entry) => entry.userId === access.userId) ?? null;
   const sportId = normalizeSportId(squad.sportId ?? squad.sportDisplayName ?? squad.sport) ?? 'other';
-  const availableSeasons = seasonsSnapshot.docs.map((document) => serializeSeason(document, currentSeasonId));
+  const availableSeasons = sortSerializedSeasons(seasonsSnapshot.docs.map((document) => (
+    serializeSeason(document, currentSeasonId, squad.timeZone)
+  )));
   const nextSeason = availableSeasons
-    .filter((season) => season.status === 'upcoming')
-    .sort((left, right) => left.startAt.toMillis() - right.startAt.toMillis())[0] ?? null;
+    .filter((season) => season.status === 'upcoming' && season.startAtMs !== null)
+    .sort((left, right) => left.startAtMs! - right.startAtMs!)[0] ?? null;
 
   console.info('[getSquadLeaderboard] completed', {
     hasSeason: Boolean(selectedSeasonSnapshot),
@@ -635,7 +809,7 @@ export const getSquadLeaderboard = regionalFunctions.https.onCall(async (data, c
         ? squad.sportDisplayName.trim()
         : getSportDisplayName(sportId),
     },
-    season: selectedSeasonSnapshot ? serializeSeason(selectedSeasonSnapshot, currentSeasonId) : null,
+    season: selectedSeasonSnapshot ? serializeSeason(selectedSeasonSnapshot, currentSeasonId, squad.timeZone) : null,
     entries,
     currentUserEntry,
     currentUserLifetimeStars: normalizeStars(currentUserSnapshot.data()?.sidelineStars),

@@ -4,6 +4,7 @@ import { AlertTriangle } from "lucide-react-native";
 
 import { Button } from "@/components/Button";
 import { Colors, Spacing, Typography } from "@/constants/theme";
+import i18n from "@/i18n";
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -38,9 +39,9 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     return (
       <View style={styles.container}>
         <AlertTriangle size={44} color={Colors.primary} />
-        <Text style={styles.title}>Something went wrong</Text>
-        <Text style={styles.message}>{this.state.error.message || "Please try again."}</Text>
-        <Button title="Try again" onPress={this.reset} style={styles.button} />
+        <Text style={styles.title}>{i18n.t("common.somethingWentWrong")}</Text>
+        <Text style={styles.message}>{i18n.t("common.genericError")}</Text>
+        <Button title={i18n.t("common.retry")} onPress={this.reset} style={styles.button} />
       </View>
     );
   }

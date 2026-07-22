@@ -126,7 +126,14 @@ async function run() {
   await assert.rejects(() => creator.call("getSquadSeasons", { squadId }), (error) => String(error?.code).includes("permission-denied"));
   const startDate = calendarDate(new Date(Date.now() + 24 * 60 * 60 * 1000));
   const endDate = calendarDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
-  await maria.call("createSquadSeason", { squadId, name: "Succession Season", startDate, endDate, timeZone: "America/New_York" });
+  await maria.call("createSquadSeason", {
+    squadId,
+    name: "Succession Season",
+    startDate,
+    endDate,
+    timeZone: "America/New_York",
+    idempotencyKey: "succession-season-request-1",
+  });
 
   await creator.call("joinVenueSportSquad", { squadId });
   const rejoinedCreatorMembership = (await db.collection("squadMemberships").doc(`${squadId}__${creator.uid}`).get()).data();

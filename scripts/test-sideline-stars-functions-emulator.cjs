@@ -24,9 +24,11 @@ async function run() {
   const outsider = await createClient("outsider");
   const squadId = "dr-phillips__baseball";
   const secondSquadId = "ymca__basketball";
+  const fallFixtureSquadId = "fall-fixture__baseball";
   await Promise.all([
     db.collection("squads").doc(squadId).set({ venueName: "Dr. Phillips Little League", sportId: "baseball", sportDisplayName: "Baseball", isActive: true, createdBy: parentA.uid, currentSeasonId: null }),
     db.collection("squads").doc(secondSquadId).set({ venueName: "YMCA", sportId: "basketball", sportDisplayName: "Basketball", isActive: true, createdBy: parentA.uid, currentSeasonId: null }),
+    db.collection("squads").doc(fallFixtureSquadId).set({ venueName: "Fixture Venue", sportId: "baseball", sportDisplayName: "Baseball", isActive: true, createdBy: parentA.uid, currentSeasonId: null }),
     db.collection("users").doc(parentA.uid).set({ displayName: "Joann Pollard", sidelineStars: 10 }),
     db.collection("users").doc(parentB.uid).set({ firstName: "Maria", lastName: "Garcia", email: "private@example.test", sidelineStars: 20 }),
     db.collection("users").doc(outsider.uid).set({ displayName: "Outside Person", sidelineStars: 999 }),
@@ -37,6 +39,7 @@ async function run() {
     membership(squadId, outsider.uid, "left", "away"),
     membership(secondSquadId, parentA.uid, "active", "away"),
     membership(secondSquadId, parentB.uid, "active", "recent"),
+    membership(fallFixtureSquadId, parentA.uid, "active", "away"),
   ]);
 
   const createSeason = httpsCallable(parentA.functions, "createSquadSeason");
@@ -44,14 +47,39 @@ async function run() {
   const endDate = calendarDate(new Date(Date.now() + 90 * 24 * 60 * 60 * 1000));
   const firstSeason = (await createSeason({
     squadId, name: "Spring Test", startDate: today, endDate,
-    timeZone: "America/New_York", startNow: true,
+    timeZone: "America/New_York", startNow: true, idempotencyKey: "spring-season-request-1",
+  })).data;
+  const firstSeasonRetry = (await createSeason({
+    squadId, name: "Spring Test", startDate: today, endDate,
+    timeZone: "America/New_York", startNow: true, idempotencyKey: "spring-season-request-1",
   })).data;
   const secondSeason = (await createSeason({
     squadId: secondSquadId, name: "Basketball Test", startDate: today, endDate,
-    timeZone: "America/New_York", startNow: true,
+    timeZone: "America/New_York", startNow: true, idempotencyKey: "basketball-season-request-1",
   })).data;
   assert.equal(firstSeason.status, "active");
+  assert.equal(firstSeasonRetry.seasonId, firstSeason.seasonId, "a retried season request is idempotent");
+  assert.equal(firstSeasonRetry.alreadyCreated, true);
+  assert.equal((await db.collection("squads").doc(squadId).collection("seasons").get()).size, 1);
   assert.equal(secondSeason.status, "active");
+  const fallFixture = (await createSeason({
+    squadId: fallFixtureSquadId,
+    name: "Fall 2026",
+    startDate: "2026-09-12",
+    endDate: "2026-11-20",
+    timeZone: "America/New_York",
+    idempotencyKey: "fall-2026-fixture-request",
+  })).data;
+  const fallDocument = (await db.collection("squads").doc(fallFixtureSquadId).collection("seasons").doc(fallFixture.seasonId).get()).data();
+  assert.equal(fallDocument.startDateKey, "2026-09-12");
+  assert.equal(fallDocument.endDateKey, "2026-11-20");
+  assert.equal(fallDocument.timeZone, "America/New_York");
+  assert.equal(typeof fallDocument.startAt.toDate, "function", "Firestore stores canonical Timestamp values");
+  const fallResponse = (await httpsCallable(parentA.functions, "getSquadSeasons")({ squadId: fallFixtureSquadId })).data;
+  assert.equal(fallResponse.seasons[0].startDateKey, "2026-09-12");
+  assert.equal(fallResponse.seasons[0].endDateKey, "2026-11-20");
+  assert.equal(typeof fallResponse.seasons[0].startAtMs, "number", "callables return method-free timestamps as milliseconds");
+  await membership(fallFixtureSquadId, parentA.uid, "left", "away");
   await assert.rejects(
     () => httpsCallable(parentB.functions, "createSquadSeason")({
       squadId, name: "Coach Cannot Create", startDate: today, endDate,
@@ -90,7 +118,7 @@ async function run() {
   await assert.rejects(
     () => createSeason({
       squadId, name: "Overlapping Season", startDate: calendarDate(new Date(Date.now() + 24 * 60 * 60 * 1000)), endDate,
-      timeZone: "America/New_York",
+      timeZone: "America/New_York", idempotencyKey: "overlapping-season-request-1",
     }),
     (error) => String(error?.code).includes("already-exists"),
   );
@@ -205,7 +233,7 @@ async function run() {
   );
   const newSeason = (await createSeason({
     squadId, name: "Summer Test", startDate: today, endDate,
-    timeZone: "America/New_York", startNow: true,
+    timeZone: "America/New_York", startNow: true, idempotencyKey: "summer-season-request-1",
   })).data;
   const resetLeaderboard = (await getLeaderboardA({ squadId })).data;
   assert.equal(resetLeaderboard.season.seasonId, newSeason.seasonId);

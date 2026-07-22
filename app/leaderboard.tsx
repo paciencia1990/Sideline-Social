@@ -26,6 +26,7 @@ import {
   type SquadSeasonSummary,
 } from "@/services/leaderboardService";
 import { flattenStyle } from "@/utils/flatten-style";
+import { formatSeasonDateRange, formatSpokenDateKey, formatUsDateKey } from "@/utils/squadSeasonDate";
 
 type SeasonView = "current" | "past";
 
@@ -48,7 +49,7 @@ function LeaderboardScreen() {
   const [error, setError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
   const numberFormatter = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
-  const locale = i18n.language.startsWith("es") ? "es" : "en";
+  const language = i18n.language;
 
   useEffect(() => {
     requestIdRef.current += 1;
@@ -199,13 +200,13 @@ function LeaderboardScreen() {
             canManage={result?.canManageSeasons === true}
             lifetimeStars={numberFormatter.format(result?.currentUserLifetimeStars ?? 0)}
             nextSeason={result?.nextSeason ?? null}
-            locale={locale}
+            language={language}
             onSetup={() => router.push(`/(social)/squad-detail?squadId=${selectedSquadId}` as never)}
             t={t}
           />
         ) : result?.season ? (
           <>
-            <SeasonHeader locale={locale} season={result.season} t={t} />
+            <SeasonHeader language={language} season={result.season} t={t} />
             <View style={styles.summaryCard}>
               <SummaryLine
                 label={t("season.yourSeasonStars")}
@@ -289,20 +290,24 @@ function SeasonTab({ label, onPress, selected }: { label: string; onPress: () =>
 }
 
 function SeasonHeader({
-  locale,
+  language,
   season,
   t,
 }: {
-  locale: string;
+  language: string;
   season: SquadSeasonSummary;
   t: (key: string, options?: Record<string, unknown>) => string;
 }) {
-  const range = formatSeasonRange(season, locale);
+  const range = formatSeasonDateRange(season);
+  if (!season.detailsAvailable || !range) {
+    return <StateCard title={t("season.detailsUnavailable")} body={t("season.detailsUnavailableBody")} />;
+  }
+  const spokenRange = `${formatSpokenDateKey(season.startDateKey, language)} – ${formatSpokenDateKey(season.endDateKey, language)}`;
   const final = season.status === "closed";
   return (
     <View
       accessible
-      accessibilityLabel={`${season.name}. ${t(`season.status.${season.status}`)}. ${range}.`}
+      accessibilityLabel={`${season.name}. ${t(`season.status.${season.status}`)}. ${spokenRange}.`}
       style={styles.seasonCard}
     >
       <Text style={styles.seasonStatus}>{final ? t("season.finalStandings") : t("season.currentSeason")}</Text>
@@ -315,14 +320,14 @@ function SeasonHeader({
 function NoActiveSeason({
   canManage,
   lifetimeStars,
-  locale,
+  language,
   nextSeason,
   onSetup,
   t,
 }: {
   canManage: boolean;
   lifetimeStars: string;
-  locale: string;
+  language: string;
   nextSeason: SquadSeasonSummary | null;
   onSetup: () => void;
   t: (key: string, options?: Record<string, unknown>) => string;
@@ -339,12 +344,14 @@ function NoActiveSeason({
           </TouchableOpacity>
         ) : null}
       </View>
-      {nextSeason ? (
-        <View accessible accessibilityLabel={`${t("season.nextSeason")}. ${nextSeason.name}. ${t("season.starts", { date: formatSeasonStart(nextSeason, locale) })}.`} style={styles.nextCard}>
+      {nextSeason?.detailsAvailable ? (
+        <View accessible accessibilityLabel={`${t("season.nextSeason")}. ${nextSeason.name}. ${t("season.starts", { date: formatSpokenDateKey(nextSeason.startDateKey, language) })}.`} style={styles.nextCard}>
           <Text style={styles.seasonStatus}>{t("season.nextSeason")}</Text>
           <Text style={styles.seasonName}>{nextSeason.name}</Text>
-          <Text style={styles.seasonDates}>{t("season.starts", { date: formatSeasonStart(nextSeason, locale) })}</Text>
+          <Text style={styles.seasonDates}>{t("season.starts", { date: formatUsDateKey(nextSeason.startDateKey) })}</Text>
         </View>
+      ) : nextSeason ? (
+        <StateCard title={t("season.detailsUnavailable")} body={t("season.detailsUnavailableBody")} />
       ) : null}
       <View style={styles.lifetimeOnlyCard}>
         <Text style={styles.summaryLabel}>{t("season.lifetimeSidelineStars")}</Text>
@@ -421,15 +428,6 @@ function PlayerRow({
       </View>
     </View>
   );
-}
-
-function formatSeasonRange(season: SquadSeasonSummary, locale: string) {
-  const formatter = new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", year: "numeric", timeZone: season.timeZone });
-  return `${formatter.format(season.startAt.toDate())} – ${formatter.format(new Date(season.endAt.toMillis() - 1))}`;
-}
-
-function formatSeasonStart(season: SquadSeasonSummary, locale: string) {
-  return new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", timeZone: season.timeZone }).format(season.startAt.toDate());
 }
 
 function getInitials(displayName: string): string {
