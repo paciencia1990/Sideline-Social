@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   Pressable,
@@ -10,6 +11,7 @@ import {
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { onSnapshot, orderBy, query, Unsubscribe } from "firebase/firestore";
+import { Check, X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { GameEndActions } from "@/components/GameEndActions";
@@ -37,6 +39,13 @@ import {
 import { scoreSessionAnswer, type ScoreResult } from "./scoring";
 import { finalizeGameReward, type GameRewardResult } from "@/services/sidelineStarsService";
 import { updateGameJoinCodeStatus } from "@/services/gameJoinCodeService";
+import {
+  createTriviaQuestionKey,
+  getTriviaAnswerAccessibilityLabel,
+  getTriviaAnswerFeedbackIcon,
+  resolveTriviaAnswerVisualState,
+  type TriviaAnswerAccessibilityLabels,
+} from "./answerFeedback";
 import { advanceTurn } from "./turnManager";
 import type { TriviaPlayer, TriviaQuestion, TriviaSession } from "./types";
 
@@ -44,8 +53,12 @@ const QUESTION_SECONDS = 15;
 const TRIVIA_MIN_PLAYERS = 2;
 const FALLBACK_PLAYER_NAME = "Player";
 
+type QuestionScoreResult = ScoreResult & {
+  questionKey: string;
+};
+
 export default function TriviaBlitzScreen() {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
   const { user, firebaseUser, loading: authLoading } = useAuth();
   const params = useLocalSearchParams<{
     sessionId?: string | string[];
@@ -63,7 +76,7 @@ export default function TriviaBlitzScreen() {
   const [session, setSession] = useState<TriviaSession | null>(null);
   const [players, setPlayers] = useState<TriviaPlayer[]>([]);
   const [secondsRemaining, setSecondsRemaining] = useState(QUESTION_SECONDS);
-  const [lastResult, setLastResult] = useState<ScoreResult | null>(null);
+  const [lastResult, setLastResult] = useState<QuestionScoreResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [settingUp, setSettingUp] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -74,6 +87,7 @@ export default function TriviaBlitzScreen() {
   const setupInFlightRef = useRef(false);
   const scoringInFlightRef = useRef(false);
   const scoredSelectionRef = useRef<string | null>(null);
+  const announcedFeedbackRef = useRef<string | null>(null);
   const rewardRequestKeyRef = useRef("");
   const lifecycleEndedRef = useRef("");
 
@@ -169,6 +183,60 @@ export default function TriviaBlitzScreen() {
     [players, session?.turnIndex],
   );
   const currentQuestion = session?.selectedQuestions[session.questionIndex] as TriviaQuestion | undefined;
+  const currentQuestionKey = currentQuestion
+    ? createTriviaQuestionKey(session?.questionIndex ?? -1, currentQuestion.id)
+    : "";
+  const currentResult = lastResult?.questionKey === currentQuestionKey ? lastResult : null;
+  const selectedAnswerIndex = session?.currentSelection?.answerIndex ?? null;
+  const synchronizedResultKnown = Boolean(session?.selectionRevealed && session.currentSelection);
+  const feedbackQuestionKey =
+    currentResult?.questionKey ?? (synchronizedResultKnown ? currentQuestionKey : null);
+  const answerResultKnown = Boolean(
+    currentQuestion &&
+      feedbackQuestionKey &&
+      (currentResult || synchronizedResultKnown),
+  );
+  const isSpanish = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith("es");
+  const currentQuestionText = currentQuestion
+    ? isSpanish
+      ? currentQuestion.question_es
+      : currentQuestion.question_en
+    : "";
+  const currentAnswerOptions = currentQuestion
+    ? isSpanish
+      ? currentQuestion.options_es
+      : currentQuestion.options_en
+    : [];
+  const correctAnswerText = currentQuestion
+    ? currentAnswerOptions[currentQuestion.answer] ?? ""
+    : "";
+  const selectionBelongsToSelf = Boolean(
+    self && session?.currentSelection?.playerId === self.id,
+  );
+  const selectedAnswerWasCorrect = Boolean(
+    answerResultKnown &&
+      currentQuestion &&
+      selectedAnswerIndex === currentQuestion.answer,
+  );
+  const answerAccessibilityLabels = useMemo<TriviaAnswerAccessibilityLabels>(
+    () => ({
+      correctAnswer: t("trivia.feedback.correctAnswer"),
+      yourAnswerCorrect: t("trivia.feedback.yourAnswerCorrect"),
+      yourAnswerIncorrect: t("trivia.feedback.yourAnswerIncorrect"),
+      selectedAnswerIncorrect: t("trivia.feedback.selectedAnswerIncorrect"),
+      notSelected: t("trivia.feedback.notSelected"),
+    }),
+    [t],
+  );
+  const feedbackAnnouncement = answerResultKnown
+    ? selectedAnswerWasCorrect
+      ? selectionBelongsToSelf
+        ? t("trivia.feedback.yourAnswerCorrect")
+        : t("trivia.feedback.correctAnswer")
+      : selectionBelongsToSelf
+        ? t("trivia.feedback.yourAnswerIncorrectWithCorrect", { answer: correctAnswerText })
+        : t("trivia.feedback.selectedAnswerIncorrectWithCorrect", { answer: correctAnswerText })
+    : "";
   const isHost = Boolean(self && (session?.hostPlayerId === self.id || self.playerIndex === 0));
   const isActiveTurn = Boolean(self && activePlayer?.id === self.id);
   // "Play Now" intentionally creates a legitimate authenticated solo session.
@@ -176,7 +244,7 @@ export default function TriviaBlitzScreen() {
   const canStartGame = players.length >= TRIVIA_MIN_PLAYERS || (shouldAutoStart && players.length === 1);
   const lobbyPlayerSignature = players.map((player) => `${player.id}:${player.ready}`).join("|");
   const activeSelectionKey = session?.currentSelection
-    ? `${session.currentSelection.playerId}:${session.currentSelection.answerIndex}:${session.currentSelection.selectedAt}`
+    ? `${currentQuestionKey}:${session.currentSelection.playerId}:${session.currentSelection.answerIndex}:${session.currentSelection.selectedAt}`
     : null;
 
   useEffect(() => {
@@ -251,10 +319,11 @@ export default function TriviaBlitzScreen() {
     setSecondsRemaining(QUESTION_SECONDS);
     setLastResult(null);
     scoredSelectionRef.current = null;
+    announcedFeedbackRef.current = null;
   }, [session?.questionIndex, session?.status]);
 
   useEffect(() => {
-    if (session?.status !== "playing" || lastResult) {
+    if (session?.status !== "playing" || currentResult) {
       return;
     }
 
@@ -263,13 +332,28 @@ export default function TriviaBlitzScreen() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [lastResult, session?.status]);
+  }, [currentResult, session?.status]);
+
+  useEffect(() => {
+    if (
+      !answerResultKnown ||
+      !feedbackQuestionKey ||
+      !feedbackAnnouncement ||
+      announcedFeedbackRef.current === feedbackQuestionKey
+    ) {
+      return;
+    }
+
+    announcedFeedbackRef.current = feedbackQuestionKey;
+    AccessibilityInfo.announceForAccessibility(feedbackAnnouncement);
+  }, [answerResultKnown, feedbackAnnouncement, feedbackQuestionKey]);
 
   useEffect(() => {
     const selectedAnswer = session?.currentSelection?.answerIndex;
     if (
       !isHost ||
       !sessionId ||
+      !currentQuestionKey ||
       session?.status !== "playing" ||
       selectedAnswer === undefined ||
       session.selectionRevealed ||
@@ -280,6 +364,7 @@ export default function TriviaBlitzScreen() {
     }
 
     const answerIndex = selectedAnswer;
+    const scoringQuestionKey = currentQuestionKey;
     scoringInFlightRef.current = true;
     scoredSelectionRef.current = activeSelectionKey;
     let isMounted = true;
@@ -288,7 +373,7 @@ export default function TriviaBlitzScreen() {
       try {
         const result = await scoreSessionAnswer(sessionId, answerIndex, secondsRemaining);
         if (isMounted) {
-          setLastResult(result);
+          setLastResult({ ...result, questionKey: scoringQuestionKey });
         }
         setTimeout(() => {
           advanceTurn(sessionId).catch((error) => {
@@ -309,7 +394,7 @@ export default function TriviaBlitzScreen() {
     return () => {
       isMounted = false;
     };
-  }, [activeSelectionKey, isHost, secondsRemaining, session?.currentSelection?.answerIndex, session?.selectionRevealed, session?.status, sessionId]);
+  }, [activeSelectionKey, currentQuestionKey, isHost, secondsRemaining, session?.currentSelection?.answerIndex, session?.selectionRevealed, session?.status, sessionId]);
 
   const handleRetrySetup = useCallback(() => {
     setSetupError(null);
@@ -521,29 +606,79 @@ export default function TriviaBlitzScreen() {
             <Text style={styles.metaText}>Turn: {activePlayer?.name ?? FALLBACK_PLAYER_NAME}</Text>
             <Text style={styles.timer}>{secondsRemaining}s</Text>
             <Text style={styles.category}>{currentQuestion.category}</Text>
-            <Text style={styles.question}>{currentQuestion.question_en}</Text>
-            {currentQuestion.options_en.map((option, index) => {
+            <Text style={styles.question}>{currentQuestionText}</Text>
+            {currentAnswerOptions.map((option, index) => {
               const selected = session.currentSelection?.answerIndex === index;
-              const correct = (lastResult?.correctAnswerIndex ?? (session.selectionRevealed ? currentQuestion.answer : -1)) === index;
+              const visualState = resolveTriviaAnswerVisualState({
+                answerIndex: index,
+                selectedAnswerIndex,
+                correctAnswerIndex: currentQuestion.answer,
+                resultKnown: answerResultKnown,
+                currentQuestionKey,
+                feedbackQuestionKey,
+              });
+              const feedbackIcon = getTriviaAnswerFeedbackIcon(visualState);
+              const usesSelectedStyle =
+                visualState === "selected-pending" || visualState === "selected-incorrect";
+              const usesCorrectStyle =
+                visualState === "selected-correct" || visualState === "revealed-correct";
+              const answerLocked = Boolean(session.currentSelection);
 
               return (
                 <Pressable
-                  key={option}
+                  key={`${currentQuestionKey}:${index}`}
                   style={[
                     styles.answerButton,
-                    selected && styles.selectedAnswer,
-                    (lastResult || session.selectionRevealed) && correct && styles.correctAnswer,
+                    usesSelectedStyle && styles.selectedAnswer,
+                    usesCorrectStyle && styles.correctAnswer,
                   ]}
                   onPress={() => handleSelectAnswer(index)}
-                  disabled={busy}
+                  disabled={busy || answerLocked}
+                  accessibilityRole="button"
+                  accessibilityLabel={getTriviaAnswerAccessibilityLabel(
+                    option,
+                    visualState,
+                    answerAccessibilityLabels,
+                    selectionBelongsToSelf,
+                  )}
+                  accessibilityState={{
+                    disabled: busy || answerLocked,
+                    selected,
+                  }}
                 >
-                  <Text style={styles.answerText}>{option}</Text>
+                  <View style={styles.answerContent}>
+                    <Text style={styles.answerText}>{option}</Text>
+                    <View
+                      style={styles.feedbackIconSlot}
+                      pointerEvents="none"
+                      accessible={false}
+                      accessibilityElementsHidden
+                      importantForAccessibility="no-hide-descendants"
+                    >
+                      {feedbackIcon === "check" ? (
+                        <Check
+                          color={Colors.textHeading}
+                          size={24}
+                          strokeWidth={3}
+                          testID={`trivia-answer-check-${index}`}
+                        />
+                      ) : null}
+                      {feedbackIcon === "x" ? (
+                        <X
+                          color={Colors.primary}
+                          size={24}
+                          strokeWidth={3}
+                          testID={`trivia-answer-x-${index}`}
+                        />
+                      ) : null}
+                    </View>
+                  </View>
                 </Pressable>
               );
             })}
-            {lastResult ? (
-              <Text style={styles.resultText}>
-                {lastResult.correct ? t("trivia.correct") : t("trivia.notQuite")}
+            {answerResultKnown ? (
+              <Text style={styles.resultText} accessibilityLabel={feedbackAnnouncement}>
+                {selectedAnswerWasCorrect ? t("trivia.correct") : t("trivia.notQuite")}
               </Text>
             ) : null}
             {isHost ? (
@@ -738,6 +873,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: Spacing.md,
   },
+  answerContent: {
+    alignItems: "center",
+    flexDirection: "row",
+    minHeight: 24,
+  },
   selectedAnswer: {
     borderColor: Colors.primary,
     borderWidth: 2,
@@ -749,7 +889,17 @@ const styles = StyleSheet.create({
   answerText: {
     color: Colors.textHeading,
     fontFamily: Typography.bodySemiBold,
+    flex: 1,
+    flexShrink: 1,
     textAlign: "center",
+  },
+  feedbackIconSlot: {
+    alignItems: "center",
+    flexShrink: 0,
+    justifyContent: "center",
+    marginLeft: Spacing.sm,
+    minHeight: 24,
+    width: 24,
   },
   resultText: {
     color: Colors.textHeading,

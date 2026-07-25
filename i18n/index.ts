@@ -968,6 +968,15 @@ const resources = {
         correct: 'Correct',
         notQuite: 'Not quite',
         results: 'Results',
+        feedback: {
+          correctAnswer: 'Correct answer',
+          yourAnswerCorrect: 'Your answer, correct',
+          yourAnswerIncorrect: 'Your answer, incorrect',
+          selectedAnswerIncorrect: 'Selected answer, incorrect',
+          notSelected: 'Not selected',
+          yourAnswerIncorrectWithCorrect: 'Your answer, incorrect. Correct answer: {{answer}}',
+          selectedAnswerIncorrectWithCorrect: 'Selected answer, incorrect. Correct answer: {{answer}}',
+        },
       },
       games: {
         title: 'Games',
@@ -2488,6 +2497,15 @@ const resources = {
         correct: 'Correcto',
         notQuite: 'No exactamente',
         results: 'Resultados',
+        feedback: {
+          correctAnswer: 'Respuesta correcta',
+          yourAnswerCorrect: 'Tu respuesta, correcta',
+          yourAnswerIncorrect: 'Tu respuesta, incorrecta',
+          selectedAnswerIncorrect: 'Respuesta seleccionada, incorrecta',
+          notSelected: 'No seleccionada',
+          yourAnswerIncorrectWithCorrect: 'Tu respuesta, incorrecta. Respuesta correcta: {{answer}}',
+          selectedAnswerIncorrectWithCorrect: 'Respuesta seleccionada, incorrecta. Respuesta correcta: {{answer}}',
+        },
       },
       games: {
         title: 'Juegos',
