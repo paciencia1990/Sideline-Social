@@ -14,6 +14,7 @@ import {
   type GameJoinCodeStatus,
   type GameJoinCodeType,
 } from './gameJoinCodeCore';
+import { resolveJoinableGameSession } from './gameJoinSessionState';
 import { resolveCanonicalPublicName } from './publicUserProfileCore';
 
 const JOIN_CODE_TTL_MS = 2 * 60 * 60 * 1000;
@@ -44,6 +45,8 @@ type ActiveSquadGameSession = {
   sessionId: string;
   gameType: 'bomb_defusal' | 'spot_difference';
   status: 'lobby' | 'countdown' | 'active';
+  callerIsParticipant: boolean;
+  endsAtMs: number;
 };
 
 export const createGameJoinCode = functions.https.onCall(async (data, context): Promise<ReservationResult> => {
@@ -241,8 +244,10 @@ export const getGameJoinCodeForSession = functions.https.onCall(async (data, con
 
 export const getActiveSquadGameSession = functions.https.onCall(async (data, context): Promise<{
   session: ActiveSquadGameSession | null;
+  serverNowMs: number;
 }> => {
   const uid = requireUid(context);
+  const serverNowMs = Date.now();
   const requestedSquadId = typeof data?.squadId === 'string' ? data.squadId.trim() : '';
   const squadId = await readAuthorizedSquadId(uid, requestedSquadId);
   if (!squadId) throw safeError('permission-denied', 'not_authorized');
@@ -253,37 +258,93 @@ export const getActiveSquadGameSession = functions.https.onCall(async (data, con
     .equalTo(squadId)
     .once('value');
   const rawSessions = snapshot.val();
-  if (!rawSessions || typeof rawSessions !== 'object' || Array.isArray(rawSessions)) return { session: null };
+  if (!rawSessions || typeof rawSessions !== 'object' || Array.isArray(rawSessions)) {
+    return { session: null, serverNowMs };
+  }
 
   const candidates = Object.entries(rawSessions as Record<string, unknown>)
     .flatMap(([documentId, value]) => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
       const session = value as Record<string, unknown>;
-      const gameType = session.gameType;
-      const status = session.status;
-      if (gameType !== 'bomb_defusal' && gameType !== 'spot_difference') return [];
-      if (status !== 'lobby' && status !== 'countdown' && status !== 'active') return [];
+      const gameTypeValue = session.gameType;
+      const statusValue = session.status;
+      if (gameTypeValue !== 'bomb_defusal' && gameTypeValue !== 'spot_difference') return [];
+      if (statusValue !== 'lobby' && statusValue !== 'countdown' && statusValue !== 'active') return [];
+      const gameType: ActiveSquadGameSession['gameType'] = gameTypeValue;
+      const status: ActiveSquadGameSession['status'] = statusValue;
       const sessionId = typeof session.sessionId === 'string' && session.sessionId.trim()
         ? session.sessionId.trim()
         : documentId;
       const createdAt = typeof session.createdAt === 'number' && Number.isFinite(session.createdAt)
         ? session.createdAt
         : 0;
-      const candidate: ActiveSquadGameSession & { createdAt: number } = {
+      const candidate = {
         sessionId,
         gameType,
         status,
         createdAt,
+        raw: session,
       };
       return [candidate];
     })
     .sort((left, right) => right.createdAt - left.createdAt);
-  const active = candidates[0];
-  return {
-    session: active
-      ? { sessionId: active.sessionId, gameType: active.gameType, status: active.status }
-      : null,
-  };
+
+  for (const candidate of candidates) {
+    const joinCodeType = candidate.gameType === 'bomb_defusal' ? 'bombDefusal' : 'spotTheDifferences';
+    const linkSnapshot = await sessionLinks().doc(hashIdentifier(`${joinCodeType}:${candidate.sessionId}`)).get();
+    const link = linkSnapshot.data();
+    const code = normalizeGameJoinCode(link?.code);
+    if (
+      !linkSnapshot.exists ||
+      link?.sessionId !== candidate.sessionId ||
+      link?.gameType !== joinCodeType ||
+      !code
+    ) {
+      continue;
+    }
+
+    const players = readRecord(candidate.raw.players);
+    const callerIsParticipant = Boolean(players[uid]);
+    const durationSeconds = readRealtimeDurationSeconds(candidate.gameType, candidate.raw.settings);
+    const hardExpiresAtMs = earliestPositiveNumber(
+      readPositiveNumber(candidate.raw.expiresAt),
+      readTimestampMillis(link?.expiresAt),
+    );
+    if (hardExpiresAtMs != null && hardExpiresAtMs <= serverNowMs) {
+      await expireRealtimeGameSession(joinCodeType, candidate.sessionId, serverNowMs);
+      continue;
+    }
+    const result = resolveJoinableGameSession({
+      status: candidate.status,
+      startedAtMs: readPositiveNumber(candidate.raw.startedAt),
+      endsAtMs: candidate.status === 'active'
+        ? readPositiveNumber(candidate.raw.endsAt)
+        : earliestPositiveNumber(readPositiveNumber(candidate.raw.endsAt), hardExpiresAtMs),
+      durationSeconds,
+      joinCodeStatus: typeof link?.status === 'string' ? link.status : null,
+      participantCount: Object.keys(players).length,
+      capacity: readPositiveNumber(candidate.raw.maxPlayers),
+      callerIsParticipant,
+      nowMs: serverNowMs,
+    });
+
+    if (result.isExpired) {
+      await expireRealtimeGameSession(joinCodeType, candidate.sessionId, serverNowMs);
+      continue;
+    }
+    if (!result.isJoinable || result.endsAtMs == null) continue;
+    return {
+      session: {
+        sessionId: candidate.sessionId,
+        gameType: candidate.gameType,
+        status: candidate.status,
+        callerIsParticipant,
+        endsAtMs: result.endsAtMs,
+      },
+      serverNowMs,
+    };
+  }
+  return { session: null, serverNowMs };
 });
 
 export const updateGameJoinCodeStatus = functions.https.onCall(async (data, context) => {
@@ -293,11 +354,15 @@ export const updateGameJoinCodeStatus = functions.https.onCall(async (data, cont
   const status = readLifecycleStatus(data?.status);
   await assertHostOwnsCanonicalSession(uid, gameType, sessionId, true);
   await setJoinCodeStatus(gameType, sessionId, uid, status);
-  if (gameType !== 'triviaBlitz' && status !== 'started') {
-    await admin.database().ref(`/gameSessions/${sessionId}`).update({
-      status: status === 'ended' ? 'completed' : 'failed',
-      completedAt: Date.now(),
-    });
+  if (gameType !== 'triviaBlitz') {
+    const serverNowMs = Date.now();
+    await admin.database().ref(`/gameSessions/${sessionId}`).update(status === 'started'
+      ? { status: 'active', startedAt: serverNowMs, updatedAt: serverNowMs }
+      : {
+        status: status === 'ended' ? 'completed' : 'failed',
+        completedAt: serverNowMs,
+        updatedAt: serverNowMs,
+      });
   }
   return { status };
 });
@@ -335,8 +400,20 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
   const reference = admin.database().ref(`/gameSessions/${sessionId}`);
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) throw safeError('not-found', 'game_not_found');
-  const initialSession = initialSnapshot.val();
+  const initialSession = initialSnapshot.val() as Record<string, unknown>;
+  const linkSnapshot = await sessionLinks()
+    .doc(hashIdentifier(`spotTheDifferences:${sessionId}`))
+    .get();
+  const joinCodeStatus = linkSnapshot.data()?.status;
+  const initialState = resolveRealtimeJoinState(initialSession, joinCodeStatus, uid, Date.now());
+  if (!initialState.isJoinable) {
+    if (initialState.isExpired) {
+      await expireRealtimeGameSession('spotTheDifferences', sessionId, Date.now());
+    }
+    throw safeError('failed-precondition', 'game_already_started');
+  }
   let mayUseInitialCacheFallback = true;
+  let expiredDuringRecord = false;
   const result = await reference.transaction((cachedSession) => {
     const session = cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
     mayUseInitialCacheFallback = false;
@@ -348,7 +425,9 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
       reason = 'not_authorized';
       return;
     }
-    if (session.status !== 'active') {
+    const state = resolveRealtimeJoinState(session, joinCodeStatus, uid, Date.now());
+    if (!state.isJoinable || session.status !== 'active') {
+      expiredDuringRecord = state.isExpired;
       reason = 'game_already_started';
       return;
     }
@@ -363,7 +442,12 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
       updatedAt: Date.now(),
     };
   });
-  if (!result.committed) throw safeError('permission-denied', reason ?? 'not_authorized');
+  if (!result.committed) {
+    if (expiredDuringRecord) {
+      await expireRealtimeGameSession('spotTheDifferences', sessionId, Date.now());
+    }
+    throw safeError('permission-denied', reason ?? 'not_authorized');
+  }
   return { foundCount };
 });
 
@@ -426,6 +510,69 @@ async function createRealtimeSession(input: {
   return sessionId;
 }
 
+function resolveRealtimeJoinState(
+  session: Record<string, unknown>,
+  joinCodeStatus: unknown,
+  uid: string,
+  nowMs: number,
+) {
+  const gameType = session.gameType;
+  const players = readRecord(session.players);
+  const status = typeof session.status === 'string' ? session.status : '';
+  return resolveJoinableGameSession({
+    status,
+    startedAtMs: readPositiveNumber(session.startedAt),
+    endsAtMs: status === 'active' || status === 'playing' || status === 'started'
+      ? readPositiveNumber(session.endsAt)
+      : earliestPositiveNumber(
+        readPositiveNumber(session.endsAt),
+        readPositiveNumber(session.expiresAt),
+      ),
+    durationSeconds: gameType === 'bomb_defusal' || gameType === 'spot_difference'
+      ? readRealtimeDurationSeconds(gameType, session.settings)
+      : null,
+    joinCodeStatus: typeof joinCodeStatus === 'string' ? joinCodeStatus : null,
+    participantCount: Object.keys(players).length,
+    capacity: readPositiveNumber(session.maxPlayers),
+    callerIsParticipant: Boolean(players[uid]),
+    nowMs,
+  });
+}
+
+async function expireRealtimeGameSession(
+  gameType: Exclude<GameJoinCodeType, 'triviaBlitz'>,
+  sessionId: string,
+  serverNowMs: number,
+) {
+  await admin.database().ref(`/gameSessions/${sessionId}`).transaction((session) => {
+    if (!session || typeof session !== 'object') return session;
+    if (['completed', 'failed', 'ended', 'expired', 'canceled', 'cancelled', 'abandoned'].includes(session.status)) {
+      return session;
+    }
+    return {
+      ...session,
+      status: session.status === 'active' || session.status === 'playing' ? 'completed' : 'failed',
+      completedAt: serverNowMs,
+      updatedAt: serverNowMs,
+    };
+  });
+
+  const linkRef = sessionLinks().doc(hashIdentifier(`${gameType}:${sessionId}`));
+  await admin.firestore().runTransaction(async (transaction) => {
+    const link = await transaction.get(linkRef);
+    const linkData = link.data();
+    const code = normalizeGameJoinCode(linkData?.code);
+    if (!link.exists || linkData?.sessionId !== sessionId || linkData?.gameType !== gameType || !code) return;
+    const mappingRef = registry().doc(code);
+    const mapping = await transaction.get(mappingRef);
+    const timestamp = Timestamp.fromMillis(serverNowMs);
+    transaction.update(linkRef, { status: 'expired', updatedAt: timestamp });
+    if (mapping.exists && mapping.data()?.sessionId === sessionId && mapping.data()?.gameType === gameType) {
+      transaction.update(mappingRef, { status: 'expired', updatedAt: timestamp });
+    }
+  });
+}
+
 async function assertHostOwnsCanonicalSession(
   uid: string,
   gameType: GameJoinCodeType,
@@ -483,7 +630,18 @@ async function joinRealtimeSession(input: {
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) throw safeError('not-found', 'invalid_or_expired_code');
   const initialSession = initialSnapshot.val();
+  const initialState = resolveRealtimeJoinState(
+    initialSession,
+    input.mappingStatus,
+    input.uid,
+    Date.now(),
+  );
+  if (initialState.isExpired) {
+    await expireRealtimeGameSession(input.gameType, input.sessionId, Date.now());
+    throw safeError('not-found', 'invalid_or_expired_code');
+  }
   let mayUseInitialCacheFallback = true;
+  let expiredDuringJoin = false;
   const result = await reference.transaction((cachedSession) => {
     const session = cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
     mayUseInitialCacheFallback = false;
@@ -493,14 +651,20 @@ async function joinRealtimeSession(input: {
     }
     const players = session.players && typeof session.players === 'object' ? session.players : {};
     const existing = Boolean(players[input.uid]);
+    const state = resolveRealtimeJoinState(session, input.mappingStatus, input.uid, Date.now());
+    if (!state.isJoinable) {
+      expiredDuringJoin = state.isExpired;
+      reason = state.reason === 'full'
+        ? 'game_full'
+        : state.reason === 'playing'
+          ? 'game_already_started'
+          : 'invalid_or_expired_code';
+      return;
+    }
     if (existing) {
       participantState = 'reconnected';
       players[input.uid] = { ...players[input.uid], isConnected: true };
       return { ...session, players };
-    }
-    if (input.mappingStatus !== 'lobby' || session.status !== 'lobby') {
-      reason = 'game_already_started';
-      return;
     }
     const maxPlayers = Number.isInteger(session.maxPlayers) ? session.maxPlayers : 12;
     if (Object.keys(players).length >= maxPlayers) {
@@ -517,6 +681,9 @@ async function joinRealtimeSession(input: {
     return { ...session, players, updatedAt: Date.now() };
   });
   if (!result.committed) {
+    if (expiredDuringJoin) {
+      await expireRealtimeGameSession(input.gameType, input.sessionId, Date.now());
+    }
     functions.logger.warn('game_join_realtime_transaction_aborted', {
       reason: reason ?? 'transaction_not_committed',
       mappingStatus: input.mappingStatus,
@@ -717,6 +884,31 @@ function isRegistryForSession(
 
 function readTimestampMillis(value: unknown) {
   return value instanceof Timestamp ? value.toMillis() : 0;
+}
+
+function readRealtimeDurationSeconds(
+  gameType: 'bomb_defusal' | 'spot_difference',
+  settingsValue: unknown,
+) {
+  const settings = readRecord(settingsValue);
+  return readPositiveNumber(
+    gameType === 'bomb_defusal' ? settings.timerSeconds : settings.roundDuration,
+  );
+}
+
+function readPositiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function earliestPositiveNumber(...values: Array<number | null>) {
+  const valid = values.filter((value): value is number => value != null);
+  return valid.length ? Math.min(...valid) : null;
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function readStringArray(value: unknown): string[] {

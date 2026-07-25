@@ -35,7 +35,11 @@ export interface GameSession {
   settings: Record<string, unknown>;
 }
 
-export type ActiveGameSession = Pick<GameSession, "sessionId" | "gameType" | "status">;
+export type ActiveGameSession = Pick<GameSession, "sessionId" | "gameType" | "status"> & {
+  callerIsParticipant: boolean;
+  endsAtMs: number;
+  expiresAtLocalMs: number;
+};
 
 export type ActiveSquadSessionFetchResult =
   | { status: "ready"; session: ActiveGameSession | null }
@@ -140,14 +144,32 @@ async function requestActiveSquadSession(squadId: string): Promise<ActiveSquadSe
     const sessionId = typeof session.sessionId === "string" ? session.sessionId.trim() : "";
     const gameType = session.gameType;
     const status = session.status;
+    const endsAtMs = typeof session.endsAtMs === "number" && Number.isFinite(session.endsAtMs)
+      ? session.endsAtMs
+      : 0;
+    const serverNowMs = typeof rawResult.serverNowMs === "number" && Number.isFinite(rawResult.serverNowMs)
+      ? rawResult.serverNowMs
+      : 0;
     if (
       !sessionId ||
       (gameType !== "bomb_defusal" && gameType !== "spot_difference") ||
-      (status !== "lobby" && status !== "countdown" && status !== "active")
+      (status !== "lobby" && status !== "countdown" && status !== "active") ||
+      endsAtMs <= 0 ||
+      serverNowMs <= 0
     ) {
       return { status: "network-error" };
     }
-    return { status: "ready", session: { sessionId, gameType, status } };
+    return {
+      status: "ready",
+      session: {
+        sessionId,
+        gameType,
+        status,
+        callerIsParticipant: session.callerIsParticipant === true,
+        endsAtMs,
+        expiresAtLocalMs: Date.now() + Math.max(0, endsAtMs - serverNowMs),
+      },
+    };
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
     return code.includes("permission-denied") || code.includes("unauthenticated")

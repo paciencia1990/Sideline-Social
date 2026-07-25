@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const admin = require("../functions/node_modules/firebase-admin");
 const { initializeApp } = require("firebase/app");
 const { connectAuthEmulator, createUserWithEmailAndPassword, getAuth } = require("firebase/auth");
@@ -20,22 +21,31 @@ async function createClient(label) {
   connectStorageEmulator(storage, "127.0.0.1", 9199);
   return { uid: credential.user.uid, storage, call: (name, data = {}) => httpsCallable(callableFunctions, name)(data).then((result) => result.data) };
 }
+function createUnauthenticatedClient(label) {
+  const app = initializeApp({ apiKey: "demo-key", projectId }, label);
+  const callableFunctions = getFunctions(app, "us-central1");
+  connectFunctionsEmulator(callableFunctions, "127.0.0.1", 5001);
+  return { call: (name, data = {}) => httpsCallable(callableFunctions, name)(data).then((result) => result.data) };
+}
 function hasCode(code) { return (error) => String(error?.code).includes(code); }
 
 async function run() {
-  const [coach, parent, secondCoach, outsider, joannStaff] = await Promise.all([
+  const unauthenticated = createUnauthenticatedClient("team-unauthenticated");
+  const [coach, parent, secondCoach, outsider, joannStaff, otherParent] = await Promise.all([
     "team-coach",
     "team-parent",
     "team-second-coach",
     "team-outsider",
     "team-joann-staff",
+    "team-other-parent",
   ].map(createClient));
-  await db.collection("teams").doc("team-1").set({ name: "Tigers", createdBy: coach.uid, coachIds: [coach.uid], parentIds: [parent.uid, joannStaff.uid], status: "active" });
+  await db.collection("teams").doc("team-1").set({ name: "Tigers", createdBy: coach.uid, coachIds: [coach.uid], parentIds: [parent.uid, joannStaff.uid, otherParent.uid], status: "active" });
   await Promise.all([
     db.collection("teams").doc("team-1").collection("members").doc(coach.uid).set({ userId: coach.uid, teamId: "team-1", status: "active", role: "coach", roles: { coach: true, parent: false, staff: false }, displayName: "Coach C." }),
     db.collection("teams").doc("team-1").collection("members").doc(parent.uid).set({ userId: parent.uid, teamId: "team-1", status: "active", role: "parent", roles: { coach: false, parent: true, staff: false }, displayName: "Parent P." }),
     db.collection("teams").doc("team-1").collection("members").doc(secondCoach.uid).set({ userId: secondCoach.uid, teamId: "team-1", status: "active", role: "coach", roles: { coach: true, parent: false, staff: false }, displayName: "Coach S." }),
     db.collection("teams").doc("team-1").collection("members").doc(joannStaff.uid).set({ userId: joannStaff.uid, teamId: "team-1", status: "active", role: "parent", roles: { coach: false, parent: true, staff: true }, displayName: "Staff J." }),
+    db.collection("teams").doc("team-1").collection("members").doc(otherParent.uid).set({ userId: otherParent.uid, teamId: "team-1", status: "active", role: "parent", roles: { coach: false, parent: true, staff: false }, displayName: "Parent O." }),
   ]);
 
   const textAnnouncement = await coach.call("createTeamAnnouncement", {
@@ -65,7 +75,54 @@ async function run() {
     db.collection("users").doc(coach.uid).set({ displayName: "Coach C." }),
     db.collection("users").doc(parent.uid).set({ displayName: "Parent P." }),
     db.collection("users").doc(joannStaff.uid).set({ displayName: "Staff J." }),
+    db.collection("users").doc(otherParent.uid).set({ displayName: "Parent O." }),
   ]);
+  const parentReply = await parent.call("createTeamAnnouncementReply", {
+    teamId: "team-1",
+    announcementId: textAnnouncement.announcementId,
+    body: "We will be there.",
+    replyType: "team",
+  });
+  await assert.rejects(() => otherParent.call("deleteTeamAnnouncementReply", {
+    teamId: "team-1",
+    announcementId: textAnnouncement.announcementId,
+    replyId: parentReply.reply.id,
+  }), hasCode("permission-denied"));
+  assert.equal((await parent.call("deleteTeamAnnouncementReply", {
+    teamId: "team-1",
+    announcementId: textAnnouncement.announcementId,
+    replyId: parentReply.reply.id,
+  })).deleted, true);
+  assert.equal((await parent.call("deleteTeamAnnouncementReply", {
+    teamId: "team-1",
+    announcementId: textAnnouncement.announcementId,
+    replyId: parentReply.reply.id,
+  })).deleted, false, "repeated reply deletion is idempotent");
+  const deletedReply = (await db.collection("teams").doc("team-1").collection("announcements")
+    .doc(textAnnouncement.announcementId).collection("replies").doc(parentReply.reply.id).get()).data();
+  assert.equal(deletedReply.isDeleted, true);
+  assert.equal(deletedReply.body, null);
+  assert.equal(deletedReply.deletedBy, parent.uid);
+  await assert.rejects(() => otherParent.call("deleteTeamAnnouncement", {
+    teamId: "team-1",
+    announcementId: textAnnouncement.announcementId,
+  }), hasCode("permission-denied"));
+  assert.equal((await coach.call("deleteTeamAnnouncement", {
+    teamId: "team-1",
+    announcementId: textAnnouncement.announcementId,
+  })).status, "deleted");
+  assert.equal((await coach.call("deleteTeamAnnouncement", {
+    teamId: "team-1",
+    announcementId: textAnnouncement.announcementId,
+  })).status, "alreadyDeleted", "repeated text announcement deletion is idempotent");
+  const deletedTextAnnouncement = (await db.collection("teams").doc("team-1").collection("announcements")
+    .doc(textAnnouncement.announcementId).get()).data();
+  assert.equal(deletedTextAnnouncement.isDeleted, true);
+  assert.equal(deletedTextAnnouncement.title, null);
+  assert.equal(deletedTextAnnouncement.body, null);
+  assert.equal(deletedTextAnnouncement.voiceMemo, null);
+  assert.equal((await db.collection("teams").doc("team-1").collection("announcements")
+    .doc(textAnnouncement.announcementId).collection("replies").doc(parentReply.reply.id).get()).exists, true);
 
   await assert.rejects(() => outsider.call("setTeamStaffRole", {
     teamId: "team-1", targetUserId: parent.uid, isStaff: true,
@@ -127,6 +184,36 @@ async function run() {
     kind: "privateTeamMessage", teamId: "team-1", parentId: first.conversationId,
     contentId: sent.messageId, reason: "other",
   }), hasCode("permission-denied"));
+  await assert.rejects(
+    () => parent.call("deletePrivateTeamMessage", {
+      conversationId: first.conversationId,
+      messageId: sent.messageId,
+      senderUserId: coach.uid,
+    }),
+    hasCode("permission-denied"),
+  );
+  await assert.rejects(
+    () => unauthenticated.call("deletePrivateTeamMessage", {
+      conversationId: first.conversationId,
+      messageId: sent.messageId,
+    }),
+    hasCode("unauthenticated"),
+  );
+  assert.equal((await coach.call("deletePrivateTeamMessage", {
+    conversationId: first.conversationId,
+    messageId: sent.messageId,
+  })).status, "deleted");
+  assert.equal((await coach.call("deletePrivateTeamMessage", {
+    conversationId: first.conversationId,
+    messageId: sent.messageId,
+  })).status, "alreadyDeleted", "repeated private text deletion is idempotent");
+  const deletedPrivateText = (await db.collection("teamPrivateConversations").doc(first.conversationId)
+    .collection("messages").doc(sent.messageId).get()).data();
+  assert.equal(deletedPrivateText.isDeleted, true);
+  assert.equal(deletedPrivateText.deletedBy, coach.uid);
+  assert.equal(deletedPrivateText.text, null);
+  assert.equal(deletedPrivateText.caption, null);
+  assert.equal(deletedPrivateText.voiceMemo, null);
 
   const voiceMemo = { durationMilliseconds: 1000, sizeBytes: 1024, mimeType: "audio/mp4" };
   await assert.rejects(() => parent.call("createTeamVoiceMemoUpload", {
@@ -146,6 +233,38 @@ async function run() {
   const storedAnnouncement = (await db.collection("teams").doc("team-1").collection("announcements").doc(announcementReservation.targetId).get()).data();
   assert.equal(storedAnnouncement.contentType, "voice");
   assert.equal(storedAnnouncement.voiceMemo.storagePath, announcementReservation.storagePath);
+  assert.equal(JSON.stringify(storedAnnouncement).includes("file://"), false, "persisted announcements never retain the local draft URI");
+  const announcementPlaybackRequest = {
+    messageId: announcementReservation.targetId,
+    messageKind: "announcement",
+    storagePath: announcementReservation.storagePath,
+  };
+  let announcementPlaybackUrl;
+  for (const authorized of [coach, parent, joannStaff]) {
+    const playback = await authorized.call("getTeamVoiceMemoDownloadUrl", announcementPlaybackRequest);
+    assert.equal(typeof playback.url, "string");
+    assert.equal(playback.expiresAtMillis > Date.now(), true);
+    announcementPlaybackUrl ??= playback.url;
+  }
+  const announcementAudio = await fetch(announcementPlaybackUrl);
+  assert.equal(announcementAudio.ok, true, "authorized announcement URL returns the stored audio bytes");
+  assert.equal(announcementAudio.headers.get("content-type"), "audio/mp4");
+  assert.equal((await announcementAudio.arrayBuffer()).byteLength, 1024);
+  await assert.rejects(
+    () => outsider.call("getTeamVoiceMemoDownloadUrl", announcementPlaybackRequest),
+    hasCode("permission-denied"),
+  );
+  await assert.rejects(
+    () => unauthenticated.call("getTeamVoiceMemoDownloadUrl", announcementPlaybackRequest),
+    hasCode("unauthenticated"),
+  );
+  await assert.rejects(
+    () => coach.call("getTeamVoiceMemoDownloadUrl", {
+      ...announcementPlaybackRequest,
+      storagePath: "teamVoiceMemos/team-1/announcements/arbitrary/reservation/memo.m4a",
+    }),
+    hasCode("not-found"),
+  );
   const announcementNotificationRef = db.collection("userNotifications").doc(parent.uid).collection("notifications").doc(`coachAnnouncement_team-1_${announcementReservation.targetId}`);
   await waitForDocument(announcementNotificationRef);
   const announcementNotification = (await announcementNotificationRef.get()).data();
@@ -158,11 +277,109 @@ async function run() {
   await uploadBytes(ref(parent.storage, privateReservation.storagePath), new Uint8Array(1024), { contentType: "audio/mp4" });
   assert.equal((await parent.call("finalizePrivateTeamVoiceMessage", { reservationId: privateReservation.reservationId })).status, "sent");
   assert.equal((await parent.call("finalizePrivateTeamVoiceMessage", { reservationId: privateReservation.reservationId })).status, "alreadyFinalized");
-  assert.equal((await db.collection("teamPrivateConversations").doc(first.conversationId).collection("messages").doc(privateReservation.targetId).get()).data().contentType, "voice");
+  const storedPrivateMessage = (await db.collection("teamPrivateConversations").doc(first.conversationId).collection("messages").doc(privateReservation.targetId).get()).data();
+  assert.equal(storedPrivateMessage.contentType, "voice");
+  assert.equal(storedPrivateMessage.voiceMemo.storagePath, privateReservation.storagePath);
+  assert.equal(JSON.stringify(storedPrivateMessage).includes("file://"), false, "persisted private messages never retain the local draft URI");
+  const privatePlaybackRequest = {
+    messageId: privateReservation.targetId,
+    messageKind: "privateMessage",
+    storagePath: privateReservation.storagePath,
+  };
+  let privatePlaybackUrl;
+  for (const authorized of [parent, coach]) {
+    const playback = await authorized.call("getTeamVoiceMemoDownloadUrl", privatePlaybackRequest);
+    assert.equal(typeof playback.url, "string");
+    assert.equal(playback.expiresAtMillis > Date.now(), true);
+    privatePlaybackUrl ??= playback.url;
+  }
+  const privateAudio = await fetch(privatePlaybackUrl);
+  assert.equal(privateAudio.ok, true, "authorized private URL returns the stored audio bytes");
+  assert.equal(privateAudio.headers.get("content-type"), "audio/mp4");
+  assert.equal((await privateAudio.arrayBuffer()).byteLength, 1024);
+  await assert.rejects(
+    () => joannStaff.call("getTeamVoiceMemoDownloadUrl", privatePlaybackRequest),
+    hasCode("permission-denied"),
+  );
+  await assert.rejects(
+    () => outsider.call("getTeamVoiceMemoDownloadUrl", privatePlaybackRequest),
+    hasCode("permission-denied"),
+  );
+  await assert.rejects(
+    () => parent.call("getTeamVoiceMemoDownloadUrl", { ...privatePlaybackRequest, messageId: "another-message" }),
+    hasCode("not-found"),
+  );
+
+  const coachVoiceReservation = await coach.call("createTeamVoiceMemoUpload", {
+    teamId: "team-1", kind: "privateMessage", conversationId: first.conversationId,
+    clientMessageId: "voice_client_coach_001", caption: "Coach voice reply", voiceMemo,
+  });
+  await uploadBytes(ref(coach.storage, coachVoiceReservation.storagePath), new Uint8Array(1024), { contentType: "audio/mp4" });
+  await coach.call("finalizePrivateTeamVoiceMessage", { reservationId: coachVoiceReservation.reservationId });
+  const coachVoicePlaybackRequest = {
+    messageId: coachVoiceReservation.targetId,
+    messageKind: "privateMessage",
+    storagePath: coachVoiceReservation.storagePath,
+  };
+  await coach.call("getTeamVoiceMemoDownloadUrl", coachVoicePlaybackRequest);
+  await parent.call("getTeamVoiceMemoDownloadUrl", coachVoicePlaybackRequest);
   const privateNotificationId = `teamPrivateMessage_${first.conversationId}_${privateReservation.targetId}`;
   const privateNotification = (await db.collection("userNotifications").doc(coach.uid).collection("notifications").doc(privateNotificationId).get()).data();
   assert.equal(privateNotification.type, "teamPrivateMessage");
   assert.equal(JSON.stringify(privateNotification).includes("Private voice reply"), false, "private captions are excluded from notification records");
+
+  const playbackGrantToken = "a".repeat(64);
+  const playbackGrantId = createHash("sha256").update(playbackGrantToken).digest("hex");
+  await db.collection("teamVoicePlaybackGrants").doc(playbackGrantId).set({
+    expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+    messageId: privateReservation.targetId,
+    messageKind: "privateMessage",
+    storagePath: privateReservation.storagePath,
+    userId: coach.uid,
+  });
+  const streamedPrivateAudio = await fetch(
+    `http://127.0.0.1:5001/${projectId}/us-central1/streamTeamVoiceMemo?grant=${playbackGrantToken}`,
+    { headers: { Range: "bytes=0-15" } },
+  );
+  assert.equal(streamedPrivateAudio.status, 206, "authorized media grants support physical-player byte ranges");
+  assert.equal(streamedPrivateAudio.headers.get("content-type"), "audio/mp4");
+  assert.equal((await streamedPrivateAudio.arrayBuffer()).byteLength, 16);
+
+  await assert.rejects(() => coach.call("deletePrivateTeamMessage", {
+    conversationId: first.conversationId,
+    messageId: privateReservation.targetId,
+  }), hasCode("permission-denied"));
+  assert.equal((await parent.call("deletePrivateTeamMessage", {
+    conversationId: first.conversationId,
+    messageId: privateReservation.targetId,
+  })).status, "deleted");
+  assert.equal((await parent.call("deletePrivateTeamMessage", {
+    conversationId: first.conversationId,
+    messageId: privateReservation.targetId,
+  })).status, "alreadyDeleted");
+  const deletedPrivateVoice = (await db.collection("teamPrivateConversations").doc(first.conversationId)
+    .collection("messages").doc(privateReservation.targetId).get()).data();
+  assert.equal(deletedPrivateVoice.isDeleted, true);
+  assert.equal(deletedPrivateVoice.caption, null);
+  assert.equal(deletedPrivateVoice.voiceMemo, null);
+  assert.equal((await admin.storage().bucket().file(privateReservation.storagePath).exists())[0], false);
+  await assert.rejects(
+    () => coach.call("getTeamVoiceMemoDownloadUrl", privatePlaybackRequest),
+    hasCode("not-found"),
+  );
+  assert.equal((await fetch(
+    `http://127.0.0.1:5001/${projectId}/us-central1/streamTeamVoiceMemo?grant=${playbackGrantToken}`,
+  )).status, 404, "an issued media grant is revoked by the message tombstone");
+
+  assert.equal((await coach.call("deletePrivateTeamMessage", {
+    conversationId: first.conversationId,
+    messageId: coachVoiceReservation.targetId,
+  })).status, "deleted");
+  const conversationAfterLatestDelete = (await db.collection("teamPrivateConversations")
+    .doc(first.conversationId).get()).data();
+  assert.equal(conversationAfterLatestDelete.lastMessageType, "text");
+  assert.equal(conversationAfterLatestDelete.lastMessagePreview, "Private reply");
+  assert.equal(conversationAfterLatestDelete.lastSenderUserId, parent.uid);
 
   const [audioExistsBeforeDelete] = await admin.storage().bucket().file(announcementReservation.storagePath).exists();
   assert.equal(audioExistsBeforeDelete, true);
@@ -170,6 +387,16 @@ async function run() {
   const [audioExistsAfterDelete] = await admin.storage().bucket().file(announcementReservation.storagePath).exists();
   assert.equal(audioExistsAfterDelete, false, "deleting a voice announcement deletes its private audio object");
   assert.equal((await db.collection("teamVoiceUploadReservations").doc(announcementReservation.reservationId).get()).exists, false);
+  const deletedVoiceAnnouncement = (await db.collection("teams").doc("team-1").collection("announcements")
+    .doc(announcementReservation.targetId).get()).data();
+  assert.equal(deletedVoiceAnnouncement.isDeleted, true);
+  assert.equal(deletedVoiceAnnouncement.title, null);
+  assert.equal(deletedVoiceAnnouncement.body, null);
+  assert.equal(deletedVoiceAnnouncement.voiceMemo, null);
+  await assert.rejects(
+    () => parent.call("getTeamVoiceMemoDownloadUrl", announcementPlaybackRequest),
+    hasCode("not-found"),
+  );
 
   const coachInbox = await coach.call("getTeamPrivateMessageInbox", { role: "coach" });
   const parentInbox = await parent.call("getTeamPrivateMessageInbox", { role: "parent", teamId: "team-1" });

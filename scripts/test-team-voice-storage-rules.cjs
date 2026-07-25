@@ -26,6 +26,10 @@ async function seed(testEnv) {
     await setDoc(doc(db, "teamVoiceUploadReservations", "expired-reservation"), {
       ...common, reservationId: "expired-reservation", kind: "announcement", targetId: "announcement-expired", expiresAt: Timestamp.fromMillis(Date.now() - 1000),
     });
+    await setDoc(doc(db, "teamVoiceUploadReservations", "zero-reservation"), {
+      ...common, reservationId: "zero-reservation", kind: "announcement", targetId: "announcement-zero",
+      storagePath: "teamVoiceMemos/team-1/announcements/announcement-zero/zero-reservation/memo.m4a",
+    });
   });
 }
 
@@ -45,6 +49,7 @@ async function run() {
     await assertFails(coachStorage.ref("teamVoiceMemos/team-1/announcements/wrong/announcement-reservation/memo.m4a").put(bytes, { contentType: "audio/mp4" }));
     await assertFails(coachStorage.ref("teamVoiceMemos/team-1/privateConversations/wrong/message-1/private-reservation/memo.m4a").put(bytes, { contentType: "audio/mp4" }));
     await assertFails(coachStorage.ref("teamVoiceMemos/team-1/announcements/announcement-expired/expired-reservation/memo.m4a").put(bytes, { contentType: "audio/mp4" }));
+    await assertFails(coachStorage.ref("teamVoiceMemos/team-1/announcements/announcement-zero/zero-reservation/memo.m4a").put(new Uint8Array(0), { contentType: "audio/mp4" }));
     await assertFails(coachStorage.ref("teamVoiceMemos/team-1/announcements/announcement-1/announcement-reservation/memo.m4a").getDownloadURL());
     await assertFails(coachStorage.ref("other/path.m4a").put(bytes, { contentType: "audio/mp4" }));
     console.log("Team voice Storage reservation ownership, path, expiry, metadata, and direct-read denial tests passed.");

@@ -31,8 +31,8 @@ import {
 import { formatPublicUserName } from "@/utils/friendPrivacy";
 import { getTeamPrivateMessageInbox } from "@/services/teamPrivateMessageService";
 import { getPublicUserProfiles } from "@/services/publicProfileService";
-import type { StoredVoiceMemo, TeamPrivateConversation } from "@/types/teamVoiceMessaging";
-import { resolveAnnouncementContentType } from "@/utils/teamAnnouncementCore";
+import type { TeamPrivateConversation } from "@/types/teamVoiceMessaging";
+import { normalizeVoiceMessageFields } from "@/utils/voiceMessageNormalizer";
 
 export type ParentTeamAnnouncement = TeamAnnouncement & {
   createdAtDate: Date | null;
@@ -277,8 +277,7 @@ async function resolveCoachName(team: Team): Promise<{
 }
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): ParentTeamAnnouncement {
-  const voice = data.voiceMemo && typeof data.voiceMemo === "object" ? data.voiceMemo as Record<string, unknown> : null;
-  const contentType = resolveAnnouncementContentType(data.contentType, voice);
+  const voice = normalizeVoiceMessageFields(data);
   return {
     id,
     title: readString(data.title) ?? "",
@@ -287,22 +286,16 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): Paren
     createdByName: formatPublicUserName(readString(data.createdByName)) ?? "",
     audience: data.audience === "staff" || data.audience === "all" ? data.audience : "parents",
     allowReplies: data.allowReplies !== false,
-    contentType,
-    voiceMemo: contentType === "voice" && voice ? {
-      storagePath: readString(voice.storagePath) ?? "",
-      durationMilliseconds: Number(voice.durationMilliseconds ?? 0),
-      sizeBytes: Number(voice.sizeBytes ?? 0),
-      mimeType: readVoiceMime(voice.mimeType),
-    } satisfies StoredVoiceMemo : null,
+    contentType: voice.contentType,
+    voiceMemo: voice.voiceMemo,
+    isDeleted: data.isDeleted === true,
+    deletedBy: readString(data.deletedBy),
+    deletedAt: data.deletedAt,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
     createdAtDate: readDate(data.createdAt),
     isRead: false,
   };
-}
-
-function readVoiceMime(value: unknown): StoredVoiceMemo["mimeType"] {
-  return value === "audio/m4a" || value === "audio/x-m4a" ? value : "audio/mp4";
 }
 
 function compareTeamSummaries(first: ParentTeamSummary, second: ParentTeamSummary) {

@@ -6,6 +6,13 @@ export const TEAM_VOICE_MIME_TYPES = ['audio/mp4', 'audio/m4a', 'audio/x-m4a'] a
 export type TeamVoiceMimeType = typeof TEAM_VOICE_MIME_TYPES[number];
 export type TeamVoiceUploadKind = 'announcement' | 'privateMessage';
 export type TeamPrivateMessageContentType = 'text' | 'voice';
+export type TeamVoiceStorageReference = {
+  kind: TeamVoiceUploadKind;
+  messageId: string;
+  reservationId: string;
+  teamId: string;
+  conversationId?: string;
+};
 
 export type TeamVoiceMemoMetadata = {
   storagePath: string;
@@ -85,6 +92,28 @@ export function teamVoiceStoragePath(input: {
     return `teamVoiceMemos/${input.teamId}/privateConversations/${input.conversationId}/${input.messageId}/${input.reservationId}/memo.m4a`;
   }
   throw new Error('invalid_voice_target');
+}
+
+export function parseTeamVoiceStoragePath(storagePath: unknown): TeamVoiceStorageReference | null {
+  if (typeof storagePath !== 'string') return null;
+  const announcement = /^teamVoiceMemos\/([A-Za-z0-9_-]+)\/announcements\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)\/memo\.m4a$/u.exec(storagePath);
+  if (announcement) {
+    return {
+      kind: 'announcement',
+      teamId: announcement[1],
+      messageId: announcement[2],
+      reservationId: announcement[3],
+    };
+  }
+  const privateMessage = /^teamVoiceMemos\/([A-Za-z0-9_-]+)\/privateConversations\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)\/memo\.m4a$/u.exec(storagePath);
+  if (!privateMessage) return null;
+  return {
+    kind: 'privateMessage',
+    teamId: privateMessage[1],
+    conversationId: privateMessage[2],
+    messageId: privateMessage[3],
+    reservationId: privateMessage[4],
+  };
 }
 
 export function isExplicitConversationParticipant(

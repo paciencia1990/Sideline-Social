@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
+import { MessageKeyboardAwareScrollView } from "@/components/MessageKeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { VoiceMemoComposer } from "@/components/VoiceMemoComposer";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -104,6 +105,7 @@ export default function CoachMessagesScreen() {
     submissionInFlight.current = true;
     setSending(true);
     setError(null);
+    let voicePhase: "reserving" | "uploading" | "finalizing" | null = null;
     try {
       if (messageType === "voice") {
         if (!voiceDraft?.previewed) {
@@ -112,6 +114,7 @@ export default function CoachMessagesScreen() {
         }
         setUploadProgress(0);
         setSendPhase("uploading");
+        voicePhase = "reserving";
         const reservation = await reserveVoiceUpload({
           teamId: selectedTeam.id,
           kind: "announcement",
@@ -121,9 +124,11 @@ export default function CoachMessagesScreen() {
           allowReplies,
           voiceMemo: voiceDraft,
         });
+        voicePhase = "uploading";
         const upload = await uploadReservedVoiceMemo(reservation, voiceDraft, setUploadProgress);
         setCancelUpload(() => () => upload.task.cancel());
         await upload.completion;
+        voicePhase = "finalizing";
         setSendPhase("finalizing");
         await finalizeVoiceAnnouncement(reservation.reservationId);
         await deleteLocalVoiceMemo(voiceDraft.uri);
@@ -137,8 +142,8 @@ export default function CoachMessagesScreen() {
       setAudience("all");
       setAllowReplies(true);
     } catch (nextError) {
-      console.warn("[CoachMessages] create error:", nextError);
-      setError(t("coach.messages.error"));
+      console.warn("[CoachMessages] create error:", getSafeErrorCode(nextError));
+      setError(voicePhase === "uploading" ? t("voiceMemo.uploadError") : t("coach.messages.error"));
     } finally {
       setCancelUpload(null);
       setUploadProgress(null);
@@ -169,7 +174,7 @@ export default function CoachMessagesScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <MessageKeyboardAwareScrollView contentContainerStyle={styles.content}>
         <CoachResourceHeader
           accessibilityLabel={t("coach.messages.backAccessibility")}
           onBack={navigateBack}
@@ -273,21 +278,26 @@ export default function CoachMessagesScreen() {
                 onPress={() => router.push({ pathname: "/coach/messages/[announcementId]", params: { teamId: selectedTeam.id, announcementId: announcement.id } } as never)}
                 style={styles.announcementRow}
               >
-                <Text style={styles.announcementTitle}>{announcement.title}</Text>
-                {announcement.contentType === "voice" ? <Text style={styles.voiceLabel}>{t("teamMessages.voicePreview")}</Text> : null}
-                <Text style={styles.announcementBody} numberOfLines={2}>{announcement.body}</Text>
+                <Text style={styles.announcementTitle}>{announcement.isDeleted ? t("teamMessages.messageDeleted") : announcement.title}</Text>
+                {!announcement.isDeleted && announcement.contentType === "voice" ? <Text style={styles.voiceLabel}>{t("teamMessages.voicePreview")}</Text> : null}
+                <Text style={styles.announcementBody} numberOfLines={2}>{announcement.isDeleted ? t("teamMessages.messageDeleted") : announcement.body}</Text>
                 <Text style={styles.announcementMeta}>{announcement.createdByName || t(announcement.authorProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")} • {t(`coach.messages.audience${capitalize(announcement.audience)}`)}</Text>
               </TouchableOpacity>
             ))}
           </Card>
         ) : null}
-      </ScrollView>
+      </MessageKeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }
 
 function normalizeParam(value?: string | string[]) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function getSafeErrorCode(error: unknown) {
+  if (error && typeof error === "object" && "code" in error) return String(error.code).slice(0, 80);
+  return error instanceof Error ? error.name : "unknown";
 }
 
 function capitalize(value: string) {
@@ -303,7 +313,7 @@ const styles = StyleSheet.create({
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
   input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 46, paddingHorizontal: Spacing.md },
-  bodyInput: { minHeight: 92, paddingTop: Spacing.md, textAlignVertical: "top" },
+  bodyInput: { maxHeight: 144, minHeight: 92, paddingTop: Spacing.md, textAlignVertical: "top" },
   inputLabel: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   segmentRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   segment: { borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexGrow: 1, minHeight: 40, justifyContent: "center", paddingHorizontal: Spacing.sm },

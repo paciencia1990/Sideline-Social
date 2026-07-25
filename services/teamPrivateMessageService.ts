@@ -11,9 +11,10 @@ import { ref, uploadBytesResumable, type UploadTask } from "firebase/storage";
 
 import { auth, db, functions, storage } from "@/config/firebase";
 import { getPublicUserProfiles } from "@/services/publicProfileService";
+import { isCanonicalTeamVoiceStoragePath, normalizeVoiceMessageFields } from "@/utils/voiceMessageNormalizer";
+import { normalizeVoicePlaybackUrlResponse } from "@/utils/voicePlaybackCore";
 import type {
   LocalVoiceMemoDraft,
-  StoredVoiceMemo,
   TeamPrivateConversation,
   TeamPrivateMessage,
   VoiceUploadReservation,
@@ -124,14 +125,41 @@ export async function uploadReservedVoiceMemo(
   draft: LocalVoiceMemoDraft,
   onProgress?: (progress: number) => void,
 ): Promise<{ task: UploadTask; completion: Promise<void> }> {
+  if (!draft.previewed) throw new Error("voice_preview_required");
+  if (!/^(?:file|content|cache):/iu.test(draft.uri)) throw new Error("invalid_local_voice_uri");
+  if (!isCanonicalTeamVoiceStoragePath(reservation.storagePath)) throw new Error("invalid_voice_storage_path");
   const blob = await (await fetch(draft.uri)).blob();
+  if (blob.size < 1 || blob.size !== draft.sizeBytes) {
+    const closable = blob as unknown as { close?: () => void };
+    if (typeof closable.close === "function") closable.close();
+    throw new Error("voice_upload_size_mismatch");
+  }
   const task = uploadBytesResumable(ref(storage, reservation.storagePath), blob, {
     contentType: draft.mimeType,
   });
   const completion = new Promise<void>((resolve, reject) => {
     task.on("state_changed", (snapshot) => {
       onProgress?.(snapshot.totalBytes ? snapshot.bytesTransferred / snapshot.totalBytes : 0);
-    }, reject, resolve);
+    }, reject, () => {
+      const snapshot = task.snapshot;
+      if (
+        snapshot.bytesTransferred !== draft.sizeBytes ||
+        snapshot.totalBytes !== draft.sizeBytes ||
+        snapshot.metadata.contentType !== draft.mimeType
+      ) {
+        reject(new Error("voice_upload_verification_failed"));
+        return;
+      }
+      if (__DEV__) {
+        console.info("[VoiceMemoUpload] upload completed", {
+          contentTypeMatched: true,
+          hasStoragePath: true,
+          localFileSizeValidated: true,
+          uploadedBytesMatched: true,
+        });
+      }
+      resolve();
+    });
   }).finally(() => {
     const closable = blob as unknown as { close?: () => void };
     if (typeof closable.close === "function") closable.close();
@@ -155,12 +183,25 @@ export async function finalizePrivateVoiceMessage(reservationId: string) {
   return (await call({ reservationId })).data;
 }
 
-export async function getVoiceMemoDownloadUrl(storagePath: string) {
-  const call = httpsCallable<{ storagePath: string }, { url: string; expiresAtMillis: number }>(
+export async function deletePrivateTeamMessage(conversationId: string, messageId: string) {
+  const call = httpsCallable<
+    { conversationId: string; messageId: string },
+    { status: "deleted" | "alreadyDeleted"; storageCleanup: "deleted" | "cleanupPending" | "notRequired" }
+  >(functions, "deletePrivateTeamMessage");
+  return (await call({ conversationId, messageId })).data;
+}
+
+export async function getVoiceMemoDownloadUrl(input: {
+  messageId: string;
+  messageKind: "announcement" | "privateMessage";
+  storagePath: string;
+}) {
+  const call = httpsCallable<typeof input, { url: string; expiresAtMillis: number }>(
     functions,
     "getTeamVoiceMemoDownloadUrl",
   );
-  return (await call({ storagePath })).data;
+  const result = await call(input);
+  return normalizeVoicePlaybackUrlResponse(result.data, { allowLocalHttp: __DEV__ });
 }
 
 export function createClientMessageId() {
@@ -178,7 +219,13 @@ function normalizeConversation(id: string, data: Record<string, unknown>): TeamP
     parentDisplayName: readString(data.parentDisplayName),
     status: data.status === "readOnly" ? "readOnly" : "active",
     lastMessageAtMillis: readMillis(data.lastMessageAt),
-    lastMessageType: data.lastMessageType === "voice" ? "voice" : data.lastMessageType === "text" ? "text" : null,
+    lastMessageType: data.lastMessageType === "voice"
+      ? "voice"
+      : data.lastMessageType === "text"
+        ? "text"
+        : data.lastMessageType === "deleted"
+          ? "deleted"
+          : null,
     lastMessagePreview: typeof data.lastMessagePreview === "string" ? data.lastMessagePreview : null,
     lastSenderUserId: typeof data.lastSenderUserId === "string" ? data.lastSenderUserId : null,
     unreadCount: 0,
@@ -206,22 +253,20 @@ async function hydrateConversationNames(conversations: TeamPrivateConversation[]
 }
 
 function normalizeMessage(id: string, data: Record<string, unknown>): TeamPrivateMessage {
-  const voice = data.voiceMemo && typeof data.voiceMemo === "object" ? data.voiceMemo as Record<string, unknown> : null;
+  const voice = normalizeVoiceMessageFields(data);
   return {
     id,
     conversationId: readString(data.conversationId),
     teamId: readString(data.teamId),
-    senderUserId: readString(data.senderUserId),
+    senderUserId: voice.senderUserId,
     senderRole: data.senderRole === "coach" ? "coach" : "parent",
-    contentType: data.contentType === "voice" ? "voice" : "text",
+    contentType: voice.contentType,
     text: typeof data.text === "string" ? data.text : null,
-    caption: typeof data.caption === "string" ? data.caption : null,
-    voiceMemo: voice ? {
-      storagePath: readString(voice.storagePath),
-      durationMilliseconds: Number(voice.durationMilliseconds ?? 0),
-      sizeBytes: Number(voice.sizeBytes ?? 0),
-      mimeType: readMimeType(voice.mimeType),
-    } satisfies StoredVoiceMemo : null,
+    caption: voice.caption,
+    voiceMemo: voice.voiceMemo,
+    isDeleted: data.isDeleted === true,
+    deletedBy: typeof data.deletedBy === "string" ? data.deletedBy : null,
+    deletedAt: data.deletedAt,
     createdAt: data.createdAt,
   };
 }
@@ -238,8 +283,4 @@ function readMillis(value: unknown) {
   if (typeof value === "number") return value;
   if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") return value.toMillis();
   return 0;
-}
-
-function readMimeType(value: unknown): StoredVoiceMemo["mimeType"] {
-  return value === "audio/m4a" || value === "audio/x-m4a" ? value : "audio/mp4";
 }

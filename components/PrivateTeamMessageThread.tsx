@@ -1,15 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
+import { MoreHorizontal } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { VoiceMemoComposer } from "@/components/VoiceMemoComposer";
-import { VoiceMemoPlayer } from "@/components/VoiceMemoPlayer";
+import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { Card } from "@/components/Card";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { auth } from "@/config/firebase";
 import {
   createClientMessageId,
+  deletePrivateTeamMessage,
   finalizePrivateVoiceMessage,
   listenToPrivateTeamConversation,
   listenToPrivateTeamMessages,
@@ -22,6 +24,7 @@ import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import { reportTeamContent, type TeamContentReportReason } from "@/services/contentModerationService";
 import { showContentReportPrompt } from "@/utils/contentReporting";
+import { invalidateVoicePlaybackSource } from "@/utils/voicePlaybackCore";
 import type { LocalVoiceMemoDraft, TeamPrivateConversation, TeamPrivateMessage } from "@/types/teamVoiceMessaging";
 
 export function PrivateTeamMessageThread({ conversationId, role }: { conversationId: string; role: "coach" | "parent" }) {
@@ -38,10 +41,12 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   const [sendPhase, setSendPhase] = useState<"uploading" | "finalizing" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reportingMessageId, setReportingMessageId] = useState<string | null>(null);
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
   const voiceAudioAvailable = isTeamVoiceAudioAvailable();
   const clientId = useRef(createClientMessageId());
   const uploadCancel = useRef<(() => boolean) | null>(null);
   const sendInFlight = useRef(false);
+  const deleteInFlight = useRef(false);
 
   useEffect(() => listenToPrivateTeamConversation(conversationId, setConversation, () => setError(t("teamMessages.loadError"))), [conversationId, t]);
   useEffect(() => listenToPrivateTeamMessages(conversationId, (next) => {
@@ -88,6 +93,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
     setUploadProgress(0);
     setSendPhase("uploading");
     setError(null);
+    let voicePhase: "reserving" | "uploading" | "finalizing" = "reserving";
     try {
       const reservation = await reserveVoiceUpload({
         teamId: conversation.teamId,
@@ -97,9 +103,11 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
         caption,
         voiceMemo: voiceDraft,
       });
+      voicePhase = "uploading";
       const upload = await uploadReservedVoiceMemo(reservation, voiceDraft, setUploadProgress);
       uploadCancel.current = () => upload.task.cancel();
       await upload.completion;
+      voicePhase = "finalizing";
       setSendPhase("finalizing");
       await finalizePrivateVoiceMessage(reservation.reservationId);
       await deleteLocalVoiceMemo(voiceDraft.uri);
@@ -110,7 +118,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
       clientId.current = createClientMessageId();
     } catch (nextError) {
       console.warn("[PrivateTeamMessageThread] voice send", getErrorCode(nextError));
-      setError(resolveSendError(nextError, t));
+      setError(voicePhase === "uploading" ? t("voiceMemo.uploadError") : resolveSendError(nextError, t));
     } finally {
       uploadCancel.current = null;
       setUploadProgress(null);
@@ -140,6 +148,63 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
     }
   }, [conversation?.teamId, conversationId, reportingMessageId, t]);
 
+  const deleteMessage = useCallback(async (message: TeamPrivateMessage) => {
+    if (
+      deleteInFlight.current ||
+      message.isDeleted ||
+      message.senderUserId !== auth.currentUser?.uid
+    ) return;
+    deleteInFlight.current = true;
+    setDeletingMessageId(message.id);
+    setError(null);
+    try {
+      await deletePrivateTeamMessage(conversationId, message.id);
+      if (message.voiceMemo) {
+        invalidateVoicePlaybackSource({
+          kind: "persisted-message",
+          messageId: message.id,
+          messageKind: "privateMessage",
+          storagePath: message.voiceMemo.storagePath,
+        });
+      }
+    } catch {
+      setError(t("teamMessages.deleteError"));
+    } finally {
+      deleteInFlight.current = false;
+      setDeletingMessageId(null);
+    }
+  }, [conversationId, t]);
+
+  const confirmDeleteMessage = useCallback((message: TeamPrivateMessage) => {
+    Alert.alert(
+      t("teamMessages.deleteConfirmTitle"),
+      t("teamMessages.deleteConfirmBody"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("teamMessages.delete"),
+          style: "destructive",
+          onPress: () => { void deleteMessage(message); },
+        },
+      ],
+    );
+  }, [deleteMessage, t]);
+
+  const showOwnMessageActions = useCallback((message: TeamPrivateMessage) => {
+    Alert.alert(
+      t("teamMessages.messageActions"),
+      undefined,
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("teamMessages.deleteMessage"),
+          style: "destructive",
+          onPress: () => confirmDeleteMessage(message),
+        },
+      ],
+    );
+  }, [confirmDeleteMessage, t]);
+
   return (
     <View style={styles.container}>
       <Card style={styles.identityCard}>
@@ -157,13 +222,43 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
         {messages.map((message) => {
           const mine = message.senderUserId === auth.currentUser?.uid;
           return (
-            <View key={message.id} style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
-              <Text style={styles.sender}>{mine ? t("teamMessages.you") : otherName}</Text>
-              {message.contentType === "voice" && message.voiceMemo ? (
-                <VoiceMemoPlayer durationMilliseconds={message.voiceMemo.durationMilliseconds} storagePath={message.voiceMemo.storagePath} />
-              ) : <Text style={styles.messageText}>{message.text}</Text>}
-              {message.caption ? <Text style={styles.caption}>{message.caption}</Text> : null}
-              {!mine ? (
+            <View key={message.id} style={[styles.bubble, message.contentType === "voice" && !message.isDeleted && styles.voiceBubble, mine ? styles.mine : styles.theirs]}>
+              <View style={styles.messageHeader}>
+                <Text style={styles.sender}>{mine ? t("teamMessages.you") : otherName}</Text>
+                {mine && !message.isDeleted ? (
+                  <TouchableOpacity
+                    accessibilityLabel={t("teamMessages.messageActions")}
+                    accessibilityRole="button"
+                    disabled={Boolean(deletingMessageId)}
+                    onPress={() => showOwnMessageActions(message)}
+                    style={styles.messageActions}
+                  >
+                    {deletingMessageId === message.id
+                      ? <ActivityIndicator color={Colors.primary} size="small" />
+                      : <MoreHorizontal accessible={false} color={Colors.primary} size={20} />}
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              {message.isDeleted ? (
+                <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>
+                  {mine ? t("teamMessages.youDeletedMessage") : t("teamMessages.messageDeleted")}
+                </Text>
+              ) : message.contentType === "voice" && message.voiceMemo ? (
+                <VoiceMemoPlayer
+                  durationMilliseconds={message.voiceMemo.durationMilliseconds}
+                  isOwnMessage={mine}
+                  source={{
+                    kind: "persisted-message",
+                    messageId: message.id,
+                    messageKind: "privateMessage",
+                    storagePath: message.voiceMemo.storagePath,
+                  }}
+                />
+              ) : message.contentType === "voice"
+                ? <VoiceMemoUnavailable />
+                : <Text style={styles.messageText}>{message.text}</Text>}
+              {!message.isDeleted && message.caption ? <Text style={styles.caption}>{message.caption}</Text> : null}
+              {!message.isDeleted && !mine ? (
                 <TouchableOpacity
                   accessibilityRole="button"
                   disabled={Boolean(reportingMessageId)}
@@ -227,10 +322,14 @@ const styles = StyleSheet.create({
   messages: { gap: Spacing.sm },
   empty: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, paddingVertical: Spacing.lg, textAlign: "center" },
   bubble: { borderRadius: Radius.card, gap: Spacing.xs, maxWidth: "92%", padding: Spacing.md, width: "auto" },
+  voiceBubble: { width: "92%" },
   mine: { alignSelf: "flex-end", backgroundColor: Colors.background, borderColor: Colors.primary, borderWidth: 1 },
   theirs: { alignSelf: "flex-start", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderWidth: 1 },
   sender: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 12 },
+  messageHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", minHeight: 28 },
+  messageActions: { alignItems: "center", justifyContent: "center", minHeight: 36, minWidth: 36 },
   messageText: { color: Colors.textHeading, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 21 },
+  deletedMessage: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, fontStyle: "italic", lineHeight: 20 },
   caption: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 18 },
   composer: { gap: Spacing.md },
   tabs: { flexDirection: "row", gap: Spacing.sm },
@@ -238,7 +337,7 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: Colors.primary },
   tabText: { color: Colors.primary, fontFamily: Typography.bodySemiBold },
   tabTextActive: { color: Colors.surface },
-  input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 76, padding: Spacing.md, textAlignVertical: "top" },
+  input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, maxHeight: 144, minHeight: 76, padding: Spacing.md, textAlignVertical: "top" },
   send: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 46 },
   sendText: { color: Colors.surface, fontFamily: Typography.bodyBold },
   disabled: { opacity: 0.5 },

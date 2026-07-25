@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, Linking, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Mic, RotateCcw, Trash2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
@@ -7,8 +7,16 @@ import { VoiceMemoPlayer } from "@/components/VoiceMemoPlayer";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo, getLocalVoiceMemoSize } from "@/services/voiceMemoFileService";
-import { ensureVoiceRecordingPermission } from "@/services/voiceMemoPermissionService";
+import { ensureVoiceRecordingPermissionDetails } from "@/services/voiceMemoPermissionService";
 import { stopVoicePlayback } from "@/services/voiceMemoAudioService";
+import {
+  createVoiceRecorderDiagnostic,
+  finalizeVoiceRecorder,
+  prepareAndStartVoiceRecorder,
+  resetPreparedVoiceRecorder,
+  VoiceRecorderLifecycleError,
+  type VoiceRecorderFailureStage,
+} from "@/services/voiceMemoRecorderService";
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
 
 const MAX_DURATION_MS = 90_000;
@@ -50,15 +58,49 @@ export function VoiceMemoComposer(props: Props) {
   const { t } = useTranslation();
   const audioAvailable = isTeamVoiceAudioAvailable();
   const [audioModule, setAudioModule] = useState<ExpoAudioModule | null>(null);
+  const [audioLoadFailed, setAudioLoadFailed] = useState(false);
 
   useEffect(() => {
     if (!audioAvailable) return;
     let mounted = true;
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- Deferred loading protects older native clients without expo-audio.
     Promise.resolve().then(() => require("expo-audio") as ExpoAudioModule).then((module) => {
-      if (mounted) setAudioModule(module);
-    }).catch(() => {
-      if (mounted) setAudioModule(null);
+      if (!mounted) return;
+      const recorderApiAvailable =
+        typeof module.useAudioRecorder === "function" &&
+        typeof module.setAudioModeAsync === "function";
+      if (!recorderApiAvailable) {
+        logVoiceRecorderFailure(createVoiceRecorderDiagnostic({
+          platform: Platform.OS,
+          permissionGranted: false,
+          canAskAgain: false,
+          audioPackageLoaded: true,
+          recorderApiAvailable: false,
+          audioModeConfigured: false,
+          recorderCreated: false,
+          recorderPrepared: false,
+          failureStage: "load-package",
+        }));
+        setAudioLoadFailed(true);
+        return;
+      }
+      setAudioModule(module);
+      setAudioLoadFailed(false);
+    }).catch((error) => {
+      if (!mounted) return;
+      logVoiceRecorderFailure(createVoiceRecorderDiagnostic({
+        platform: Platform.OS,
+        permissionGranted: false,
+        canAskAgain: false,
+        audioPackageLoaded: false,
+        recorderApiAvailable: false,
+        audioModeConfigured: false,
+        recorderCreated: false,
+        recorderPrepared: false,
+        failureStage: "load-package",
+      }, error));
+      setAudioModule(null);
+      setAudioLoadFailed(true);
     });
     return () => { mounted = false; };
   }, [audioAvailable]);
@@ -66,10 +108,49 @@ export function VoiceMemoComposer(props: Props) {
   if (!audioAvailable) {
     return <Text accessibilityLiveRegion="polite" style={styles.help}>{t("voiceMemo.updatedBuildRequired")}</Text>;
   }
+  if (audioLoadFailed) {
+    return <Text accessibilityLiveRegion="polite" style={styles.error}>{t("voiceMemo.startRecordingError")}</Text>;
+  }
   if (!audioModule) {
     return <ActivityIndicator accessibilityLabel={t("common.loading")} color={Colors.primary} size="small" />;
   }
-  return <VoiceMemoComposerAvailable {...props} audioModule={audioModule} />;
+  return (
+    <VoiceRecorderCreationBoundary fallback={t("voiceMemo.startRecordingError")}>
+      <VoiceMemoComposerAvailable {...props} audioModule={audioModule} />
+    </VoiceRecorderCreationBoundary>
+  );
+}
+
+class VoiceRecorderCreationBoundary extends React.Component<
+  React.PropsWithChildren<{ fallback: string }>,
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    logVoiceRecorderFailure(createVoiceRecorderDiagnostic({
+      platform: Platform.OS,
+      permissionGranted: false,
+      canAskAgain: false,
+      audioPackageLoaded: true,
+      recorderApiAvailable: true,
+      audioModeConfigured: false,
+      recorderCreated: false,
+      recorderPrepared: false,
+      failureStage: "create-recorder",
+    }, error));
+  }
+
+  render() {
+    if (this.state.failed) {
+      return <Text accessibilityLiveRegion="polite" style={styles.error}>{this.props.fallback}</Text>;
+    }
+    return this.props.children;
+  }
 }
 
 function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = false, onChange, uploadProgress }: Props & { audioModule: ExpoAudioModule }) {
@@ -78,10 +159,12 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
   const recordingRef = useRef<typeof recorder | null>(null);
   const draftRef = useRef<LocalVoiceMemoDraft | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const permissionRequestInFlight = useRef(false);
+  const operationInFlightRef = useRef(false);
+  const stopInFlightRef = useRef(false);
   const startedAt = useRef(0);
   const [draft, setDraft] = useState<LocalVoiceMemoDraft | null>(null);
   const [recording, setRecording] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,17 +173,48 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
     timerRef.current = null;
   }, []);
 
+  const restorePlaybackAudioMode = useCallback(async () => {
+    try {
+      await audioModule.setAudioModeAsync({
+        allowsRecording: false,
+        allowsBackgroundRecording: false,
+        interruptionMode: "duckOthers",
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+      });
+    } catch (restoreError) {
+      logVoiceRecorderFailure(createVoiceRecorderDiagnostic({
+        platform: Platform.OS,
+        permissionGranted: true,
+        canAskAgain: true,
+        audioPackageLoaded: true,
+        recorderApiAvailable: true,
+        audioModeConfigured: false,
+        recorderCreated: true,
+        recorderPrepared: false,
+        failureStage: "configure-audio-mode",
+      }, restoreError));
+    }
+  }, [audioModule]);
+
   const finishRecording = useCallback(async () => {
-    const active = recordingRef.current;
-    if (!active) return;
-    recordingRef.current = null;
+    const activeRecorder = recordingRef.current;
+    if (!activeRecorder || stopInFlightRef.current) return;
+    stopInFlightRef.current = true;
+    operationInFlightRef.current = true;
     clearTimer();
     setRecording(false);
     try {
-      await active.stop();
-      const status = active.getStatus();
-      const uri = active.uri;
-      if (!uri || !status.durationMillis || status.durationMillis < 500) throw new Error("recording_too_short");
+      const finalized = await finalizeVoiceRecorder(
+        activeRecorder,
+        Date.now() - startedAt.current,
+      );
+      const { durationMilliseconds, uri } = finalized;
+      if (durationMilliseconds < 500) {
+        await deleteLocalVoiceMemo(uri);
+        throw new VoiceRecorderLifecycleError("stop-recorder", new Error("Recording was too short."));
+      }
       const sizeBytes = await getLocalVoiceMemoSize(uri);
       if (sizeBytes < 1 || sizeBytes > MAX_SIZE_BYTES) {
         await deleteLocalVoiceMemo(uri);
@@ -108,7 +222,7 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
       }
       const next: LocalVoiceMemoDraft = {
         uri,
-        durationMilliseconds: Math.min(status.durationMillis, MAX_DURATION_MS),
+        durationMilliseconds: Math.min(durationMilliseconds, MAX_DURATION_MS),
         sizeBytes,
         mimeType: "audio/mp4",
         previewed: false,
@@ -117,21 +231,46 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
       draftRef.current = next;
       onChange(next);
     } catch (nextError) {
-      console.warn("[VoiceMemoComposer] finish error", getErrorCode(nextError));
-      setError(getErrorCode(nextError).includes("large") ? t("voiceMemo.fileTooLarge") : t("voiceMemo.recordingError"));
+      const failureStage = getVoiceRecorderFailureStage(nextError, "stop-recorder");
+      logVoiceRecorderFailure(createVoiceRecorderDiagnostic({
+        platform: Platform.OS,
+        permissionGranted: true,
+        canAskAgain: true,
+        audioPackageLoaded: true,
+        recorderApiAvailable: true,
+        audioModeConfigured: true,
+        recorderCreated: true,
+        recorderPrepared: true,
+        failureStage,
+      }, nextError));
+      setError(
+        getErrorCode(nextError).includes("large")
+          ? t("voiceMemo.fileTooLarge")
+          : t("voiceMemo.saveRecordingError"),
+      );
     } finally {
-      await audioModule.setAudioModeAsync({ allowsRecording: false });
+      recordingRef.current = null;
+      stopInFlightRef.current = false;
+      operationInFlightRef.current = false;
+      await restorePlaybackAudioMode();
     }
-  }, [audioModule, clearTimer, onChange, t]);
+  }, [clearTimer, onChange, restorePlaybackAudioMode, t]);
 
   const startRecording = useCallback(async () => {
-    if (!active || disabled || recordingRef.current || permissionRequestInFlight.current) return;
-    permissionRequestInFlight.current = true;
+    if (!active || disabled || recordingRef.current || operationInFlightRef.current) return;
+    operationInFlightRef.current = true;
+    setStarting(true);
     setError(null);
+    let permissionGranted = false;
+    let canAskAgain = false;
+    let audioModeConfigured = false;
+    let recorderPrepared = false;
     try {
       await stopVoicePlayback();
-      const permission = await ensureVoiceRecordingPermission(audioModule);
-      if (permission === "settings") {
+      const permission = await ensureVoiceRecordingPermissionDetails(audioModule);
+      permissionGranted = permission.permissionGranted;
+      canAskAgain = permission.canAskAgain;
+      if (permission.outcome === "settings") {
         Alert.alert(
           t("voiceMemo.permissionRequiredTitle"),
           t("voiceMemo.permissionRequiredBody"),
@@ -140,24 +279,44 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
             {
               text: t("voiceMemo.openSettings"),
               onPress: () => {
-                void Linking.openSettings().catch(() => setError(t("voiceMemo.permissionDenied")));
+                void Linking.openSettings().catch(() => setError(t("voiceMemo.permissionProblem")));
               },
             },
           ],
         );
+        setError(t("voiceMemo.permissionProblem"));
         return;
       }
-      if (permission !== "granted") {
-        setError(t("voiceMemo.permissionDenied"));
+      if (permission.outcome !== "granted") {
+        logVoiceRecorderFailure(createVoiceRecorderDiagnostic({
+          platform: Platform.OS,
+          permissionGranted,
+          canAskAgain,
+          audioPackageLoaded: true,
+          recorderApiAvailable: true,
+          audioModeConfigured: false,
+          recorderCreated: true,
+          recorderPrepared: false,
+          failureStage: "permission",
+        }));
+        setError(t("voiceMemo.permissionProblem"));
         return;
       }
-      await audioModule.setAudioModeAsync({
-        allowsRecording: true,
-        playsInSilentMode: true,
-        interruptionMode: "doNotMix",
+      await prepareAndStartVoiceRecorder({
+        recorder,
+        configureAudioMode: async () => {
+          await audioModule.setAudioModeAsync({
+            allowsRecording: true,
+            allowsBackgroundRecording: false,
+            interruptionMode: "doNotMix",
+            playsInSilentMode: true,
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          });
+          audioModeConfigured = true;
+        },
       });
-      await recorder.prepareToRecordAsync();
-      recorder.record();
+      recorderPrepared = true;
       recordingRef.current = recorder;
       startedAt.current = Date.now();
       setElapsed(0);
@@ -168,12 +327,66 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
         if (nextElapsed >= MAX_DURATION_MS) void finishRecording();
       }, 250);
     } catch (nextError) {
-      console.warn("[VoiceMemoComposer] start error", getErrorCode(nextError));
-      setError(t("voiceMemo.recordingError"));
+      try {
+        recorderPrepared = recorder.getStatus().canRecord;
+      } catch {
+        recorderPrepared = false;
+      }
+      const failureStage = getVoiceRecorderFailureStage(nextError, "unknown");
+      logVoiceRecorderFailure(createVoiceRecorderDiagnostic({
+        platform: Platform.OS,
+        permissionGranted,
+        canAskAgain,
+        audioPackageLoaded: true,
+        recorderApiAvailable: true,
+        audioModeConfigured,
+        recorderCreated: true,
+        recorderPrepared,
+        failureStage,
+      }, nextError));
+      await resetPreparedVoiceRecorder(recorder).catch(() => undefined);
+      await restorePlaybackAudioMode();
+      recordingRef.current = null;
+      setRecording(false);
+      setError(t("voiceMemo.startRecordingError"));
     } finally {
-      permissionRequestInFlight.current = false;
+      operationInFlightRef.current = false;
+      setStarting(false);
     }
-  }, [active, audioModule, disabled, finishRecording, recorder, t]);
+  }, [active, audioModule, disabled, finishRecording, recorder, restorePlaybackAudioMode, t]);
+
+  const cancelRecording = useCallback(async () => {
+    const activeRecorder = recordingRef.current;
+    if (!activeRecorder || stopInFlightRef.current) return;
+    stopInFlightRef.current = true;
+    operationInFlightRef.current = true;
+    clearTimer();
+    setRecording(false);
+    setError(null);
+    try {
+      await activeRecorder.stop();
+      const uri = activeRecorder.uri?.trim();
+      if (uri) await deleteLocalVoiceMemo(uri);
+    } catch (nextError) {
+      logVoiceRecorderFailure(createVoiceRecorderDiagnostic({
+        platform: Platform.OS,
+        permissionGranted: true,
+        canAskAgain: true,
+        audioPackageLoaded: true,
+        recorderApiAvailable: true,
+        audioModeConfigured: true,
+        recorderCreated: true,
+        recorderPrepared: true,
+        failureStage: "stop-recorder",
+      }, nextError));
+    } finally {
+      recordingRef.current = null;
+      stopInFlightRef.current = false;
+      operationInFlightRef.current = false;
+      onChange(null);
+      await restorePlaybackAudioMode();
+    }
+  }, [clearTimer, onChange, restorePlaybackAudioMode]);
 
   const removeDraft = useCallback(async () => {
     if (draft?.uri) await deleteLocalVoiceMemo(draft.uri);
@@ -184,10 +397,10 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state !== "active" && recordingRef.current) void finishRecording();
+      if (state !== "active" && recordingRef.current) void cancelRecording();
     });
     return () => subscription.remove();
-  }, [finishRecording]);
+  }, [cancelRecording]);
 
   useEffect(() => {
     if (!active && recordingRef.current) void finishRecording();
@@ -195,9 +408,21 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
 
   useEffect(() => () => {
     clearTimer();
-    if (recordingRef.current) void recordingRef.current.stop();
+    if (recordingRef.current) {
+      const abandonedRecorder = recordingRef.current;
+      recordingRef.current = null;
+      void resetPreparedVoiceRecorder(abandonedRecorder)
+        .then(async () => {
+          const abandonedUri = abandonedRecorder.uri?.trim();
+          if (abandonedUri) await deleteLocalVoiceMemo(abandonedUri);
+        })
+        .catch(() => undefined)
+        .finally(restorePlaybackAudioMode);
+    } else {
+      void restorePlaybackAudioMode();
+    }
     if (draftRef.current?.uri) void deleteLocalVoiceMemo(draftRef.current.uri);
-  }, [clearTimer]);
+  }, [clearTimer, restorePlaybackAudioMode]);
 
   return (
     <View style={styles.container}>
@@ -208,6 +433,10 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
           <Text style={styles.recordingText}>{t("voiceMemo.recording")} {formatTime(elapsed)}</Text>
           <TouchableOpacity accessibilityRole="button" onPress={finishRecording} style={styles.primaryButton}>
             <Text style={styles.primaryText}>{t("voiceMemo.stop")}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity accessibilityRole="button" onPress={cancelRecording} style={styles.outlineButton}>
+            <Trash2 color={Colors.primary} size={17} />
+            <Text style={styles.outlineText}>{t("common.cancel")}</Text>
           </TouchableOpacity>
         </View>
       ) : draft ? (
@@ -221,7 +450,7 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
               draftRef.current = next;
               onChange(next);
             }}
-            uri={draft.uri}
+            source={{ kind: "local-draft", uri: draft.uri }}
           />
           <View style={styles.actionRow}>
             <TouchableOpacity accessibilityRole="button" disabled={disabled} onPress={() => { void removeDraft().then(startRecording); }} style={styles.outlineButton}>
@@ -233,8 +462,9 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
           </View>
         </View>
       ) : (
-        <TouchableOpacity accessibilityLabel={t("voiceMemo.recordAccessibility")} accessibilityRole="button" disabled={disabled || !active} onPress={startRecording} style={[styles.primaryButton, (disabled || !active) && styles.disabled]}>
-          <Mic color={Colors.surface} size={18} /><Text style={styles.primaryText}>{t("voiceMemo.record")}</Text>
+        <TouchableOpacity accessibilityLabel={t("voiceMemo.recordAccessibility")} accessibilityRole="button" disabled={disabled || !active || starting} onPress={startRecording} style={[styles.primaryButton, (disabled || !active || starting) && styles.disabled]}>
+          {starting ? <ActivityIndicator color={Colors.surface} size="small" /> : <Mic color={Colors.surface} size={18} />}
+          <Text style={styles.primaryText}>{t("voiceMemo.record")}</Text>
         </TouchableOpacity>
       )}
       {uploadProgress != null ? (
@@ -256,6 +486,17 @@ function formatTime(milliseconds: number) {
 function getErrorCode(error: unknown) {
   if (error instanceof Error) return error.message;
   return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+}
+
+function getVoiceRecorderFailureStage(
+  error: unknown,
+  fallback: VoiceRecorderFailureStage,
+) {
+  return error instanceof VoiceRecorderLifecycleError ? error.stage : fallback;
+}
+
+function logVoiceRecorderFailure(diagnostic: ReturnType<typeof createVoiceRecorderDiagnostic>) {
+  if (__DEV__) console.warn("[VoiceMemoRecorder] lifecycle failure", diagnostic);
 }
 
 const styles = StyleSheet.create({

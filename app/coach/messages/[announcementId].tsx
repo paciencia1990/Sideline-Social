@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
-import { VoiceMemoPlayer } from "@/components/VoiceMemoPlayer";
+import { MessageKeyboardAwareScrollView } from "@/components/MessageKeyboardAwareScrollView";
+import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { auth } from "@/config/firebase";
 import { QUICK_REPLY_IDS, QUICK_REPLY_TRANSLATION_KEYS, type QuickReplyId } from "@/constants/teamReplies";
@@ -129,7 +130,7 @@ export default function AnnouncementThreadScreen() {
 
   const confirmDeleteReply = useCallback((reply: AnnouncementReply) => {
     const deletingOwnReply = reply.userId === auth.currentUser?.uid;
-    if ((!deletingOwnReply && !canModerateReplies) || replyDeletionInFlight.current) return;
+    if (reply.isDeleted || (!deletingOwnReply && !canModerateReplies) || replyDeletionInFlight.current) return;
     Alert.alert(
       t(deletingOwnReply ? "teamReplies.deleteOwnTitle" : "teamReplies.removeOtherTitle"),
       t(deletingOwnReply ? "teamReplies.deleteOwnBody" : "teamReplies.removeOtherBody"),
@@ -144,7 +145,9 @@ export default function AnnouncementThreadScreen() {
             setDeletingReplyId(reply.id);
             setError(null);
             void deleteAnnouncementReply(teamId, announcementId, reply.id)
-              .then(() => setReplies((current) => current.filter((item) => item.id !== reply.id)))
+              .then(() => setReplies((current) => current.map((item) => item.id === reply.id
+                ? { ...item, body: "", deletedBy: auth.currentUser?.uid ?? null, isDeleted: true }
+                : item)))
               .catch((nextError) => {
                 logOperationError("deleteReply", nextError);
                 setError(t("teamReplies.deleteError"));
@@ -159,25 +162,22 @@ export default function AnnouncementThreadScreen() {
     );
   }, [announcementId, canModerateReplies, t, teamId]);
 
-  const navigateBackToMessages = useCallback(() => {
-    if (router.canGoBack()) router.back();
-    else router.replace({ pathname: "/coach/messages", params: { teamId } } as never);
-  }, [teamId]);
-
   const performDeleteAnnouncement = useCallback(async () => {
-    if (!announcement || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
+    if (!announcement || announcement.isDeleted || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
     announcementDeletionInFlight.current = true;
     setDeletingAnnouncement(true);
     setError(null);
     try {
       await deleteTeamAnnouncement(teamId, announcementId);
-      setAnnouncement(null);
-      setReplies([]);
-      Alert.alert(
-        t("coach.messages.deleteSuccess"),
-        undefined,
-        [{ text: t("common.ok"), onPress: navigateBackToMessages }],
-      );
+      setAnnouncement((current) => current ? {
+        ...current,
+        allowReplies: false,
+        body: "",
+        deletedBy: auth.currentUser?.uid ?? null,
+        isDeleted: true,
+        title: "",
+        voiceMemo: null,
+      } : current);
     } catch (nextError) {
       logAnnouncementDeleteError(nextError, {
         teamId,
@@ -189,17 +189,17 @@ export default function AnnouncementThreadScreen() {
       announcementDeletionInFlight.current = false;
       setDeletingAnnouncement(false);
     }
-  }, [announcement, announcementId, canDeleteAnnouncement, navigateBackToMessages, t, teamId]);
+  }, [announcement, announcementId, canDeleteAnnouncement, t, teamId]);
 
   const confirmDeleteAnnouncement = useCallback(() => {
-    if (!announcement || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
+    if (!announcement || announcement.isDeleted || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
     Alert.alert(
-      t("coach.messages.deleteAnnouncementTitle"),
-      t("coach.messages.deleteAnnouncementBody"),
+      t("teamMessages.deleteConfirmTitle"),
+      t("teamMessages.deleteConfirmBody"),
       [
         { text: t("common.cancel"), style: "cancel" },
         {
-          text: t("coach.messages.delete"),
+          text: t("teamMessages.delete"),
           style: "destructive",
           onPress: () => { void performDeleteAnnouncement(); },
         },
@@ -208,14 +208,14 @@ export default function AnnouncementThreadScreen() {
   }, [announcement, canDeleteAnnouncement, performDeleteAnnouncement, t]);
 
   const openAnnouncementActions = useCallback(() => {
-    if (!announcement || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
+    if (!announcement || announcement.isDeleted || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
     Alert.alert(
       t("coach.messages.announcementActions"),
       undefined,
       [
         { text: t("common.cancel"), style: "cancel" },
         {
-          text: t("coach.messages.deleteAnnouncement"),
+          text: t("teamMessages.deleteMessage"),
           style: "destructive",
           onPress: confirmDeleteAnnouncement,
         },
@@ -225,7 +225,7 @@ export default function AnnouncementThreadScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <MessageKeyboardAwareScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text style={styles.title}>{t("coach.messages.thread")}</Text>
           <Text style={styles.subtitle}>{t("coach.messages.replyToTeam")}</Text>
@@ -247,12 +247,14 @@ export default function AnnouncementThreadScreen() {
         {announcement ? (
           <Card style={styles.cardGap}>
             <View style={styles.announcementHeader}>
-              <Text style={styles.announcementTitle}>{announcement.title}</Text>
-              {canDeleteAnnouncement ? (
+              <Text style={styles.announcementTitle}>
+                {announcement.isDeleted ? t("teamMessages.messageDeleted") : announcement.title}
+              </Text>
+              {canDeleteAnnouncement && !announcement.isDeleted ? (
                 <TouchableOpacity
                   accessibilityLabel={deletingAnnouncement
-                    ? t("coach.messages.deletingAnnouncement")
-                    : t("coach.messages.deleteAnnouncement")}
+                    ? t("teamMessages.deleting")
+                    : t("teamMessages.deleteMessage")}
                   accessibilityRole="button"
                   accessibilityState={{ busy: deletingAnnouncement, disabled: deletingAnnouncement }}
                   disabled={deletingAnnouncement}
@@ -266,10 +268,21 @@ export default function AnnouncementThreadScreen() {
                 </TouchableOpacity>
               ) : null}
             </View>
-            <Text style={styles.cardText}>{announcement.body}</Text>
-            {announcement.contentType === "voice" && announcement.voiceMemo ? (
-              <VoiceMemoPlayer durationMilliseconds={announcement.voiceMemo.durationMilliseconds} storagePath={announcement.voiceMemo.storagePath} />
-            ) : null}
+            {announcement.isDeleted
+              ? <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>{t("teamMessages.messageDeleted")}</Text>
+              : <Text style={styles.cardText}>{announcement.body}</Text>}
+            {!announcement.isDeleted && announcement.contentType === "voice" && announcement.voiceMemo ? (
+              <VoiceMemoPlayer
+                durationMilliseconds={announcement.voiceMemo.durationMilliseconds}
+                isOwnMessage={announcement.createdBy === auth.currentUser?.uid}
+                source={{
+                  kind: "persisted-message",
+                  messageId: announcement.id,
+                  messageKind: "announcement",
+                  storagePath: announcement.voiceMemo.storagePath,
+                }}
+              />
+            ) : !announcement.isDeleted && announcement.contentType === "voice" ? <VoiceMemoUnavailable /> : null}
             <Text style={styles.metaText}>{announcement.createdByName || t(announcement.authorProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
           </Card>
         ) : !loading ? (
@@ -287,7 +300,7 @@ export default function AnnouncementThreadScreen() {
               <View key={reply.id} style={styles.replyRow}>
                 <View style={styles.replyTopRow}>
                   <Text style={styles.replyName}>{reply.displayName || t(reply.profileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
-                  {reply.userId === auth.currentUser?.uid || canModerateReplies ? (
+                  {!reply.isDeleted && (reply.userId === auth.currentUser?.uid || canModerateReplies) ? (
                     <TouchableOpacity
                       accessibilityLabel={t(reply.userId === auth.currentUser?.uid ? "teamReplies.deleteMenuOwn" : "teamReplies.deleteMenuModerate")}
                       accessibilityRole="button"
@@ -302,7 +315,13 @@ export default function AnnouncementThreadScreen() {
                     </TouchableOpacity>
                   ) : null}
                 </View>
-                <Text style={styles.replyBody}>{reply.body}</Text>
+                <Text style={reply.isDeleted ? styles.deletedMessage : styles.replyBody}>
+                  {reply.isDeleted
+                    ? reply.deletedBy === auth.currentUser?.uid
+                      ? t("teamMessages.youDeletedMessage")
+                      : t("teamMessages.messageDeleted")
+                    : reply.body}
+                </Text>
               </View>
             ))}
           </Card>
@@ -342,7 +361,7 @@ export default function AnnouncementThreadScreen() {
             <Text style={styles.cardText}>{t("coach.messages.repliesClosed")}</Text>
           </Card>
         ) : null}
-      </ScrollView>
+      </MessageKeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }
@@ -398,10 +417,11 @@ const styles = StyleSheet.create({
   replyName: { color: Colors.textHeading, fontFamily: Typography.bodyBold },
   replyMenuButton: { alignItems: "center", justifyContent: "center", minHeight: 44, minWidth: 44, marginRight: -Spacing.sm, marginTop: -Spacing.sm },
   replyBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, lineHeight: 20 },
+  deletedMessage: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontStyle: "italic", lineHeight: 20 },
   quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   quickButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexBasis: "46%", flexGrow: 1, justifyContent: "center", minHeight: 48, minWidth: 120, paddingHorizontal: Spacing.sm, paddingVertical: Spacing.sm },
   quickButtonText: { color: Colors.primary, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 14, lineHeight: 19, textAlign: "center" },
-  input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 84, padding: Spacing.md, textAlignVertical: "top" },
+  input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, maxHeight: 144, minHeight: 84, padding: Spacing.md, textAlignVertical: "top" },
   primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   disabledButton: { opacity: 0.55 },

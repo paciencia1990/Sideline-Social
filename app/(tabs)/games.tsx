@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   ScrollView,
@@ -18,10 +18,9 @@ import { SquadSelector } from "@/components/SquadSelector";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { useActiveSquadGameSession } from "@/hooks/useActiveSquadGameSession";
 import {
-  fetchActiveSquadSession,
   getGameLabel,
-  type ActiveGameSession,
   type GameType,
 } from "@/services/gameService";
 import {
@@ -31,10 +30,6 @@ import {
   type GameJoinCodeType,
 } from "@/services/gameJoinCodeService";
 import { isCompleteGameJoinCode, normalizeGameJoinCodeInput } from "@/utils/gameJoinCode";
-import {
-  createActiveSessionLoadCoordinator,
-  type ActiveSessionLoadState,
-} from "@/utils/activeSessionLoadState";
 
 type GameCardConfig = {
   gameType: GameType;
@@ -95,47 +90,27 @@ export default function GamesScreen() {
   const { loading: authLoading, user } = useAuth();
   const { membershipLoading, selectedSquadId } = useSquad();
   const params = useLocalSearchParams<{ join?: string }>();
-  const [activeSessionState, setActiveSessionState] = useState<ActiveSessionLoadState<ActiveGameSession>>({ status: "idle" });
-  const activeSessionCoordinator = useRef<ReturnType<typeof createActiveSessionLoadCoordinator<ActiveGameSession>> | null>(null);
   const [joinCode, setJoinCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<GameJoinCodeFailureReason | null>(null);
   const [showJoinCode, setShowJoinCode] = useState(params.join === "1");
 
-  const activeSession = "session" in activeSessionState ? activeSessionState.session : null;
+  const {
+    retry: retryActiveSession,
+    session: activeSession,
+    state: activeSessionState,
+  } = useActiveSquadGameSession({
+    diagnosticLabel: "GamesScreen",
+    enabled: !authLoading && !membershipLoading,
+    squadId: selectedSquadId,
+    userId: user?.uid ?? null,
+  });
   const loadingSession = activeSessionState.status === "loading" && !activeSession;
   const sessionLoadFailed = activeSessionState.status === "permission-error" || activeSessionState.status === "network-error";
 
   const activeGameName = useMemo(() => {
     return activeSession ? getGameLabel(activeSession.gameType) : "";
   }, [activeSession]);
-
-  useEffect(() => {
-    const coordinator = createActiveSessionLoadCoordinator<ActiveGameSession>({
-      fetchSession: fetchActiveSquadSession,
-      onDiagnostic: (status) => {
-        if (__DEV__) console.info("[GamesScreen] active session lookup", { status });
-      },
-      onStateChange: setActiveSessionState,
-    });
-    activeSessionCoordinator.current = coordinator;
-    return () => {
-      coordinator.dispose();
-      if (activeSessionCoordinator.current === coordinator) activeSessionCoordinator.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    void activeSessionCoordinator.current?.setContext({
-      enabled: !authLoading && !membershipLoading,
-      squadId: selectedSquadId,
-      userId: user?.uid ?? null,
-    });
-  }, [authLoading, membershipLoading, selectedSquadId, user?.uid]);
-
-  const retryActiveSession = useCallback(() => {
-    void activeSessionCoordinator.current?.retry();
-  }, []);
 
   useEffect(() => {
     if (params.join === "1") {

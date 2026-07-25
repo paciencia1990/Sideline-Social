@@ -86,9 +86,17 @@ async function run() {
   assert.equal(bombSession.gameState.bombSteps.length, 5);
 
   const activeForHost = await hostA.call('getActiveSquadGameSession', { squadId });
-  assert.deepEqual(Object.keys(activeForHost.session).sort(), ['gameType', 'sessionId', 'status']);
+  assert.deepEqual(
+    Object.keys(activeForHost.session).sort(),
+    ['callerIsParticipant', 'endsAtMs', 'gameType', 'sessionId', 'status'].sort(),
+  );
+  assert.equal(Number.isFinite(activeForHost.serverNowMs), true);
+  assert.equal(activeForHost.session.callerIsParticipant, true);
+  assert.equal(activeForHost.session.endsAtMs > activeForHost.serverNowMs, true);
   assert.equal(activeForHost.session.sessionId, createdBomb.sessionId);
-  assert.equal((await player.call('getActiveSquadGameSession', { squadId })).session.sessionId, createdBomb.sessionId);
+  const lobbyForSquadMember = await player.call('getActiveSquadGameSession', { squadId });
+  assert.equal(lobbyForSquadMember.session.sessionId, createdBomb.sessionId);
+  assert.equal(lobbyForSquadMember.session.callerIsParticipant, false);
   await assert.rejects(
     () => outsider.call('getActiveSquadGameSession', { squadId }),
     (error) => String(error?.code).includes('permission-denied'),
@@ -125,6 +133,9 @@ async function run() {
   );
   const reconnected = await player.call('resolveAndJoinGameByCode', { code: createdBomb.joinCode });
   assert.equal(reconnected.participantState, 'reconnected');
+  await hostA.call('updateGameJoinCodeStatus', {
+    gameType: 'bombDefusal', sessionId: createdBomb.sessionId, status: 'ended',
+  });
 
   const [spotA, spotB] = await Promise.all([
     hostA.call('createGameJoinCode', { gameType: 'spotTheDifferences', idempotencyKey: 'spot-host-request-a' }),
@@ -149,6 +160,39 @@ async function run() {
   await assert.rejects(
     () => outsider.call('resolveAndJoinGameByCode', { code: spotA.joinCode }),
     hasReason('invalid_or_expired_code'),
+  );
+
+  const staleSpot = await hostA.call('createGameJoinCode', {
+    gameType: 'spotTheDifferences',
+    idempotencyKey: 'spot-expiration-request-a',
+    squadId,
+  });
+  await player.call('resolveAndJoinGameByCode', { code: staleSpot.joinCode });
+  await hostA.call('updateGameJoinCodeStatus', {
+    gameType: 'spotTheDifferences',
+    sessionId: staleSpot.sessionId,
+    status: 'started',
+  });
+  await database.ref(`gameSessions/${staleSpot.sessionId}/startedAt`).set(Date.now() - 91_000);
+  const expiredLookup = await hostA.call('getActiveSquadGameSession', { squadId });
+  assert.equal(expiredLookup.session, null, 'a Spot session at zero seconds is never advertised as active');
+  const expiredSession = (await database.ref(`gameSessions/${staleSpot.sessionId}`).get()).val();
+  assert.equal(expiredSession.status, 'completed');
+  assert.equal((await firestore.collection('gameJoinCodes').doc(staleSpot.joinCode).get()).data().status, 'expired');
+  const firstCompletedAt = expiredSession.completedAt;
+  assert.equal((await hostA.call('getActiveSquadGameSession', { squadId })).session, null);
+  assert.equal(
+    (await database.ref(`gameSessions/${staleSpot.sessionId}/completedAt`).get()).val(),
+    firstCompletedAt,
+    'expiration finalization is idempotent',
+  );
+  await assert.rejects(
+    () => player.call('resolveAndJoinGameByCode', { code: staleSpot.joinCode }),
+    hasReason('invalid_or_expired_code'),
+  );
+  await assert.rejects(
+    () => player.call('recordSpotDifferenceFound', { sessionId: staleSpot.sessionId, differenceId: 'difference_2' }),
+    hasReason('game_already_started'),
   );
 
   const triviaSessionId = 'triviaCanonicalSessionA';

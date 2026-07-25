@@ -60,9 +60,9 @@ async function run() {
   const coachComposer = read("app", "coach", "messages.tsx");
   const privateThread = read("components", "PrivateTeamMessageThread.tsx");
   assert.equal(composer.includes("audioModule.requestRecordingPermissionsAsync()"), false, "permission logic must check before requesting");
-  assert.ok(composer.indexOf("ensureVoiceRecordingPermission(audioModule)") > composer.indexOf("const startRecording"));
-  assert.match(composer, /permissionRequestInFlight/);
-  assert.match(composer, /permission === "settings"/);
+  assert.ok(composer.indexOf("ensureVoiceRecordingPermissionDetails(audioModule)") > composer.indexOf("const startRecording"));
+  assert.match(composer, /operationInFlightRef/);
+  assert.match(composer, /permission\.outcome === "settings"/);
   assert.match(composer, /Linking\.openSettings\(\)/);
   assert.match(composer, /voiceMemo\.permissionRequiredTitle/);
   assert.match(composer, /voiceMemo\.permissionRequiredBody/);
@@ -79,6 +79,10 @@ async function run() {
     "Microphone Permission Required",
     "Allow microphone access in your phone settings to record voice messages.",
     "Open Settings",
+    "Microphone permission is required to record a voice message.",
+    "We couldn't start the recording. Please try again.",
+    "We couldn't save that recording. Please try again.",
+    "We couldn't upload that voice message. Please try again.",
     "Se requiere permiso para usar el micrófono",
     "Permite el acceso al micrófono en la configuración de tu teléfono para grabar mensajes de voz.",
     "Abrir configuración",

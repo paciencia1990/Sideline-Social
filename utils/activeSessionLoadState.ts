@@ -27,6 +27,7 @@ export function createActiveSessionLoadCoordinator<Session>(input: {
   let activeToken = 0;
   let disposed = false;
   let inFlight: { key: string; promise: Promise<void>; token: number } | null = null;
+  let invalidatedInFlight: Promise<void> | null = null;
 
   const emit = (next: ActiveSessionLoadState<Session>) => {
     state = next;
@@ -67,16 +68,33 @@ export function createActiveSessionLoadCoordinator<Session>(input: {
   };
 
   return {
+    clearSession(expectedSession?: Session) {
+      const currentSession = "session" in state ? state.session : null;
+      if (expectedSession !== undefined && currentSession !== expectedSession) return false;
+      if (inFlight) invalidatedInFlight = inFlight.promise;
+      activeToken += 1;
+      inFlight = null;
+      emit({ status: "ready", session: null });
+      return true;
+    },
     dispose() {
       disposed = true;
       activeToken += 1;
       inFlight = null;
+      invalidatedInFlight = null;
       context = null;
     },
     getState() {
       return state;
     },
     retry() {
+      const invalidated = invalidatedInFlight;
+      if (invalidated) {
+        return invalidated.catch(() => undefined).then(() => {
+          if (invalidatedInFlight === invalidated) invalidatedInFlight = null;
+          return run(true);
+        });
+      }
       return run(true);
     },
     setContext(next: ActiveSessionLoadContext) {
@@ -85,6 +103,7 @@ export function createActiveSessionLoadCoordinator<Session>(input: {
       if (!next.enabled || !squadId || !userId) {
         activeToken += 1;
         inFlight = null;
+        invalidatedInFlight = null;
         context = null;
         loadedKey = null;
         emit({ status: "idle" });
@@ -94,6 +113,7 @@ export function createActiveSessionLoadCoordinator<Session>(input: {
       if (context?.key !== key) {
         activeToken += 1;
         inFlight = null;
+        invalidatedInFlight = null;
         loadedKey = null;
         emit({ status: "idle" });
       }
@@ -102,4 +122,3 @@ export function createActiveSessionLoadCoordinator<Session>(input: {
     },
   };
 }
-

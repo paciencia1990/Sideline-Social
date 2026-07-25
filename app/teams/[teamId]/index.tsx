@@ -7,7 +7,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { ChildProfilePicker } from "@/components/ChildProfilePicker";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { VoiceMemoPlayer } from "@/components/VoiceMemoPlayer";
+import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import {
   getCoachUpdateRoute,
@@ -290,7 +290,7 @@ export default function ParentTeamHubScreen() {
                     <LockKeyhole color={Colors.primary} size={20} />
                     <View style={styles.announcementCopy}>
                       <Text style={styles.announcementTitle}>{conversation.coachDisplayName || t(conversation.coachProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
-                      <Text numberOfLines={2} style={styles.announcementBody}>{conversation.lastMessageType === "voice" ? t("teamMessages.voicePreview") : conversation.lastMessagePreview || t("teamMessages.noMessagesYet")}</Text>
+                      <Text numberOfLines={2} style={styles.announcementBody}>{conversation.lastMessageType === "voice" ? t("teamMessages.voicePreview") : conversation.lastMessageType === "deleted" ? t("teamMessages.messageDeleted") : conversation.lastMessagePreview || t("teamMessages.noMessagesYet")}</Text>
                     </View>
                     <ChevronRight color={Colors.textPrimary} size={20} />
                   </View>
@@ -338,9 +338,13 @@ export default function ParentTeamHubScreen() {
                   <View style={styles.announcementTopRow}>
                     <View style={[styles.readDot, announcement.isRead && styles.readDotRead]} />
                     <View style={styles.announcementCopy}>
-                      {announcement.title ? <Text style={styles.announcementTitle}>{announcement.title}</Text> : null}
-                      {announcement.contentType === "voice" ? <Text style={styles.voiceLabel}>{t("teamMessages.voicePreview")}</Text> : null}
-                      <Text numberOfLines={3} style={styles.announcementBody}>{announcement.body}</Text>
+                      {announcement.isDeleted
+                        ? <Text style={styles.announcementTitle}>{t("teamMessages.messageDeleted")}</Text>
+                        : announcement.title
+                          ? <Text style={styles.announcementTitle}>{announcement.title}</Text>
+                          : null}
+                      {!announcement.isDeleted && announcement.contentType === "voice" ? <Text style={styles.voiceLabel}>{t("teamMessages.voicePreview")}</Text> : null}
+                      <Text numberOfLines={3} style={styles.announcementBody}>{announcement.isDeleted ? t("teamMessages.messageDeleted") : announcement.body}</Text>
                     </View>
                     <ChevronRight color={Colors.textPrimary} size={20} />
                   </View>
@@ -351,7 +355,17 @@ export default function ParentTeamHubScreen() {
                       {announcement.allowReplies ? t("myTeams.repliesEnabled") : t("myTeams.repliesDisabledShort")}
                     </Text>
                   </View>
-                  {announcement.contentType === "voice" && announcement.voiceMemo ? <VoiceMemoPlayer durationMilliseconds={announcement.voiceMemo.durationMilliseconds} storagePath={announcement.voiceMemo.storagePath} /> : null}
+                  {!announcement.isDeleted && announcement.contentType === "voice" && announcement.voiceMemo ? (
+                    <VoiceMemoPlayer
+                      durationMilliseconds={announcement.voiceMemo.durationMilliseconds}
+                      source={{
+                        kind: "persisted-message",
+                        messageId: announcement.id,
+                        messageKind: "announcement",
+                        storagePath: announcement.voiceMemo.storagePath,
+                      }}
+                    />
+                  ) : !announcement.isDeleted && announcement.contentType === "voice" ? <VoiceMemoUnavailable /> : null}
                 </Card>
               </TouchableOpacity>
             ))}

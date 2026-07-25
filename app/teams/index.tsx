@@ -146,8 +146,12 @@ function ParentTeamCard({ locale, summary }: { locale: string; summary: ParentTe
         {summary.privateUnreadCount > 0 ? <Text style={styles.privateUnread}>{t("teamMessages.unread", { count: summary.privateUnreadCount })} · {t("teamMessages.title")}</Text> : null}
         {latest ? (
           <View style={[styles.preview, !latest.isRead && styles.previewUnread]}>
-            {latest.title ? <Text style={styles.previewTitle}>{latest.title}</Text> : null}
-            <Text numberOfLines={2} style={styles.previewBody}>{latest.body}</Text>
+            {latest.isDeleted
+              ? <Text style={styles.previewTitle}>{t("teamMessages.messageDeleted")}</Text>
+              : latest.title
+                ? <Text style={styles.previewTitle}>{latest.title}</Text>
+                : null}
+            <Text numberOfLines={2} style={styles.previewBody}>{latest.isDeleted ? t("teamMessages.messageDeleted") : latest.body}</Text>
             <Text style={styles.previewTime}>{formatRelativeTime(latest.createdAtDate, locale, t)}</Text>
           </View>
         ) : (

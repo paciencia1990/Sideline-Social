@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { ArrowLeft, MessageCircle, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
-import { VoiceMemoPlayer } from "@/components/VoiceMemoPlayer";
+import { MessageKeyboardAwareScrollView } from "@/components/MessageKeyboardAwareScrollView";
+import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { auth } from "@/config/firebase";
 import { QUICK_REPLY_IDS, QUICK_REPLY_TRANSLATION_KEYS, type QuickReplyId } from "@/constants/teamReplies";
@@ -166,7 +167,7 @@ export default function ParentAnnouncementScreen() {
   }, [announcement?.allowReplies, announcementId, t, teamId]);
 
   const confirmDeleteReply = useCallback((reply: AnnouncementReply) => {
-    if (reply.userId !== auth.currentUser?.uid || replyDeletionInFlight.current) return;
+    if (reply.isDeleted || reply.userId !== auth.currentUser?.uid || replyDeletionInFlight.current) return;
     Alert.alert(
       t("teamReplies.deleteOwnTitle"),
       t("teamReplies.deleteOwnBody"),
@@ -181,7 +182,9 @@ export default function ParentAnnouncementScreen() {
             setDeletingReplyId(reply.id);
             setError(null);
             void deleteAnnouncementReply(teamId, announcementId, reply.id)
-              .then(() => setReplies((current) => current.filter((item) => item.id !== reply.id)))
+              .then(() => setReplies((current) => current.map((item) => item.id === reply.id
+                ? { ...item, body: "", deletedBy: auth.currentUser?.uid ?? null, isDeleted: true }
+                : item)))
               .catch((nextError) => {
                 logOperationError("deleteReply", nextError);
                 setError(t("teamReplies.deleteError"));
@@ -228,7 +231,7 @@ export default function ParentAnnouncementScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <MessageKeyboardAwareScrollView contentContainerStyle={styles.content}>
         <View style={styles.headerRow}>
           <TouchableOpacity accessibilityLabel={t("myTeams.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
             <ArrowLeft color={Colors.textHeading} size={22} />
@@ -260,16 +263,29 @@ export default function ParentAnnouncementScreen() {
         {announcement ? (
           <>
             <Card style={styles.announcementCard}>
-              {announcement.title ? <Text style={styles.announcementTitle}>{announcement.title}</Text> : null}
-              <Text style={styles.announcementBody}>{announcement.body}</Text>
-              {announcement.contentType === "voice" && announcement.voiceMemo ? (
-                <VoiceMemoPlayer durationMilliseconds={announcement.voiceMemo.durationMilliseconds} storagePath={announcement.voiceMemo.storagePath} />
-              ) : null}
+              {announcement.isDeleted
+                ? <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>{t("teamMessages.messageDeleted")}</Text>
+                : announcement.title
+                  ? <Text style={styles.announcementTitle}>{announcement.title}</Text>
+                  : null}
+              {!announcement.isDeleted ? <Text style={styles.announcementBody}>{announcement.body}</Text> : null}
+              {!announcement.isDeleted && announcement.contentType === "voice" && announcement.voiceMemo ? (
+                <VoiceMemoPlayer
+                  durationMilliseconds={announcement.voiceMemo.durationMilliseconds}
+                  isOwnMessage={announcement.createdBy === auth.currentUser?.uid}
+                  source={{
+                    kind: "persisted-message",
+                    messageId: announcement.id,
+                    messageKind: "announcement",
+                    storagePath: announcement.voiceMemo.storagePath,
+                  }}
+                />
+              ) : !announcement.isDeleted && announcement.contentType === "voice" ? <VoiceMemoUnavailable /> : null}
               <View style={styles.metaPanel}>
                 <Text style={styles.metaText}>{announcement.createdByName || t(announcement.authorProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
                 <Text style={styles.metaText}>{formatDateTime(announcement.createdAt, i18n.language)}</Text>
               </View>
-              {announcement.createdBy !== auth.currentUser?.uid ? (
+              {!announcement.isDeleted && announcement.createdBy !== auth.currentUser?.uid ? (
                 <TouchableOpacity
                   accessibilityRole="button"
                   disabled={Boolean(reportingContentId)}
@@ -294,7 +310,7 @@ export default function ParentAnnouncementScreen() {
                       <Text style={styles.replyName}>{reply.displayName || t(reply.profileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
                       <Text style={styles.replyTime}>{formatDateTime(reply.createdAt, i18n.language)}</Text>
                     </View>
-                    {reply.userId ? (
+                    {!reply.isDeleted && reply.userId ? (
                       <TouchableOpacity
                         accessibilityLabel={reply.userId === auth.currentUser?.uid ? t("teamReplies.deleteMenuOwn") : t("moderation.reportContent")}
                         accessibilityRole="button"
@@ -309,7 +325,13 @@ export default function ParentAnnouncementScreen() {
                       </TouchableOpacity>
                     ) : null}
                   </View>
-                  <Text style={styles.replyBody}>{reply.body}</Text>
+                  <Text style={reply.isDeleted ? styles.deletedMessage : styles.replyBody}>
+                    {reply.isDeleted
+                      ? reply.deletedBy === auth.currentUser?.uid
+                        ? t("teamMessages.youDeletedMessage")
+                        : t("teamMessages.messageDeleted")
+                      : reply.body}
+                  </Text>
                 </View>
               ))}
             </Card>
@@ -366,7 +388,7 @@ export default function ParentAnnouncementScreen() {
             )}
           </>
         ) : null}
-      </ScrollView>
+      </MessageKeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }
@@ -427,11 +449,12 @@ const styles = StyleSheet.create({
   replyTime: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 10 },
   replyMenuButton: { alignItems: "center", justifyContent: "center", minHeight: 44, minWidth: 44, marginRight: -Spacing.sm, marginTop: -Spacing.sm },
   replyBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20 },
+  deletedMessage: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, fontStyle: "italic", lineHeight: 20 },
   composerCard: { gap: Spacing.sm },
   quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   quickButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexBasis: "46%", flexGrow: 1, justifyContent: "center", minHeight: 48, minWidth: 120, paddingHorizontal: Spacing.sm, paddingVertical: Spacing.sm },
   quickButtonText: { color: Colors.primary, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 14, lineHeight: 19, textAlign: "center" },
-  input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 90, padding: Spacing.md, textAlignVertical: "top" },
+  input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, maxHeight: 144, minHeight: 90, padding: Spacing.md, textAlignVertical: "top" },
   primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 46, paddingHorizontal: Spacing.md },
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold },
   disabledButton: { opacity: 0.55 },

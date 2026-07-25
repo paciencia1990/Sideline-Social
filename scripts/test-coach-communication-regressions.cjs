@@ -82,7 +82,7 @@ const teamService = read("services", "teamMessageService.ts");
 const parentService = read("services", "parentTeamService.ts");
 for (const source of [teamService, parentService]) {
   assert.equal(/where\(["']contentType["']/.test(source), false, "announcement queries must not require contentType");
-  assert.match(source, /resolveAnnouncementContentType/);
+  assert.match(source, /normalizeVoiceMessageFields/);
   assert.match(source, /orderBy\("createdAt", "desc"\)/);
 }
 assert.match(teamService, /listenToAnnouncementReplies/);
@@ -97,8 +97,8 @@ assert.match(coachComposer, /\["text", "voice"\]/);
 assert.match(coachComposer, /voiceMemo\.updatedBuildRequired/);
 assert.match(coachComposer, /disabled=\{nextType === "voice" && !voiceAudioAvailable\}/);
 assert.equal(coachComposer.includes("requestRecordingPermissionsAsync"), false, "screen load must not request microphone permission");
-assert.match(recorder, /ensureVoiceRecordingPermission\(audioModule\)/);
-assert.ok(recorder.indexOf("ensureVoiceRecordingPermission(audioModule)") > recorder.indexOf("const startRecording"));
+assert.match(recorder, /ensureVoiceRecordingPermissionDetails\(audioModule\)/);
+assert.ok(recorder.indexOf("ensureVoiceRecordingPermissionDetails(audioModule)") > recorder.indexOf("const startRecording"));
 assert.equal(recorder.includes('from "expo-audio"'), false, "old binaries must not evaluate expo-audio on import");
 assert.equal(player.includes('from "expo-audio"'), false, "legacy announcement surfaces must not evaluate expo-audio on import");
 assert.match(recorder, /isTeamVoiceAudioAvailable/);

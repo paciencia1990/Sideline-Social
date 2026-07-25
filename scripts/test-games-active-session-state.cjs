@@ -88,8 +88,40 @@ async function run() {
   await unmountRequest;
   assert.equal(afterUnmount.length, stateCountAtUnmount, 'unmount ignores stale responses');
 
+  const staleAfterClear = deferred();
+  const cleared = createCoordinator({
+    fetchSession: () => staleAfterClear.promise,
+    onStateChange() {},
+  });
+  const staleRequest = cleared.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
+  assert.equal(cleared.clearSession(), true);
+  staleAfterClear.resolve({ status: 'ready', session: { sessionId: 'must-not-return' } });
+  await staleRequest;
+  assert.equal(cleared.getState().session, null, 'a response invalidated by local expiration cannot restore Active Now');
+
+  const beforeExpiration = deferred();
+  const afterExpiration = deferred();
+  let expirationCalls = 0;
+  const expirationRefresh = createCoordinator({
+    fetchSession: () => {
+      expirationCalls += 1;
+      return expirationCalls === 1 ? beforeExpiration.promise : afterExpiration.promise;
+    },
+    onStateChange() {},
+  });
+  const beforeExpirationRequest = expirationRefresh.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
+  expirationRefresh.clearSession();
+  const afterExpirationRequest = expirationRefresh.retry();
+  beforeExpiration.resolve({ status: 'ready', session: { sessionId: 'stale-session' } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(expirationCalls, 2, 'expiration waits out invalidated deduplication before one trusted refresh');
+  afterExpiration.resolve({ status: 'ready', session: { sessionId: 'new-session' } });
+  await Promise.all([beforeExpirationRequest, afterExpirationRequest]);
+  assert.equal(expirationRefresh.getState().session.sessionId, 'new-session', 'a genuinely new active session can appear after stale state clears');
+
   const gamesSource = fs.readFileSync(path.join(process.cwd(), 'app', '(tabs)', 'games.tsx'), 'utf8');
   const serviceSource = fs.readFileSync(path.join(process.cwd(), 'services', 'gameService.ts'), 'utf8');
+  const activeHookSource = fs.readFileSync(path.join(process.cwd(), 'hooks', 'useActiveSquadGameSession.ts'), 'utf8');
   assert.match(gamesSource, /servicesUnavailable/);
   assert.match(gamesSource, /retryActiveSession/);
   assert.match(gamesSource, /!authLoading && !membershipLoading/);
@@ -98,6 +130,10 @@ async function run() {
   assert.doesNotMatch(gamesSource, /active session error:/);
   assert.doesNotMatch(serviceSource, /orderByChild\("squadId"\)|equalTo\(squadId\)/, 'the client no longer queries all RTDB sessions by Squad');
   assert.match(serviceSource, /getActiveSquadGameSession/);
+  assert.match(activeHookSource, /useFocusEffect/);
+  assert.match(activeHookSource, /AppState\.addEventListener/);
+  assert.match(activeHookSource, /clearSession\(expectedSession\)/);
+  assert.doesNotMatch(activeHookSource, /setInterval/);
 
   console.log('Games active-session permission stability, deduplication, retry, stale-response, UI, and trusted-callable tests passed.');
 }
@@ -106,4 +142,3 @@ run().catch((error) => {
   console.error(error?.stack ?? error);
   process.exit(1);
 });
-

@@ -27,7 +27,7 @@ export type TeamPrivateConversation = {
   parentProfileState?: "available" | "unnamed" | "deleted";
   status: "active" | "readOnly";
   lastMessageAtMillis: number;
-  lastMessageType: "text" | "voice" | null;
+  lastMessageType: "deleted" | "text" | "voice" | null;
   lastMessagePreview: string | null;
   lastSenderUserId: string | null;
   unreadCount: number;
@@ -43,6 +43,9 @@ export type TeamPrivateMessage = {
   text: string | null;
   caption: string | null;
   voiceMemo: StoredVoiceMemo | null;
+  isDeleted: boolean;
+  deletedBy: string | null;
+  deletedAt?: unknown;
   createdAt?: unknown;
 };
 

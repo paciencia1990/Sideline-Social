@@ -89,7 +89,11 @@ export default function CoachTeamMessagesInboxScreen() {
 }
 
 function formatPreview(conversation: TeamPrivateConversation, t: (key: string) => string) {
-  return conversation.lastMessageType === "voice" ? t("teamMessages.voicePreview") : conversation.lastMessagePreview || t("teamMessages.noMessagesYet");
+  return conversation.lastMessageType === "voice"
+    ? t("teamMessages.voicePreview")
+    : conversation.lastMessageType === "deleted"
+      ? t("teamMessages.messageDeleted")
+      : conversation.lastMessagePreview || t("teamMessages.noMessagesYet");
 }
 
 function formatTime(milliseconds: number) {

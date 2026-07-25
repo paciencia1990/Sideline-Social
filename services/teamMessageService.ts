@@ -13,7 +13,7 @@ import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "@/config/firebase";
 import { getTeamRosterProfiles } from "@/services/teamRosterService";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
-import { resolveAnnouncementContentType } from "@/utils/teamAnnouncementCore";
+import { normalizeVoiceMessageFields } from "@/utils/voiceMessageNormalizer";
 import type { StoredVoiceMemo } from "@/types/teamVoiceMessaging";
 
 export type AnnouncementAudience = "parents" | "staff" | "all";
@@ -30,6 +30,9 @@ export type TeamAnnouncement = {
   allowReplies: boolean;
   contentType: "text" | "voice";
   voiceMemo: StoredVoiceMemo | null;
+  isDeleted: boolean;
+  deletedBy: string | null;
+  deletedAt?: unknown;
   createdAt?: unknown;
   updatedAt?: unknown;
 };
@@ -41,6 +44,9 @@ export type AnnouncementReply = {
   profileState?: "available" | "unnamed" | "deleted";
   body: string;
   replyType: ReplyType;
+  isDeleted: boolean;
+  deletedBy: string | null;
+  deletedAt?: unknown;
   createdAt?: unknown;
 };
 
@@ -240,6 +246,8 @@ export async function replyToAnnouncement(
   return {
     ...response.data.reply,
     createdAt: new Date(response.data.reply.createdAtMillis),
+    deletedBy: null,
+    isDeleted: false,
   } satisfies AnnouncementReply;
 }
 
@@ -261,7 +269,10 @@ export async function deleteTeamAnnouncement(teamId: string, announcementId: str
   requireUser();
   const deleteAnnouncement = httpsCallable<
     { teamId: string; announcementId: string },
-    { status: "deleted" | "alreadyDeleted" }
+    {
+      status: "deleted" | "alreadyDeleted";
+      storageCleanup: "deleted" | "cleanupPending" | "notRequired";
+    }
   >(functions, "deleteTeamAnnouncement");
   const response = await deleteAnnouncement({ teamId, announcementId });
   return response.data.status;
@@ -276,8 +287,7 @@ function requireUser() {
 }
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamAnnouncement {
-  const voice = data.voiceMemo && typeof data.voiceMemo === "object" ? data.voiceMemo as Record<string, unknown> : null;
-  const contentType = resolveAnnouncementContentType(data.contentType, voice);
+  const voice = normalizeVoiceMessageFields(data);
   return {
     id,
     title: readString(data.title),
@@ -286,13 +296,11 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamA
     createdByName: formatPublicUserName(readString(data.createdByName)) ?? "",
     audience: readAudience(data.audience),
     allowReplies: data.allowReplies !== false,
-    contentType,
-    voiceMemo: contentType === "voice" && voice ? {
-      storagePath: readString(voice.storagePath),
-      durationMilliseconds: Number(voice.durationMilliseconds ?? 0),
-      sizeBytes: Number(voice.sizeBytes ?? 0),
-      mimeType: voice.mimeType === "audio/m4a" || voice.mimeType === "audio/x-m4a" ? voice.mimeType : "audio/mp4",
-    } : null,
+    contentType: voice.contentType,
+    voiceMemo: voice.voiceMemo,
+    isDeleted: data.isDeleted === true,
+    deletedBy: readNullableString(data.deletedBy),
+    deletedAt: data.deletedAt,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };
@@ -305,6 +313,9 @@ function normalizeReply(id: string, data: Record<string, unknown>): Announcement
     displayName: formatPublicUserName(readString(data.displayName)) ?? "",
     body: readString(data.body),
     replyType: data.replyType === "privateToCoach" ? "privateToCoach" : "team",
+    isDeleted: data.isDeleted === true,
+    deletedBy: readNullableString(data.deletedBy),
+    deletedAt: data.deletedAt,
     createdAt: data.createdAt,
   };
 }
@@ -382,4 +393,8 @@ function readMillis(value: unknown) {
 }
 function readString(value: unknown, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function readNullableString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }

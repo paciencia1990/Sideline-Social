@@ -173,16 +173,22 @@ assert.equal(deleteReplyCallableSource.includes("context.auth?.uid"), true);
 assert.equal(deleteReplyCallableSource.includes("data?.userId"), false);
 assert.equal(deleteReplyCallableSource.includes("canDeleteTeamAnnouncementReply(uid, member"), true);
 assert.equal(deleteReplyCallableSource.includes("memberRef = teamRef.collection('members').doc(uid)"), true);
-assert.equal(deleteReplyCallableSource.includes("transaction.delete(replyRef)"), true);
+assert.equal(deleteReplyCallableSource.includes("transaction.update(replyRef"), true);
+assert.equal(deleteReplyCallableSource.includes("isDeleted: true"), true);
+assert.equal(deleteReplyCallableSource.includes("body: null"), true);
+assert.equal(deleteReplyCallableSource.includes("transaction.delete(replyRef)"), false);
 assert.equal(deleteReplyCallableSource.includes("transaction.delete(announcementRef)"), false);
 assert.equal(deleteAnnouncementCallableSource.includes("context.auth?.uid"), true);
 assert.equal(deleteAnnouncementCallableSource.includes("data?.coachId"), false);
 assert.equal(deleteAnnouncementCallableSource.includes("memberRef = teamRef.collection('members').doc(uid)"), true);
 assert.equal(deleteAnnouncementCallableSource.includes("canManageTeamAnnouncements(member)"), true);
-assert.equal(deleteAnnouncementCallableSource.includes("transaction.delete(announcementRef)"), true);
-assert.equal(deleteAnnouncementCallableSource.includes("deleteTeamAnnouncementData"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("transaction.update(announcementRef"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("isDeleted: true"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("voiceMemo: null"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("transaction.delete(announcementRef)"), false);
+assert.equal(deleteAnnouncementCallableSource.includes("deleteTeamVoiceStorageObject"), true);
 assert.equal(deleteAnnouncementCallableSource.includes("status = 'deleted'"), true);
-assert.equal(deleteAnnouncementCallableSource.includes("return { status }"), true);
+assert.equal(deleteAnnouncementCallableSource.includes("return { status, storageCleanup }"), true);
 const deleteCallableSource = functionsSource.slice(
   functionsSource.indexOf("export const deleteChildProfile"),
   functionsSource.indexOf("async function generateAvailableTeamInviteCode"),
@@ -287,7 +293,9 @@ assert.equal(coachAnnouncementSource.includes("reply.userId === auth.currentUser
 assert.equal(coachAnnouncementSource.includes("canManageTeamAnnouncements"), true);
 assert.equal(coachAnnouncementSource.includes("deleteTeamAnnouncement(teamId, announcementId)"), true);
 assert.equal(coachAnnouncementSource.includes("announcementDeletionInFlight.current"), true);
-assert.equal(coachAnnouncementSource.includes('t("coach.messages.deleteAnnouncement")'), true);
+assert.equal(coachAnnouncementSource.includes('t("teamMessages.deleteMessage")'), true);
+assert.equal(coachAnnouncementSource.includes("announcement.isDeleted"), true);
+assert.equal(parentAnnouncementSource.includes("reply.isDeleted"), true);
 assert.equal(parentAnnouncementSource.includes("listenToTeamAnnouncement"), true);
 assert.equal(coachAnnouncementListSource.includes("listenToTeamAnnouncements"), true);
 assert.equal(parentTeamServiceSource.includes("latestAnnouncement: announcements[0] ?? null"), true);

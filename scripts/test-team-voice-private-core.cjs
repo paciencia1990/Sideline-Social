@@ -30,6 +30,13 @@ assert.equal(core.teamPrivateMessageId(firstConversation, "coach", "client_1"), 
 assert.notEqual(core.teamPrivateMessageId(firstConversation, "coach", "client_1"), core.teamPrivateMessageId(firstConversation, "coach", "client_2"));
 assert.equal(core.teamVoiceStoragePath({ teamId: "team", announcementId: "announcement", reservationId: "reservation" }), "teamVoiceMemos/team/announcements/announcement/reservation/memo.m4a");
 assert.equal(core.teamVoiceStoragePath({ teamId: "team", conversationId: "conversation", messageId: "message", reservationId: "reservation" }), "teamVoiceMemos/team/privateConversations/conversation/message/reservation/memo.m4a");
+assert.deepEqual(core.parseTeamVoiceStoragePath("teamVoiceMemos/team/announcements/announcement/reservation/memo.m4a"), {
+  kind: "announcement", teamId: "team", messageId: "announcement", reservationId: "reservation",
+});
+assert.deepEqual(core.parseTeamVoiceStoragePath("teamVoiceMemos/team/privateConversations/conversation/message/reservation/memo.m4a"), {
+  kind: "privateMessage", teamId: "team", conversationId: "conversation", messageId: "message", reservationId: "reservation",
+});
+assert.equal(core.parseTeamVoiceStoragePath("teamVoiceMemos/team/announcements/announcement/reservation/other.m4a"), null);
 
 const participants = { participantUserIds: ["coach", "parent"], coachUserId: "coach", parentUserId: "parent" };
 assert.equal(core.isExplicitConversationParticipant(participants, "coach"), true);
@@ -49,7 +56,7 @@ const coachComposer = read("app", "coach", "messages.tsx");
 const privateThread = read("components", "PrivateTeamMessageThread.tsx");
 const rules = read("firestore.rules");
 const storageRules = read("storage.rules");
-for (const required of ["ensureVoiceRecordingPermission(audioModule)", "MAX_DURATION_MS = 90_000", "MAX_SIZE_BYTES = 2 * 1024 * 1024", "AppState.addEventListener", "previewed: false", "deleteLocalVoiceMemo"]) assert.equal(recorder.includes(required), true, required);
+for (const required of ["ensureVoiceRecordingPermissionDetails(audioModule)", "MAX_DURATION_MS = 90_000", "MAX_SIZE_BYTES = 2 * 1024 * 1024", "AppState.addEventListener", "previewed: false", "deleteLocalVoiceMemo"]) assert.equal(recorder.includes(required), true, required);
 assert.match(recorder, /require\("expo-audio"\)/, "expo-audio must load only after native capability detection");
 assert.equal(recorder.includes('from "expo-audio"'), false, "expo-audio must remain deferred for old binaries");
 assert.equal(player.includes('from "expo-audio"'), false, "announcement surfaces must remain safe in old binaries");

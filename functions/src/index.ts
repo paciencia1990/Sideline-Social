@@ -45,10 +45,6 @@ import {
   toMinimalPublicUserProfile,
 } from './publicUserProfileCore';
 import {
-  deleteTeamAnnouncementData,
-  type TeamAnnouncementDeletionStatus,
-} from './teamAnnouncementDeletionCore';
-import {
   WEEKLY_CHALLENGES,
   getPreviousWeekKey,
   getWeekInfo,
@@ -79,6 +75,7 @@ import {
   TEAM_VOICE_MAX_SIZE_BYTES,
   isExplicitConversationParticipant,
   privateMessagePreview,
+  parseTeamVoiceStoragePath,
   readAnnouncementAudience,
   readBoundedText,
   readClientIdentifier,
@@ -2101,6 +2098,7 @@ export const getOrCreatePrivateTeamConversation = teamMessagingFunctions.https.o
           coachDisplayName: coachName,
           parentDisplayName: parentName,
           lastMessageAt: null,
+          lastMessageId: null,
           lastMessageType: null,
           lastMessagePreview: null,
           lastSenderUserId: null,
@@ -2302,6 +2300,92 @@ export const finalizePrivateTeamVoiceMessage = teamMessagingFunctions.https.onCa
   }
 });
 
+export const deletePrivateTeamMessage = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
+    const messageId = readRequiredIdentifier(data?.messageId, 'invalid_message_id');
+    const firestore = admin.firestore();
+    const conversationRef = firestore.collection('teamPrivateConversations').doc(conversationId);
+    const messageRef = conversationRef.collection('messages').doc(messageId);
+    let status: 'deleted' | 'alreadyDeleted' = 'alreadyDeleted';
+    let voiceStoragePath: string | null = null;
+
+    await firestore.runTransaction(async (transaction) => {
+      const [conversationSnapshot, messageSnapshot] = await transaction.getAll(conversationRef, messageRef);
+      const conversation = conversationSnapshot.data();
+      const message = messageSnapshot.data();
+      if (!conversationSnapshot.exists || !isExplicitConversationParticipant(conversation, uid)) {
+        throw new Error('not_conversation_participant');
+      }
+      if (!messageSnapshot.exists || message?.conversationId !== conversationId) {
+        throw new Error('voice_message_unavailable');
+      }
+      if (message.senderUserId !== uid) throw new Error('not_message_author');
+      if (message.isDeleted === true) return;
+
+      const recentSnapshot = await transaction.get(
+        conversationRef.collection('messages').orderBy('createdAt', 'desc').limit(25),
+      );
+      const latestDocument = recentSnapshot.docs[0];
+      const deletesLatestMessage = conversation?.lastMessageId === messageId ||
+        (!conversation?.lastMessageId && latestDocument?.id === messageId);
+      const storedPath = message.voiceMemo?.storagePath;
+      voiceStoragePath = typeof storedPath === 'string' &&
+        parseTeamVoiceStoragePath(storedPath)?.messageId === messageId
+        ? storedPath
+        : null;
+
+      transaction.update(messageRef, {
+        caption: null,
+        deletedAt: FieldValue.serverTimestamp(),
+        deletedBy: uid,
+        isDeleted: true,
+        text: null,
+        voiceMemo: null,
+      });
+      if (deletesLatestMessage) {
+        const previous = recentSnapshot.docs.find((document) =>
+          document.id !== messageId && document.data().isDeleted !== true);
+        if (previous) {
+          const previousMessage = previous.data();
+          const previousType = previousMessage.contentType === 'voice' ? 'voice' : 'text';
+          transaction.update(conversationRef, {
+            lastMessageAt: previousMessage.createdAt ?? null,
+            lastMessageId: previous.id,
+            lastMessagePreview: privateMessagePreview(
+              previousType,
+              previousMessage.text ?? previousMessage.caption,
+              previousMessage.voiceMemo?.durationMilliseconds,
+            ),
+            lastMessageType: previousType,
+            lastSenderUserId: previousMessage.senderUserId ?? null,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        } else {
+          transaction.update(conversationRef, {
+            lastMessageAt: message.createdAt ?? null,
+            lastMessageId: messageId,
+            lastMessagePreview: null,
+            lastMessageType: 'deleted',
+            lastSenderUserId: message.senderUserId ?? null,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      }
+      status = 'deleted';
+    });
+
+    const storageCleanup = voiceStoragePath
+      ? await deleteTeamVoiceStorageObject(voiceStoragePath)
+      : 'notRequired';
+    return { status, storageCleanup };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
 export const markPrivateTeamConversationRead = teamMessagingFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
@@ -2376,11 +2460,31 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
     const storagePath = readBoundedText(data?.storagePath, 1, 1024, 'invalid_storage_path');
-    const match = /^teamVoiceMemos\/[^/]+\/(?:announcements|privateConversations)\/.+\/([A-Za-z0-9_-]+)\/memo\.m4a$/u.exec(storagePath);
-    if (!match) throw new Error('invalid_storage_path');
-    const reservationSnapshot = await admin.firestore().collection('teamVoiceUploadReservations').doc(match[1]).get();
+    const storageReference = parseTeamVoiceStoragePath(storagePath);
+    if (!storageReference) throw new Error('invalid_storage_path');
+    const requestedMessageId = data?.messageId == null
+      ? null
+      : readRequiredIdentifier(data.messageId, 'invalid_message_id');
+    const requestedMessageKind = data?.messageKind == null ? null : data.messageKind;
+    if (
+      (requestedMessageId && requestedMessageId !== storageReference.messageId) ||
+      (requestedMessageKind && requestedMessageKind !== storageReference.kind)
+    ) throw new Error('voice_message_unavailable');
+    const reservationSnapshot = await admin.firestore()
+      .collection('teamVoiceUploadReservations')
+      .doc(storageReference.reservationId)
+      .get();
     const reservation = reservationSnapshot.data();
-    if (!reservationSnapshot.exists || reservation?.status !== 'finalized' || reservation.storagePath !== storagePath) {
+    if (
+      !reservationSnapshot.exists ||
+      reservation?.status !== 'finalized' ||
+      reservation.storagePath !== storagePath ||
+      reservation.kind !== storageReference.kind ||
+      reservation.teamId !== storageReference.teamId ||
+      reservation.targetId !== storageReference.messageId ||
+      (storageReference.kind === 'privateMessage' &&
+        reservation.conversationId !== storageReference.conversationId)
+    ) {
       throw new Error('voice_message_unavailable');
     }
     const firestore = admin.firestore();
@@ -2390,20 +2494,163 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
         firestore.collection('teams').doc(teamId).collection('members').doc(uid).get(),
         firestore.collection('teams').doc(teamId).collection('announcements').doc(reservation.targetId).get(),
       ]);
-      if (!announcementSnapshot.exists || !canAccessTeamAnnouncement(memberSnapshot.data(), announcementSnapshot.data()?.audience)) {
+      const announcement = announcementSnapshot.data();
+        if (
+          !announcementSnapshot.exists ||
+          announcement?.isDeleted === true ||
+          announcement?.voiceMemo?.storagePath !== storagePath ||
+        !canAccessTeamAnnouncement(memberSnapshot.data(), announcement?.audience)
+      ) {
         throw new Error('not_authorized_voice_recipient');
       }
     } else {
-      const conversationSnapshot = await firestore.collection('teamPrivateConversations').doc(reservation.conversationId).get();
-      if (!conversationSnapshot.exists || !isExplicitConversationParticipant(conversationSnapshot.data(), uid)) {
+      const conversationRef = firestore.collection('teamPrivateConversations').doc(reservation.conversationId);
+      const [conversationSnapshot, messageSnapshot] = await Promise.all([
+        conversationRef.get(),
+        conversationRef.collection('messages').doc(reservation.targetId).get(),
+      ]);
+        if (
+          !conversationSnapshot.exists ||
+          !messageSnapshot.exists ||
+          messageSnapshot.data()?.isDeleted === true ||
+          messageSnapshot.data()?.voiceMemo?.storagePath !== storagePath ||
+        !isExplicitConversationParticipant(conversationSnapshot.data(), uid)
+      ) {
         throw new Error('not_conversation_participant');
       }
     }
     const expiresAtMillis = Date.now() + TEAM_VOICE_SIGNED_URL_MS;
-    const [url] = await admin.storage().bucket().file(storagePath).getSignedUrl({ action: 'read', expires: expiresAtMillis });
+    const bucket = admin.storage().bucket();
+    const storageEmulatorHost = process.env.STORAGE_EMULATOR_HOST;
+    const storageEmulatorOrigin = storageEmulatorHost && /^https?:\/\//u.test(storageEmulatorHost)
+      ? storageEmulatorHost
+      : `http://${storageEmulatorHost}`;
+    const file = bucket.file(storagePath);
+    let url: string;
+    if (process.env.FUNCTIONS_EMULATOR === 'true' && storageEmulatorHost) {
+      const [metadata] = await file.getMetadata();
+      const existingToken = metadata.metadata?.firebaseStorageDownloadTokens;
+      const emulatorToken = typeof existingToken === 'string' && existingToken
+        ? existingToken.split(',')[0]
+        : randomBytes(18).toString('hex');
+      if (!existingToken) {
+        await file.setMetadata({
+          metadata: {
+            ...metadata.metadata,
+            firebaseStorageDownloadTokens: emulatorToken,
+          },
+        });
+      }
+      url = `${storageEmulatorOrigin}/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(emulatorToken)}`;
+    } else {
+      // Runtime URL signing depends on an IAM signBlob permission that is not
+      // guaranteed for the Functions service account. An opaque, short-lived
+      // grant keeps the same private-media contract without granting the client
+      // direct Storage access. The media endpoint rechecks the message and
+      // membership on every request, so deletion revokes even an unexpired URL.
+      const grantToken = randomBytes(32).toString('hex');
+      const grantId = createHash('sha256').update(grantToken).digest('hex');
+      await firestore.collection('teamVoicePlaybackGrants').doc(grantId).create({
+        expiresAt: Timestamp.fromMillis(expiresAtMillis),
+        messageId: storageReference.messageId,
+        messageKind: storageReference.kind,
+        storagePath,
+        userId: uid,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      const projectId = process.env.GCLOUD_PROJECT || admin.app().options.projectId;
+      if (!projectId) throw new Error('playback_grant_failed');
+      url = `https://us-central1-${projectId}.cloudfunctions.net/streamTeamVoiceMemo?grant=${grantToken}`;
+    }
     return { url, expiresAtMillis };
   } catch (error) {
+    functions.logger.warn('team_voice_playback_url_failed', {
+      failureStage: voicePlaybackAuthorizationFailureStage(error),
+    });
     throwTeamMessagingError(error);
+  }
+});
+
+export const streamTeamVoiceMemo = teamMessagingFunctions.https.onRequest(async (request, response) => {
+  response.set('Cache-Control', 'private, no-store, max-age=0');
+  response.set('X-Content-Type-Options', 'nosniff');
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    response.status(405).set('Allow', 'GET, HEAD').end();
+    return;
+  }
+
+  const grantToken = typeof request.query.grant === 'string' ? request.query.grant : '';
+  if (!/^[a-f0-9]{64}$/u.test(grantToken)) {
+    response.status(404).end();
+    return;
+  }
+
+  try {
+    const firestore = admin.firestore();
+    const grantId = createHash('sha256').update(grantToken).digest('hex');
+    const grantSnapshot = await firestore.collection('teamVoicePlaybackGrants').doc(grantId).get();
+    const grant = grantSnapshot.data();
+    const expiresAtMillis = timestampMillis(grant?.expiresAt) ?? 0;
+    if (!grantSnapshot.exists || expiresAtMillis <= Date.now()) {
+      response.status(404).end();
+      return;
+    }
+
+    const userId = readRequiredIdentifier(grant?.userId, 'invalid_playback_grant');
+    const storagePath = readBoundedText(grant?.storagePath, 1, 1024, 'invalid_playback_grant');
+    const storageReference = parseTeamVoiceStoragePath(storagePath);
+    if (
+      !storageReference ||
+      grant?.messageId !== storageReference.messageId ||
+      grant?.messageKind !== storageReference.kind ||
+      !await canStreamGrantedTeamVoiceMemo(firestore, storageReference, storagePath, userId)
+    ) {
+      response.status(404).end();
+      return;
+    }
+
+    const file = admin.storage().bucket().file(storagePath);
+    const [metadata] = await file.getMetadata();
+    const sizeBytes = Number(metadata.size);
+    const mimeType = typeof metadata.contentType === 'string' ? metadata.contentType : '';
+    if (
+      !Number.isInteger(sizeBytes) ||
+      sizeBytes < 1 ||
+      sizeBytes > TEAM_VOICE_MAX_SIZE_BYTES ||
+      !['audio/mp4', 'audio/m4a', 'audio/x-m4a'].includes(mimeType)
+    ) {
+      response.status(415).end();
+      return;
+    }
+
+    const range = parseVoiceByteRange(request.get('range'), sizeBytes);
+    if (range === 'invalid') {
+      response.status(416).set('Content-Range', `bytes */${sizeBytes}`).end();
+      return;
+    }
+    response.set('Accept-Ranges', 'bytes');
+    response.type(mimeType);
+    if (range) {
+      response.status(206);
+      response.set('Content-Range', `bytes ${range.start}-${range.end}/${sizeBytes}`);
+      response.set('Content-Length', String(range.end - range.start + 1));
+    } else {
+      response.status(200);
+      response.set('Content-Length', String(sizeBytes));
+    }
+    if (request.method === 'HEAD') {
+      response.end();
+      return;
+    }
+
+    const [contents] = await file.download(range ? { start: range.start, end: range.end } : undefined);
+    response.send(contents);
+  } catch (error) {
+    functions.logger.warn('team_voice_stream_failed', {
+      failureStage: voicePlaybackAuthorizationFailureStage(error),
+    });
+    if (!response.headersSent) response.status(404).end();
+    else response.end();
   }
 });
 
@@ -2425,12 +2672,155 @@ export const cleanupAbandonedTeamVoiceUploads = teamMessagingFunctions.pubsub
       }
       await document.ref.delete();
     }));
+    const deletePendingSnapshot = await firestore.collection('teamVoiceUploadReservations')
+      .where('status', '==', 'deletePending')
+      .limit(100)
+      .get();
+    await Promise.all(deletePendingSnapshot.docs.map(async (document) => {
+      const storagePath = document.data()?.storagePath;
+      if (typeof storagePath !== 'string' || !parseTeamVoiceStoragePath(storagePath)) return;
+      try {
+        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        await document.ref.delete();
+        deletedObjects += 1;
+      } catch {
+        functions.logger.warn('team_voice_cleanup_retry_deferred', { hasStoragePath: true });
+      }
+    }));
     functions.logger.info('team_voice_cleanup_completed', {
-      reservations: snapshot.size,
+      reservations: snapshot.size + deletePendingSnapshot.size,
       deletedObjects,
     });
+    const expiredGrants = await firestore.collection('teamVoicePlaybackGrants')
+      .where('expiresAt', '<=', Timestamp.now())
+      .limit(500)
+      .get();
+    if (!expiredGrants.empty) {
+      const writer = firestore.bulkWriter();
+      expiredGrants.docs.forEach((document) => writer.delete(document.ref));
+      await writer.close();
+    }
     return null;
   });
+
+async function canStreamGrantedTeamVoiceMemo(
+  firestore: FirebaseFirestore.Firestore,
+  storageReference: NonNullable<ReturnType<typeof parseTeamVoiceStoragePath>>,
+  storagePath: string,
+  userId: string,
+) {
+  const reservationSnapshot = await firestore.collection('teamVoiceUploadReservations')
+    .doc(storageReference.reservationId)
+    .get();
+  const reservation = reservationSnapshot.data();
+  if (
+    !reservationSnapshot.exists ||
+    reservation?.status !== 'finalized' ||
+    reservation.storagePath !== storagePath ||
+    reservation.kind !== storageReference.kind ||
+    reservation.teamId !== storageReference.teamId ||
+    reservation.targetId !== storageReference.messageId
+  ) return false;
+
+  if (storageReference.kind === 'announcement') {
+    const [memberSnapshot, announcementSnapshot] = await Promise.all([
+      firestore.collection('teams').doc(storageReference.teamId).collection('members').doc(userId).get(),
+      firestore.collection('teams').doc(storageReference.teamId).collection('announcements')
+        .doc(storageReference.messageId).get(),
+    ]);
+    const announcement = announcementSnapshot.data();
+    return Boolean(
+      announcementSnapshot.exists &&
+      announcement?.isDeleted !== true &&
+      announcement?.voiceMemo?.storagePath === storagePath &&
+      canAccessTeamAnnouncement(memberSnapshot.data(), announcement?.audience),
+    );
+  }
+
+  if (
+    reservation.conversationId !== storageReference.conversationId ||
+    !storageReference.conversationId
+  ) return false;
+  const conversationRef = firestore.collection('teamPrivateConversations').doc(storageReference.conversationId);
+  const [conversationSnapshot, messageSnapshot] = await Promise.all([
+    conversationRef.get(),
+    conversationRef.collection('messages').doc(storageReference.messageId).get(),
+  ]);
+  const message = messageSnapshot.data();
+  return Boolean(
+    conversationSnapshot.exists &&
+    messageSnapshot.exists &&
+    message?.isDeleted !== true &&
+    message?.voiceMemo?.storagePath === storagePath &&
+    isExplicitConversationParticipant(conversationSnapshot.data(), userId),
+  );
+}
+
+function parseVoiceByteRange(value: string | undefined, sizeBytes: number) {
+  if (!value) return null;
+  const match = /^bytes=(\d*)-(\d*)$/u.exec(value.trim());
+  if (!match || (!match[1] && !match[2])) return 'invalid' as const;
+  let start: number;
+  let end: number;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isInteger(suffixLength) || suffixLength < 1) return 'invalid' as const;
+    start = Math.max(0, sizeBytes - suffixLength);
+    end = sizeBytes - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : sizeBytes - 1;
+  }
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= sizeBytes
+  ) return 'invalid' as const;
+  return { start, end: Math.min(end, sizeBytes - 1) };
+}
+
+function voicePlaybackAuthorizationFailureStage(error: unknown) {
+  const reason = error instanceof Error ? error.message : '';
+  if (reason === 'invalid_storage_path' || reason === 'invalid_message_id') return 'normalize-message';
+  if (
+    reason === 'voice_message_unavailable' ||
+    reason === 'not_authorized_voice_recipient' ||
+    reason === 'not_conversation_participant' ||
+    reason === 'invalid_playback_grant'
+  ) return 'playback-url-authorization';
+  if (reason === 'playback_grant_failed') return 'request-playback-url';
+  return 'unknown';
+}
+
+async function deleteTeamVoiceStorageObject(storagePath: string) {
+  const storageReference = parseTeamVoiceStoragePath(storagePath);
+  if (!storageReference) return 'cleanupPending' as const;
+  const reservationRef = admin.firestore().collection('teamVoiceUploadReservations')
+    .doc(storageReference.reservationId);
+  try {
+    await reservationRef.set({
+      expiresAt: Timestamp.now(),
+      status: 'deletePending',
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch {
+    functions.logger.warn('team_voice_cleanup_marker_deferred', { hasStoragePath: true });
+  }
+  try {
+    await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+    try {
+      await reservationRef.delete();
+    } catch {
+      functions.logger.warn('team_voice_reservation_cleanup_deferred', { storageDeleted: true });
+    }
+    return 'deleted' as const;
+  } catch {
+    functions.logger.warn('team_voice_message_cleanup_deferred', { retryScheduled: true });
+    return 'cleanupPending' as const;
+  }
+}
 
 type PrivateMessageTransactionInput = {
   caption?: string;
@@ -2506,6 +2896,7 @@ async function createPrivateTeamMessageTransaction(
     transaction.update(conversationRef, {
       status: 'active',
       lastMessageAt: now,
+      lastMessageId: messageId,
       lastMessageType: input.contentType,
       lastMessagePreview: preview,
       lastSenderUserId: input.senderUserId,
@@ -2644,7 +3035,13 @@ function serializePrivateConversation(
     parentDisplayName: String(conversation.parentDisplayName ?? 'Sideline Social member'),
     status: conversation.status === 'readOnly' ? 'readOnly' : 'active',
     lastMessageAtMillis: timestampMillis(conversation.lastMessageAt) ?? 0,
-    lastMessageType: conversation.lastMessageType === 'voice' ? 'voice' : conversation.lastMessageType === 'text' ? 'text' : null,
+    lastMessageType: conversation.lastMessageType === 'voice'
+      ? 'voice'
+      : conversation.lastMessageType === 'text'
+        ? 'text'
+        : conversation.lastMessageType === 'deleted'
+          ? 'deleted'
+          : null,
     lastMessagePreview: typeof conversation.lastMessagePreview === 'string' ? conversation.lastMessagePreview : null,
     lastSenderUserId: typeof conversation.lastSenderUserId === 'string' ? conversation.lastSenderUserId : null,
     unreadCount: Math.max(0, Number(member?.unreadCount ?? 0)),
@@ -2658,10 +3055,17 @@ function throwTeamMessagingError(error: unknown): never {
     'not_authorized_coach',
     'not_conversation_participant',
     'not_authorized_voice_recipient',
+    'not_message_author',
     'parent_not_active',
   ]);
   const notFoundReasons = new Set(['team_not_found', 'conversation_not_found', 'voice_message_unavailable']);
-  const failedReasons = new Set(['conversation_read_only', 'upload_expired']);
+  const failedReasons = new Set(['conversation_conflict', 'conversation_read_only', 'upload_expired', 'upload_failed']);
+  const validationReasons = new Set([
+    'announcement_summary_required',
+    'announcement_title_required',
+    'unsupported_audio_type',
+    'voice_file_too_large',
+  ]);
   const code: functions.https.FunctionsErrorCode = reason === 'rate_limited'
     ? 'resource-exhausted'
     : permissionReasons.has(reason)
@@ -2670,7 +3074,9 @@ function throwTeamMessagingError(error: unknown): never {
         ? 'not-found'
         : failedReasons.has(reason)
           ? 'failed-precondition'
-          : 'invalid-argument';
+          : reason.startsWith('invalid_') || validationReasons.has(reason)
+            ? 'invalid-argument'
+            : 'internal';
   throw new functions.https.HttpsError(code, 'The Team Message request could not be completed.', { reason });
 }
 
@@ -2918,9 +3324,8 @@ function normalizePublicProfileIds(value: unknown): string[] {
 
 // ---------------------------------------------------------------------------
 // Team announcement deletion
-// The callable owns authorization and recursive cleanup so a client cannot
-// leave reply/read descendants behind or delete an announcement for another
-// team. Active staff retain their existing announcement-management permission.
+// The callable owns authorization and writes a content-clearing tombstone.
+// Active staff retain their existing documented announcement moderation access.
 // ---------------------------------------------------------------------------
 
 export const deleteTeamAnnouncement = functions.https.onCall(async (data, context) => {
@@ -2933,7 +3338,7 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
   const teamRef = firestore.collection('teams').doc(teamId);
   const memberRef = teamRef.collection('members').doc(uid);
   const announcementRef = teamRef.collection('announcements').doc(announcementId);
-  let status: TeamAnnouncementDeletionStatus = 'alreadyDeleted';
+  let status: 'deleted' | 'alreadyDeleted' = 'alreadyDeleted';
   let voiceStoragePath: string | null = null;
 
   await firestore.runTransaction(async (transaction) => {
@@ -2952,42 +3357,31 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
     if (!canManageTeamAnnouncements(member)) {
       throw new functions.https.HttpsError('permission-denied', 'Announcement management access is required.');
     }
-    if (!announcementSnapshot.exists) return;
+    if (!announcementSnapshot.exists || announcementSnapshot.data()?.isDeleted === true) return;
 
     const storedPath = announcementSnapshot.data()?.voiceMemo?.storagePath;
     voiceStoragePath = typeof storedPath === 'string' && storedPath.startsWith(`teamVoiceMemos/${teamId}/announcements/`)
       ? storedPath
       : null;
 
-    transaction.delete(announcementRef);
+    transaction.update(announcementRef, {
+      allowReplies: false,
+      body: null,
+      deletedAt: FieldValue.serverTimestamp(),
+      deletedBy: uid,
+      isDeleted: true,
+      title: null,
+      updatedAt: FieldValue.serverTimestamp(),
+      voiceMemo: null,
+    });
     status = 'deleted';
   });
 
-  // Membership documents are retained when access changes, so this list also
-  // reaches announcement inbox entries belonging to former team members.
-  const memberSnapshot = await teamRef.collection('members').get();
-  await deleteTeamAnnouncementData(
-    firestore,
-    announcementRef,
-    memberSnapshot.docs.map((memberDocument) => memberDocument.id),
-  );
-  if (voiceStoragePath) {
-    const reservationMatch = /\/([A-Za-z0-9_-]+)\/memo\.m4a$/u.exec(voiceStoragePath);
-    const reservationRef = reservationMatch
-      ? firestore.collection('teamVoiceUploadReservations').doc(reservationMatch[1])
-      : null;
-    if (reservationRef) {
-      await reservationRef.set({ status: 'deletePending', expiresAt: Timestamp.now(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-    }
-    try {
-      await admin.storage().bucket().file(voiceStoragePath).delete({ ignoreNotFound: true });
-      if (reservationRef) await reservationRef.delete();
-    } catch (error) {
-      functions.logger.warn('team_voice_announcement_cleanup_deferred', { retryScheduled: Boolean(reservationRef) });
-    }
-  }
+  const storageCleanup = voiceStoragePath
+    ? await deleteTeamVoiceStorageObject(voiceStoragePath)
+    : 'notRequired';
 
-  return { status };
+  return { status, storageCleanup };
 });
 
 // ---------------------------------------------------------------------------
@@ -3151,8 +3545,14 @@ export const deleteTeamAnnouncementReply = functions.https.onCall(async (data, c
     if (!canDeleteTeamAnnouncementReply(uid, member, replySnapshot.data())) {
       throw new functions.https.HttpsError('permission-denied', 'You cannot delete this reply.');
     }
+    if (replySnapshot.data()?.isDeleted === true) return;
 
-    transaction.delete(replyRef);
+    transaction.update(replyRef, {
+      body: null,
+      deletedAt: FieldValue.serverTimestamp(),
+      deletedBy: uid,
+      isDeleted: true,
+    });
     deleted = true;
   });
 

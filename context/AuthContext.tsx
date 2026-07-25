@@ -13,6 +13,7 @@ import { auth, db } from "@/config/firebase";
 import { unregisterCurrentDeviceNotificationToken } from "@/services/notificationService";
 import { readModeOnboardingState, type AppMode } from "@/utils/onboardingMode";
 import { resolveDisplayName } from "@/utils/profileName";
+import { setVoicePlaybackAuthorizationContext } from "@/utils/voicePlaybackCore";
 
 type AppUser = {
   uid: string;
@@ -93,6 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let disposed = false;
 
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+      setVoicePlaybackAuthorizationContext(nextUser?.uid ?? null);
       const loadVersion = ++profileLoadVersion.current;
       setFirebaseUser(nextUser);
       setUser(null);

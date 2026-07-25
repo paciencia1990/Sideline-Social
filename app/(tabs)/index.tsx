@@ -22,13 +22,14 @@ import { SquadSelector } from "@/components/SquadSelector";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { useActiveSquadGameSession } from "@/hooks/useActiveSquadGameSession";
 import {
   retryPendingNotificationAcknowledgements,
   subscribeToUnreadNotificationCount,
 } from "@/services/notificationService";
 import { formatUnreadBadgeCount } from "@/utils/notificationCore";
 import { subscribeToUnreadFriendConversationCount } from "@/services/chatService";
-import { fetchActiveSquadSession, getGameLabel, type ActiveGameSession } from "@/services/gameService";
+import { getGameLabel } from "@/services/gameService";
 import {
   getParentTeamsOverview,
   getTeamChildNames,
@@ -69,8 +70,16 @@ export default function HomeScreen() {
   const [activeChallenge, setActiveChallenge] = useState<UserWeeklyChallenge | null>(null);
   const [challengeError, setChallengeError] = useState<string | null>(null);
   const [challengeCompletionLoading, setChallengeCompletionLoading] = useState(false);
-  const [activeSession, setActiveSession] = useState<ActiveGameSession | null>(null);
   const [squadSelectorOpen, setSquadSelectorOpen] = useState(false);
+  const {
+    retry: retryActiveSession,
+    session: activeSession,
+  } = useActiveSquadGameSession({
+    diagnosticLabel: "HomeScreen",
+    enabled: !membershipLoading,
+    squadId: selectedSquadId,
+    userId: user?.uid ?? null,
+  });
 
   const safeUnreadCount = Number.isFinite(unreadCount) ? Math.max(0, unreadCount) : 0;
   const unreadBadge = formatUnreadBadgeCount(safeUnreadCount);
@@ -108,7 +117,7 @@ export default function HomeScreen() {
     const userId = user?.uid;
 
     try {
-      const [challengeResult, session] = await Promise.all([
+      const challengeResult = await (
         userId
           ? getCurrentWeeklyChallenge()
               .then((challenge) => ({ challenge, failed: false }))
@@ -116,15 +125,11 @@ export default function HomeScreen() {
                 console.warn("[HomeScreen] weekly challenge load error:", challengeLoadError);
                 return { challenge: null, failed: true };
               })
-          : Promise.resolve({ challenge: null, failed: false }),
-        selectedSquadId
-          ? fetchActiveSquadSession(selectedSquadId)
-          : Promise.resolve({ status: "ready", session: null } as const),
-      ]);
+          : Promise.resolve({ challenge: null, failed: false })
+      );
 
       setActiveChallenge(challengeResult.challenge);
       setChallengeError(challengeResult.failed ? t("home.challengeError") : null);
-      setActiveSession(session.status === "ready" ? session.session : null);
 
     } catch (nextError) {
       console.warn("[HomeScreen] load error:", nextError);
@@ -134,7 +139,7 @@ export default function HomeScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedSquadId, t, user?.uid]);
+  }, [t, user?.uid]);
 
   useEffect(() => {
     void loadHome();
@@ -164,11 +169,12 @@ export default function HomeScreen() {
     setRefreshing(true);
     void Promise.allSettled([
       retryPendingNotificationAcknowledgements(),
+      retryActiveSession(),
       loadHome(),
       loadMyTeams(),
       reloadMemberships(),
     ]).finally(() => setRefreshing(false));
-  }, [loadHome, loadMyTeams, reloadMemberships]);
+  }, [loadHome, loadMyTeams, reloadMemberships, retryActiveSession]);
 
   const confirmChallengeCompletion = useCallback(() => {
     if (!activeChallenge || activeChallenge.completed || challengeCompletionLoading) return;
@@ -386,14 +392,14 @@ function MyTeamsCard({
             <Text style={styles.myTeamsPreviewTeam}>
               {formatHomeTeamLabel(latestTeam, t("myTeams.childNotSpecified"))}
             </Text>
-            <Text numberOfLines={2} style={styles.myTeamsPreviewBody}>{latest.body}</Text>
+            <Text numberOfLines={2} style={styles.myTeamsPreviewBody}>{latest.isDeleted ? t("teamMessages.messageDeleted") : latest.body}</Text>
           </View>
         ) : null}
 
         {latestPrivate ? (
           <View style={styles.myTeamsPreview}>
             <Text style={styles.myTeamsPreviewTeam}>{t("teamMessages.privateLabel")} · {latestPrivate.team.team.name}</Text>
-            <Text numberOfLines={2} style={styles.myTeamsPreviewBody}>{latestPrivate.conversation.lastMessageType === "voice" ? t("teamMessages.voicePreview") : latestPrivate.conversation.lastMessagePreview || t("teamMessages.noMessagesYet")}</Text>
+            <Text numberOfLines={2} style={styles.myTeamsPreviewBody}>{latestPrivate.conversation.lastMessageType === "voice" ? t("teamMessages.voicePreview") : latestPrivate.conversation.lastMessageType === "deleted" ? t("teamMessages.messageDeleted") : latestPrivate.conversation.lastMessagePreview || t("teamMessages.noMessagesYet")}</Text>
           </View>
         ) : null}
 
