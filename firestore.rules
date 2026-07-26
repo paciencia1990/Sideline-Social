@@ -260,7 +260,7 @@ service cloud.firestore {
         isTeamMember(teamId) &&
         (
           isCoachStaff(teamId) ||
-          (isParentTeamMember(teamId) && resource.data.audience in ["parents", "all"])
+          (isParentTeamMember(teamId) && resource.data.audience in ["parents", "all", "everyone"])
         );
     }
 
@@ -272,7 +272,7 @@ service cloud.firestore {
           isCoachStaff(teamId) ||
           (
             isParentTeamMember(teamId) &&
-            get(announcementPath(teamId, announcementId)).data.audience in ["parents", "all"]
+            get(announcementPath(teamId, announcementId)).data.audience in ["parents", "all", "everyone"]
           )
         );
     }

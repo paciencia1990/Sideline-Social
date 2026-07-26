@@ -11,7 +11,7 @@ const template = (
   placeholders: string[],
 ): CoachCommunicationTemplate => ({
   id, category, title: text(...title), description: text(...description), body: text(...body), placeholders,
-  canSendAsAnnouncement: true, sortOrder: order, isActive: true, contentVersion: 1,
+  canSendAsAnnouncement: category !== "message_parent", sortOrder: order, isActive: true, contentVersion: 1,
 });
 
 export const COACH_COMMUNICATION_TEMPLATES: CoachCommunicationTemplate[] = [
@@ -51,15 +51,15 @@ export const COACH_COMMUNICATION_TEMPLATES: CoachCommunicationTemplate[] = [
     ["Send a practical supply reminder.", "Envía un recordatorio práctico de suministros."],
     ["Hello {teamName} families. This is a reminder about {equipment} for {date}. Please follow league guidance for allergies, food, and shared supplies. Contact the coaching staff privately with questions.", "Hola, familias de {teamName}. Este es un recordatorio sobre {equipment} para el {date}. Sigan las indicaciones de la liga sobre alergias, alimentos y suministros compartidos. Consulten en privado al staff si tienen preguntas."],
     ["teamName", "equipment", "date"]),
-  template("parent-concern", "parents", 100, ["Addressing a Parent Concern", "Responder a una Inquietud Familiar"],
+  template("parent-concern", "message_parent", 100, ["Addressing a Parent Concern", "Responder a una Inquietud Familiar"],
     ["Acknowledge a concern and propose a calm next step.", "Reconoce la inquietud y propone un próximo paso tranquilo."],
     ["Thank you for sharing your concern. I want every player to have a positive experience. Could we speak privately at {time} so I can listen carefully and we can agree on an appropriate next step?", "Gracias por compartir su inquietud. Quiero que cada jugador tenga una experiencia positiva. ¿Podemos hablar en privado a las {time} para que pueda escuchar con atención y acordar un próximo paso apropiado?"],
     ["time"]),
-  template("private-conversation", "parents", 110, ["Requesting a Private Conversation", "Solicitar una Conversación Privada"],
+  template("private-conversation", "message_parent", 110, ["Requesting a Private Conversation", "Solicitar una Conversación Privada"],
     ["Move a sensitive topic away from the team space.", "Lleva un tema sensible fuera del espacio del equipo."],
     ["Hi. I'd like to discuss {reason} privately so we can give it the attention it deserves. Would {date} at {time} work for a brief conversation? Please do not share private player details in the team announcement space.", "Hola. Me gustaría conversar en privado sobre {reason} para prestarle la atención que merece. ¿Le serviría el {date} a las {time} para una conversación breve? Por favor, no comparta detalles privados de jugadores en los anuncios del equipo."],
     ["reason", "date", "time"]),
-  template("difficult-follow-up", "parents", 120, ["Following Up After a Difficult Interaction", "Seguimiento Después de una Interacción Difícil"],
+  template("difficult-follow-up", "message_parent", 120, ["Following Up After a Private Conversation", "Seguimiento Después de una Conversación Privada"],
     ["Re-center a conversation on a constructive next step.", "Vuelve a centrar la conversación en un próximo paso constructivo."],
     ["Thank you for speaking with me about {reason}. I appreciate the chance to listen. Our agreed next step is {newLocation}. I will follow up by {date}. Please let me know privately if I misunderstood anything important.", "Gracias por hablar conmigo sobre {reason}. Aprecio la oportunidad de escuchar. Nuestro próximo paso acordado es {newLocation}. Daré seguimiento antes del {date}. Avíseme en privado si entendí mal algo importante."],
     ["reason", "newLocation", "date"]),

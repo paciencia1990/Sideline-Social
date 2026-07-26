@@ -28,7 +28,8 @@ assert.match(navigation, /COACH_HOME_ROUTE = "\/coach"/, "fallback must be Coach
 assert.match(navigation, /BackHandler\.addEventListener\("hardwareBackPress"[\s\S]*navigateBack\(\)[\s\S]*return true/, "Android system back must use the same navigation action");
 
 assert.match(messages, /draftBody[\s\S]*draftTitle[\s\S]*selectedTeamId/, "communication-template drafts and team parameters must remain intact");
-for (const audience of ["parents", "staff", "all"]) assert.match(messages, new RegExp(`"${audience}"`), `${audience} audience must remain available`);
+assert.match(messages, /const AUDIENCES = \["all", "staff"\] as const/, "new announcements must offer Team and Staff only");
+assert.doesNotMatch(messages, /const AUDIENCES[^\n]*parents/, "Parents must not remain a new-announcement choice");
 assert.match(team, /getTeamMembers[\s\S]*setTeamStaffRole[\s\S]*setTeamArchived/, "team data, roles, and lifecycle controls must remain intact");
 
 assert.equal((translations.match(/backAccessibility:/g) ?? []).length >= 4, true, "View Team and Send Team Message back labels must resolve in English and Spanish");

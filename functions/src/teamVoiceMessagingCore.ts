@@ -6,6 +6,11 @@ export const TEAM_VOICE_MIME_TYPES = ['audio/mp4', 'audio/m4a', 'audio/x-m4a'] a
 export type TeamVoiceMimeType = typeof TEAM_VOICE_MIME_TYPES[number];
 export type TeamVoiceUploadKind = 'announcement' | 'privateMessage';
 export type TeamPrivateMessageContentType = 'text' | 'voice';
+export type TeamAnnouncementAudience = 'all' | 'parents' | 'staff';
+export type TeamAnnouncementMember = {
+  membershipId: string;
+  data: Record<string, unknown>;
+};
 export type TeamVoiceStorageReference = {
   kind: TeamVoiceUploadKind;
   messageId: string;
@@ -44,9 +49,16 @@ export function readOptionalBoundedText(value: unknown, max: number, code: strin
   return readBoundedText(value, 1, max, code);
 }
 
-export function readAnnouncementAudience(value: unknown) {
-  if (value !== 'all' && value !== 'parents' && value !== 'staff') throw new Error('invalid_audience');
-  return value;
+export function normalizeAnnouncementAudience(value: unknown): TeamAnnouncementAudience | null {
+  if (value === 'all' || value === 'everyone') return 'all';
+  if (value === 'parents' || value === 'staff') return value;
+  return null;
+}
+
+export function readAnnouncementAudience(value: unknown): TeamAnnouncementAudience {
+  const audience = normalizeAnnouncementAudience(value);
+  if (!audience) throw new Error('invalid_audience');
+  return audience;
 }
 
 export function validateVoiceMemoMetadata(value: unknown): Omit<TeamVoiceMemoMetadata, 'storagePath'> {
@@ -131,13 +143,30 @@ export function isExplicitConversationParticipant(
 
 export function shouldReceiveAnnouncement(member: Record<string, unknown>, audience: unknown) {
   if (member.status !== 'active') return false;
+  const normalizedAudience = normalizeAnnouncementAudience(audience);
+  if (!normalizedAudience) return false;
   const roles = member.roles && typeof member.roles === 'object' ? member.roles as Record<string, unknown> : {};
   const parent = roles.parent === true || member.role === 'parent';
   const coach = roles.coach === true || member.role === 'coach';
   const staff = roles.staff === true || member.role === 'assistantCoach' || member.role === 'teamParent';
-  if (audience === 'parents') return parent;
-  if (audience === 'staff') return coach || staff;
-  return audience === 'all' && (parent || coach || staff);
+  if (normalizedAudience === 'parents') return parent;
+  if (normalizedAudience === 'staff') return coach || staff;
+  return parent || coach || staff;
+}
+
+export function resolveAnnouncementRecipientUserIds(
+  members: TeamAnnouncementMember[],
+  senderUserId: string,
+  audience: unknown,
+) {
+  const normalizedAudience = readAnnouncementAudience(audience);
+  const recipientUserIds = new Set<string>();
+  members.forEach(({ membershipId, data }) => {
+    const userId = membershipId.trim();
+    if (!userId || userId === senderUserId || !shouldReceiveAnnouncement(data, normalizedAudience)) return;
+    recipientUserIds.add(userId);
+  });
+  return Array.from(recipientUserIds).sort();
 }
 
 export function privateMessagePreview(contentType: TeamPrivateMessageContentType, text?: string, durationMilliseconds?: number) {

@@ -162,7 +162,7 @@ async function loadParentTeamSummary(
   const announcementSnapshot = await getDocs(
     query(
       collection(db, "teams", team.id, "announcements"),
-      where("audience", "in", ["parents", "all"]),
+      where("audience", "in", ["parents", "all", "everyone"]),
       orderBy("createdAt", "desc"),
     ),
   );
@@ -284,7 +284,11 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): Paren
     body: readString(data.body) ?? "",
     createdBy: readString(data.createdBy) ?? "",
     createdByName: formatPublicUserName(readString(data.createdByName)) ?? "",
-    audience: data.audience === "staff" || data.audience === "all" ? data.audience : "parents",
+    audience: data.audience === "staff"
+      ? "staff"
+      : data.audience === "all" || data.audience === "everyone"
+        ? "all"
+        : "parents",
     allowReplies: data.allowReplies !== false,
     contentType: voice.contentType,
     voiceMemo: voice.voiceMemo,

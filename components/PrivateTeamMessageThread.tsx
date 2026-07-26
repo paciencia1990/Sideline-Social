@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Keyboard,
-  KeyboardAvoidingView,
   Platform,
   ScrollView,
   StyleSheet,
@@ -37,14 +36,25 @@ import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import { clearPersistedVoicePlaybackArtifacts } from "@/services/voicePlaybackCleanupService";
 import { reportTeamContent, type TeamContentReportReason } from "@/services/contentModerationService";
+import { findUnresolvedCoachPlaceholders } from "@/services/coachResourcesService";
 import type { LocalVoiceMemoDraft, TeamPrivateConversation, TeamPrivateMessage } from "@/types/teamVoiceMessaging";
 
-export function PrivateTeamMessageThread({ conversationId, role }: { conversationId: string; role: "coach" | "parent" }) {
+export function PrivateTeamMessageThread({
+  conversationId,
+  initialText = "",
+  isTemplateDraft = false,
+  role,
+}: {
+  conversationId: string;
+  initialText?: string;
+  isTemplateDraft?: boolean;
+  role: "coach" | "parent";
+}) {
   const { t } = useTranslation();
   const [conversation, setConversation] = useState<TeamPrivateConversation | null>(null);
   const [messages, setMessages] = useState<TeamPrivateMessage[]>([]);
   const [mode, setMode] = useState<"text" | "voice">("text");
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => initialText.slice(0, 2000));
   const [caption, setCaption] = useState("");
   const [voiceDraft, setVoiceDraft] = useState<LocalVoiceMemoDraft | null>(null);
   const [voiceComposerKey, setVoiceComposerKey] = useState(0);
@@ -60,9 +70,27 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   const deleteInFlight = useRef(false);
   const messageScrollRef = useRef<ScrollView>(null);
   const keyboardVisibleRef = useRef(false);
+  const keyboardTopRef = useRef<number | null>(null);
+  const composerBoundaryRef = useRef<View>(null);
+  const composerKeyboardOverlapRef = useRef(0);
+  const [composerKeyboardOverlap, setComposerKeyboardOverlap] = useState(0);
 
   const scrollToLatest = useCallback((animated: boolean) => {
     requestAnimationFrame(() => messageScrollRef.current?.scrollToEnd({ animated }));
+  }, []);
+
+  const updateComposerKeyboardOverlap = useCallback(() => {
+    const keyboardTop = keyboardTopRef.current;
+    if (keyboardTop == null) return;
+    requestAnimationFrame(() => {
+      composerBoundaryRef.current?.measureInWindow((_x, y, _width, height) => {
+        const unadjustedBottom = y + height + composerKeyboardOverlapRef.current;
+        const nextOverlap = Math.max(0, unadjustedBottom - keyboardTop);
+        if (Math.abs(nextOverlap - composerKeyboardOverlapRef.current) < 0.5) return;
+        composerKeyboardOverlapRef.current = nextOverlap;
+        setComposerKeyboardOverlap(nextOverlap);
+      });
+    });
   }, []);
 
   useEffect(() => listenToPrivateTeamConversation(conversationId, setConversation, () => setError(t("teamMessages.loadError"))), [conversationId, t]);
@@ -77,18 +105,23 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
-    const showSubscription = Keyboard.addListener(showEvent, () => {
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
       keyboardVisibleRef.current = true;
+      keyboardTopRef.current = Platform.OS === "android" ? event.endCoordinates.screenY : null;
       scrollToLatest(false);
+      if (Platform.OS === "android") updateComposerKeyboardOverlap();
     });
     const hideSubscription = Keyboard.addListener(hideEvent, () => {
       keyboardVisibleRef.current = false;
+      keyboardTopRef.current = null;
+      composerKeyboardOverlapRef.current = 0;
+      setComposerKeyboardOverlap(0);
     });
     return () => {
       showSubscription.remove();
       hideSubscription.remove();
     };
-  }, [scrollToLatest]);
+  }, [scrollToLatest, updateComposerKeyboardOverlap]);
 
   const otherName = useMemo(() => {
     const displayName = role === "coach" ? conversation?.parentDisplayName : conversation?.coachDisplayName;
@@ -96,9 +129,19 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
     return displayName || t(profileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember");
   }, [conversation, role, t]);
   const readOnly = conversation?.status === "readOnly";
+  const unresolvedTemplatePlaceholders = useMemo(
+    () => isTemplateDraft ? findUnresolvedCoachPlaceholders(text) : [],
+    [isTemplateDraft, text],
+  );
 
   const sendText = useCallback(async () => {
     if (!text.trim() || sending || sendInFlight.current || readOnly) return;
+    if (unresolvedTemplatePlaceholders.length > 0) {
+      setError(t("coach.resources.unresolvedBody", {
+        placeholders: unresolvedTemplatePlaceholders.map((key) => `{${key}}`).join(", "),
+      }));
+      return;
+    }
     sendInFlight.current = true;
     setSending(true);
     setError(null);
@@ -113,7 +156,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
       setSending(false);
       sendInFlight.current = false;
     }
-  }, [conversationId, readOnly, sending, t, text]);
+  }, [conversationId, readOnly, sending, t, text, unresolvedTemplatePlaceholders]);
 
   const sendVoice = useCallback(async () => {
     if (!conversation || !voiceDraft || !voiceDraft.previewed || sending || sendInFlight.current || readOnly) {
@@ -250,10 +293,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   }, [actionMessage, deleteMessage, hideMessage, selectedMine, t]);
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      style={styles.container}
-    >
+    <View style={styles.container}>
       <ScrollView
         ref={messageScrollRef}
         contentContainerStyle={styles.threadContent}
@@ -335,6 +375,12 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
       />
 
       {!readOnly ? (
+        <View
+          collapsable={false}
+          onLayout={updateComposerKeyboardOverlap}
+          ref={composerBoundaryRef}
+          style={composerKeyboardOverlap > 0 ? { marginBottom: composerKeyboardOverlap } : undefined}
+        >
         <Card style={styles.composer}>
           <View accessibilityRole="tablist" style={styles.tabs}>
             {(["text", "voice"] as const).map((nextMode) => (
@@ -344,7 +390,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
             ))}
           </View>
           {!voiceAudioAvailable ? <Text accessibilityLiveRegion="polite" style={styles.error}>{t("voiceMemo.updatedBuildRequired")}</Text> : null}
-          {mode === "text" ? <TextInput maxLength={2000} multiline onChangeText={setText} onContentSizeChange={() => scrollToLatest(false)} onFocus={() => scrollToLatest(false)} placeholder={t("teamMessages.messagePlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={text} /> : null}
+          {mode === "text" ? <TextInput maxLength={2000} multiline onChangeText={(value) => { setText(value); if (error) setError(null); }} onContentSizeChange={() => scrollToLatest(false)} onFocus={() => scrollToLatest(false)} placeholder={t("teamMessages.messagePlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={text} /> : null}
           {voiceAudioAvailable ? <View style={mode === "voice" ? undefined : styles.hidden}>
             <VoiceMemoComposer active={mode === "voice"} disabled={sending} key={voiceComposerKey} onChange={setVoiceDraft} uploadProgress={uploadProgress} />
             <TextInput maxLength={500} multiline onChangeText={setCaption} onContentSizeChange={() => scrollToLatest(false)} onFocus={() => scrollToLatest(false)} placeholder={t("teamMessages.captionPlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={caption} />
@@ -355,8 +401,9 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
           </TouchableOpacity>
           {uploadProgress != null ? <TouchableOpacity accessibilityRole="button" onPress={() => uploadCancel.current?.()}><Text style={styles.cancel}>{t("voiceMemo.cancelUpload")}</Text></TouchableOpacity> : null}
         </Card>
+        </View>
       ) : null}
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

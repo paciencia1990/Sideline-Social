@@ -147,7 +147,7 @@ export default function FriendConversationScreen() {
 
   return (
     <ScreenWrapper>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.fill}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
         <View style={styles.header}>
           <TouchableOpacity accessibilityLabel={t("chat.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.iconButton}><ArrowLeft color={Colors.textHeading} size={22} /></TouchableOpacity>
           <View style={styles.headerCopy}><Text numberOfLines={1} style={styles.headerTitle}>{title}</Text><Text style={styles.headerMeta}>{access.conversation.conversationType === "group" ? t("chat.participants", { count: access.conversation.activeParticipantCount }) : t("chat.directConversation")}</Text></View>
@@ -169,6 +169,7 @@ export default function FriendConversationScreen() {
             if (keyboardVisibleRef.current) scrollToLatest(false);
           }}
           renderItem={({ item }) => <MessageBubble isMine={item.senderUserId === user?.uid} message={item} onActions={() => setActionMessage(item)} />}
+          style={styles.messageList}
         />
         <View style={styles.composer}>
           <View style={styles.inputWrap}>
@@ -226,7 +227,7 @@ const styles = StyleSheet.create({
   primary: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.lg }, primaryText: { color: Colors.surface, fontFamily: Typography.bodySemiBold },
   errorCard: { borderColor: Colors.primary, borderWidth: 1, margin: Spacing.sm, marginBottom: 0 }, error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center" },
   notice: { backgroundColor: Colors.secondary, padding: Spacing.sm }, noticeText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center" },
-  messages: { gap: Spacing.sm, padding: Spacing.md }, emptyMessages: { flexGrow: 1 }, loadEarlier: { alignItems: "center", minHeight: 40, justifyContent: "center" }, loadEarlierText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
+  messageList: { flex: 1 }, messages: { gap: Spacing.sm, padding: Spacing.md }, emptyMessages: { flexGrow: 1 }, loadEarlier: { alignItems: "center", minHeight: 40, justifyContent: "center" }, loadEarlierText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   emptyTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17 }, messageRow: { alignItems: "flex-start" }, mineRow: { alignItems: "flex-end" },
   bubble: { backgroundColor: Colors.surface, borderRadius: Radius.button, maxWidth: "82%", paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, ...Shadow.card }, mineBubble: { backgroundColor: Colors.primary },
   sender: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 11, marginBottom: 2 }, messageText: { color: Colors.textHeading, flexShrink: 1, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 21 }, mineText: { color: Colors.surface }, removed: { fontStyle: "italic", opacity: 0.75 },

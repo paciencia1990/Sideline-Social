@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { Redirect, router, useLocalSearchParams } from "expo-router";
 import { Send, Share2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
@@ -93,6 +93,9 @@ export default function CoachCommunicationTemplateScreen() {
 
   if (!template) {
     return <ScreenWrapper><View style={styles.center}><Text style={styles.error}>{t("coach.resources.templateNotFound")}</Text></View></ScreenWrapper>;
+  }
+  if (template.category === "message_parent" || !template.canSendAsAnnouncement) {
+    return <Redirect href={`/coach/resources/message-parent/${template.id}` as never} />;
   }
 
   return (

@@ -205,9 +205,10 @@ assert.equal(notificationSource.includes("announcement.body"), false);
 assert.equal(notificationSource.includes("announcement.title"), false);
 assert.equal(notificationSource.includes("createPersonalNotificationAndPush"), true);
 assert.equal(notificationSource.includes("notifications.types.coachAnnouncementTitle"), true);
-assert.equal(notificationSource.includes("memberSnapshot.id === authorUserId"), true);
+assert.equal(notificationSource.includes("storedAnnouncementRecipientUserIds(announcement.recipientUserIds)"), true);
+assert.equal(notificationSource.includes("resolveAnnouncementRecipientUserIds"), true);
+assert.equal(notificationSource.includes("recipientUserId"), true);
 assert.equal(notificationSource.includes("isTeamActive(teamSnapshot.data())"), true);
-assert.equal(notificationSource.includes("shouldReceiveAnnouncement(member, announcement.audience)"), true);
 const joinCallableSource = functionsSource.slice(
   functionsSource.indexOf("export const joinParentTeamByInviteCode"),
   functionsSource.indexOf("export const setTeamStaffRole"),
@@ -293,7 +294,7 @@ assert.equal(coachAnnouncementSource.includes("reply.userId === auth.currentUser
 assert.equal(coachAnnouncementSource.includes("canManageTeamAnnouncements"), true);
 assert.equal(coachAnnouncementSource.includes("deleteTeamAnnouncement(teamId, announcementId)"), true);
 assert.equal(coachAnnouncementSource.includes("announcementDeletionInFlight.current"), true);
-assert.equal(coachAnnouncementSource.includes('t("teamMessages.deleteMessage")'), true);
+assert.equal(coachAnnouncementSource.includes('"teamMessages.deleteForEveryone"'), true);
 assert.equal(coachAnnouncementSource.includes("announcement.isDeleted"), true);
 assert.equal(parentAnnouncementSource.includes("reply.isDeleted"), true);
 assert.equal(parentAnnouncementSource.includes("listenToTeamAnnouncement"), true);

@@ -10,7 +10,7 @@ export type CoachChecklist = {
 export type CoachChecklistProgress = {
   checklistId: string; completedItemIds: string[]; updatedAt: string; lastResetAt?: string; contentVersion: number;
 };
-export type CoachCommunicationCategory = "schedule" | "parents" | "culture";
+export type CoachCommunicationCategory = "schedule" | "parents" | "message_parent" | "culture";
 export type CoachCommunicationTemplate = {
   id: string; category: CoachCommunicationCategory; title: LocalizedText; description: LocalizedText; body: LocalizedText;
   placeholders: string[]; canSendAsAnnouncement: boolean; sortOrder: number; isActive: boolean; contentVersion: number;

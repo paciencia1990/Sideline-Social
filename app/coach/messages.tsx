@@ -10,14 +10,21 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { VoiceMemoComposer } from "@/components/VoiceMemoComposer";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useCoachBackNavigation } from "@/hooks/useCoachBackNavigation";
-import { createTeamAnnouncement, listenToTeamAnnouncements, type AnnouncementAudience, type TeamAnnouncement } from "@/services/teamMessageService";
+import {
+  createTeamAnnouncement,
+  getTeamAnnouncementRecipientCounts,
+  listenToTeamAnnouncements,
+  type AnnouncementAudience,
+  type TeamAnnouncement,
+  type TeamAnnouncementRecipientCounts,
+} from "@/services/teamMessageService";
 import { finalizeVoiceAnnouncement, reserveVoiceUpload, uploadReservedVoiceMemo } from "@/services/teamPrivateMessageService";
 import { getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive, type TeamMembership } from "@/services/teamService";
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
 
-const AUDIENCES: AnnouncementAudience[] = ["all", "parents", "staff"];
+const AUDIENCES = ["all", "staff"] as const;
 
 export default function CoachMessagesScreen() {
   const { t } = useTranslation();
@@ -43,6 +50,9 @@ export default function CoachMessagesScreen() {
   const [sendPhase, setSendPhase] = useState<"uploading" | "finalizing" | null>(null);
   const [cancelUpload, setCancelUpload] = useState<(() => boolean) | null>(null);
   const [audience, setAudience] = useState<AnnouncementAudience>("all");
+  const [recipientCounts, setRecipientCounts] = useState<TeamAnnouncementRecipientCounts | null>(null);
+  const [recipientCountsLoading, setRecipientCountsLoading] = useState(false);
+  const [recipientCountsError, setRecipientCountsError] = useState(false);
   const [allowReplies, setAllowReplies] = useState(true);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -86,6 +96,32 @@ export default function CoachMessagesScreen() {
   );
   const selectedTeam = selectedMembership?.team ?? null;
   const canCreate = hasCoachAccess(selectedMembership);
+  const selectedRecipientCount = audience === "staff" ? recipientCounts?.staff : recipientCounts?.all;
+
+  useEffect(() => {
+    let active = true;
+    if (!selectedTeam) {
+      setRecipientCounts(null);
+      setRecipientCountsError(false);
+      setRecipientCountsLoading(false);
+      return () => { active = false; };
+    }
+    setRecipientCounts(null);
+    setRecipientCountsError(false);
+    setRecipientCountsLoading(true);
+    void getTeamAnnouncementRecipientCounts(selectedTeam.id)
+      .then((counts) => {
+        if (active) setRecipientCounts(counts);
+      })
+      .catch((nextError) => {
+        console.warn("[CoachMessages] recipient counts error:", getSafeErrorCode(nextError));
+        if (active) setRecipientCountsError(true);
+      })
+      .finally(() => {
+        if (active) setRecipientCountsLoading(false);
+      });
+    return () => { active = false; };
+  }, [selectedTeam]);
 
   useEffect(() => {
     if (!selectedTeam) {
@@ -143,7 +179,13 @@ export default function CoachMessagesScreen() {
       setAllowReplies(true);
     } catch (nextError) {
       console.warn("[CoachMessages] create error:", getSafeErrorCode(nextError));
-      setError(voicePhase === "uploading" ? t("voiceMemo.uploadError") : t("coach.messages.error"));
+      setError(
+        hasErrorReason(nextError, "empty_audience")
+          ? t("coach.messages.audienceEmpty")
+          : voicePhase === "uploading"
+            ? t("voiceMemo.uploadError")
+            : t("coach.messages.error"),
+      );
     } finally {
       setCancelUpload(null);
       setUploadProgress(null);
@@ -158,6 +200,10 @@ export default function CoachMessagesScreen() {
       setError(t("coach.messages.required"));
       return;
     }
+    if (selectedRecipientCount === 0) {
+      setError(t("coach.messages.audienceEmpty"));
+      return;
+    }
     if (messageType === "voice") {
       if (!voiceDraft?.previewed) {
         setError(t("voiceMemo.previewRequired"));
@@ -170,7 +216,7 @@ export default function CoachMessagesScreen() {
       return;
     }
     void performCreate();
-  }, [body, messageType, performCreate, selectedTeam, t, title, voiceDraft]);
+  }, [body, messageType, performCreate, selectedRecipientCount, selectedTeam, t, title, voiceDraft]);
 
   return (
     <ScreenWrapper>
@@ -251,16 +297,29 @@ export default function CoachMessagesScreen() {
             <Text style={styles.inputLabel}>{t("coach.messages.audience")}</Text>
             <View style={styles.segmentRow}>
               {AUDIENCES.map((nextAudience) => (
-                <TouchableOpacity key={nextAudience} activeOpacity={0.86} onPress={() => setAudience(nextAudience)} style={[styles.segment, audience === nextAudience && styles.segmentActive]}>
+                <TouchableOpacity accessibilityRole="radio" accessibilityState={{ checked: audience === nextAudience }} key={nextAudience} activeOpacity={0.86} onPress={() => setAudience(nextAudience)} style={[styles.segment, audience === nextAudience && styles.segmentActive]}>
                   <Text style={[styles.segmentText, audience === nextAudience && styles.segmentTextActive]}>{t(`coach.messages.audience${capitalize(nextAudience)}`)}</Text>
                 </TouchableOpacity>
               ))}
             </View>
+            <Text style={styles.audienceDescription}>{t(`coach.messages.audience${capitalize(audience)}Description`)}</Text>
+            {recipientCountsLoading ? (
+              <View style={styles.recipientCountRow}>
+                <ActivityIndicator color={Colors.primary} size="small" />
+                <Text accessibilityLiveRegion="polite" style={styles.recipientCount}>{t("coach.messages.recipientCountLoading")}</Text>
+              </View>
+            ) : selectedRecipientCount != null ? (
+              <Text accessibilityLiveRegion="polite" style={styles.recipientCount}>
+                {t("coach.messages.recipientCount", { count: selectedRecipientCount })}
+              </Text>
+            ) : recipientCountsError ? (
+              <Text accessibilityLiveRegion="polite" style={styles.recipientCount}>{t("coach.messages.recipientCountUnavailable")}</Text>
+            ) : null}
             <TouchableOpacity activeOpacity={0.86} onPress={() => setAllowReplies((value) => !value)} style={styles.toggleRow}>
               <View style={[styles.checkbox, allowReplies && styles.checkboxActive]} />
               <Text style={styles.toggleText}>{t("coach.messages.allowReplies")}</Text>
             </TouchableOpacity>
-            <TouchableOpacity activeOpacity={0.86} disabled={sending} onPress={handleCreate} style={[styles.primaryButton, sending && styles.disabledButton]}>
+            <TouchableOpacity activeOpacity={0.86} disabled={sending || selectedRecipientCount === 0} onPress={handleCreate} style={[styles.primaryButton, (sending || selectedRecipientCount === 0) && styles.disabledButton]}>
               {sending ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.primaryButtonText}>{t("coach.messages.send")}</Text>}
             </TouchableOpacity>
             {cancelUpload ? <TouchableOpacity accessibilityRole="button" onPress={() => cancelUpload()}><Text style={styles.cancelUpload}>{t("voiceMemo.cancelUpload")}</Text></TouchableOpacity> : null}
@@ -300,6 +359,12 @@ function getSafeErrorCode(error: unknown) {
   return error instanceof Error ? error.name : "unknown";
 }
 
+function hasErrorReason(error: unknown, reason: string) {
+  if (!error || typeof error !== "object" || !("details" in error)) return false;
+  const details = error.details;
+  return Boolean(details && typeof details === "object" && "reason" in details && details.reason === reason);
+}
+
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -320,6 +385,9 @@ const styles = StyleSheet.create({
   segmentActive: { backgroundColor: Colors.primary },
   segmentText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   segmentTextActive: { color: Colors.surface },
+  audienceDescription: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 19 },
+  recipientCountRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
+  recipientCount: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19 },
   toggleRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
   checkbox: { borderColor: Colors.primary, borderRadius: 5, borderWidth: 1, height: 22, width: 22 },
   checkboxActive: { backgroundColor: Colors.primary },

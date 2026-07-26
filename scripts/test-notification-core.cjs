@@ -152,7 +152,8 @@ const requestNotificationResolver = read("functions", "src", "friendRequestNotif
 assert.equal(requestNotificationResolver.includes("dismissReason: 'resolved'"), true);
 assert.equal(requestNotificationResolver.includes("status: 'dismissed'"), true);
 assert.equal(actorNameResolver.toLowerCase().includes("email"), false);
-assert.equal(teamAnnouncement.includes("memberSnapshot.id === authorUserId"), true);
+assert.equal(teamAnnouncement.includes("storedAnnouncementRecipientUserIds(announcement.recipientUserIds)"), true);
+assert.equal(teamAnnouncement.includes("resolveAnnouncementRecipientUserIds"), true);
 assert.equal(notificationService.includes('Platform.OS === "ios"'), true);
 assert.equal(notificationService.includes("getExpoPushTokenAsync"), true);
 assert.equal(functionsSource.includes("cleanupExpoPushReceipts"), true);

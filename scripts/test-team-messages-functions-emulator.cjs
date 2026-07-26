@@ -58,13 +58,62 @@ async function run() {
     db.collection("teams").doc("team-1").collection("members").doc(secondCoach.uid).set({ userId: secondCoach.uid, teamId: "team-1", status: "active", role: "coach", roles: { coach: true, parent: false, staff: false }, displayName: "Coach S." }),
     db.collection("teams").doc("team-1").collection("members").doc(joannStaff.uid).set({ userId: joannStaff.uid, teamId: "team-1", status: "active", role: "parent", roles: { coach: false, parent: true, staff: true }, displayName: "Staff J." }),
     db.collection("teams").doc("team-1").collection("members").doc(otherParent.uid).set({ userId: otherParent.uid, teamId: "team-1", status: "active", role: "parent", roles: { coach: false, parent: true, staff: false }, displayName: "Parent O." }),
+    db.collection("teams").doc("team-1").collection("members").doc("staff-only-uid").set({ userId: "staff-only-uid", teamId: "team-1", status: "active", role: "assistantCoach", roles: { coach: false, parent: false, staff: true }, displayName: "Staff Only" }),
+    db.collection("teams").doc("team-1").collection("members").doc("inactive-parent-uid").set({ userId: "inactive-parent-uid", teamId: "team-1", status: "removed", role: "parent", roles: { coach: false, parent: true, staff: false }, displayName: "Inactive Parent" }),
+    db.collection("users").doc(parent.uid).collection("teamChildLinks").doc("team-1").set({ teamId: "team-1", childIds: ["child-parent"], status: "active" }),
+    db.collection("users").doc(joannStaff.uid).collection("teamChildLinks").doc("team-1").set({ teamId: "team-1", childIds: ["child-joann"], status: "active" }),
+    db.collection("users").doc(otherParent.uid).collection("teamChildLinks").doc("team-1").set({ teamId: "team-1", childIds: ["child-other"], status: "active" }),
   ]);
+  await db.collection("teams").doc("team-2").set({ name: "Unrelated Team", createdBy: secondCoach.uid, status: "active" });
+  await Promise.all([
+    db.collection("teams").doc("team-2").collection("members").doc(secondCoach.uid).set({ userId: secondCoach.uid, teamId: "team-2", status: "active", role: "coach", roles: { coach: true, parent: false, staff: false }, displayName: "Coach S." }),
+    db.collection("teams").doc("team-2").collection("members").doc(outsider.uid).set({ userId: outsider.uid, teamId: "team-2", status: "active", role: "parent", roles: { coach: false, parent: true, staff: false }, displayName: "Unrelated Parent" }),
+    db.collection("users").doc(outsider.uid).collection("teamChildLinks").doc("team-2").set({ teamId: "team-2", childIds: ["unrelated-child"], status: "active" }),
+  ]);
+
+  const initialRecipientCounts = await coach.call("getTeamAnnouncementRecipientCounts", { teamId: "team-1" });
+  assert.deepEqual(initialRecipientCounts.counts, { all: 5, staff: 3 });
+  await assert.rejects(
+    () => parent.call("getTeamAnnouncementRecipientCounts", { teamId: "team-1" }),
+    hasCode("permission-denied"),
+  );
+  await db.collection("teams").doc("team-empty").set({ name: "Solo Coach", createdBy: coach.uid, status: "active" });
+  await db.collection("teams").doc("team-empty").collection("members").doc(coach.uid).set({
+    userId: coach.uid, teamId: "team-empty", status: "active", role: "coach",
+    roles: { coach: true, parent: false, staff: false }, displayName: "Coach C.",
+  });
+  assert.deepEqual(
+    (await coach.call("getTeamAnnouncementRecipientCounts", { teamId: "team-empty" })).counts,
+    { all: 0, staff: 0 },
+  );
+  await assert.rejects(() => coach.call("createTeamAnnouncement", {
+    teamId: "team-empty", title: "No recipients", body: "This must not be stored.", audience: "all", allowReplies: true,
+  }), hasCode("failed-precondition"));
+  assert.equal((await db.collection("teams").doc("team-empty").collection("announcements").get()).empty, true);
 
   const textAnnouncement = await coach.call("createTeamAnnouncement", {
     teamId: "team-1", title: "Practice update", body: "Practice starts at six.", audience: "all", allowReplies: true,
   });
   assert.equal(textAnnouncement.status, "created");
-  assert.equal((await db.collection("teams").doc("team-1").collection("announcements").doc(textAnnouncement.announcementId).get()).data().createdBy, coach.uid);
+  const textAnnouncementData = (await db.collection("teams").doc("team-1").collection("announcements").doc(textAnnouncement.announcementId).get()).data();
+  assert.equal(textAnnouncementData.createdBy, coach.uid);
+  assert.equal(textAnnouncementData.recipientCount, 5);
+  assert.deepEqual(
+    [...textAnnouncementData.recipientUserIds].sort(),
+    [parent.uid, secondCoach.uid, joannStaff.uid, otherParent.uid, "staff-only-uid"].sort(),
+    "the stored audience snapshot exactly matches the preview and excludes the sender",
+  );
+  const staffAnnouncement = await coach.call("createTeamAnnouncement", {
+    teamId: "team-1", title: "Staff update", body: "Staff-only coordination.", audience: "staff", allowReplies: false,
+  });
+  const staffAnnouncementData = (await db.collection("teams").doc("team-1").collection("announcements")
+    .doc(staffAnnouncement.announcementId).get()).data();
+  assert.equal(staffAnnouncementData.recipientCount, 3);
+  assert.deepEqual(
+    [...staffAnnouncementData.recipientUserIds].sort(),
+    [secondCoach.uid, joannStaff.uid, "staff-only-uid"].sort(),
+    "Staff delivery matches the preview and excludes parent-only members",
+  );
   await assert.rejects(() => parent.call("createTeamAnnouncement", {
     teamId: "team-1", title: "Unauthorized", body: "No", audience: "all", allowReplies: true,
   }), hasCode("permission-denied"));
@@ -171,6 +220,17 @@ async function run() {
   assert.equal(joannMembershipAfterRemoval.status, "active", "the second staff removal preserves parent membership");
   assert.equal((await db.collection("teams").doc("team-1").collection("members").doc(secondCoach.uid).get()).data().roles.coach, true, "staff changes never alter coach authority");
 
+  const eligibleParents = await coach.call("getEligiblePrivateTeamParents", { teamId: "team-1" });
+  assert.deepEqual(
+    eligibleParents.parents.map((entry) => entry.userId).sort(),
+    [parent.uid, joannStaff.uid, otherParent.uid].sort(),
+    "only active team parents with an authorized child relationship are returned",
+  );
+  await assert.rejects(
+    () => outsider.call("getEligiblePrivateTeamParents", { teamId: "team-1" }),
+    hasCode("permission-denied"),
+  );
+
   const first = await coach.call("getOrCreatePrivateTeamConversation", { teamId: "team-1", parentUserId: parent.uid });
   const retry = await coach.call("getOrCreatePrivateTeamConversation", { teamId: "team-1", parentUserId: parent.uid });
   assert.equal(retry.conversationId, first.conversationId, "one deterministic conversation per coach-parent-team tuple");
@@ -179,6 +239,30 @@ async function run() {
   await assert.rejects(() => secondCoach.call("markPrivateTeamConversationRead", { conversationId: first.conversationId }), hasCode("permission-denied"));
   await assert.rejects(() => parent.call("getOrCreatePrivateTeamConversation", { teamId: "team-1", parentUserId: outsider.uid }), hasCode("permission-denied"));
   await assert.rejects(() => outsider.call("getOrCreatePrivateTeamConversation", { teamId: "team-1", parentUserId: parent.uid }), hasCode("permission-denied"));
+  const blockedConversation = await coach.call("getOrCreatePrivateTeamConversation", { teamId: "team-1", parentUserId: otherParent.uid });
+  await db.collection("userBlocks").doc(coach.uid).collection("blockedUsers").doc(otherParent.uid).set({
+    blockerUserId: coach.uid,
+    blockedUserId: otherParent.uid,
+    status: "active",
+  });
+  await assert.rejects(
+    () => coach.call("sendPrivateTeamTextMessage", {
+      conversationId: blockedConversation.conversationId,
+      text: "This must not send",
+      clientMessageId: "blocked_private_001",
+    }),
+    hasCode("failed-precondition"),
+  );
+  await assert.rejects(
+    () => coach.call("getOrCreatePrivateTeamConversation", { teamId: "team-1", parentUserId: otherParent.uid }),
+    hasCode("permission-denied"),
+  );
+  assert.equal(
+    (await coach.call("getEligiblePrivateTeamParents", { teamId: "team-1" })).parents
+      .some((entry) => entry.userId === otherParent.uid),
+    false,
+    "blocked relationships are removed from the picker",
+  );
 
   const sent = await coach.call("sendPrivateTeamTextMessage", { conversationId: first.conversationId, text: "Private hello", clientMessageId: "client_001" });
   assert.equal(sent.status, "sent");
@@ -504,7 +588,8 @@ async function run() {
 
   const coachInbox = await coach.call("getTeamPrivateMessageInbox", { role: "coach" });
   const parentInbox = await parent.call("getTeamPrivateMessageInbox", { role: "parent", teamId: "team-1" });
-  assert.equal(coachInbox.conversations.length, 1);
+  assert.equal(coachInbox.conversations.length, 2);
+  assert.equal(coachInbox.conversations.some((conversation) => conversation.conversationId === blockedConversation.conversationId), true);
   assert.equal(parentInbox.conversations.length, 2);
   assert.equal(parentInbox.conversations.some((conversation) => conversation.conversationId === first.conversationId), true);
   await parent.call("markPrivateTeamConversationRead", { conversationId: first.conversationId });

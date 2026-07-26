@@ -59,6 +59,7 @@ async function seed(testEnv) {
     });
     await setDoc(doc(db, "teams", "team-1", "announcements", "parents-open"), announcement("parents"));
     await setDoc(doc(db, "teams", "team-1", "announcements", "staff-only"), announcement("staff"));
+    await setDoc(doc(db, "teams", "team-1", "announcements", "legacy-everyone"), announcement("everyone"));
     await setDoc(doc(db, "teams", "team-1", "announcements", "parents-closed"), announcement("parents", false));
     await setDoc(doc(db, "teams", "team-archived", "announcements", "preserved-update"), announcement("parents"));
     await setDoc(doc(db, "teams", "team-1", "announcements", "parents-open", "replies", "private-reply"), {
@@ -106,10 +107,11 @@ async function run() {
     await assertFails(getDoc(doc(parentDb, "teams", "team-1", "members", "parent-b")));
 
     await assertSucceeds(getDoc(doc(parentDb, "teams", "team-1", "announcements", "parents-open")));
+    await assertSucceeds(getDoc(doc(parentDb, "teams", "team-1", "announcements", "legacy-everyone")));
     await assertFails(getDoc(doc(parentDb, "teams", "team-1", "announcements", "staff-only")));
     await assertSucceeds(getDoc(doc(multiDb, "teams", "team-1", "announcements", "staff-only")));
     await assertSucceeds(getDoc(doc(multiDb, "teams", "team-1", "announcements", "parents-open")));
-    await assertSucceeds(getDocs(query(collection(parentDb, "teams", "team-1", "announcements"), where("audience", "in", ["parents", "all"]))));
+    await assertSucceeds(getDocs(query(collection(parentDb, "teams", "team-1", "announcements"), where("audience", "in", ["parents", "all", "everyone"]))));
 
     await assertSucceeds(getDoc(doc(parentDb, "users", "parent-a", "children", "child-a")));
     await assertSucceeds(getDocs(collection(parentDb, "users", "parent-a", "children")));

@@ -57,6 +57,24 @@ export type AnnouncementInput = {
   allowReplies: boolean;
 };
 
+export type TeamAnnouncementRecipientCounts = {
+  all: number;
+  staff: number;
+};
+
+export async function getTeamAnnouncementRecipientCounts(teamId: string) {
+  requireUser();
+  const callable = httpsCallable<
+    { teamId: string },
+    { teamId: string; counts: TeamAnnouncementRecipientCounts }
+  >(functions, "getTeamAnnouncementRecipientCounts");
+  const response = await callable({ teamId });
+  return {
+    all: Math.max(0, Math.floor(Number(response.data.counts?.all ?? 0))),
+    staff: Math.max(0, Math.floor(Number(response.data.counts?.staff ?? 0))),
+  };
+}
+
 export async function createTeamAnnouncement(teamId: string, input: AnnouncementInput) {
   const callable = httpsCallable<
     { teamId: string } & AnnouncementInput,
@@ -381,6 +399,7 @@ function readAudience(value: unknown): AnnouncementAudience {
   if (value === "staff" || value === "all" || value === "parents") {
     return value;
   }
+  if (value === "everyone") return "all";
   return "parents";
 }
 

@@ -20,6 +20,33 @@ import type {
   VoiceUploadReservation,
 } from "@/types/teamVoiceMessaging";
 
+export type EligiblePrivateTeamParent = {
+  userId: string;
+  displayName: string;
+};
+
+export async function getEligiblePrivateTeamParents(teamId: string) {
+  requireUser();
+  const call = httpsCallable<
+    { teamId: string },
+    { teamId: string; teamName: string; parents: EligiblePrivateTeamParent[] }
+  >(functions, "getEligiblePrivateTeamParents");
+  const response = (await call({ teamId })).data;
+  return {
+    teamId: response.teamId,
+    teamName: response.teamName,
+    parents: Array.isArray(response.parents)
+      ? response.parents
+        .filter((parent) => parent && typeof parent.userId === "string" && typeof parent.displayName === "string")
+        .map((parent) => ({
+          userId: parent.userId.trim(),
+          displayName: parent.displayName.trim() || "Sideline Social member",
+        }))
+        .filter((parent) => Boolean(parent.userId))
+      : [],
+  };
+}
+
 export async function getOrCreatePrivateTeamConversation(teamId: string, parentUserId: string) {
   requireUser();
   const call = httpsCallable<

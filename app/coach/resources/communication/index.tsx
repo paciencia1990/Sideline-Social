@@ -13,7 +13,7 @@ import {
   resolveCoachResourceLocale,
 } from "@/services/coachResourcesService";
 
-const CATEGORY_ORDER = ["schedule", "parents", "culture"] as const;
+const CATEGORY_ORDER = ["schedule", "parents", "message_parent", "culture"] as const;
 
 export default function CoachCommunicationLibraryScreen() {
   const { i18n, t } = useTranslation();
@@ -31,7 +31,11 @@ export default function CoachCommunicationLibraryScreen() {
                 accessibilityLabel={`${localizeCoachText(entry.title, locale)}. ${t("coach.resources.opensTemplate")}`}
                 description={localizeCoachText(entry.description, locale)}
                 key={entry.id}
-                onPress={() => router.push(`/coach/resources/communication/${entry.id}` as never)}
+                onPress={() => router.push((
+                  entry.category === "message_parent"
+                    ? `/coach/resources/message-parent/${entry.id}`
+                    : `/coach/resources/communication/${entry.id}`
+                ) as never)}
                 title={localizeCoachText(entry.title, locale)}
               />
             ))}

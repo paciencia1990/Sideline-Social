@@ -27,6 +27,19 @@ export function hasParentRole(data: Record<string, unknown> | undefined): boolea
   return Boolean(data && resolveTeamRoleFlags(data.roles, data.role).parent);
 }
 
+export function hasActiveTeamChildRelationship(
+  member: Record<string, unknown> | undefined,
+  link: Record<string, unknown> | undefined,
+): boolean {
+  if (!member || member.status !== 'active' || !hasParentRole(member)) return false;
+  const linkedChildIds = Array.isArray(link?.childIds)
+    ? link.childIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    : [];
+  const hasCurrentLink = link?.status === 'active' && linkedChildIds.length > 0;
+  const hasLegacyLink = typeof member.childId === 'string' && Boolean(member.childId.trim());
+  return hasCurrentLink || hasLegacyLink;
+}
+
 export function isTeamActive(data: Record<string, unknown> | undefined): boolean {
   return Boolean(data && (data.status === undefined || data.status === 'active'));
 }
@@ -59,7 +72,7 @@ export function canAccessTeamAnnouncement(
 ): boolean {
   if (!data || data.status !== 'active') return false;
   if (hasCoachAccess(data)) return true;
-  return hasParentRole(data) && (audience === 'parents' || audience === 'all');
+  return hasParentRole(data) && (audience === 'parents' || audience === 'all' || audience === 'everyone');
 }
 
 export function canDeleteTeamAnnouncementReply(

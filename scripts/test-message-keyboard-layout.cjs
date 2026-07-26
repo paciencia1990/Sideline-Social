@@ -38,6 +38,7 @@ for (const route of [
 ]) {
   const source = read(...route);
   assert.match(source, /PrivateTeamMessageThread/, `${route.join("/")} uses the fixed private-message layout`);
+  assert.match(source, /KeyboardAvoidingView/, `${route.join("/")} keeps its header and composer in one keyboard-resized column`);
   assert.match(source, /flex: 1/, `${route.join("/")} gives the conversation the available keyboard-resized height`);
 }
 
@@ -92,9 +93,11 @@ assert.match(seasonManager, /paddingBottom: bottomPadding/);
 
 const privateComposer = read("components", "PrivateTeamMessageThread.tsx");
 const coachComposer = read("app", "coach", "messages.tsx");
-assert.match(privateComposer, /KeyboardAvoidingView/);
+assert.doesNotMatch(privateComposer, /<KeyboardAvoidingView/, "the private thread does not apply a second keyboard offset");
 assert.match(privateComposer, /messageScrollRef/);
 assert.match(privateComposer, /scrollToLatest/);
+assert.match(privateComposer, /measureInWindow/, "Android navigation-mode overlap is measured at runtime");
+assert.match(privateComposer, /marginBottom: composerKeyboardOverlap/, "any measured overlap shrinks the list and keeps the full composer visible");
 assert.ok(
   privateComposer.indexOf("</ScrollView>") < privateComposer.indexOf("<Card style={styles.composer}>"),
   "private-message history scrolls independently above the fixed composer",
