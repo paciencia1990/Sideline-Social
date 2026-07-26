@@ -477,8 +477,12 @@ export async function reportFriendChatUser(conversationId: string, reportedUserI
   return call("reportFriendChatUser", { conversationId, reportedUserId });
 }
 
-export async function reportFriendChatMessage(conversationId: string, messageId: string) {
-  return call("reportFriendChatMessage", { conversationId, messageId });
+export async function reportFriendChatMessage(
+  conversationId: string,
+  messageId: string,
+  reason: "privacy" | "harassment" | "offensive" | "other",
+) {
+  return call("reportFriendChatMessage", { conversationId, messageId, reason });
 }
 
 export async function unblockFriendChatUser(blockedUserId: string) {

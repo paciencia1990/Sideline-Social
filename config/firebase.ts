@@ -29,7 +29,7 @@ export const app = firebaseApp;
 
 export const auth = initializeReactNativeAuth(firebaseApp);
 export const db = getFirestore(firebaseApp);
-export const functions = getFunctions(firebaseApp);
+export const functions = getFunctions(firebaseApp, "us-central1");
 export const storage = getStorage(firebaseApp);
 export const rtdb = getDatabase(firebaseApp);
 

@@ -27,7 +27,11 @@ if (!projectId || !/^[a-z0-9:-]{3,100}$/u.test(projectId)) {
 
 admin.initializeApp({ projectId });
 const firestore = admin.firestore();
-const { isCanonicalPublicProfile, resolveCanonicalPublicProfile, toMinimalPublicUserProfile } = loadPublicProfileCore();
+const {
+  isSearchablePublicProfileProjection,
+  resolveCanonicalPublicProfile,
+  toSearchablePublicUserProfileProjection,
+} = loadPublicProfileCore();
 const counts = {
   scanned: 0,
   valid: 0,
@@ -58,8 +62,9 @@ async function run() {
       counts.scanned += 1;
       const projection = projections[index];
       const canonical = resolveCanonicalPublicProfile(privateDocument.id, privateDocument.data());
-      const expected = canonical ? toMinimalPublicUserProfile(canonical) : null;
-      const projectionValid = projection.exists && isCanonicalPublicProfile(projection.data(), privateDocument.id);
+      const expected = canonical ? toSearchablePublicUserProfileProjection(canonical) : null;
+      const projectionValid = projection.exists &&
+        isSearchablePublicProfileProjection(projection.data(), privateDocument.id);
       if (!expected) {
         counts.sourceWithoutValidName += 1;
         if (projection.exists && !projectionValid) {
@@ -73,7 +78,15 @@ async function run() {
         return;
       }
       if (!projection.exists) counts.missing += 1;
-      else if (!projectionValid || ["firstName", "lastName", "displayName", "photoURL"]
+      else if (!projectionValid || [
+        "firstName",
+        "lastName",
+        "displayName",
+        "photoURL",
+        "displayNameLower",
+        "firstNameLower",
+        "lastNameLower",
+      ]
         .some((field) => projection.data()?.[field] !== expected[field])) counts.malformed += 1;
       else {
         counts.valid += 1;

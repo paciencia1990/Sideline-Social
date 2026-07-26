@@ -86,11 +86,50 @@ export function listenToPrivateTeamMessages(
   onValue: (messages: TeamPrivateMessage[]) => void,
   onError?: (error: Error) => void,
 ): Unsubscribe {
-  return onSnapshot(
+  const userId = auth.currentUser?.uid;
+  if (!userId) {
+    onError?.(new Error("private_team_message_auth_required"));
+    return () => {};
+  }
+  let canonicalMessages: TeamPrivateMessage[] | null = null;
+  let hiddenMessageIds: Set<string> | null = null;
+  let failed = false;
+  const publishVisibleMessages = () => {
+    if (!canonicalMessages || !hiddenMessageIds) return;
+    onValue(canonicalMessages.filter((message) => !hiddenMessageIds?.has(message.id)));
+  };
+  const reportError = (error: Error) => {
+    if (failed) return;
+    failed = true;
+    onError?.(error);
+  };
+  const unsubscribeMessages = onSnapshot(
     query(collection(db, "teamPrivateConversations", conversationId, "messages"), orderBy("createdAt", "asc")),
-    (snapshot) => onValue(snapshot.docs.map((message) => normalizeMessage(message.id, message.data()))),
-    (error) => onError?.(error),
+    (snapshot) => {
+      canonicalMessages = snapshot.docs.map((message) => normalizeMessage(message.id, message.data()));
+      publishVisibleMessages();
+    },
+    reportError,
   );
+  const unsubscribeHiddenMessages = onSnapshot(
+    collection(
+      db,
+      "teamPrivateConversations",
+      conversationId,
+      "members",
+      userId,
+      "hiddenMessages",
+    ),
+    (snapshot) => {
+      hiddenMessageIds = new Set(snapshot.docs.map((document) => document.id));
+      publishVisibleMessages();
+    },
+    reportError,
+  );
+  return () => {
+    unsubscribeMessages();
+    unsubscribeHiddenMessages();
+  };
 }
 
 export async function markPrivateTeamConversationRead(conversationId: string) {
@@ -188,6 +227,15 @@ export async function deletePrivateTeamMessage(conversationId: string, messageId
     { conversationId: string; messageId: string },
     { status: "deleted" | "alreadyDeleted"; storageCleanup: "deleted" | "cleanupPending" | "notRequired" }
   >(functions, "deletePrivateTeamMessage");
+  return (await call({ conversationId, messageId })).data;
+}
+
+export async function hidePrivateTeamMessageForCurrentUser(conversationId: string, messageId: string) {
+  requireUser();
+  const call = httpsCallable<
+    { conversationId: string; messageId: string },
+    { status: "hidden" | "alreadyHidden" }
+  >(functions, "hidePrivateTeamMessageForCurrentUser");
   return (await call({ conversationId, messageId })).data;
 }
 

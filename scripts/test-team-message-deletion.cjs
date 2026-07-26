@@ -54,14 +54,16 @@ assert.match(functionsSource, /ignoreNotFound: true/);
 
 const privateThread = read("components", "PrivateTeamMessageThread.tsx");
 assert.match(privateThread, /message\.senderUserId === auth\.currentUser\?\.uid/);
-assert.match(privateThread, /mine && !message\.isDeleted/);
+assert.match(privateThread, /\(mine \? !message\.isDeleted : true\)/);
 assert.match(privateThread, /deleteInFlight\.current/);
 assert.match(privateThread, /deletePrivateTeamMessage\(conversationId, message\.id\)/);
-assert.match(privateThread, /invalidateVoicePlaybackSource/);
-assert.match(privateThread, /teamMessages\.deleteConfirmTitle/);
+assert.match(privateThread, /hidePrivateTeamMessageForCurrentUser\(conversationId, message\.id\)/);
+assert.match(privateThread, /clearPersistedVoicePlaybackArtifacts/);
+assert.match(privateThread, /teamMessages\.deleteForEveryoneTitle/);
+assert.match(privateThread, /teamMessages\.deleteForMeTitle/);
 assert.match(privateThread, /teamMessages\.messageDeleted/);
 assert.match(privateThread, /teamMessages\.youDeletedMessage/);
-assert.match(privateThread, /!message\.isDeleted && !mine/);
+assert.match(privateThread, /MessageActionsModal/);
 
 const messageService = read("services", "teamPrivateMessageService.ts");
 assert.match(messageService, /functions, "deletePrivateTeamMessage"/);
@@ -77,9 +79,15 @@ for (const value of [
   "deleteMessage: 'Delete Message'",
   "deleteConfirmTitle: 'Delete this message?'",
   "deleteConfirmBody: 'This will remove it for everyone in this conversation.'",
+  "deleteForEveryone: 'Delete for Everyone'",
+  "deleteForMe: 'Delete for Me'",
+  "deleteForEveryoneTitle: 'Delete for everyone?'",
+  "deleteForMeTitle: 'Delete for you?'",
   "messageDeleted: 'Message deleted'",
   "youDeletedMessage: 'You deleted this message'",
   "deleteMessage: 'Eliminar mensaje'",
+  "deleteForEveryone: 'Eliminar para todos'",
+  "deleteForMe: 'Eliminar para m\\u00ed'",
   "deleteConfirmTitle: '\\u00bfEliminar este mensaje?'",
   "messageDeleted: 'Mensaje eliminado'",
   "youDeletedMessage: 'Eliminaste este mensaje'",
@@ -87,4 +95,4 @@ for (const value of [
   assert.equal(translations.includes(value), true, `${value} is localized`);
 }
 
-console.log("Author-only message deletion, soft tombstones, voice cleanup, previews, UI actions, and localization contract tests passed.");
+console.log("Global deletion tombstones plus participant-scoped hiding, voice cleanup, previews, UI actions, and localization contract tests passed.");

@@ -22,6 +22,10 @@ import {
   resolvePublicProfileName,
 } from './friendSuggestionCore';
 import {
+  classifyFriendsCallableUnexpectedError,
+  toSafeFriendsCallableError,
+} from './friendsCallableErrorCore';
+import {
   friendRequestIdFor,
   friendRequestExpiresAtMillis,
   isActivePendingRequest,
@@ -39,11 +43,18 @@ import {
 } from './pushNotificationDelivery';
 import { assertUserContentAllowed } from './contentSafety';
 import {
-  isCanonicalPublicProfile,
+  isSearchablePublicProfileProjection,
+  normalizePublicProfileSearchText,
   resolveCanonicalPublicName,
   resolveCanonicalPublicProfile,
   toMinimalPublicUserProfile,
+  toSearchablePublicUserProfileProjection,
 } from './publicUserProfileCore';
+import {
+  legacyPublicProfilePrefixVariants,
+  rankAndLimitPublicUserSearchResults,
+  resolvePublicUserSearchRelationship,
+} from './publicUserSearchCore';
 import {
   WEEKLY_CHALLENGES,
   getPreviousWeekKey,
@@ -960,6 +971,54 @@ function preserveTerminalRequestOutcomes(request: Record<string, unknown>) {
   }];
 }
 
+type FriendsCallableValidationStage = (stage: string) => void;
+
+function friendsCallableFailureMessage(code: ReturnType<typeof classifyFriendsCallableUnexpectedError>['code']) {
+  if (code === 'failed-precondition') {
+    return 'Friends data is temporarily unavailable. Please try again.';
+  }
+  if (code === 'permission-denied') {
+    return 'Friends data cannot be accessed with the current permissions.';
+  }
+  if (code === 'resource-exhausted') {
+    return 'Friends data is temporarily busy. Please try again.';
+  }
+  return 'Friends data is temporarily unavailable. Please try again.';
+}
+
+async function runFriendsCallable<T>(
+  functionName: string,
+  authenticatedUserId: string | undefined,
+  operation: (setValidationStage: FriendsCallableValidationStage) => Promise<T>,
+): Promise<T> {
+  let validationStage = 'callable-entry';
+  try {
+    return await operation((stage) => {
+      validationStage = stage;
+    });
+  } catch (error) {
+    if (error instanceof functions.https.HttpsError) throw error;
+
+    const classification = classifyFriendsCallableUnexpectedError(error);
+    const originalError = toSafeFriendsCallableError(error);
+    functions.logger.error('friends_callable_unexpected_failure', {
+      functionName,
+      authenticatedUserId: authenticatedUserId ?? null,
+      validationStage,
+      normalizedCode: classification.code,
+      reason: classification.reason,
+      originalCode: originalError.originalCode,
+      originalMessage: originalError.originalMessage,
+      originalStack: originalError.originalStack,
+    });
+    throw new functions.https.HttpsError(
+      classification.code,
+      friendsCallableFailureMessage(classification.code),
+      { reason: classification.reason },
+    );
+  }
+}
+
 async function readBlockedRelationshipIds(userId: string) {
   const firestore = admin.firestore();
   const [outgoing, incoming] = await Promise.all([
@@ -992,11 +1051,16 @@ function publicFriendRequest(document: admin.firestore.QueryDocumentSnapshot, ex
   };
 }
 
-export const getActiveFriendRequests = functions.https.onCall(async (_data, context) => {
+export const getActiveFriendRequests = functions.https.onCall(async (_data, context) => runFriendsCallable(
+  'getActiveFriendRequests',
+  context.auth?.uid,
+  async (setValidationStage) => {
+  setValidationStage('authentication');
   const userId = context.auth?.uid;
   if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to view friend requests.');
   const firestore = admin.firestore();
   const now = Timestamp.now();
+  setValidationStage('friend-request-and-block-query');
   const [incomingSnapshot, outgoingSnapshot, blockedUserIds] = await Promise.all([
     firestore.collection('friendRequests')
       .where('toUserId', '==', userId)
@@ -1034,6 +1098,7 @@ export const getActiveFriendRequests = functions.https.onCall(async (_data, cont
   inspect('outgoing', outgoingSnapshot.docs);
 
   if (expired.length > 0 || needsExpiryProjection.length > 0) {
+    setValidationStage('request-expiry-normalization');
     const batch = firestore.batch();
     needsExpiryProjection.forEach(({ document, expiresAt }) => batch.update(document.ref, {
       expiresAt: Timestamp.fromMillis(expiresAt),
@@ -1056,13 +1121,15 @@ export const getActiveFriendRequests = functions.https.onCall(async (_data, cont
   const byNewest = (left: typeof active[number], right: typeof active[number]) => (
     (timestampMillis(right.document.data()?.createdAt) ?? 0) - (timestampMillis(left.document.data()?.createdAt) ?? 0)
   );
+  setValidationStage('response-serialization');
   return {
     incoming: active.filter((item) => item.direction === 'incoming').sort(byNewest)
       .map((item) => publicFriendRequest(item.document, item.expiresAt)),
     outgoing: active.filter((item) => item.direction === 'outgoing').sort(byNewest)
       .map((item) => publicFriendRequest(item.document, item.expiresAt)),
   };
-});
+  },
+));
 
 export const sendFriendRequest = functions.https.onCall(async (data, context) => {
   const senderUserId = context.auth?.uid;
@@ -2110,14 +2177,26 @@ export const getOrCreatePrivateTeamConversation = teamMessagingFunctions.https.o
           role: 'coach',
           joinedAt: now,
           lastReadAt: now,
+          lastVisibleMessageAt: null,
+          lastVisibleMessageId: null,
+          lastVisibleMessagePreview: null,
+          lastVisibleMessageType: null,
+          lastVisibleSenderUserId: null,
           unreadCount: 0,
+          visibilityVersion: 1,
         });
         transaction.create(conversationRef.collection('members').doc(parentUserId), {
           userId: parentUserId,
           role: 'parent',
           joinedAt: now,
           lastReadAt: null,
+          lastVisibleMessageAt: null,
+          lastVisibleMessageId: null,
+          lastVisibleMessagePreview: null,
+          lastVisibleMessageType: null,
+          lastVisibleSenderUserId: null,
           unreadCount: 0,
+          visibilityVersion: 1,
         });
       }
       return { conversationId, teamId, coachUserId: uid, parentUserId, teamName, coachName, parentName };
@@ -2326,8 +2405,16 @@ export const deletePrivateTeamMessage = teamMessagingFunctions.https.onCall(asyn
       if (message.isDeleted === true) return;
 
       const recentSnapshot = await transaction.get(
-        conversationRef.collection('messages').orderBy('createdAt', 'desc').limit(25),
+        conversationRef.collection('messages').orderBy('createdAt', 'desc').limit(50),
       );
+      const participantUserIds = readPrivateConversationParticipantIds(conversation);
+      const hiddenReferences = participantUserIds.flatMap((participantUserId) =>
+        recentSnapshot.docs.map((document) =>
+          conversationRef.collection('members').doc(participantUserId)
+            .collection('hiddenMessages').doc(document.id)));
+      const hiddenSnapshots = hiddenReferences.length > 0
+        ? await transaction.getAll(...hiddenReferences)
+        : [];
       const latestDocument = recentSnapshot.docs[0];
       const deletesLatestMessage = conversation?.lastMessageId === messageId ||
         (!conversation?.lastMessageId && latestDocument?.id === messageId);
@@ -2344,6 +2431,19 @@ export const deletePrivateTeamMessage = teamMessagingFunctions.https.onCall(asyn
         isDeleted: true,
         text: null,
         voiceMemo: null,
+      });
+      participantUserIds.forEach((participantUserId, participantIndex) => {
+        const hiddenIds = new Set(
+          hiddenSnapshots
+            .slice(participantIndex * recentSnapshot.size, (participantIndex + 1) * recentSnapshot.size)
+            .filter((snapshot) => snapshot.exists)
+            .map((snapshot) => snapshot.id),
+        );
+        transaction.set(
+          conversationRef.collection('members').doc(participantUserId),
+          privateMemberPreviewFields(recentSnapshot.docs, hiddenIds, messageId),
+          { merge: true },
+        );
       });
       if (deletesLatestMessage) {
         const previous = recentSnapshot.docs.find((document) =>
@@ -2381,6 +2481,73 @@ export const deletePrivateTeamMessage = teamMessagingFunctions.https.onCall(asyn
       ? await deleteTeamVoiceStorageObject(voiceStoragePath)
       : 'notRequired';
     return { status, storageCleanup };
+  } catch (error) {
+    throwTeamMessagingError(error);
+  }
+});
+
+export const hidePrivateTeamMessageForCurrentUser = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
+  try {
+    const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
+    const messageId = readRequiredIdentifier(data?.messageId, 'invalid_message_id');
+    const firestore = admin.firestore();
+    const conversationRef = firestore.collection('teamPrivateConversations').doc(conversationId);
+    const messageRef = conversationRef.collection('messages').doc(messageId);
+    const memberRef = conversationRef.collection('members').doc(uid);
+    const hiddenRef = memberRef.collection('hiddenMessages').doc(messageId);
+    let status: 'hidden' | 'alreadyHidden' = 'alreadyHidden';
+
+    await firestore.runTransaction(async (transaction) => {
+      const [conversationSnapshot, messageSnapshot, memberSnapshot, existingHiddenSnapshot] =
+        await transaction.getAll(conversationRef, messageRef, memberRef, hiddenRef);
+      const conversation = conversationSnapshot.data();
+      const message = messageSnapshot.data();
+      if (
+        !conversationSnapshot.exists ||
+        !memberSnapshot.exists ||
+        memberSnapshot.data()?.userId !== uid ||
+        !isExplicitConversationParticipant(conversation, uid)
+      ) {
+        throw new Error('not_conversation_participant');
+      }
+      if (existingHiddenSnapshot.exists) return;
+      if (!messageSnapshot.exists || message?.conversationId !== conversationId) {
+        throw new Error('voice_message_unavailable');
+      }
+      if (message.senderUserId === uid) throw new Error('not_message_recipient');
+
+      const recentSnapshot = await transaction.get(
+        conversationRef.collection('messages').orderBy('createdAt', 'desc').limit(50),
+      );
+      const hiddenRefs = recentSnapshot.docs
+        .filter((document) => document.id !== messageId)
+        .map((document) => memberRef.collection('hiddenMessages').doc(document.id));
+      const hiddenSnapshots = hiddenRefs.length > 0 ? await transaction.getAll(...hiddenRefs) : [];
+      const hiddenIds = new Set(hiddenSnapshots.filter((snapshot) => snapshot.exists).map((snapshot) => snapshot.id));
+      hiddenIds.add(messageId);
+
+      const member = memberSnapshot.data() ?? {};
+      const lastReadAtMillis = timestampMillis(member.lastReadAt) ?? 0;
+      const messageCreatedAtMillis = timestampMillis(message.createdAt) ?? 0;
+      const hidesUnreadMessage = message.senderUserId !== uid &&
+        message.isDeleted !== true &&
+        messageCreatedAtMillis > lastReadAtMillis;
+      const unreadCount = Math.max(0, Number(member.unreadCount ?? 0) - (hidesUnreadMessage ? 1 : 0));
+
+      transaction.create(hiddenRef, {
+        hiddenAt: FieldValue.serverTimestamp(),
+        messageId,
+        userId: uid,
+      });
+      transaction.set(memberRef, {
+        ...privateMemberPreviewFields(recentSnapshot.docs, hiddenIds),
+        unreadCount,
+      }, { merge: true });
+      status = 'hidden';
+    });
+    return { status };
   } catch (error) {
     throwTeamMessagingError(error);
   }
@@ -2505,13 +2672,17 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
       }
     } else {
       const conversationRef = firestore.collection('teamPrivateConversations').doc(reservation.conversationId);
-      const [conversationSnapshot, messageSnapshot] = await Promise.all([
+      const hiddenRef = conversationRef.collection('members').doc(uid)
+        .collection('hiddenMessages').doc(reservation.targetId);
+      const [conversationSnapshot, messageSnapshot, hiddenSnapshot] = await Promise.all([
         conversationRef.get(),
         conversationRef.collection('messages').doc(reservation.targetId).get(),
+        hiddenRef.get(),
       ]);
         if (
           !conversationSnapshot.exists ||
           !messageSnapshot.exists ||
+          hiddenSnapshot.exists ||
           messageSnapshot.data()?.isDeleted === true ||
           messageSnapshot.data()?.voiceMemo?.storagePath !== storagePath ||
         !isExplicitConversationParticipant(conversationSnapshot.data(), uid)
@@ -2742,14 +2913,18 @@ async function canStreamGrantedTeamVoiceMemo(
     !storageReference.conversationId
   ) return false;
   const conversationRef = firestore.collection('teamPrivateConversations').doc(storageReference.conversationId);
-  const [conversationSnapshot, messageSnapshot] = await Promise.all([
+  const hiddenRef = conversationRef.collection('members').doc(userId)
+    .collection('hiddenMessages').doc(storageReference.messageId);
+  const [conversationSnapshot, messageSnapshot, hiddenSnapshot] = await Promise.all([
     conversationRef.get(),
     conversationRef.collection('messages').doc(storageReference.messageId).get(),
+    hiddenRef.get(),
   ]);
   const message = messageSnapshot.data();
   return Boolean(
     conversationSnapshot.exists &&
     messageSnapshot.exists &&
+    !hiddenSnapshot.exists &&
     message?.isDeleted !== true &&
     message?.voiceMemo?.storagePath === storagePath &&
     isExplicitConversationParticipant(conversationSnapshot.data(), userId),
@@ -2906,12 +3081,24 @@ async function createPrivateTeamMessageTransaction(
       userId: input.senderUserId,
       role: senderRole,
       lastReadAt: now,
+      lastVisibleMessageAt: now,
+      lastVisibleMessageId: messageId,
+      lastVisibleMessagePreview: preview,
+      lastVisibleMessageType: input.contentType,
+      lastVisibleSenderUserId: input.senderUserId,
       unreadCount: 0,
+      visibilityVersion: 1,
     }, { merge: true });
     transaction.set(conversationRef.collection('members').doc(recipientUserId), {
       userId: recipientUserId,
       role: senderRole === 'coach' ? 'parent' : 'coach',
+      lastVisibleMessageAt: now,
+      lastVisibleMessageId: messageId,
+      lastVisibleMessagePreview: preview,
+      lastVisibleMessageType: input.contentType,
+      lastVisibleSenderUserId: input.senderUserId,
       unreadCount: FieldValue.increment(1),
+      visibilityVersion: 1,
     }, { merge: true });
     if (input.reservationRef) transaction.update(input.reservationRef, { status: 'finalized', finalizedAt: now });
     return { blocked: false as const, conversation: conversation ?? {}, created: true, messageId };
@@ -3020,11 +3207,61 @@ async function enforceTeamMessageRateLimit(
   });
 }
 
+function readPrivateConversationParticipantIds(conversation: Record<string, unknown> | undefined) {
+  if (!conversation || !Array.isArray(conversation.participantUserIds)) return [];
+  const participantUserIds = conversation.participantUserIds
+    .filter((value): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/u.test(value));
+  return Array.from(new Set(participantUserIds)).slice(0, 2);
+}
+
+function privateMemberPreviewFields(
+  messages: FirebaseFirestore.QueryDocumentSnapshot[],
+  hiddenMessageIds: Set<string>,
+  globallyDeletedMessageId?: string,
+) {
+  const visibleMessages = messages.filter((document) => !hiddenMessageIds.has(document.id));
+  const latestContent = visibleMessages.find((document) =>
+    document.id !== globallyDeletedMessageId && document.data().isDeleted !== true);
+  const latest = latestContent ?? visibleMessages[0];
+  if (!latest) {
+    return {
+      lastVisibleMessageAt: null,
+      lastVisibleMessageId: null,
+      lastVisibleMessagePreview: null,
+      lastVisibleMessageType: null,
+      lastVisibleSenderUserId: null,
+      visibilityVersion: 1,
+    };
+  }
+  const message = latest.data();
+  const deleted = latest.id === globallyDeletedMessageId || message.isDeleted === true;
+  const contentType = message.contentType === 'voice' ? 'voice' : 'text';
+  return {
+    lastVisibleMessageAt: message.createdAt ?? null,
+    lastVisibleMessageId: latest.id,
+    lastVisibleMessagePreview: deleted
+      ? null
+      : privateMessagePreview(
+        contentType,
+        message.text ?? message.caption,
+        message.voiceMemo?.durationMilliseconds,
+      ),
+    lastVisibleMessageType: deleted ? 'deleted' : contentType,
+    lastVisibleSenderUserId: typeof message.senderUserId === 'string' ? message.senderUserId : null,
+    visibilityVersion: 1,
+  };
+}
+
 function serializePrivateConversation(
   conversationId: string,
   conversation: Record<string, unknown>,
   member: Record<string, unknown> | undefined,
 ) {
+  const hasMemberVisibility = member?.visibilityVersion === 1;
+  const lastMessageAt = hasMemberVisibility ? member?.lastVisibleMessageAt : conversation.lastMessageAt;
+  const lastMessageType = hasMemberVisibility ? member?.lastVisibleMessageType : conversation.lastMessageType;
+  const lastMessagePreview = hasMemberVisibility ? member?.lastVisibleMessagePreview : conversation.lastMessagePreview;
+  const lastSenderUserId = hasMemberVisibility ? member?.lastVisibleSenderUserId : conversation.lastSenderUserId;
   return {
     conversationId,
     teamId: String(conversation.teamId ?? ''),
@@ -3034,16 +3271,16 @@ function serializePrivateConversation(
     coachDisplayName: String(conversation.coachDisplayName ?? 'Sideline Social member'),
     parentDisplayName: String(conversation.parentDisplayName ?? 'Sideline Social member'),
     status: conversation.status === 'readOnly' ? 'readOnly' : 'active',
-    lastMessageAtMillis: timestampMillis(conversation.lastMessageAt) ?? 0,
-    lastMessageType: conversation.lastMessageType === 'voice'
+    lastMessageAtMillis: timestampMillis(lastMessageAt) ?? 0,
+    lastMessageType: lastMessageType === 'voice'
       ? 'voice'
-      : conversation.lastMessageType === 'text'
+      : lastMessageType === 'text'
         ? 'text'
-        : conversation.lastMessageType === 'deleted'
+        : lastMessageType === 'deleted'
           ? 'deleted'
           : null,
-    lastMessagePreview: typeof conversation.lastMessagePreview === 'string' ? conversation.lastMessagePreview : null,
-    lastSenderUserId: typeof conversation.lastSenderUserId === 'string' ? conversation.lastSenderUserId : null,
+    lastMessagePreview: typeof lastMessagePreview === 'string' ? lastMessagePreview : null,
+    lastSenderUserId: typeof lastSenderUserId === 'string' ? lastSenderUserId : null,
     unreadCount: Math.max(0, Number(member?.unreadCount ?? 0)),
   };
 }
@@ -3056,6 +3293,7 @@ function throwTeamMessagingError(error: unknown): never {
     'not_conversation_participant',
     'not_authorized_voice_recipient',
     'not_message_author',
+    'not_message_recipient',
     'parent_not_active',
   ]);
   const notFoundReasons = new Set(['team_not_found', 'conversation_not_found', 'voice_message_unavailable']);
@@ -3099,7 +3337,10 @@ export const syncPublicUserProfile = functions.firestore
       await publicRef.delete();
       return null;
     }
-    await publicRef.set({ ...toMinimalPublicUserProfile(profile), updatedAt: FieldValue.serverTimestamp() });
+    await publicRef.set({
+      ...toSearchablePublicUserProfileProjection(profile),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
     return null;
   });
 
@@ -3135,7 +3376,10 @@ export const updatePublicUserProfile = functions.https.onCall(async (data, conte
       updatedAt: now,
     }, { merge: true });
     const publicProfile = toMinimalPublicUserProfile(next);
-    transaction.set(publicRef, { ...publicProfile, updatedAt: now });
+    transaction.set(publicRef, {
+      ...toSearchablePublicUserProfileProjection(next),
+      updatedAt: now,
+    });
     return { privateProfile: next, publicProfile };
   });
   try {
@@ -3164,9 +3408,9 @@ export const getPublicUserProfiles = functions.https.onCall(async (data, context
   let projectionNameCount = 0;
   publicSnapshots.forEach((snapshot) => {
     const profile = snapshot.data();
-    if (isCanonicalPublicProfile(profile, snapshot.id)) {
+    if (isSearchablePublicProfileProjection(profile, snapshot.id)) {
       projectionNameCount += 1;
-      resolved.set(snapshot.id, profile as NonNullable<ReturnType<typeof resolveCanonicalPublicProfile>>);
+      resolved.set(snapshot.id, resolveCanonicalPublicProfile(snapshot.id, profile));
     }
   });
 
@@ -3196,7 +3440,10 @@ export const getPublicUserProfiles = functions.https.onCall(async (data, context
   await Promise.allSettled(selfHealingProfiles.map((profile) => firestore
     .collection('publicUserProfiles')
     .doc(profile.userId)
-    .set({ ...toMinimalPublicUserProfile(profile), updatedAt: FieldValue.serverTimestamp() })));
+    .set({
+      ...toSearchablePublicUserProfileProjection(profile),
+      updatedAt: FieldValue.serverTimestamp(),
+    })));
 
   const resolvedProfiles: {
     userId: string;
@@ -3231,24 +3478,235 @@ export const getPublicUserProfiles = functions.https.onCall(async (data, context
   };
 });
 
-export const getSuggestedConnections = functions.https.onCall(async (data, context) => {
+const PUBLIC_USER_SEARCH_MAX_RESULTS = 20;
+const PUBLIC_USER_SEARCH_RATE_LIMIT = 30;
+const PUBLIC_USER_SEARCH_RATE_WINDOW_MS = 60_000;
+const PUBLIC_USER_SEARCH_FIELDS = [
+  'displayNameLower',
+  'firstNameLower',
+  'lastNameLower',
+] as const;
+const LEGACY_PUBLIC_USER_SEARCH_FIELDS = [
+  'displayName',
+  'firstName',
+  'lastName',
+] as const;
+
+async function enforcePublicUserSearchRateLimit(userId: string) {
+  const firestore = admin.firestore();
+  const reference = firestore.collection('publicUserSearchRateLimits').doc(userId);
+  const nowMillis = Date.now();
+  try {
+    await firestore.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(reference);
+      const current = snapshot.data() ?? {};
+      const windowStartedAt = timestampMillis(current.windowStartedAt);
+      const insideWindow = windowStartedAt !== null &&
+        nowMillis - windowStartedAt < PUBLIC_USER_SEARCH_RATE_WINDOW_MS;
+      const count = insideWindow && typeof current.count === 'number'
+        ? current.count
+        : 0;
+      if (count >= PUBLIC_USER_SEARCH_RATE_LIMIT) throw new Error('public_search_rate_limited');
+      transaction.set(reference, {
+        count: count + 1,
+        windowStartedAt: insideWindow
+          ? current.windowStartedAt
+          : Timestamp.fromMillis(nowMillis),
+        updatedAt: Timestamp.fromMillis(nowMillis),
+      });
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'public_search_rate_limited') {
+      throw new functions.https.HttpsError(
+        'resource-exhausted',
+        'Please wait before searching again.',
+        { reason: 'rate_limited' },
+      );
+    }
+    throw error;
+  }
+}
+
+export const searchPublicUserProfiles = functions.https.onCall(async (data, context) => runFriendsCallable(
+  'searchPublicUserProfiles',
+  context.auth?.uid,
+  async (setValidationStage) => {
+  setValidationStage('authentication');
+  const uid = context.auth?.uid;
+  if (!uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in to search for parents.');
+  }
+  setValidationStage('input-validation');
+  const rawQuery = typeof data?.query === 'string' ? data.query : '';
+  const normalizedQuery = normalizePublicProfileSearchText(rawQuery);
+  if (
+    normalizedQuery.length < 2 ||
+    normalizedQuery.length > 80 ||
+    (normalizedQuery.match(/\p{L}/gu)?.length ?? 0) < 2
+  ) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      'Enter at least two letters of a parent name.',
+    );
+  }
+  const requestedLimit = data?.limit === undefined ? PUBLIC_USER_SEARCH_MAX_RESULTS : data.limit;
+  if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > PUBLIC_USER_SEARCH_MAX_RESULTS) {
+    throw new functions.https.HttpsError('invalid-argument', 'The search result limit is invalid.');
+  }
+  const resultLimit = requestedLimit as number;
+  setValidationStage('rate-limit');
+  await enforcePublicUserSearchRateLimit(uid);
+
+  const firestore = admin.firestore();
+  const queryLimit = Math.min(PUBLIC_USER_SEARCH_MAX_RESULTS * 2, resultLimit * 3);
+  setValidationStage('viewer-block-and-profile-query');
+  const [viewerSnapshot, blockedUserIds, ...prefixSnapshots] = await Promise.all([
+    firestore.collection('users').doc(uid).get(),
+    readBlockedRelationshipIds(uid),
+    ...PUBLIC_USER_SEARCH_FIELDS.map((field) => firestore
+      .collection('publicUserProfiles')
+      .where(field, '>=', normalizedQuery)
+      .where(field, '<=', `${normalizedQuery}\uf8ff`)
+      .limit(queryLimit)
+      .get()),
+  ]);
+  if (!viewerSnapshot.exists) return { results: [] };
+
+  const candidates = new Map<string, NonNullable<ReturnType<typeof resolveCanonicalPublicProfile>>>();
+  const projectionsToRepair = new Map<string, NonNullable<ReturnType<typeof resolveCanonicalPublicProfile>>>();
+  prefixSnapshots.forEach((snapshot) => {
+    snapshot.docs.forEach((document) => {
+      const profile = resolveCanonicalPublicProfile(document.id, document.data());
+      if (!profile) return;
+      candidates.set(document.id, profile);
+      if (!isSearchablePublicProfileProjection(document.data(), document.id)) {
+        projectionsToRepair.set(document.id, profile);
+      }
+    });
+  });
+
+  // Compatibility for existing public projections created before normalized
+  // search keys existed. Common casing variants locate a bounded prefix match
+  // without opening collection listing; every match self-heals immediately.
+  if (candidates.size < resultLimit) {
+    setValidationStage('legacy-profile-query');
+    const legacyPrefixes = legacyPublicProfilePrefixVariants(rawQuery);
+    const legacySnapshots = await Promise.all(LEGACY_PUBLIC_USER_SEARCH_FIELDS.flatMap((field) => (
+      legacyPrefixes.map((prefix) => firestore
+        .collection('publicUserProfiles')
+        .where(field, '>=', prefix)
+        .where(field, '<=', `${prefix}\uf8ff`)
+        .limit(queryLimit)
+        .get())
+    )));
+    legacySnapshots.forEach((snapshot) => {
+      snapshot.docs.forEach((document) => {
+        const profile = resolveCanonicalPublicProfile(document.id, document.data());
+        if (!profile) return;
+        const alreadyProjected = candidates.has(document.id);
+        candidates.set(document.id, profile);
+        if (!alreadyProjected) projectionsToRepair.set(document.id, profile);
+      });
+    });
+  }
+
+  const excludedUserIds = new Set([uid, ...blockedUserIds]);
+  const rankedProjectionCandidates = rankAndLimitPublicUserSearchResults(
+    Array.from(candidates.values()).filter((profile) => !excludedUserIds.has(profile.userId)),
+    normalizedQuery,
+    queryLimit,
+  );
+  setValidationStage('auth-account-validation');
+  const activeAuthUserIds = rankedProjectionCandidates.length > 0
+    ? new Set((await admin.auth().getUsers(
+      rankedProjectionCandidates.map((profile) => ({ uid: profile.userId })),
+    )).users.map((authUser) => authUser.uid))
+    : new Set<string>();
+  const rankedCandidates = rankedProjectionCandidates
+    .filter((profile) => activeAuthUserIds.has(profile.userId))
+    .slice(0, resultLimit);
+  const requestReferences = rankedCandidates.flatMap((profile) => [
+    firestore.collection('friendRequests').doc(friendRequestIdFor(uid, profile.userId)),
+    firestore.collection('friendRequests').doc(friendRequestIdFor(profile.userId, uid)),
+  ]);
+  setValidationStage('relationship-query');
+  const requestSnapshots = requestReferences.length > 0
+    ? await firestore.getAll(...requestReferences)
+    : [];
+  const outgoingPendingUserIds = new Set<string>();
+  const incomingPendingUserIds = new Set<string>();
+  const nowMillis = Date.now();
+  rankedCandidates.forEach((profile, index) => {
+    const outgoing = requestSnapshots[index * 2]?.data() ?? {};
+    const incoming = requestSnapshots[index * 2 + 1]?.data() ?? {};
+    if (isActivePendingRequest(outgoing.status, requestExpiresAtMillis(outgoing), nowMillis)) {
+      outgoingPendingUserIds.add(profile.userId);
+    }
+    if (isActivePendingRequest(incoming.status, requestExpiresAtMillis(incoming), nowMillis)) {
+      incomingPendingUserIds.add(profile.userId);
+    }
+  });
+  const friendUserIds = new Set(readStringArray(viewerSnapshot.data()?.friendIds));
+
+  const repairProfiles = Array.from(projectionsToRepair.values())
+    .filter((profile) => activeAuthUserIds.has(profile.userId));
+  setValidationStage('projection-repair');
+  await Promise.allSettled(repairProfiles.map((profile) => firestore
+    .collection('publicUserProfiles')
+    .doc(profile.userId)
+    .set({
+      ...toSearchablePublicUserProfileProjection(profile),
+      updatedAt: FieldValue.serverTimestamp(),
+    })));
+
+  console.info('[publicUserSearch] completed', {
+    queryLength: normalizedQuery.length,
+    projectionCandidateCount: candidates.size,
+    repairedProjectionCount: repairProfiles.length,
+    returnedResultCount: rankedCandidates.length,
+  });
+  setValidationStage('response-serialization');
+  return {
+    results: rankedCandidates.map((profile) => ({
+      ...toMinimalPublicUserProfile(profile),
+      profileState: 'available' as const,
+      relationship: resolvePublicUserSearchRelationship({
+        candidateUserId: profile.userId,
+        friendUserIds,
+        outgoingPendingUserIds,
+        incomingPendingUserIds,
+      }),
+    })),
+  };
+  },
+));
+
+export const getSuggestedConnections = functions.https.onCall(async (data, context) => runFriendsCallable(
+  'getSuggestedConnections',
+  context.auth?.uid,
+  async (setValidationStage) => {
+  setValidationStage('authentication');
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to view suggestions.');
 
+  setValidationStage('input-validation');
   const queryText = typeof data?.queryText === 'string' ? data.queryText.trim() : '';
   if (queryText.length > 80) {
     throw new functions.https.HttpsError('invalid-argument', 'Search text is too long.');
   }
   const normalizedQuery = queryText.toLocaleLowerCase();
   const firestore = admin.firestore();
+  setValidationStage('viewer-profile-query');
   const viewerSnapshot = await firestore.collection('users').doc(uid).get();
   if (!viewerSnapshot.exists) return { suggestions: [] };
 
   const viewer = viewerSnapshot.data() ?? {};
   const viewerFriendIds = readStringArray(viewer.friendIds);
+  setValidationStage('block-query');
   const blockedUserIds = await readBlockedRelationshipIds(uid);
   const excludedUserIds = new Set([uid, ...viewerFriendIds, ...blockedUserIds]);
   let candidateSnapshots: admin.firestore.QueryDocumentSnapshot[];
+  setValidationStage('candidate-query');
   if (normalizedQuery) {
     const prefixSnapshot = await firestore.collection('users')
       .where('searchName', '>=', normalizedQuery)
@@ -3277,6 +3735,7 @@ export const getSuggestedConnections = functions.https.onCall(async (data, conte
     .filter((candidate) => !normalizedQuery || candidate.publicProfile?.displayName.toLocaleLowerCase().includes(normalizedQuery));
 
   const sharedSquadNames = new Map<string, string>();
+  setValidationStage('shared-squad-query');
   const viewerSquads = await firestore.collection('squads')
     .where('memberIds', 'array-contains', uid)
     .limit(50)
@@ -3293,6 +3752,7 @@ export const getSuggestedConnections = functions.https.onCall(async (data, conte
     });
   }
 
+  setValidationStage('response-serialization');
   return {
     suggestions: candidates.slice(0, 20).map(({ snapshot, profile, publicProfile }) => {
       const mutualConnectionCount = countMutualConnections(viewerFriendIds, profile.friendIds);
@@ -3309,7 +3769,8 @@ export const getSuggestedConnections = functions.https.onCall(async (data, conte
       };
     }),
   };
-});
+  },
+));
 
 function normalizePublicProfileIds(value: unknown): string[] {
   if (!Array.isArray(value)) {

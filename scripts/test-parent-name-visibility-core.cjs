@@ -63,7 +63,7 @@ for (const roleFallback of ["Team Parent", "Sideline Parent", "Squad member"]) {
 const functionsSource = read("functions", "src", "index.ts");
 const callable = functionsSource.slice(
   functionsSource.indexOf("export const getPublicUserProfiles"),
-  functionsSource.indexOf("export const getSuggestedConnections"),
+  functionsSource.indexOf("export const searchPublicUserProfiles"),
 );
 assert.ok(callable.includes("profileState: 'unnamed'"));
 assert.ok(callable.includes("profileState: 'deleted'"));

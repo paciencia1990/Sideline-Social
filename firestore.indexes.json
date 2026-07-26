@@ -256,6 +256,16 @@
   ],
   "fieldOverrides": [
     {
+      "collectionGroup": "blockedUsers",
+      "fieldPath": "blockedUserId",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
       "collectionGroup": "notifications",
       "fieldPath": "createdAt",
       "indexes": [

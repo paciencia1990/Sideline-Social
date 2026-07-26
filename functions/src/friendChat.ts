@@ -684,7 +684,12 @@ export const reportFriendChatMessage = chatFunctions.https.onCall(async (data, c
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   const messageId = normalizeConversationId(data?.messageId);
-  if (!conversationId || !messageId) invalid('Report references are required.');
+  const reason = data?.reason == null
+    ? 'other'
+    : typeof data.reason === 'string' && ['privacy', 'harassment', 'offensive', 'other'].includes(data.reason)
+      ? data.reason
+      : null;
+  if (!conversationId || !messageId || !reason) invalid('Report references are required.');
   await assertActiveMember(conversationId, uid);
   const message = await conversationRef(conversationId).collection('messages').doc(messageId).get();
   if (!message.exists) failed('Message unavailable.');
@@ -692,7 +697,7 @@ export const reportFriendChatMessage = chatFunctions.https.onCall(async (data, c
   const ref = firestore().collection('chatModerationReports').doc();
   await ref.set({
     reportId: ref.id, reporterUserId: uid, reportedUserId: message.data()?.senderUserId ?? null,
-    conversationId, messageId, reportType: 'message', status: 'open', createdAt: Timestamp.now(),
+    conversationId, messageId, reason, reportType: 'message', status: 'open', createdAt: Timestamp.now(),
   });
   return { reportId: ref.id, reported: true };
 });

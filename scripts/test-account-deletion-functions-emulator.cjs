@@ -92,6 +92,10 @@ async function run() {
     db.collection("teamPrivateConversations").doc("privacy-team-conversation").collection("members").doc(deletingUser.uid).set({
       userId: deletingUser.uid, role: "parent",
     }),
+    db.collection("teamPrivateConversations").doc("privacy-team-conversation").collection("members").doc(deletingUser.uid)
+      .collection("hiddenMessages").doc("hidden-private-message").set({
+        hiddenAt: admin.firestore.Timestamp.now(), messageId: "hidden-private-message", userId: deletingUser.uid,
+      }),
     admin.database().ref(`gameSessions/test-session/players/${deletingUser.uid}`).set({ score: 10 }),
   ]);
 
@@ -127,6 +131,8 @@ async function run() {
   assert.deepEqual(privateConversation.participantUserIds, [friend.uid]);
   assert.equal(privateConversation.parentUserId, null);
   assert.equal(privateConversation.parentDisplayName, "Deleted user");
+  assert.equal((await db.collection("teamPrivateConversations").doc("privacy-team-conversation")
+    .collection("members").doc(deletingUser.uid).collection("hiddenMessages").doc("hidden-private-message").get()).exists, false);
   assert.equal((await admin.database().ref(`gameSessions/test-session/players/${deletingUser.uid}`).get()).exists(), false);
   await assert.rejects(() => admin.auth().getUser(deletingUser.uid), (error) => error?.code === "auth/user-not-found");
 

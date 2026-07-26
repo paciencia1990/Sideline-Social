@@ -65,6 +65,12 @@ export function invalidateVoicePlaybackSource(source: VoicePlaybackSource) {
   if (source.kind === "persisted-message") cachedPlaybackUrls.delete(cacheKey(source));
 }
 
+export function voicePlaybackSourceIdentity(source: VoicePlaybackSource) {
+  return source.kind === "local-draft"
+    ? `local\u001f${source.uri}`
+    : `${source.messageKind}\u001f${source.messageId}\u001f${source.storagePath}`;
+}
+
 export function normalizeVoicePlaybackUrlResponse(
   value: unknown,
   options: { now?: number; allowLocalHttp?: boolean } = {},

@@ -16,6 +16,8 @@ import { auth, db, functions } from "@/config/firebase";
 import {
   getPublicUserProfiles,
   getSuggestedConnections,
+  searchPublicUserProfiles,
+  type PublicUserSearchRelationship,
   type SuggestedConnection,
 } from "@/services/publicProfileService";
 import {
@@ -51,6 +53,12 @@ export type SuggestedFriendProfile = FriendProfile & Pick<
   SuggestedConnection,
   "sharedSquadName" | "sharedActivity" | "mutualConnectionCount"
 >;
+
+export type FriendSearchResult = FriendProfile & {
+  firstName: string | null;
+  lastName: string | null;
+  relationship: PublicUserSearchRelationship;
+};
 
 type PrivateFriendProfile = FriendProfile & { friendIds: string[] };
 
@@ -201,8 +209,22 @@ export async function searchUsers(queryText: string): Promise<SuggestedFriendPro
     }));
   } catch (error) {
     logFriendsIssue("searchUsers", error);
-    return [];
+    throw error;
   }
+}
+
+export async function searchParentsByName(queryText: string): Promise<FriendSearchResult[]> {
+  if (!auth.currentUser?.uid) return [];
+  const results = await searchPublicUserProfiles(queryText);
+  return results.map((profile) => ({
+    id: profile.userId,
+    firstName: profile.firstName ?? null,
+    lastName: profile.lastName ?? null,
+    displayName: formatPublicUserName(profile.displayName) ?? "",
+    photoURL: profile.photoURL ?? null,
+    profileState: profile.profileState,
+    relationship: profile.relationship,
+  }));
 }
 
 export async function getFriends(userId: string): Promise<FriendProfile[]> {
@@ -302,7 +324,7 @@ export async function getFriendRequestGroups(userId: string): Promise<FriendRequ
     }
   } catch (error) {
     logFriendsIssue("getFriendRequestGroups", error);
-    return emptyFriendRequestGroups();
+    throw error;
   }
 }
 

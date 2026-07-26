@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const admin = require("../functions/node_modules/firebase-admin");
 const { initializeApp } = require("firebase/app");
-const { connectAuthEmulator, createUserWithEmailAndPassword, getAuth } = require("firebase/auth");
+const { connectAuthEmulator, createUserWithEmailAndPassword, getAuth, signInWithEmailAndPassword } = require("firebase/auth");
 const { connectFunctionsEmulator, getFunctions, httpsCallable } = require("firebase/functions");
 const { connectStorageEmulator, getStorage, ref, uploadBytes } = require("firebase/storage");
 
@@ -26,6 +26,18 @@ function createUnauthenticatedClient(label) {
   const callableFunctions = getFunctions(app, "us-central1");
   connectFunctionsEmulator(callableFunctions, "127.0.0.1", 5001);
   return { call: (name, data = {}) => httpsCallable(callableFunctions, name)(data).then((result) => result.data) };
+}
+async function createExistingClient(label, email) {
+  const app = initializeApp({ apiKey: "demo-key", projectId }, label);
+  const auth = getAuth(app);
+  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+  const credential = await signInWithEmailAndPassword(auth, email, "ValidPass123!");
+  const callableFunctions = getFunctions(app, "us-central1");
+  connectFunctionsEmulator(callableFunctions, "127.0.0.1", 5001);
+  return {
+    uid: credential.user.uid,
+    call: (name, data = {}) => httpsCallable(callableFunctions, name)(data).then((result) => result.data),
+  };
 }
 function hasCode(code) { return (error) => String(error?.code).includes(code); }
 
@@ -185,6 +197,54 @@ async function run() {
     contentId: sent.messageId, reason: "other",
   }), hasCode("permission-denied"));
   await assert.rejects(
+    () => unauthenticated.call("hidePrivateTeamMessageForCurrentUser", {
+      conversationId: first.conversationId,
+      messageId: sent.messageId,
+    }),
+    hasCode("unauthenticated"),
+  );
+  await assert.rejects(
+    () => outsider.call("hidePrivateTeamMessageForCurrentUser", {
+      conversationId: first.conversationId,
+      messageId: sent.messageId,
+    }),
+    hasCode("permission-denied"),
+  );
+  await assert.rejects(
+    () => coach.call("hidePrivateTeamMessageForCurrentUser", {
+      conversationId: first.conversationId,
+      messageId: sent.messageId,
+    }),
+    hasCode("permission-denied"),
+  );
+  assert.equal((await parent.call("hidePrivateTeamMessageForCurrentUser", {
+    conversationId: first.conversationId,
+    messageId: sent.messageId,
+    targetUserId: outsider.uid,
+  })).status, "hidden");
+  assert.equal((await parent.call("hidePrivateTeamMessageForCurrentUser", {
+    conversationId: first.conversationId,
+    messageId: sent.messageId,
+  })).status, "alreadyHidden", "repeated receiver hiding is idempotent");
+  const hiddenTextRef = db.collection("teamPrivateConversations").doc(first.conversationId)
+    .collection("members").doc(parent.uid).collection("hiddenMessages").doc(sent.messageId);
+  assert.equal((await hiddenTextRef.get()).exists, true, "receiver visibility persists in Firestore");
+  const parentSecondDevice = await createExistingClient("team-parent-second-device", "team-parent@example.test");
+  assert.equal(parentSecondDevice.uid, parent.uid);
+  assert.equal((await parentSecondDevice.call("hidePrivateTeamMessageForCurrentUser", {
+    conversationId: first.conversationId,
+    messageId: sent.messageId,
+  })).status, "alreadyHidden", "hidden state persists in a fresh authenticated app session");
+  assert.equal((await db.collection("teamPrivateConversations").doc(first.conversationId)
+    .collection("members").doc(outsider.uid).collection("hiddenMessages").doc(sent.messageId).get()).exists, false, "client target UID is ignored");
+  const textAfterReceiverHide = (await db.collection("teamPrivateConversations").doc(first.conversationId)
+    .collection("messages").doc(sent.messageId).get()).data();
+  assert.equal(textAfterReceiverHide.text, "Private hello", "receiver hiding does not mutate canonical content");
+  const parentAfterTextHide = (await db.collection("teamPrivateConversations").doc(first.conversationId)
+    .collection("members").doc(parent.uid).get()).data();
+  assert.equal(parentAfterTextHide.lastVisibleMessagePreview, "Private reply");
+  assert.equal(parentAfterTextHide.unreadCount, 0, "hidden incoming text no longer contributes to unread");
+  await assert.rejects(
     () => parent.call("deletePrivateTeamMessage", {
       conversationId: first.conversationId,
       messageId: sent.messageId,
@@ -323,6 +383,38 @@ async function run() {
   };
   await coach.call("getTeamVoiceMemoDownloadUrl", coachVoicePlaybackRequest);
   await parent.call("getTeamVoiceMemoDownloadUrl", coachVoicePlaybackRequest);
+  const hiddenPlaybackToken = "b".repeat(64);
+  const hiddenPlaybackGrantId = createHash("sha256").update(hiddenPlaybackToken).digest("hex");
+  await db.collection("teamVoicePlaybackGrants").doc(hiddenPlaybackGrantId).set({
+    expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+    messageId: coachVoiceReservation.targetId,
+    messageKind: "privateMessage",
+    storagePath: coachVoiceReservation.storagePath,
+    userId: parent.uid,
+  });
+  assert.equal((await fetch(
+    `http://127.0.0.1:5001/${projectId}/us-central1/streamTeamVoiceMemo?grant=${hiddenPlaybackToken}`,
+  )).status, 200, "receiver grant works before hiding");
+  assert.equal((await parent.call("hidePrivateTeamMessageForCurrentUser", {
+    conversationId: first.conversationId,
+    messageId: coachVoiceReservation.targetId,
+  })).status, "hidden");
+  assert.equal((await parent.call("hidePrivateTeamMessageForCurrentUser", {
+    conversationId: first.conversationId,
+    messageId: coachVoiceReservation.targetId,
+  })).status, "alreadyHidden");
+  const canonicalCoachVoice = (await db.collection("teamPrivateConversations").doc(first.conversationId)
+    .collection("messages").doc(coachVoiceReservation.targetId).get()).data();
+  assert.equal(canonicalCoachVoice.voiceMemo.storagePath, coachVoiceReservation.storagePath);
+  assert.equal((await admin.storage().bucket().file(coachVoiceReservation.storagePath).exists())[0], true, "Delete for Me preserves server Storage");
+  await coach.call("getTeamVoiceMemoDownloadUrl", coachVoicePlaybackRequest);
+  await assert.rejects(
+    () => parent.call("getTeamVoiceMemoDownloadUrl", coachVoicePlaybackRequest),
+    hasCode("permission-denied"),
+  );
+  assert.equal((await fetch(
+    `http://127.0.0.1:5001/${projectId}/us-central1/streamTeamVoiceMemo?grant=${hiddenPlaybackToken}`,
+  )).status, 404, "hiding revokes the receiver's already-issued production playback grant");
   const privateNotificationId = `teamPrivateMessage_${first.conversationId}_${privateReservation.targetId}`;
   const privateNotification = (await db.collection("userNotifications").doc(coach.uid).collection("notifications").doc(privateNotificationId).get()).data();
   assert.equal(privateNotification.type, "teamPrivateMessage");
@@ -375,11 +467,23 @@ async function run() {
     conversationId: first.conversationId,
     messageId: coachVoiceReservation.targetId,
   })).status, "deleted");
+  assert.equal((await coach.call("deletePrivateTeamMessage", {
+    conversationId: first.conversationId,
+    messageId: coachVoiceReservation.targetId,
+  })).status, "alreadyDeleted", "global deletion remains idempotent after receiver hiding");
+  assert.equal((await admin.storage().bucket().file(coachVoiceReservation.storagePath).exists())[0], false, "sender Delete for Everyone removes server Storage after receiver hiding");
   const conversationAfterLatestDelete = (await db.collection("teamPrivateConversations")
     .doc(first.conversationId).get()).data();
   assert.equal(conversationAfterLatestDelete.lastMessageType, "text");
   assert.equal(conversationAfterLatestDelete.lastMessagePreview, "Private reply");
   assert.equal(conversationAfterLatestDelete.lastSenderUserId, parent.uid);
+  for (const userId of [coach.uid, parent.uid]) {
+    const memberPreview = (await db.collection("teamPrivateConversations").doc(first.conversationId)
+      .collection("members").doc(userId).get()).data();
+    assert.equal(memberPreview.lastVisibleMessagePreview, "Private reply");
+    assert.equal(memberPreview.lastVisibleMessageType, "text");
+    assert.equal(memberPreview.lastVisibleSenderUserId, parent.uid);
+  }
 
   const [audioExistsBeforeDelete] = await admin.storage().bucket().file(announcementReservation.storagePath).exists();
   assert.equal(audioExistsBeforeDelete, true);

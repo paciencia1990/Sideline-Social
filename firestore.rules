@@ -358,11 +358,17 @@ service cloud.firestore {
     }
 
     // Minimal authenticated identity projection. Documents contain only the
-    // canonical public name/photo fields produced by trusted server code.
+    // canonical public name/photo and normalized name-search fields produced
+    // by trusted server code.
     match /publicUserProfiles/{userId} {
       allow get: if signedIn();
       allow list: if false;
       allow create, update, delete: if false;
+    }
+
+    // Server-only counters bound authenticated directory search volume.
+    match /publicUserSearchRateLimits/{userId} {
+      allow read, write: if false;
     }
 
     // -----------------------------------------------------------------------
@@ -597,6 +603,14 @@ service cloud.firestore {
       match /members/{userId} {
         allow get: if isSelf(userId) && isPrivateTeamConversationParticipant(conversationId);
         allow list, create, update, delete: if false;
+
+        match /hiddenMessages/{messageId} {
+          // Visibility records are written only by the trusted hide-message
+          // callable. A participant may subscribe only to their own records so
+          // hidden messages never flash while a private thread is loading.
+          allow get, list: if isSelf(userId) && isPrivateTeamConversationParticipant(conversationId);
+          allow create, update, delete: if false;
+        }
       }
 
       match /messages/{messageId} {

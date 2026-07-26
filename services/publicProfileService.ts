@@ -17,6 +17,16 @@ export type SuggestedConnection = PublicUserProfile & {
   mutualConnectionCount: number | null;
 };
 
+export type PublicUserSearchRelationship =
+  | "none"
+  | "outgoing-request"
+  | "incoming-request"
+  | "friends";
+
+export type PublicUserSearchResult = PublicUserProfile & {
+  relationship: PublicUserSearchRelationship;
+};
+
 const MAX_PUBLIC_PROFILE_IDS = 50;
 
 export async function getPublicUserProfiles(userIds: string[]) {
@@ -66,6 +76,43 @@ export async function getSuggestedConnections(queryText: string) {
   >(functions, "getSuggestedConnections");
   const response = await loadSuggestions({ queryText: queryText.trim() });
   return response.data.suggestions;
+}
+
+export async function searchPublicUserProfiles(
+  query: string,
+  limit = 20,
+): Promise<PublicUserSearchResult[]> {
+  const searchProfiles = httpsCallable<
+    { query: string; limit: number },
+    { results: unknown }
+  >(functions, "searchPublicUserProfiles");
+  const response = await searchProfiles({ query: query.trim(), limit });
+  const records = Array.isArray(response.data.results) ? response.data.results : [];
+  const inspected = inspectPublicUserProfiles(records);
+  const relationshipsByUserId = new Map<string, PublicUserSearchRelationship>();
+  records.forEach((record) => {
+    if (!record || typeof record !== "object") return;
+    const userId = "userId" in record && typeof record.userId === "string"
+      ? record.userId
+      : "";
+    const relationship = "relationship" in record ? record.relationship : null;
+    if (
+      userId &&
+      ["none", "outgoing-request", "incoming-request", "friends"].includes(String(relationship))
+    ) {
+      relationshipsByUserId.set(userId, relationship as PublicUserSearchRelationship);
+    }
+  });
+  return inspected.profiles
+    .filter((profile) => (
+      profile.profileState === "available" &&
+      Boolean(formatPublicUserName(profile.displayName)) &&
+      relationshipsByUserId.has(profile.userId)
+    ))
+    .map((profile) => ({
+      ...profile,
+      relationship: relationshipsByUserId.get(profile.userId) ?? "none",
+    }));
 }
 
 export async function updatePublicUserProfile(input: {

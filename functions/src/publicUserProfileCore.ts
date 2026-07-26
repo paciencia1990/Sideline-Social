@@ -8,6 +8,12 @@ export type CanonicalPublicUserProfile = {
 
 export type MinimalPublicUserProfile = CanonicalPublicUserProfile;
 
+export type SearchablePublicUserProfileProjection = CanonicalPublicUserProfile & {
+  displayNameLower: string;
+  firstNameLower: string | null;
+  lastNameLower: string | null;
+};
+
 const PLACEHOLDER_NAMES = new Set([
   'sideline parent',
   'a sideline parent',
@@ -88,6 +94,21 @@ export function toMinimalPublicUserProfile(
   return { ...profile };
 }
 
+export function normalizePublicProfileSearchText(value: string) {
+  return value.trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+}
+
+export function toSearchablePublicUserProfileProjection(
+  profile: CanonicalPublicUserProfile,
+): SearchablePublicUserProfileProjection {
+  return {
+    ...profile,
+    displayNameLower: normalizePublicProfileSearchText(profile.displayName),
+    firstNameLower: profile.firstName ? normalizePublicProfileSearchText(profile.firstName) : null,
+    lastNameLower: profile.lastName ? normalizePublicProfileSearchText(profile.lastName) : null,
+  };
+}
+
 export function isCanonicalPublicProfile(value: unknown, userId?: string) {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
@@ -108,4 +129,15 @@ export function isCanonicalPublicProfile(value: unknown, userId?: string) {
     record.displayName === displayName && canonicalName?.displayName === displayName &&
     (record.photoURL === photoURL || (record.photoURL == null && photoURL === null)),
   );
+}
+
+export function isSearchablePublicProfileProjection(value: unknown, userId?: string) {
+  if (!isCanonicalPublicProfile(value, userId) || !value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  const canonical = resolveCanonicalPublicProfile(String(record.userId), record);
+  if (!canonical) return false;
+  const expected = toSearchablePublicUserProfileProjection(canonical);
+  return record.displayNameLower === expected.displayNameLower &&
+    record.firstNameLower === expected.firstNameLower &&
+    record.lastNameLower === expected.lastNameLower;
 }

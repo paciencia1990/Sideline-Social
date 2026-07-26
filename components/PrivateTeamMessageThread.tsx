@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { MoreHorizontal } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
+import { MessageActionsModal, type MessageModalAction } from "@/components/MessageActionsModal";
 import { VoiceMemoComposer } from "@/components/VoiceMemoComposer";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { Card } from "@/components/Card";
@@ -13,6 +14,7 @@ import {
   createClientMessageId,
   deletePrivateTeamMessage,
   finalizePrivateVoiceMessage,
+  hidePrivateTeamMessageForCurrentUser,
   listenToPrivateTeamConversation,
   listenToPrivateTeamMessages,
   markPrivateTeamConversationRead,
@@ -22,9 +24,8 @@ import {
 } from "@/services/teamPrivateMessageService";
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
+import { clearPersistedVoicePlaybackArtifacts } from "@/services/voicePlaybackCleanupService";
 import { reportTeamContent, type TeamContentReportReason } from "@/services/contentModerationService";
-import { showContentReportPrompt } from "@/utils/contentReporting";
-import { invalidateVoicePlaybackSource } from "@/utils/voicePlaybackCore";
 import type { LocalVoiceMemoDraft, TeamPrivateConversation, TeamPrivateMessage } from "@/types/teamVoiceMessaging";
 
 export function PrivateTeamMessageThread({ conversationId, role }: { conversationId: string; role: "coach" | "parent" }) {
@@ -40,8 +41,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [sendPhase, setSendPhase] = useState<"uploading" | "finalizing" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reportingMessageId, setReportingMessageId] = useState<string | null>(null);
-  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<TeamPrivateMessage | null>(null);
   const voiceAudioAvailable = isTeamVoiceAudioAvailable();
   const clientId = useRef(createClientMessageId());
   const uploadCancel = useRef<(() => boolean) | null>(null);
@@ -129,24 +129,15 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   }, [caption, conversation, conversationId, readOnly, sending, t, voiceDraft]);
 
   const submitReport = useCallback(async (messageId: string, reason: TeamContentReportReason) => {
-    if (!conversation?.teamId || reportingMessageId) return;
-    setReportingMessageId(messageId);
-    setError(null);
-    try {
-      await reportTeamContent({
-        kind: "privateTeamMessage",
-        teamId: conversation.teamId,
-        parentId: conversationId,
-        contentId: messageId,
-        reason,
-      });
-      setError(t("moderation.reportSentBody"));
-    } catch {
-      setError(t("moderation.reportError"));
-    } finally {
-      setReportingMessageId(null);
-    }
-  }, [conversation?.teamId, conversationId, reportingMessageId, t]);
+    if (!conversation?.teamId) throw new Error("missing_team");
+    await reportTeamContent({
+      kind: "privateTeamMessage",
+      teamId: conversation.teamId,
+      parentId: conversationId,
+      contentId: messageId,
+      reason,
+    });
+  }, [conversation?.teamId, conversationId]);
 
   const deleteMessage = useCallback(async (message: TeamPrivateMessage) => {
     if (
@@ -155,55 +146,76 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
       message.senderUserId !== auth.currentUser?.uid
     ) return;
     deleteInFlight.current = true;
-    setDeletingMessageId(message.id);
     setError(null);
     try {
-      await deletePrivateTeamMessage(conversationId, message.id);
       if (message.voiceMemo) {
-        invalidateVoicePlaybackSource({
+        await clearPersistedVoicePlaybackArtifacts({
           kind: "persisted-message",
           messageId: message.id,
           messageKind: "privateMessage",
           storagePath: message.voiceMemo.storagePath,
         });
       }
+      await deletePrivateTeamMessage(conversationId, message.id);
     } catch {
-      setError(t("teamMessages.deleteError"));
+      throw new Error("delete_failed");
     } finally {
       deleteInFlight.current = false;
-      setDeletingMessageId(null);
     }
-  }, [conversationId, t]);
+  }, [conversationId]);
 
-  const confirmDeleteMessage = useCallback((message: TeamPrivateMessage) => {
-    Alert.alert(
-      t("teamMessages.deleteConfirmTitle"),
-      t("teamMessages.deleteConfirmBody"),
-      [
-        { text: t("common.cancel"), style: "cancel" },
-        {
-          text: t("teamMessages.delete"),
-          style: "destructive",
-          onPress: () => { void deleteMessage(message); },
-        },
-      ],
-    );
-  }, [deleteMessage, t]);
+  const hideMessage = useCallback(async (message: TeamPrivateMessage) => {
+    if (deleteInFlight.current || message.senderUserId === auth.currentUser?.uid) return;
+    deleteInFlight.current = true;
+    setError(null);
+    try {
+      if (message.voiceMemo) {
+        await clearPersistedVoicePlaybackArtifacts({
+          kind: "persisted-message",
+          messageId: message.id,
+          messageKind: "privateMessage",
+          storagePath: message.voiceMemo.storagePath,
+        });
+      }
+      await hidePrivateTeamMessageForCurrentUser(conversationId, message.id);
+    } catch {
+      throw new Error("hide_failed");
+    } finally {
+      deleteInFlight.current = false;
+    }
+  }, [conversationId]);
 
-  const showOwnMessageActions = useCallback((message: TeamPrivateMessage) => {
-    Alert.alert(
-      t("teamMessages.messageActions"),
-      undefined,
-      [
-        { text: t("common.cancel"), style: "cancel" },
-        {
-          text: t("teamMessages.deleteMessage"),
-          style: "destructive",
-          onPress: () => confirmDeleteMessage(message),
+  const selectedMine = actionMessage?.senderUserId === auth.currentUser?.uid;
+  const selectedActions = useMemo<MessageModalAction[]>(() => {
+    if (!actionMessage) return [];
+    if (selectedMine) {
+      if (actionMessage.isDeleted) return [];
+      return [{
+        confirmation: {
+          body: t("teamMessages.deleteForEveryoneBody"),
+          confirmLabel: t("common.delete"),
+          title: t("teamMessages.deleteForEveryoneTitle"),
         },
-      ],
-    );
-  }, [confirmDeleteMessage, t]);
+        destructive: true,
+        errorMessage: t("teamMessages.deleteError"),
+        id: "delete-for-everyone",
+        label: t("teamMessages.deleteForEveryone"),
+        onPress: () => deleteMessage(actionMessage),
+      }];
+    }
+    return [{
+      confirmation: {
+        body: t("teamMessages.deleteForMeBody"),
+        confirmLabel: t("common.delete"),
+        title: t("teamMessages.deleteForMeTitle"),
+      },
+      destructive: true,
+      errorMessage: t("teamMessages.deleteError"),
+      id: "delete-for-me",
+      label: t("teamMessages.deleteForMe"),
+      onPress: () => hideMessage(actionMessage),
+    }];
+  }, [actionMessage, deleteMessage, hideMessage, selectedMine, t]);
 
   return (
     <View style={styles.container}>
@@ -225,17 +237,14 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
             <View key={message.id} style={[styles.bubble, message.contentType === "voice" && !message.isDeleted && styles.voiceBubble, mine ? styles.mine : styles.theirs]}>
               <View style={styles.messageHeader}>
                 <Text style={styles.sender}>{mine ? t("teamMessages.you") : otherName}</Text>
-                {mine && !message.isDeleted ? (
+                {(mine ? !message.isDeleted : true) ? (
                   <TouchableOpacity
                     accessibilityLabel={t("teamMessages.messageActions")}
                     accessibilityRole="button"
-                    disabled={Boolean(deletingMessageId)}
-                    onPress={() => showOwnMessageActions(message)}
+                    onPress={() => setActionMessage(message)}
                     style={styles.messageActions}
                   >
-                    {deletingMessageId === message.id
-                      ? <ActivityIndicator color={Colors.primary} size="small" />
-                      : <MoreHorizontal accessible={false} color={Colors.primary} size={20} />}
+                    <MoreHorizontal accessible={false} color={Colors.primary} size={20} />
                   </TouchableOpacity>
                 ) : null}
               </View>
@@ -258,20 +267,24 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
                 ? <VoiceMemoUnavailable />
                 : <Text style={styles.messageText}>{message.text}</Text>}
               {!message.isDeleted && message.caption ? <Text style={styles.caption}>{message.caption}</Text> : null}
-              {!message.isDeleted && !mine ? (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  disabled={Boolean(reportingMessageId)}
-                  onPress={() => showContentReportPrompt(t, (reason) => { void submitReport(message.id, reason); })}
-                  style={styles.report}
-                >
-                  <Text style={styles.reportText}>{reportingMessageId === message.id ? t("moderation.reporting") : t("moderation.reportContent")}</Text>
-                </TouchableOpacity>
-              ) : null}
             </View>
           );
         })}
       </View>
+
+      <MessageActionsModal
+        actions={selectedActions}
+        onDismiss={() => setActionMessage(null)}
+        report={!selectedMine && actionMessage && !actionMessage.isDeleted
+          ? {
+            errorMessage: t("moderation.reportError"),
+            onSubmit: (reason) => submitReport(actionMessage.id, reason),
+            successBody: t("moderation.reportSentBody"),
+            successTitle: t("moderation.reportSentTitle"),
+          }
+          : undefined}
+        visible={Boolean(actionMessage)}
+      />
 
       {!readOnly ? (
         <Card style={styles.composer}>
@@ -343,6 +356,4 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.5 },
   cancel: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   hidden: { display: "none" },
-  report: { alignSelf: "flex-start", justifyContent: "center", minHeight: 44, paddingRight: Spacing.md },
-  reportText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 12 },
 });

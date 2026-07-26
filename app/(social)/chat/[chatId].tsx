@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, type FlatList as FlatListType } from "react-native";
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, type FlatList as FlatListType } from "react-native";
 import { ArrowLeft, MoreHorizontal, Send } from "lucide-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { MessageActionsModal, type MessageModalAction } from "@/components/MessageActionsModal";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -39,6 +40,7 @@ export default function FriendConversationScreen() {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [errorKey, setErrorKey] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<FriendChatMessage | null>(null);
 
   useEffect(() => {
     if (authLoading) return;
@@ -100,16 +102,24 @@ export default function FriendConversationScreen() {
     finally { setLoadingEarlier(false); }
   }, [access, chatId, hasMore, loadingEarlier, messages, user?.uid]);
 
-  const messageActions = (message: FriendChatMessage) => {
-    if (!chatId || message.messageType === "system" || message.status === "removed") return;
-    const mine = message.senderUserId === user?.uid;
-    Alert.alert(mine ? t("chat.messageOptions") : t("chat.reportMessageTitle"), mine ? t("chat.messageOptionsBody") : t("chat.reportMessageBody"), [
-      { text: t("common.cancel"), style: "cancel" },
-      mine
-        ? { text: t("chat.removeMessage"), style: "destructive", onPress: () => void removeOwnFriendChatMessage(chatId, message.messageId).catch(() => setErrorKey("chat.tryAgain")) }
-        : { text: t("chat.report"), style: "destructive", onPress: () => void reportFriendChatMessage(chatId, message.messageId).then(() => Alert.alert(t("chat.reportSentTitle"), t("chat.reportSentBody"))).catch(() => setErrorKey("chat.tryAgain")) },
-    ]);
-  };
+  const selectedMine = actionMessage?.senderUserId === user?.uid;
+  const selectedActions = useMemo<MessageModalAction[]>(() => {
+    if (!chatId || !actionMessage || !selectedMine || actionMessage.status === "removed") return [];
+    return [{
+      confirmation: {
+        body: t("teamMessages.deleteForEveryoneBody"),
+        confirmLabel: t("common.delete"),
+        title: t("teamMessages.deleteForEveryoneTitle"),
+      },
+      destructive: true,
+      errorMessage: t("teamMessages.deleteError"),
+      id: "delete-for-everyone",
+      label: t("teamMessages.deleteForEveryone"),
+      onPress: async () => {
+        await removeOwnFriendChatMessage(chatId, actionMessage.messageId);
+      },
+    }];
+  }, [actionMessage, chatId, selectedMine, t]);
 
   if (authLoading || loading) return <ScreenWrapper><View style={styles.center}><ActivityIndicator color={Colors.primary} /><Text style={styles.body}>{t("chat.loadingConversation")}</Text></View></ScreenWrapper>;
   if (!access) return <ScreenWrapper><View style={styles.center}><Text style={styles.title}>{t("chat.cannotOpenTitle")}</Text><Text style={styles.body}>{t(errorKey ?? "chat.noAccess")}</Text><TouchableOpacity accessibilityRole="button" onPress={() => router.replace("/(social)/chat")} style={styles.primary}><Text style={styles.primaryText}>{t("chat.backToChats")}</Text></TouchableOpacity></View></ScreenWrapper>;
@@ -133,7 +143,7 @@ export default function FriendConversationScreen() {
           ListHeaderComponent={hasMore ? <TouchableOpacity accessibilityRole="button" disabled={loadingEarlier} onPress={() => void loadEarlier()} style={styles.loadEarlier}>{loadingEarlier ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.loadEarlierText}>{t("chat.loadEarlier")}</Text>}</TouchableOpacity> : null}
           ListEmptyComponent={<View style={styles.center}><Text style={styles.emptyTitle}>{t("chat.noMessages")}</Text><Text style={styles.body}>{t("chat.noMessagesBody")}</Text></View>}
           onContentSizeChange={() => { if (messages.length <= 50) listRef.current?.scrollToEnd({ animated: false }); }}
-          renderItem={({ item }) => <MessageBubble isMine={item.senderUserId === user?.uid} message={item} onPress={() => messageActions(item)} />}
+          renderItem={({ item }) => <MessageBubble isMine={item.senderUserId === user?.uid} message={item} onActions={() => setActionMessage(item)} />}
         />
         <View style={styles.composer}>
           <View style={styles.inputWrap}>
@@ -143,11 +153,26 @@ export default function FriendConversationScreen() {
           <TouchableOpacity accessibilityLabel={sending ? t("chat.sending") : t("chat.send")} accessibilityRole="button" accessibilityState={{ busy: sending, disabled: !canSend || sending || !trimmedLength || draft.length > CHAT_MESSAGE_LIMIT }} disabled={!canSend || sending || !trimmedLength || draft.length > CHAT_MESSAGE_LIMIT} onPress={() => void send()} style={[styles.send, (!canSend || sending || !trimmedLength || draft.length > CHAT_MESSAGE_LIMIT) && styles.disabled]}>{sending ? <ActivityIndicator color={Colors.surface} /> : <Send color={Colors.surface} size={18} />}</TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+      <MessageActionsModal
+        actions={selectedActions}
+        onDismiss={() => setActionMessage(null)}
+        report={!selectedMine && actionMessage?.status === "active" && chatId
+          ? {
+            errorMessage: t("moderation.reportError"),
+            onSubmit: async (reason) => {
+              await reportFriendChatMessage(chatId, actionMessage.messageId, reason);
+            },
+            successBody: t("moderation.reportSentBody"),
+            successTitle: t("moderation.reportSentTitle"),
+          }
+          : undefined}
+        visible={Boolean(actionMessage)}
+      />
     </ScreenWrapper>
   );
 }
 
-function MessageBubble({ message, isMine, onPress }: { message: FriendChatMessage; isMine: boolean; onPress: () => void }) {
+function MessageBubble({ message, isMine, onActions }: { message: FriendChatMessage; isMine: boolean; onActions: () => void }) {
   const { t } = useTranslation();
   if (message.messageType === "system") return <Text style={styles.systemMessage}>{message.text}</Text>;
   const time = message.createdAt?.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) ?? "";
@@ -155,7 +180,7 @@ function MessageBubble({ message, isMine, onPress }: { message: FriendChatMessag
     ? t("chat.you")
     : message.senderDisplayName || t(message.senderProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember");
   const text = message.status === "removed" ? t("chat.messageRemoved") : message.text;
-  return <TouchableOpacity accessibilityLabel={t("chat.messageAccessibility", { sender, text, time })} accessibilityHint={message.status === "active" ? t("chat.messageActionsHint") : undefined} accessibilityRole="button" activeOpacity={0.8} disabled={message.status === "removed"} onLongPress={onPress} style={[styles.messageRow, isMine && styles.mineRow]}><View style={[styles.bubble, isMine && styles.mineBubble]}>{!isMine && message.senderDisplayName ? <Text style={styles.sender}>{message.senderDisplayName}</Text> : null}<Text style={[styles.messageText, isMine && styles.mineText, message.status === "removed" && styles.removed]}>{text}</Text><Text style={[styles.time, isMine && styles.mineTime]}>{time}</Text></View></TouchableOpacity>;
+  return <View accessibilityLabel={t("chat.messageAccessibility", { sender, text, time })} style={[styles.messageRow, isMine && styles.mineRow]}><View style={[styles.bubble, isMine && styles.mineBubble]}>{!isMine && message.senderDisplayName ? <Text style={styles.sender}>{message.senderDisplayName}</Text> : null}<View style={styles.messageTop}><Text style={[styles.messageText, isMine && styles.mineText, message.status === "removed" && styles.removed]}>{text}</Text>{message.status === "active" ? <TouchableOpacity accessibilityLabel={t("teamMessages.messageActions")} accessibilityRole="button" onPress={onActions} style={styles.messageMenu}><MoreHorizontal accessible={false} color={isMine ? Colors.surface : Colors.primary} size={20} /></TouchableOpacity> : null}</View><Text style={[styles.time, isMine && styles.mineTime]}>{time}</Text></View></View>;
 }
 
 function errorTranslationKey(error: ReturnType<typeof mapFriendChatError>) {
@@ -179,7 +204,9 @@ const styles = StyleSheet.create({
   messages: { gap: Spacing.sm, padding: Spacing.md }, emptyMessages: { flexGrow: 1 }, loadEarlier: { alignItems: "center", minHeight: 40, justifyContent: "center" }, loadEarlierText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   emptyTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17 }, messageRow: { alignItems: "flex-start" }, mineRow: { alignItems: "flex-end" },
   bubble: { backgroundColor: Colors.surface, borderRadius: Radius.button, maxWidth: "82%", paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, ...Shadow.card }, mineBubble: { backgroundColor: Colors.primary },
-  sender: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 11, marginBottom: 2 }, messageText: { color: Colors.textHeading, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 21 }, mineText: { color: Colors.surface }, removed: { fontStyle: "italic", opacity: 0.75 },
+  sender: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 11, marginBottom: 2 }, messageText: { color: Colors.textHeading, flexShrink: 1, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 21 }, mineText: { color: Colors.surface }, removed: { fontStyle: "italic", opacity: 0.75 },
+  messageTop: { alignItems: "flex-start", flexDirection: "row", gap: Spacing.xs },
+  messageMenu: { alignItems: "center", justifyContent: "center", marginRight: -Spacing.sm, marginTop: -Spacing.xs, minHeight: 36, minWidth: 36 },
   time: { alignSelf: "flex-end", color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 10, marginTop: 3 }, mineTime: { color: Colors.surface, opacity: 0.8 }, systemMessage: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12, padding: Spacing.sm, textAlign: "center" },
   composer: { alignItems: "flex-end", backgroundColor: Colors.surface, borderTopColor: Colors.secondary, borderTopWidth: 1, flexDirection: "row", gap: Spacing.sm, padding: Spacing.sm }, inputWrap: { flex: 1 },
   input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, fontSize: 15, maxHeight: 110, minHeight: 44, paddingHorizontal: Spacing.md, paddingRight: 42, paddingVertical: 10 }, counter: { bottom: 6, color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 10, position: "absolute", right: 9 },

@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { assertFails, assertSucceeds, initializeTestEnvironment } = require("@firebase/rules-unit-testing");
-const { Timestamp, collection, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, where } = require("firebase/firestore");
+const { Timestamp, collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, where } = require("firebase/firestore");
 
 const projectId = "sideline-team-messages-rules-test";
 const rules = fs.readFileSync(path.join(process.cwd(), "firestore.rules"), "utf8");
@@ -25,6 +25,9 @@ async function seed(testEnv) {
     await setDoc(doc(db, "teamPrivateConversations", "conversation-1", "members", "parent"), { userId: "parent", role: "parent", unreadCount: 1 });
     await setDoc(doc(db, "teamPrivateConversations", "conversation-1", "messages", "message-1"), {
       messageId: "message-1", conversationId: "conversation-1", teamId: "team-1", senderUserId: "coach", senderRole: "coach", contentType: "text", text: "Private", createdAt: now(),
+    });
+    await setDoc(doc(db, "teamPrivateConversations", "conversation-1", "members", "parent", "hiddenMessages", "message-1"), {
+      messageId: "message-1", userId: "parent", hiddenAt: now(),
     });
     await setDoc(doc(db, "teamVoiceUploadReservations", "reservation-1"), { userId: "coach", status: "pending" });
     await setDoc(doc(db, "teamMessageRateLimits", "coach_voice"), { userId: "coach", count: 1 });
@@ -49,6 +52,14 @@ async function run() {
     }
     await assertSucceeds(getDoc(doc(parent, "teamPrivateConversations", "conversation-1", "members", "parent")));
     await assertFails(getDoc(doc(parent, "teamPrivateConversations", "conversation-1", "members", "coach")));
+    const parentHidden = doc(parent, "teamPrivateConversations", "conversation-1", "members", "parent", "hiddenMessages", "message-1");
+    await assertSucceeds(getDoc(parentHidden));
+    await assertSucceeds(getDocs(collection(parent, "teamPrivateConversations", "conversation-1", "members", "parent", "hiddenMessages")));
+    await assertFails(getDoc(doc(coach, "teamPrivateConversations", "conversation-1", "members", "parent", "hiddenMessages", "message-1")));
+    await assertFails(getDoc(doc(parent, "teamPrivateConversations", "conversation-1", "members", "coach", "hiddenMessages", "message-1")));
+    await assertFails(setDoc(doc(parent, "teamPrivateConversations", "conversation-1", "members", "parent", "hiddenMessages", "injected"), { messageId: "injected" }));
+    await assertFails(updateDoc(parentHidden, { messageId: "forged" }));
+    await assertFails(deleteDoc(parentHidden));
     await assertFails(getDoc(doc(outsider, "teamPrivateConversations", "conversation-1")));
     await assertFails(getDoc(doc(staff, "teamPrivateConversations", "conversation-1")));
     await assertFails(getDocs(collection(outsider, "teamPrivateConversations", "conversation-1", "messages")));

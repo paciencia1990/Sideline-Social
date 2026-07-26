@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { ArrowLeft, MessageCircle, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { MessageActionsModal, type MessageModalAction, type MessageReportReason } from "@/components/MessageActionsModal";
 import { MessageKeyboardAwareScrollView } from "@/components/MessageKeyboardAwareScrollView";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -27,8 +28,11 @@ import {
   type TeamAnnouncement,
 } from "@/services/teamMessageService";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
-import { reportTeamContent, type TeamContentReportReason } from "@/services/contentModerationService";
-import { showContentReportPrompt } from "@/utils/contentReporting";
+import { reportTeamContent } from "@/services/contentModerationService";
+
+type MessageActionTarget =
+  | { contentId: string; kind: "announcement"; mine: false }
+  | { kind: "announcementReply"; mine: boolean; reply: AnnouncementReply };
 
 export default function ParentAnnouncementScreen() {
   const { i18n, t } = useTranslation();
@@ -47,8 +51,7 @@ export default function ParentAnnouncementScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [sendingQuickReplyId, setSendingQuickReplyId] = useState<QuickReplyId | null>(null);
-  const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
-  const [reportingContentId, setReportingContentId] = useState<string | null>(null);
+  const [actionTarget, setActionTarget] = useState<MessageActionTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
   const replyDeletionInFlight = useRef(false);
@@ -166,61 +169,46 @@ export default function ParentAnnouncementScreen() {
     }
   }, [announcement?.allowReplies, announcementId, t, teamId]);
 
-  const confirmDeleteReply = useCallback((reply: AnnouncementReply) => {
+  const deleteReply = useCallback(async (reply: AnnouncementReply) => {
     if (reply.isDeleted || reply.userId !== auth.currentUser?.uid || replyDeletionInFlight.current) return;
-    Alert.alert(
-      t("teamReplies.deleteOwnTitle"),
-      t("teamReplies.deleteOwnBody"),
-      [
-        { text: t("common.cancel"), style: "cancel" },
-        {
-          text: t("teamReplies.delete"),
-          style: "destructive",
-          onPress: () => {
-            if (replyDeletionInFlight.current) return;
-            replyDeletionInFlight.current = true;
-            setDeletingReplyId(reply.id);
-            setError(null);
-            void deleteAnnouncementReply(teamId, announcementId, reply.id)
-              .then(() => setReplies((current) => current.map((item) => item.id === reply.id
-                ? { ...item, body: "", deletedBy: auth.currentUser?.uid ?? null, isDeleted: true }
-                : item)))
-              .catch((nextError) => {
-                logOperationError("deleteReply", nextError);
-                setError(t("teamReplies.deleteError"));
-              })
-              .finally(() => {
-                replyDeletionInFlight.current = false;
-                setDeletingReplyId(null);
-              });
-          },
-        },
-      ],
-    );
-  }, [announcementId, t, teamId]);
+    replyDeletionInFlight.current = true;
+    setError(null);
+    try {
+      await deleteAnnouncementReply(teamId, announcementId, reply.id);
+      setReplies((current) => current.map((item) => item.id === reply.id
+        ? { ...item, body: "", deletedBy: auth.currentUser?.uid ?? null, isDeleted: true }
+        : item));
+    } catch (nextError) {
+      logOperationError("deleteReply", nextError);
+      throw nextError;
+    } finally {
+      replyDeletionInFlight.current = false;
+    }
+  }, [announcementId, teamId]);
 
   const submitReport = useCallback(async (
     kind: "announcement" | "announcementReply",
     contentId: string,
-    reason: TeamContentReportReason,
+    reason: MessageReportReason,
   ) => {
-    if (reportingContentId) return;
-    setReportingContentId(contentId);
-    setError(null);
-    try {
-      await reportTeamContent({ kind, teamId, parentId: announcementId, contentId, reason });
-      Alert.alert(t("moderation.reportSentTitle"), t("moderation.reportSentBody"));
-    } catch (nextError) {
-      logOperationError("reportContent", nextError);
-      setError(t("moderation.reportError"));
-    } finally {
-      setReportingContentId(null);
-    }
-  }, [announcementId, reportingContentId, t, teamId]);
+    await reportTeamContent({ kind, teamId, parentId: announcementId, contentId, reason });
+  }, [announcementId, teamId]);
 
-  const confirmReport = useCallback((kind: "announcement" | "announcementReply", contentId: string) => {
-    showContentReportPrompt(t, (reason) => { void submitReport(kind, contentId, reason); });
-  }, [submitReport, t]);
+  const selectedActions = useMemo<MessageModalAction[]>(() => {
+    if (actionTarget?.kind !== "announcementReply" || !actionTarget.mine) return [];
+    return [{
+      confirmation: {
+        body: t("teamMessages.deleteForEveryoneBody"),
+        confirmLabel: t("common.delete"),
+        title: t("teamMessages.deleteForEveryoneTitle"),
+      },
+      destructive: true,
+      errorMessage: t("teamReplies.deleteError"),
+      id: "delete-for-everyone",
+      label: t("teamMessages.deleteForEveryone"),
+      onPress: () => deleteReply(actionTarget.reply),
+    }];
+  }, [actionTarget, deleteReply, t]);
 
   const childNames = summary ? getTeamChildNames(summary) : [];
   const childName = childNames.length === 0
@@ -263,11 +251,23 @@ export default function ParentAnnouncementScreen() {
         {announcement ? (
           <>
             <Card style={styles.announcementCard}>
-              {announcement.isDeleted
-                ? <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>{t("teamMessages.messageDeleted")}</Text>
-                : announcement.title
-                  ? <Text style={styles.announcementTitle}>{announcement.title}</Text>
-                  : null}
+              <View style={styles.announcementTop}>
+                {announcement.isDeleted
+                  ? <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>{t("teamMessages.messageDeleted")}</Text>
+                  : announcement.title
+                    ? <Text style={styles.announcementTitle}>{announcement.title}</Text>
+                    : <View style={styles.announcementTitle} />}
+                {!announcement.isDeleted && announcement.createdBy !== auth.currentUser?.uid ? (
+                  <TouchableOpacity
+                    accessibilityLabel={t("teamMessages.messageActions")}
+                    accessibilityRole="button"
+                    onPress={() => setActionTarget({ contentId: announcement.id, kind: "announcement", mine: false })}
+                    style={styles.replyMenuButton}
+                  >
+                    <MoreVertical accessible={false} color={Colors.primary} size={20} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
               {!announcement.isDeleted ? <Text style={styles.announcementBody}>{announcement.body}</Text> : null}
               {!announcement.isDeleted && announcement.contentType === "voice" && announcement.voiceMemo ? (
                 <VoiceMemoPlayer
@@ -285,16 +285,6 @@ export default function ParentAnnouncementScreen() {
                 <Text style={styles.metaText}>{announcement.createdByName || t(announcement.authorProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
                 <Text style={styles.metaText}>{formatDateTime(announcement.createdAt, i18n.language)}</Text>
               </View>
-              {!announcement.isDeleted && announcement.createdBy !== auth.currentUser?.uid ? (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  disabled={Boolean(reportingContentId)}
-                  onPress={() => confirmReport("announcement", announcement.id)}
-                  style={styles.reportButton}
-                >
-                  <Text style={styles.reportButtonText}>{t("moderation.reportContent")}</Text>
-                </TouchableOpacity>
-              ) : null}
             </Card>
 
             <Card style={styles.repliesCard}>
@@ -312,16 +302,16 @@ export default function ParentAnnouncementScreen() {
                     </View>
                     {!reply.isDeleted && reply.userId ? (
                       <TouchableOpacity
-                        accessibilityLabel={reply.userId === auth.currentUser?.uid ? t("teamReplies.deleteMenuOwn") : t("moderation.reportContent")}
+                        accessibilityLabel={t("teamMessages.messageActions")}
                         accessibilityRole="button"
-                        accessibilityState={{ busy: deletingReplyId === reply.id || reportingContentId === reply.id, disabled: Boolean(deletingReplyId || reportingContentId) }}
-                        disabled={Boolean(deletingReplyId || reportingContentId)}
-                        onPress={() => reply.userId === auth.currentUser?.uid ? confirmDeleteReply(reply) : confirmReport("announcementReply", reply.id)}
+                        onPress={() => setActionTarget({
+                          kind: "announcementReply",
+                          mine: reply.userId === auth.currentUser?.uid,
+                          reply,
+                        })}
                         style={styles.replyMenuButton}
                       >
-                        {deletingReplyId === reply.id || reportingContentId === reply.id
-                          ? <ActivityIndicator color={Colors.primary} size="small" />
-                          : <MoreVertical color={Colors.primary} size={20} />}
+                        <MoreVertical accessible={false} color={Colors.primary} size={20} />
                       </TouchableOpacity>
                     ) : null}
                   </View>
@@ -389,6 +379,23 @@ export default function ParentAnnouncementScreen() {
           </>
         ) : null}
       </MessageKeyboardAwareScrollView>
+      <MessageActionsModal
+        actions={selectedActions}
+        onDismiss={() => setActionTarget(null)}
+        report={actionTarget && !actionTarget.mine
+          ? {
+            errorMessage: t("moderation.reportError"),
+            onSubmit: (reason) => submitReport(
+              actionTarget.kind,
+              actionTarget.kind === "announcement" ? actionTarget.contentId : actionTarget.reply.id,
+              reason,
+            ),
+            successBody: t("moderation.reportSentBody"),
+            successTitle: t("moderation.reportSentTitle"),
+          }
+          : undefined}
+        visible={Boolean(actionTarget)}
+      />
     </ScreenWrapper>
   );
 }
@@ -435,7 +442,8 @@ const styles = StyleSheet.create({
   outlineButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
   announcementCard: { borderLeftColor: Colors.accentGold, borderLeftWidth: 4, gap: Spacing.md },
-  announcementTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 20 },
+  announcementTop: { alignItems: "flex-start", flexDirection: "row", justifyContent: "space-between" },
+  announcementTitle: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodyBold, fontSize: 20 },
   announcementBody: { color: Colors.textHeading, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 23 },
   metaPanel: { borderTopColor: Colors.secondary, borderTopWidth: 1, flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, paddingTop: Spacing.sm },
   metaText: { color: Colors.primary, fontFamily: Typography.bodyMedium, fontSize: 12 },
@@ -459,6 +467,4 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold },
   disabledButton: { opacity: 0.55 },
   repliesOffCard: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderWidth: 1 },
-  reportButton: { alignItems: "center", alignSelf: "flex-start", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.md },
-  reportButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold },
 });

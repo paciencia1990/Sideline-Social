@@ -403,7 +403,7 @@ async function removePrivateTeamConversationMemberships(
       }
       await conversationRef.set(update, { merge: true });
     }
-    await member.ref.delete();
+    await firestore.recursiveDelete(member.ref);
     summary.deletedDocuments += 1;
   }
 }

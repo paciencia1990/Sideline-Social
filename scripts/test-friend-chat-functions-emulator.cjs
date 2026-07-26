@@ -53,6 +53,13 @@ async function run() {
   assert.equal((await groupDoc.collection("members").doc(b.uid).get()).data().role, "admin");
 
   const groupMessage = await a.call("sendFriendChatMessage", { conversationId: group.conversationId, text: "Welcome to the group", clientMessageId: "group_message_001" });
+  const messageReport = await b.call("reportFriendChatMessage", {
+    conversationId: group.conversationId,
+    messageId: groupMessage.messageId,
+    reason: "offensive",
+  });
+  assert.equal(messageReport.reported, true);
+  assert.equal((await db.collection("chatModerationReports").doc(messageReport.reportId).get()).data().reason, "offensive");
   await a.call("removeOwnFriendChatMessage", { conversationId: group.conversationId, messageId: groupMessage.messageId });
   const removed = (await groupDoc.collection("messages").doc(groupMessage.messageId).get()).data();
   assert.equal(removed.status, "removed"); assert.equal(removed.text, "");

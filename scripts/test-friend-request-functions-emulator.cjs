@@ -20,6 +20,12 @@ async function createClient(label) {
     call: (name, data = {}) => httpsCallable(callableFunctions, name)(data).then((result) => result.data),
   };
 }
+function createGuestCall(label) {
+  const app = initializeApp({ apiKey: "demo-key", projectId }, label);
+  const callableFunctions = getFunctions(app, "us-central1");
+  connectFunctionsEmulator(callableFunctions, "127.0.0.1", 5001);
+  return (name, data = {}) => httpsCallable(callableFunctions, name)(data).then((result) => result.data);
+}
 function hasCode(code) { return (error) => String(error?.code).includes(code); }
 async function waitFor(check, timeout = 7000) {
   const started = Date.now();
@@ -32,6 +38,7 @@ async function waitFor(check, timeout = 7000) {
 }
 
 async function run() {
+  const guestCall = createGuestCall("request-guest");
   const [a, b, c, outsider, incomplete, unnamed] = await Promise.all(
     ["request-a", "request-b", "request-c", "request-outsider", "request-incomplete", "request-unnamed"].map(createClient),
   );
@@ -43,6 +50,10 @@ async function run() {
     db.collection("users").doc(incomplete.uid).set({ firstName: "Single", lastName: "", displayName: "Single", friendIds: [] }),
     db.collection("users").doc(unnamed.uid).set({ friendIds: [] }),
   ]);
+  await assert.rejects(
+    () => guestCall("getActiveFriendRequests"),
+    hasCode("unauthenticated"),
+  );
 
   const singleNameRequest = await incomplete.call("sendFriendRequest", { targetUserId: c.uid });
   assert.equal(singleNameRequest.status, "pending", "a valid single name is public identity");

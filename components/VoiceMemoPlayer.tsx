@@ -14,6 +14,7 @@ import {
   playVoiceSourceWithOneRefresh,
   probeVoicePlaybackUrl,
   setVoicePlaybackAuthorizationContext,
+  voicePlaybackSourceIdentity,
   type VoicePlaybackFailureStage,
   type VoicePlaybackSource,
 } from "@/utils/voicePlaybackCore";
@@ -284,7 +285,7 @@ function VoiceMemoPlayerAvailable({
     try {
       setLoading(true);
       setVoicePlaybackAuthorizationContext(auth.currentUser?.uid ?? null);
-      await activateVoicePlayback(stop);
+      await activateVoicePlayback(stop, voicePlaybackSourceIdentity(source));
       const generation = ++generationRef.current;
       await playVoiceSourceWithOneRefresh({
         beforeRetry: disposePlayer,

@@ -27,12 +27,14 @@ import {
   getCurrentUserProfile,
   getFriends,
   getFriendRequestGroups,
+  searchParentsByName,
   searchUsers,
   sendFriendRequest,
   subscribeToFriendRequestChanges,
   removeFriend,
   type FriendProfile,
   type FriendRequest,
+  type FriendSearchResult,
   type HydratedIncomingFriendRequest,
   type SuggestedFriendProfile,
 } from "@/services/friendsService";
@@ -211,6 +213,75 @@ function SuggestedConnectionRow({
   );
 }
 
+function SearchResultRow({
+  profile,
+  busy,
+  error,
+  onAdd,
+  onMessage,
+  onRespond,
+}: {
+  profile: FriendSearchResult;
+  busy: boolean;
+  error?: string | null;
+  onAdd: () => void;
+  onMessage: () => void;
+  onRespond: () => void;
+}) {
+  const { t } = useTranslation();
+  const displayName = formatPublicUserName(profile.displayName) ?? t("friends.publicNameUnavailable");
+  const relationshipLabel = profile.relationship === "friends"
+    ? t("friends.searchRelationshipFriends")
+    : profile.relationship === "outgoing-request"
+      ? t("friends.searchRelationshipOutgoing")
+      : profile.relationship === "incoming-request"
+        ? t("friends.searchRelationshipIncoming")
+        : t("friends.searchRelationshipNone");
+  const actionLabel = profile.relationship === "friends"
+    ? t("friends.messageFriend")
+    : profile.relationship === "outgoing-request"
+      ? t("friends.friendRequestSent")
+      : profile.relationship === "incoming-request"
+        ? t("friends.respond")
+        : t("friends.addFriend");
+  const onPress = profile.relationship === "friends"
+    ? onMessage
+    : profile.relationship === "incoming-request"
+      ? onRespond
+      : onAdd;
+  const disabled = busy || profile.relationship === "outgoing-request";
+
+  return (
+    <Card style={styles.personCard}>
+      <Avatar name={displayName} photoURL={profile.photoURL} />
+      <View style={styles.personText}>
+        <Text style={styles.personName}>{displayName}</Text>
+        <Text style={styles.personMeta}>{relationshipLabel}</Text>
+        {error ? <Text accessibilityLiveRegion="polite" style={styles.inlineActionError}>{error}</Text> : null}
+      </View>
+      <TouchableOpacity
+        accessibilityLabel={t("friends.searchResultAction", { action: actionLabel, name: displayName })}
+        accessibilityRole="button"
+        accessibilityState={{ busy, disabled }}
+        activeOpacity={0.82}
+        disabled={disabled}
+        onPress={onPress}
+        style={[styles.searchActionButton, disabled && styles.disabledButton]}
+      >
+        {busy ? (
+          <ActivityIndicator color={Colors.surface} size="small" />
+        ) : (
+          <>
+            {profile.relationship === "friends" ? <MessageCircle size={16} color={Colors.surface} /> : null}
+            {profile.relationship === "none" ? <UserPlus size={16} color={Colors.surface} /> : null}
+            <Text style={styles.searchActionText}>{actionLabel}</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    </Card>
+  );
+}
+
 function RequestRow({
   request,
   onAccept,
@@ -291,6 +362,10 @@ export default function FriendsScreen() {
   const [outgoingExpanded, setOutgoingExpanded] = useState(false);
   const [suggestedUsers, setSuggestedUsers] = useState<SuggestedFriendProfile[]>([]);
   const [searchText, setSearchText] = useState("");
+  const [searchResults, setSearchResults] = useState<FriendSearchResult[]>([]);
+  const [searchCompleted, setSearchCompleted] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchRefreshVersion, setSearchRefreshVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -298,6 +373,7 @@ export default function FriendsScreen() {
   const [actionError, setActionError] = useState<{ actionId: string; message: string } | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const actionsInFlight = useRef(new Set<string>());
+  const searchRequestSequence = useRef(0);
   const acknowledgedNotificationIds = useRef(new Set<string>());
   const incomingExpansionInitialized = useRef(false);
   const previousIncomingCount = useRef(0);
@@ -305,6 +381,15 @@ export default function FriendsScreen() {
   const outgoingUserIds = useMemo(
     () => new Set(outgoingRequests.map((request) => request.toUserId)),
     [outgoingRequests]
+  );
+  const normalizedSearchText = useMemo(
+    () => searchText.trim().replace(/\s+/gu, " "),
+    [searchText],
+  );
+  const searchIsReady = useMemo(
+    () => normalizedSearchText.length >= 2 &&
+      (normalizedSearchText.match(/\p{L}/gu)?.length ?? 0) >= 2,
+    [normalizedSearchText],
   );
 
   const loadFriends = useCallback(async () => {
@@ -314,6 +399,9 @@ export default function FriendsScreen() {
       setIncomingRequests([]);
       setOutgoingRequests([]);
       setSuggestedUsers([]);
+      setSearchResults([]);
+      setSearchCompleted(false);
+      setSearchError(null);
       setLoading(false);
       return;
     }
@@ -381,19 +469,38 @@ export default function FriendsScreen() {
   }, [loadFriends, user?.uid]);
 
   useEffect(() => {
-    if (!user) return;
+    const requestSequence = ++searchRequestSequence.current;
+    setSearchResults([]);
+    setSearchCompleted(false);
+    setSearchError(null);
+    setSearching(false);
+    if (!user || !searchIsReady) return;
 
     const timeout = setTimeout(async () => {
+      if (searchRequestSequence.current !== requestSequence) return;
       setSearching(true);
       try {
-        setSuggestedUsers(await searchUsers(searchText));
+        const results = await searchParentsByName(normalizedSearchText);
+        if (searchRequestSequence.current !== requestSequence) return;
+        setSearchResults(results);
+        setSearchCompleted(true);
+      } catch (nextError) {
+        if (searchRequestSequence.current !== requestSequence) return;
+        logFriendsScreenIssue("searchParentsByName", nextError);
+        setSearchError(t("friends.searchUnavailableBody"));
+        setSearchCompleted(true);
       } finally {
-        setSearching(false);
+        if (searchRequestSequence.current === requestSequence) setSearching(false);
       }
     }, 350);
 
-    return () => clearTimeout(timeout);
-  }, [searchText, user]);
+    return () => {
+      clearTimeout(timeout);
+      if (searchRequestSequence.current === requestSequence) {
+        searchRequestSequence.current += 1;
+      }
+    };
+  }, [normalizedSearchText, searchIsReady, searchRefreshVersion, t, user]);
 
   const runAction = useCallback(
     async (actionId: string, action: () => Promise<void>, failureMessage = t("friends.errorBody")) => {
@@ -404,11 +511,13 @@ export default function FriendsScreen() {
       try {
         await action();
         await loadFriends();
+        setSearchRefreshVersion((current) => current + 1);
         setActionError((current) => current?.actionId === actionId ? null : current);
       } catch (nextError) {
         logFriendsScreenIssue(actionId, nextError);
         if (["friend-request/reverse-pending", "friend-request/no-longer-available"].includes(getFriendsErrorCode(nextError))) {
           await loadFriends();
+          setSearchRefreshVersion((current) => current + 1);
         }
         setActionError({ actionId, message: mapFriendActionError(nextError, failureMessage, t) });
       } finally {
@@ -470,6 +579,44 @@ export default function FriendsScreen() {
     },
     [t]
   );
+
+  const respondToSearchResult = useCallback((profile: FriendSearchResult) => {
+    const request = incomingRequests.find((item) => item.fromUserId === profile.id);
+    if (!request) {
+      setIncomingExpanded(true);
+      setActionError({
+        actionId: `respond:${profile.id}`,
+        message: t("friends.requestNoLongerAvailable"),
+      });
+      void loadFriends();
+      return;
+    }
+    const displayName = formatPublicUserName(profile.displayName) ?? t("friends.publicNameUnavailable");
+    Alert.alert(
+      t("friends.respondToRequest", { name: displayName }),
+      t("friends.friendRequestBody", { name: displayName }),
+      [
+        { text: t("friends.cancel"), style: "cancel" },
+        {
+          text: t("friends.decline"),
+          style: "destructive",
+          onPress: () => void runAction(
+            `decline:${request.id}`,
+            () => declineFriendRequest(request.id),
+            t("friends.declineRequestError"),
+          ),
+        },
+        {
+          text: t("friends.accept"),
+          onPress: () => void runAction(
+            `accept:${request.id}`,
+            () => acceptFriendRequest(request.id),
+            t("friends.acceptRequestError"),
+          ),
+        },
+      ],
+    );
+  }, [incomingRequests, loadFriends, runAction, t]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -533,7 +680,9 @@ export default function FriendsScreen() {
           </Card>
         ) : null}
 
-        {actionError && !actionError.actionId.startsWith("add:") ? (
+        {actionError &&
+          !actionError.actionId.startsWith("add:") &&
+          !actionError.actionId.startsWith("respond:") ? (
           <Card style={styles.errorCard}>
             <Text style={styles.errorTitle}>{t("friends.actionErrorTitle")}</Text>
             <Text style={styles.errorBody}>{actionError.message}</Text>
@@ -656,7 +805,7 @@ export default function FriendsScreen() {
           <EmptyState title={t("friends.emptyTitle")} body={t("friends.emptyBody")} />
         )}
 
-        <SectionTitle title={t("friends.suggested")} />
+        <SectionTitle title={t("friends.findParents")} />
         <View style={styles.searchBox}>
           <Search size={18} color={Colors.textPrimary} />
           <TextInput
@@ -671,6 +820,76 @@ export default function FriendsScreen() {
           {searching ? <ActivityIndicator color={Colors.primary} size="small" /> : null}
         </View>
 
+        {searchText.length > 0 && !searchIsReady ? (
+          <Text accessibilityLiveRegion="polite" style={styles.searchHint}>
+            {t("friends.searchMinimum")}
+          </Text>
+        ) : null}
+
+        {searchIsReady && searchResults.length > 0 ? (
+          <>
+            <SectionTitle title={t("friends.searchResults")} count={searchResults.length} />
+            {searchResults.map((profile) => (
+              <SearchResultRow
+                key={profile.id}
+                profile={profile}
+                busy={
+                  busyAction === `add:${profile.id}` ||
+                  busyAction === `chat:${profile.id}` ||
+                  incomingRequests.some((request) => (
+                    request.fromUserId === profile.id &&
+                    (
+                      busyAction === `accept:${request.id}` ||
+                      busyAction === `decline:${request.id}`
+                    )
+                  ))
+                }
+                error={
+                  actionError?.actionId === `add:${profile.id}` ||
+                  actionError?.actionId === `respond:${profile.id}`
+                    ? actionError.message
+                    : null
+                }
+                onAdd={() => void runAction(
+                  `add:${profile.id}`,
+                  async () => {
+                    const result = await sendFriendRequest(profile.id);
+                    if (result.status === "reversePending") {
+                      throw createFriendsActionError("friend-request/reverse-pending");
+                    }
+                  },
+                  t("friends.friendRequestError"),
+                )}
+                onMessage={() => void openDirectChat(profile)}
+                onRespond={() => respondToSearchResult(profile)}
+              />
+            ))}
+          </>
+        ) : null}
+
+        {searchIsReady && searchCompleted && !searching && !searchError && searchResults.length === 0 ? (
+          <EmptyState
+            title={t("friends.noSearchResultsTitle", { query: normalizedSearchText })}
+            body={t("friends.noSearchResultsBody")}
+          />
+        ) : null}
+
+        {searchIsReady && searchCompleted && searchError ? (
+          <Card style={styles.errorCard}>
+            <Text style={styles.errorTitle}>{t("friends.searchUnavailableTitle")}</Text>
+            <Text style={styles.errorBody}>{searchError}</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              activeOpacity={0.82}
+              onPress={() => setSearchRefreshVersion((current) => current + 1)}
+              style={styles.retryButton}
+            >
+              <Text style={styles.retryText}>{t("friends.retrySearch")}</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : null}
+
+        <SectionTitle title={t("friends.suggested")} />
         {suggestedUsers.length > 0 ? (
           suggestedUsers.map((profile) => {
             const pending = outgoingUserIds.has(profile.id);
@@ -922,6 +1141,29 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodyRegular,
     fontSize: 15,
     minHeight: 48,
+  },
+  searchHint: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.bodyRegular,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  searchActionButton: {
+    alignItems: "center",
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.button,
+    flexDirection: "row",
+    gap: Spacing.xs,
+    justifyContent: "center",
+    minHeight: 42,
+    maxWidth: 142,
+    paddingHorizontal: Spacing.sm,
+  },
+  searchActionText: {
+    color: Colors.surface,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 12,
+    textAlign: "center",
   },
   errorCard: {
     borderColor: Colors.primary,

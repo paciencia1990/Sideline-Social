@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { MessageActionsModal, type MessageModalAction, type MessageReportReason } from "@/components/MessageActionsModal";
 import { MessageKeyboardAwareScrollView } from "@/components/MessageKeyboardAwareScrollView";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -27,6 +28,11 @@ import {
   hasCoachAccess,
   isTeamActive,
 } from "@/services/teamService";
+import { reportTeamContent } from "@/services/contentModerationService";
+
+type MessageActionTarget =
+  | { kind: "announcement"; mine: boolean }
+  | { kind: "announcementReply"; mine: boolean; reply: AnnouncementReply };
 
 export default function AnnouncementThreadScreen() {
   const { t } = useTranslation();
@@ -39,10 +45,9 @@ export default function AnnouncementThreadScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [sendingQuickReplyId, setSendingQuickReplyId] = useState<QuickReplyId | null>(null);
-  const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
   const [canModerateReplies, setCanModerateReplies] = useState(false);
   const [canDeleteAnnouncement, setCanDeleteAnnouncement] = useState(false);
-  const [deletingAnnouncement, setDeletingAnnouncement] = useState(false);
+  const [actionTarget, setActionTarget] = useState<MessageActionTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
   const replyDeletionInFlight = useRef(false);
@@ -128,44 +133,27 @@ export default function AnnouncementThreadScreen() {
     [announcementId, t, teamId],
   );
 
-  const confirmDeleteReply = useCallback((reply: AnnouncementReply) => {
+  const deleteReply = useCallback(async (reply: AnnouncementReply) => {
     const deletingOwnReply = reply.userId === auth.currentUser?.uid;
     if (reply.isDeleted || (!deletingOwnReply && !canModerateReplies) || replyDeletionInFlight.current) return;
-    Alert.alert(
-      t(deletingOwnReply ? "teamReplies.deleteOwnTitle" : "teamReplies.removeOtherTitle"),
-      t(deletingOwnReply ? "teamReplies.deleteOwnBody" : "teamReplies.removeOtherBody"),
-      [
-        { text: t("common.cancel"), style: "cancel" },
-        {
-          text: t(deletingOwnReply ? "teamReplies.delete" : "teamReplies.removeReply"),
-          style: "destructive",
-          onPress: () => {
-            if (replyDeletionInFlight.current) return;
-            replyDeletionInFlight.current = true;
-            setDeletingReplyId(reply.id);
-            setError(null);
-            void deleteAnnouncementReply(teamId, announcementId, reply.id)
-              .then(() => setReplies((current) => current.map((item) => item.id === reply.id
-                ? { ...item, body: "", deletedBy: auth.currentUser?.uid ?? null, isDeleted: true }
-                : item)))
-              .catch((nextError) => {
-                logOperationError("deleteReply", nextError);
-                setError(t("teamReplies.deleteError"));
-              })
-              .finally(() => {
-                replyDeletionInFlight.current = false;
-                setDeletingReplyId(null);
-              });
-          },
-        },
-      ],
-    );
-  }, [announcementId, canModerateReplies, t, teamId]);
+    replyDeletionInFlight.current = true;
+    setError(null);
+    try {
+      await deleteAnnouncementReply(teamId, announcementId, reply.id);
+      setReplies((current) => current.map((item) => item.id === reply.id
+        ? { ...item, body: "", deletedBy: auth.currentUser?.uid ?? null, isDeleted: true }
+        : item));
+    } catch (nextError) {
+      logOperationError("deleteReply", nextError);
+      throw nextError;
+    } finally {
+      replyDeletionInFlight.current = false;
+    }
+  }, [announcementId, canModerateReplies, teamId]);
 
   const performDeleteAnnouncement = useCallback(async () => {
     if (!announcement || announcement.isDeleted || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
     announcementDeletionInFlight.current = true;
-    setDeletingAnnouncement(true);
     setError(null);
     try {
       await deleteTeamAnnouncement(teamId, announcementId);
@@ -184,44 +172,51 @@ export default function AnnouncementThreadScreen() {
         announcementId,
         authorized: canDeleteAnnouncement,
       });
-      setError(t("coach.messages.deleteError"));
+      throw nextError;
     } finally {
       announcementDeletionInFlight.current = false;
-      setDeletingAnnouncement(false);
     }
-  }, [announcement, announcementId, canDeleteAnnouncement, t, teamId]);
+  }, [announcement, announcementId, canDeleteAnnouncement, teamId]);
 
-  const confirmDeleteAnnouncement = useCallback(() => {
-    if (!announcement || announcement.isDeleted || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
-    Alert.alert(
-      t("teamMessages.deleteConfirmTitle"),
-      t("teamMessages.deleteConfirmBody"),
-      [
-        { text: t("common.cancel"), style: "cancel" },
-        {
-          text: t("teamMessages.delete"),
-          style: "destructive",
-          onPress: () => { void performDeleteAnnouncement(); },
-        },
-      ],
-    );
-  }, [announcement, canDeleteAnnouncement, performDeleteAnnouncement, t]);
+  const submitReport = useCallback(async (
+    kind: "announcement" | "announcementReply",
+    contentId: string,
+    reason: MessageReportReason,
+  ) => {
+    await reportTeamContent({ kind, teamId, parentId: announcementId, contentId, reason });
+  }, [announcementId, teamId]);
 
-  const openAnnouncementActions = useCallback(() => {
-    if (!announcement || announcement.isDeleted || !canDeleteAnnouncement || announcementDeletionInFlight.current) return;
-    Alert.alert(
-      t("coach.messages.announcementActions"),
-      undefined,
-      [
-        { text: t("common.cancel"), style: "cancel" },
-        {
-          text: t("teamMessages.deleteMessage"),
-          style: "destructive",
-          onPress: confirmDeleteAnnouncement,
+  const selectedActions = useMemo<MessageModalAction[]>(() => {
+    if (!actionTarget) return [];
+    if (actionTarget.kind === "announcement") {
+      if (!canDeleteAnnouncement) return [];
+      return [{
+        confirmation: {
+          body: t("teamMessages.deleteForEveryoneBody"),
+          confirmLabel: t("common.delete"),
+          title: t("teamMessages.deleteForEveryoneTitle"),
         },
-      ],
-    );
-  }, [announcement, canDeleteAnnouncement, confirmDeleteAnnouncement, t]);
+        destructive: true,
+        errorMessage: t("coach.messages.deleteError"),
+        id: actionTarget.mine ? "delete-for-everyone" : "remove-announcement",
+        label: t(actionTarget.mine ? "teamMessages.deleteForEveryone" : "moderation.removeAnnouncement"),
+        onPress: performDeleteAnnouncement,
+      }];
+    }
+    if (!actionTarget.mine && !canModerateReplies) return [];
+    return [{
+      confirmation: {
+        body: t(actionTarget.mine ? "teamMessages.deleteForEveryoneBody" : "teamReplies.removeOtherBody"),
+        confirmLabel: t(actionTarget.mine ? "common.delete" : "teamReplies.removeReply"),
+        title: t(actionTarget.mine ? "teamMessages.deleteForEveryoneTitle" : "teamReplies.removeOtherTitle"),
+      },
+      destructive: true,
+      errorMessage: t("teamReplies.deleteError"),
+      id: actionTarget.mine ? "delete-for-everyone" : "remove-reply",
+      label: t(actionTarget.mine ? "teamMessages.deleteForEveryone" : "teamReplies.removeReply"),
+      onPress: () => deleteReply(actionTarget.reply),
+    }];
+  }, [actionTarget, canDeleteAnnouncement, canModerateReplies, deleteReply, performDeleteAnnouncement, t]);
 
   return (
     <ScreenWrapper>
@@ -250,21 +245,20 @@ export default function AnnouncementThreadScreen() {
               <Text style={styles.announcementTitle}>
                 {announcement.isDeleted ? t("teamMessages.messageDeleted") : announcement.title}
               </Text>
-              {canDeleteAnnouncement && !announcement.isDeleted ? (
+              {!announcement.isDeleted && (
+                canDeleteAnnouncement || announcement.createdBy !== auth.currentUser?.uid
+              ) ? (
                 <TouchableOpacity
-                  accessibilityLabel={deletingAnnouncement
-                    ? t("teamMessages.deleting")
-                    : t("teamMessages.deleteMessage")}
+                  accessibilityLabel={t("teamMessages.messageActions")}
                   accessibilityRole="button"
-                  accessibilityState={{ busy: deletingAnnouncement, disabled: deletingAnnouncement }}
-                  disabled={deletingAnnouncement}
                   hitSlop={8}
-                  onPress={openAnnouncementActions}
+                  onPress={() => setActionTarget({
+                    kind: "announcement",
+                    mine: announcement.createdBy === auth.currentUser?.uid,
+                  })}
                   style={styles.announcementMenuButton}
                 >
-                  {deletingAnnouncement
-                    ? <ActivityIndicator color={Colors.primary} size="small" />
-                    : <MoreVertical color={Colors.primary} size={22} />}
+                  <MoreVertical accessible={false} color={Colors.primary} size={22} />
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -300,18 +294,18 @@ export default function AnnouncementThreadScreen() {
               <View key={reply.id} style={styles.replyRow}>
                 <View style={styles.replyTopRow}>
                   <Text style={styles.replyName}>{reply.displayName || t(reply.profileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
-                  {!reply.isDeleted && (reply.userId === auth.currentUser?.uid || canModerateReplies) ? (
+                  {!reply.isDeleted && reply.userId ? (
                     <TouchableOpacity
-                      accessibilityLabel={t(reply.userId === auth.currentUser?.uid ? "teamReplies.deleteMenuOwn" : "teamReplies.deleteMenuModerate")}
+                      accessibilityLabel={t("teamMessages.messageActions")}
                       accessibilityRole="button"
-                      accessibilityState={{ busy: deletingReplyId === reply.id, disabled: Boolean(deletingReplyId) }}
-                      disabled={Boolean(deletingReplyId)}
-                      onPress={() => confirmDeleteReply(reply)}
+                      onPress={() => setActionTarget({
+                        kind: "announcementReply",
+                        mine: reply.userId === auth.currentUser?.uid,
+                        reply,
+                      })}
                       style={styles.replyMenuButton}
                     >
-                      {deletingReplyId === reply.id
-                        ? <ActivityIndicator color={Colors.primary} size="small" />
-                        : <MoreVertical color={Colors.primary} size={20} />}
+                      <MoreVertical accessible={false} color={Colors.primary} size={20} />
                     </TouchableOpacity>
                   ) : null}
                 </View>
@@ -362,6 +356,23 @@ export default function AnnouncementThreadScreen() {
           </Card>
         ) : null}
       </MessageKeyboardAwareScrollView>
+      <MessageActionsModal
+        actions={selectedActions}
+        onDismiss={() => setActionTarget(null)}
+        report={actionTarget && !actionTarget.mine
+          ? {
+            errorMessage: t("moderation.reportError"),
+            onSubmit: (reason) => submitReport(
+              actionTarget.kind,
+              actionTarget.kind === "announcement" ? announcementId : actionTarget.reply.id,
+              reason,
+            ),
+            successBody: t("moderation.reportSentBody"),
+            successTitle: t("moderation.reportSentTitle"),
+          }
+          : undefined}
+        visible={Boolean(actionTarget)}
+      />
     </ScreenWrapper>
   );
 }

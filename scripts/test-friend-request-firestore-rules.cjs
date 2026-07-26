@@ -71,8 +71,12 @@ async function run() {
       photoURL: null, updatedAt: now(),
     }));
     await assertFails(updateDoc(doc(senderDb, "publicUserProfiles", "sender"), { displayName: "Spoofed Name" }));
+    await assertFails(getDoc(doc(senderDb, "publicUserSearchRateLimits", "sender")));
+    await assertFails(setDoc(doc(senderDb, "publicUserSearchRateLimits", "sender"), {
+      count: 0, windowStartedAt: now(),
+    }));
 
-    console.log("Friend request participant-read and callable-only mutation rules tests passed.");
+    console.log("Friend request participant-read, public directory, rate-limit, and callable-only mutation rules tests passed.");
   } finally {
     await testEnv.cleanup();
   }
