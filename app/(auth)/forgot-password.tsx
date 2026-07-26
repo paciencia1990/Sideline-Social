@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity } from "react-native";
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { FORGOT_PASSWORD_SUCCESS_ROUTE } from "@/constants/routes";
 import { useAuth } from "@/context/AuthContext";
@@ -35,8 +36,7 @@ export default function ForgotPasswordScreen() {
 
   return (
     <ScreenWrapper>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.flex}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView contentContainerStyle={styles.content}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <ChevronLeft size={24} color={Colors.textHeading} />
           </TouchableOpacity>
@@ -47,8 +47,7 @@ export default function ForgotPasswordScreen() {
           <TouchableOpacity style={styles.button} onPress={handleReset} disabled={loading}>
             {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>{t("auth.sendResetLink")}</Text>}
           </TouchableOpacity>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

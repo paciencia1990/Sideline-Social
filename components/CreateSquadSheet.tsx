@@ -1,7 +1,19 @@
 import React, { useEffect, useState } from "react";
-import { Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { Check, X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { useSquad } from "@/context/SquadContext";
@@ -17,6 +29,7 @@ interface CreateSquadSheetProps {
 
 export function CreateSquadSheet({ isOpen, onClose, userCoords, onSquadCreated }: CreateSquadSheetProps) {
   const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
   const { createSquad, joinSquad } = useSquad();
   const [sportId, setSportId] = useState<SquadSportId | null>(null);
   const [venueName, setVenueName] = useState("");
@@ -92,7 +105,10 @@ export function CreateSquadSheet({ isOpen, onClose, userCoords, onSquadCreated }
 
   return (
     <Modal animationType="slide" onRequestClose={onClose} transparent visible={isOpen}>
-      <View style={styles.backdrop}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={[styles.backdrop, { paddingBottom: insets.bottom }]}
+      >
         <View accessibilityViewIsModal style={styles.sheet}>
           <View style={styles.header}>
             <Text style={styles.title}>{t("squad.createThisSquad")}</Text>
@@ -101,7 +117,12 @@ export function CreateSquadSheet({ isOpen, onClose, userCoords, onSquadCreated }
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <ScrollView
+            contentContainerStyle={styles.form}
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
             <Text style={styles.label}>{t("squad.venue")}</Text>
             <TextInput
               accessibilityLabel={t("squad.venue")}
@@ -145,7 +166,7 @@ export function CreateSquadSheet({ isOpen, onClose, userCoords, onSquadCreated }
             />
           </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

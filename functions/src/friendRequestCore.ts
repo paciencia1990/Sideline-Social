@@ -4,7 +4,7 @@ export type FriendRequestSendStatus =
   | 'reversePending'
   | 'alreadyFriends';
 
-export type FriendRequestStatus = 'pending' | 'accepted' | 'declined' | 'canceled' | 'expired';
+export type FriendRequestStatus = 'pending' | 'accepted' | 'declined' | 'canceled' | 'expired' | 'superseded';
 export const FRIEND_REQUEST_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function normalizeFriendTargetId(value: unknown) {

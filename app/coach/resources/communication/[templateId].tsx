@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Alert, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Send, Share2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -96,7 +97,7 @@ export default function CoachCommunicationTemplateScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <CoachResourceHeader subtitle={localizeCoachText(template.description, locale)} title={localizeCoachText(template.title, locale)} />
 
         {memberships.length > 0 ? (
@@ -145,7 +146,7 @@ export default function CoachCommunicationTemplateScreen() {
           </View>
           <Text style={styles.reviewNote}>{t("coach.resources.reviewBeforeSend")}</Text>
         </Card>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

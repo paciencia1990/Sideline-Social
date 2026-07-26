@@ -66,8 +66,13 @@ async function run() {
   assert.equal(request.toDisplayName, "Bailey Brown", "legacy field casing resolves to a full name");
   assert.equal(request.expiresAt.toMillis() - request.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1000);
   for (const field of ["respondedAt", "acceptedAt", "declinedAt", "canceledAt", "expiredAt"]) assert.equal(request[field], null);
-  assert.equal((await a.call("getActiveFriendRequests")).outgoing.length, 1);
-  assert.equal((await b.call("getActiveFriendRequests")).incoming.length, 1);
+  const senderActive = await a.call("getActiveFriendRequests");
+  const recipientActive = await b.call("getActiveFriendRequests");
+  assert.equal(senderActive.outgoing.length, 1);
+  assert.equal(recipientActive.incoming.length, 1);
+  assert.equal(typeof senderActive.outgoing[0].createdAt, "number", "callable returns epoch milliseconds");
+  assert.equal(typeof senderActive.outgoing[0].expiresAt, "number", "expiry uses the same stable representation");
+  assert.ok(Math.abs(senderActive.outgoing[0].createdAt - Date.now()) < 60_000);
   await assert.rejects(() => c.call("respondToFriendRequest", { requestId: sent.requestId, decision: "declined" }), hasCode("permission-denied"));
 
   assert.equal((await b.call("respondToFriendRequest", { requestId: sent.requestId, decision: "declined" })).status, "declined");
@@ -88,8 +93,23 @@ async function run() {
   request = (await requestRef.get()).data();
   assert.equal(request.status, "accepted");
   assert.ok(request.acceptedAt instanceof admin.firestore.Timestamp);
-  assert.equal((await db.collection("users").doc(a.uid).get()).data().friendIds.includes(b.uid), true);
-  assert.equal((await db.collection("users").doc(b.uid).get()).data().friendIds.includes(a.uid), true);
+  const aFriendIds = (await db.collection("users").doc(a.uid).get()).data().friendIds;
+  const bFriendIds = (await db.collection("users").doc(b.uid).get()).data().friendIds;
+  assert.equal(aFriendIds.filter((friendId) => friendId === b.uid).length, 1, "accept creates one sender friendship");
+  assert.equal(bFriendIds.filter((friendId) => friendId === a.uid).length, 1, "accept creates one recipient friendship");
+  assert.deepEqual((await a.call("getActiveFriendRequests")).outgoing, [], "sender no longer sees accepted request");
+  assert.deepEqual((await b.call("getActiveFriendRequests")).incoming, [], "recipient no longer sees accepted request");
+
+  const staleRequestId = `legacy_${a.uid}__${b.uid}`;
+  const staleNow = admin.firestore.Timestamp.now();
+  await db.collection("friendRequests").doc(staleRequestId).set({
+    fromUserId: a.uid, fromDisplayName: "Alex Anderson", toUserId: b.uid, toDisplayName: "Bailey Brown",
+    status: "pending", createdAt: staleNow, updatedAt: staleNow,
+    expiresAt: admin.firestore.Timestamp.fromMillis(staleNow.toMillis() + (30 * 24 * 60 * 60 * 1000)),
+  });
+  assert.deepEqual((await a.call("getActiveFriendRequests")).outgoing, [], "friendship suppresses stale outgoing request");
+  assert.deepEqual((await b.call("getActiveFriendRequests")).incoming, [], "friendship suppresses stale incoming request");
+  assert.equal((await db.collection("friendRequests").doc(staleRequestId).get()).data().status, "superseded");
   const direct = await a.call("createOrOpenDirectConversation", { friendUserId: b.uid });
   assert.equal(direct.status, "created", "accepted friendship remains Chat-eligible");
 
@@ -98,6 +118,8 @@ async function run() {
   assert.equal((await c.call("cancelFriendRequest", { requestId: cancelable.requestId })).status, "canceled");
   assert.equal((await c.call("cancelFriendRequest", { requestId: cancelable.requestId })).status, "canceled", "cancel retry is idempotent");
   assert.equal((await db.collection("friendRequests").doc(cancelable.requestId).get()).data().status, "canceled");
+  assert.deepEqual((await c.call("getActiveFriendRequests")).outgoing, []);
+  assert.deepEqual((await b.call("getActiveFriendRequests")).incoming, []);
 
   const oldCreatedAt = admin.firestore.Timestamp.fromMillis(Date.now() - 31 * 24 * 60 * 60 * 1000);
   const oldExpiresAt = admin.firestore.Timestamp.fromMillis(oldCreatedAt.toMillis() + 30 * 24 * 60 * 60 * 1000);

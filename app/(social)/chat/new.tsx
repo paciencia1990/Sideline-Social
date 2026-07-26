@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { ArrowLeft, Check, MessageCircle, Users } from "lucide-react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -74,7 +75,7 @@ export default function NewFriendChatScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <TouchableOpacity accessibilityLabel={t("common.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
             <ArrowLeft color={Colors.textHeading} size={22} />
@@ -140,7 +141,7 @@ export default function NewFriendChatScreen() {
             {submitting ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.primaryText}>{t("chat.createChat")}</Text>}
           </TouchableOpacity>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

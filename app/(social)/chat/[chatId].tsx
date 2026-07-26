@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, type FlatList as FlatListType } from "react-native";
+import { ActivityIndicator, FlatList, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, type FlatList as FlatListType } from "react-native";
 import { ArrowLeft, MoreHorizontal, Send } from "lucide-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -32,6 +32,7 @@ export default function FriendConversationScreen() {
   const { chatId: rawChatId } = useLocalSearchParams<{ chatId?: string | string[] }>();
   const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
   const listRef = useRef<FlatListType<FriendChatMessage>>(null);
+  const keyboardVisibleRef = useRef(false);
   const [access, setAccess] = useState<ConversationAccess | null>(null);
   const [messages, setMessages] = useState<FriendChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -41,6 +42,26 @@ export default function FriendConversationScreen() {
   const [hasMore, setHasMore] = useState(true);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<FriendChatMessage | null>(null);
+
+  const scrollToLatest = useCallback((animated: boolean) => {
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
+  }, []);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const showSubscription = Keyboard.addListener(showEvent, () => {
+      keyboardVisibleRef.current = true;
+      scrollToLatest(false);
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      keyboardVisibleRef.current = false;
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [scrollToLatest]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -126,7 +147,7 @@ export default function FriendConversationScreen() {
 
   return (
     <ScreenWrapper>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0} style={styles.fill}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.fill}>
         <View style={styles.header}>
           <TouchableOpacity accessibilityLabel={t("chat.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.iconButton}><ArrowLeft color={Colors.textHeading} size={22} /></TouchableOpacity>
           <View style={styles.headerCopy}><Text numberOfLines={1} style={styles.headerTitle}>{title}</Text><Text style={styles.headerMeta}>{access.conversation.conversationType === "group" ? t("chat.participants", { count: access.conversation.activeParticipantCount }) : t("chat.directConversation")}</Text></View>
@@ -139,15 +160,19 @@ export default function FriendConversationScreen() {
           contentContainerStyle={messages.length ? styles.messages : styles.emptyMessages}
           data={messages}
           keyExtractor={(item) => item.messageId}
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={hasMore ? <TouchableOpacity accessibilityRole="button" disabled={loadingEarlier} onPress={() => void loadEarlier()} style={styles.loadEarlier}>{loadingEarlier ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.loadEarlierText}>{t("chat.loadEarlier")}</Text>}</TouchableOpacity> : null}
           ListEmptyComponent={<View style={styles.center}><Text style={styles.emptyTitle}>{t("chat.noMessages")}</Text><Text style={styles.body}>{t("chat.noMessagesBody")}</Text></View>}
           onContentSizeChange={() => { if (messages.length <= 50) listRef.current?.scrollToEnd({ animated: false }); }}
+          onLayout={() => {
+            if (keyboardVisibleRef.current) scrollToLatest(false);
+          }}
           renderItem={({ item }) => <MessageBubble isMine={item.senderUserId === user?.uid} message={item} onActions={() => setActionMessage(item)} />}
         />
         <View style={styles.composer}>
           <View style={styles.inputWrap}>
-            <TextInput editable={canSend && !sending} maxLength={CHAT_MESSAGE_LIMIT + 1} multiline onChangeText={setDraft} placeholder={canSend ? t("chat.messagePlaceholder") : t("chat.readOnlyPlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={draft} />
+            <TextInput editable={canSend && !sending} maxLength={CHAT_MESSAGE_LIMIT + 1} multiline onChangeText={setDraft} onContentSizeChange={() => scrollToLatest(false)} onFocus={() => scrollToLatest(false)} placeholder={canSend ? t("chat.messagePlaceholder") : t("chat.readOnlyPlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={draft} />
             <Text style={[styles.counter, draft.length > CHAT_MESSAGE_LIMIT && styles.error]}>{CHAT_MESSAGE_LIMIT - draft.length}</Text>
           </View>
           <TouchableOpacity accessibilityLabel={sending ? t("chat.sending") : t("chat.send")} accessibilityRole="button" accessibilityState={{ busy: sending, disabled: !canSend || sending || !trimmedLength || draft.length > CHAT_MESSAGE_LIMIT }} disabled={!canSend || sending || !trimmedLength || draft.length > CHAT_MESSAGE_LIMIT} onPress={() => void send()} style={[styles.send, (!canSend || sending || !trimmedLength || draft.length > CHAT_MESSAGE_LIMIT) && styles.disabled]}>{sending ? <ActivityIndicator color={Colors.surface} /> : <Send color={Colors.surface} size={18} />}</TouchableOpacity>

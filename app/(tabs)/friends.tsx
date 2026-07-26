@@ -5,7 +5,6 @@ import {
   AppState,
   Image,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -17,6 +16,7 @@ import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useAuth } from "@/context/AuthContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
@@ -41,6 +41,7 @@ import {
 import { createOrOpenDirectConversation } from "@/services/chatService";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import { formatPublicUserName, getFriendNameInitials } from "@/utils/friendPrivacy";
+import { getSentAge, reconcilePendingFriendRequests } from "@/utils/friendRequestState";
 
 function SectionTitle({ title, count }: { title: string; count?: number }) {
   return (
@@ -373,6 +374,7 @@ export default function FriendsScreen() {
   const [actionError, setActionError] = useState<{ actionId: string; message: string } | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const actionsInFlight = useRef(new Set<string>());
+  const friendsLoadSequence = useRef(0);
   const searchRequestSequence = useRef(0);
   const acknowledgedNotificationIds = useRef(new Set<string>());
   const incomingExpansionInitialized = useRef(false);
@@ -393,6 +395,7 @@ export default function FriendsScreen() {
   );
 
   const loadFriends = useCallback(async () => {
+    const requestSequence = ++friendsLoadSequence.current;
     if (!user) {
       setCurrentProfile(null);
       setFriends([]);
@@ -408,29 +411,36 @@ export default function FriendsScreen() {
 
     setLoadError(null);
     try {
-      const profile = await getCurrentUserProfile();
-      setCurrentProfile(profile);
-
-      const [nextFriends, nextRequestGroups, nextSuggested] = await Promise.all([
+      const [profile, nextFriends, nextRequestGroups, nextSuggested] = await Promise.all([
+        getCurrentUserProfile(),
         getFriends(user.uid),
         getFriendRequestGroups(user.uid),
         searchUsers(""),
       ]);
-
+      if (friendsLoadSequence.current !== requestSequence) return;
+      const reconciledRequests = reconcilePendingFriendRequests(
+        nextRequestGroups.incoming,
+        nextRequestGroups.outgoing,
+        new Set(nextFriends.map((friend) => friend.id)),
+      );
+      setCurrentProfile(profile);
       setFriends(nextFriends);
-      setIncomingRequests(nextRequestGroups.incoming);
-      setOutgoingRequests(nextRequestGroups.outgoing);
+      setIncomingRequests(reconciledRequests.incoming);
+      setOutgoingRequests(reconciledRequests.outgoing);
       setSuggestedUsers(nextSuggested);
       if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
         acknowledgedNotificationIds.current.add(notificationId);
         void acknowledgeNotificationAfterOpen(notificationId);
       }
     } catch (nextError) {
+      if (friendsLoadSequence.current !== requestSequence) return;
       logFriendsScreenIssue("loadFriends", nextError);
       setLoadError(t("friends.errorBody"));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (friendsLoadSequence.current === requestSequence) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [notificationId, t, user]);
 
@@ -459,6 +469,20 @@ export default function FriendsScreen() {
   useEffect(() => {
     if (outgoingRequests.length === 0) setOutgoingExpanded(false);
   }, [outgoingRequests.length]);
+
+  useEffect(() => {
+    const nextExpiry = [...incomingRequests, ...outgoingRequests]
+      .map((request) => request.expiresAt?.getTime() ?? Number.NaN)
+      .filter(Number.isFinite)
+      .reduce((soonest, expiresAt) => Math.min(soonest, expiresAt), Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(nextExpiry)) return;
+    const delay = Math.min(
+      Math.max(0, nextExpiry - Date.now()) + 250,
+      2_147_483_647,
+    );
+    const timeout = setTimeout(() => void loadFriends(), delay);
+    return () => clearTimeout(timeout);
+  }, [incomingRequests, loadFriends, outgoingRequests]);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -506,6 +530,7 @@ export default function FriendsScreen() {
     async (actionId: string, action: () => Promise<void>, failureMessage = t("friends.errorBody")) => {
       if (actionsInFlight.current.has(actionId)) return;
       actionsInFlight.current.add(actionId);
+      friendsLoadSequence.current += 1;
       setBusyAction(actionId);
       setActionError((current) => current?.actionId === actionId ? null : current);
       try {
@@ -602,7 +627,10 @@ export default function FriendsScreen() {
           style: "destructive",
           onPress: () => void runAction(
             `decline:${request.id}`,
-            () => declineFriendRequest(request.id),
+            async () => {
+              await declineFriendRequest(request.id);
+              setIncomingRequests((current) => current.filter((item) => item.id !== request.id));
+            },
             t("friends.declineRequestError"),
           ),
         },
@@ -610,7 +638,10 @@ export default function FriendsScreen() {
           text: t("friends.accept"),
           onPress: () => void runAction(
             `accept:${request.id}`,
-            () => acceptFriendRequest(request.id),
+            async () => {
+              await acceptFriendRequest(request.id);
+              setIncomingRequests((current) => current.filter((item) => item.id !== request.id));
+            },
             t("friends.acceptRequestError"),
           ),
         },
@@ -648,7 +679,7 @@ export default function FriendsScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView
+      <KeyboardAwareScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} tintColor={Colors.primary} onRefresh={onRefresh} />}
@@ -916,7 +947,7 @@ export default function FriendsScreen() {
         ) : (
           <EmptyState title={t("friends.noSuggestionsTitle")} body={t("friends.noSuggestionsBody")} />
         )}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }
@@ -1217,13 +1248,14 @@ const styles = StyleSheet.create({
 });
 
 function formatSentAge(
-  createdAt: Date,
+  createdAt: Date | null,
   t: ReturnType<typeof useTranslation>["t"],
 ) {
-  const elapsedDays = Math.max(0, Math.floor((Date.now() - createdAt.getTime()) / (24 * 60 * 60 * 1000)));
-  return elapsedDays === 0
+  const age = getSentAge(createdAt);
+  if (age.kind === "recent") return t("friends.sentRecently");
+  return age.kind === "today"
     ? t("friends.sentToday")
-    : t("friends.sentDaysAgo", { count: elapsedDays });
+    : t("friends.sentDaysAgo", { count: age.count });
 }
 
 function logFriendsScreenIssue(operation: string, error: unknown) {

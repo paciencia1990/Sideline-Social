@@ -958,7 +958,7 @@ function preserveTerminalRequestOutcomes(request: Record<string, unknown>) {
   const previous = Array.isArray(request.priorOutcomes)
     ? request.priorOutcomes.filter((item) => item && typeof item === 'object').slice(-19)
     : [];
-  if (!['accepted', 'declined', 'canceled', 'expired'].includes(String(request.status ?? ''))) return previous;
+  if (!['accepted', 'declined', 'canceled', 'expired', 'superseded'].includes(String(request.status ?? ''))) return previous;
   return [...previous, {
     status: request.status,
     createdAt: request.createdAt ?? null,
@@ -968,6 +968,7 @@ function preserveTerminalRequestOutcomes(request: Record<string, unknown>) {
     declinedAt: request.declinedAt ?? null,
     canceledAt: request.canceledAt ?? null,
     expiredAt: request.expiredAt ?? null,
+    supersededAt: request.supersededAt ?? null,
   }];
 }
 
@@ -1045,9 +1046,9 @@ function publicFriendRequest(document: admin.firestore.QueryDocumentSnapshot, ex
     toDisplayName: request.toDisplayName ?? request.recipientDisplayNameSnapshot ?? null,
     toPhotoURL: request.toPhotoURL ?? request.recipientPhotoUrlSnapshot ?? null,
     status: request.status,
-    createdAt: request.createdAt ?? null,
-    updatedAt: request.updatedAt ?? null,
-    expiresAt: Timestamp.fromMillis(expiresAtMillis),
+    createdAt: timestampMillis(request.createdAt),
+    updatedAt: timestampMillis(request.updatedAt),
+    expiresAt: expiresAtMillis,
   };
 }
 
@@ -1061,10 +1062,10 @@ export const getActiveFriendRequests = functions.https.onCall(async (_data, cont
   const firestore = admin.firestore();
   const now = Timestamp.now();
   setValidationStage('friend-request-and-block-query');
-  const [incomingSnapshot, outgoingSnapshot, blockedUserIds] = await Promise.all([
+  const [incomingSnapshot, outgoingSnapshot, blockedUserIds, viewerSnapshot] = await Promise.all([
     firestore.collection('friendRequests')
       .where('toUserId', '==', userId)
-      .where('status', 'in', ['pending', 'deletePending'])
+      .where('status', '==', 'pending')
       .limit(FRIEND_REQUEST_PAGE_SIZE)
       .get(),
     firestore.collection('friendRequests')
@@ -1073,32 +1074,45 @@ export const getActiveFriendRequests = functions.https.onCall(async (_data, cont
       .limit(FRIEND_REQUEST_PAGE_SIZE)
       .get(),
     readBlockedRelationshipIds(userId),
+    firestore.collection('users').doc(userId).get(),
   ]);
 
   const active: { direction: 'incoming' | 'outgoing'; document: admin.firestore.QueryDocumentSnapshot; expiresAt: number }[] = [];
   const expired: admin.firestore.QueryDocumentSnapshot[] = [];
+  const superseded: admin.firestore.QueryDocumentSnapshot[] = [];
   const needsExpiryProjection: { document: admin.firestore.QueryDocumentSnapshot; expiresAt: number }[] = [];
-  const inspect = (direction: 'incoming' | 'outgoing', documents: admin.firestore.QueryDocumentSnapshot[]) => {
-    documents.forEach((document) => {
-      const request = document.data();
-      const otherUserId = direction === 'incoming' ? request.fromUserId : request.toUserId;
-      if (typeof otherUserId !== 'string' || blockedUserIds.has(otherUserId)) return;
-      const expiresAt = requestExpiresAtMillis(request);
-      if (expiresAt === null || expiresAt <= now.toMillis()) {
-        expired.push(document);
-        return;
-      }
-      if (timestampMillis(request.expiresAt) === null) {
-        needsExpiryProjection.push({ document, expiresAt });
-      }
-      active.push({ direction, document, expiresAt });
-    });
-  };
-  inspect('incoming', incomingSnapshot.docs);
-  inspect('outgoing', outgoingSnapshot.docs);
+  const friendUserIds = new Set(readStringArray(viewerSnapshot.data()?.friendIds));
+  const activeOtherUserIds = new Set<string>();
+  const candidates = [
+    ...incomingSnapshot.docs.map((document) => ({ direction: 'incoming' as const, document })),
+    ...outgoingSnapshot.docs.map((document) => ({ direction: 'outgoing' as const, document })),
+  ].sort((left, right) => (
+    (timestampMillis(left.document.data()?.createdAt) ?? 0) -
+    (timestampMillis(right.document.data()?.createdAt) ?? 0)
+  ));
+  candidates.forEach(({ direction, document }) => {
+    const request = document.data();
+    if (request.status !== 'pending') return;
+    const otherUserId = direction === 'incoming' ? request.fromUserId : request.toUserId;
+    if (typeof otherUserId !== 'string' || !otherUserId || blockedUserIds.has(otherUserId)) return;
+    const expiresAt = requestExpiresAtMillis(request);
+    if (expiresAt === null || expiresAt <= now.toMillis()) {
+      expired.push(document);
+      return;
+    }
+    if (friendUserIds.has(otherUserId) || activeOtherUserIds.has(otherUserId)) {
+      superseded.push(document);
+      return;
+    }
+    activeOtherUserIds.add(otherUserId);
+    if (timestampMillis(request.expiresAt) === null) {
+      needsExpiryProjection.push({ document, expiresAt });
+    }
+    active.push({ direction, document, expiresAt });
+  });
 
-  if (expired.length > 0 || needsExpiryProjection.length > 0) {
-    setValidationStage('request-expiry-normalization');
+  if (expired.length > 0 || superseded.length > 0 || needsExpiryProjection.length > 0) {
+    setValidationStage('request-lifecycle-normalization');
     const batch = firestore.batch();
     needsExpiryProjection.forEach(({ document, expiresAt }) => batch.update(document.ref, {
       expiresAt: Timestamp.fromMillis(expiresAt),
@@ -1110,8 +1124,13 @@ export const getActiveFriendRequests = functions.https.onCall(async (_data, cont
       expiredAt: now,
       updatedAt: now,
     }));
+    superseded.forEach((document) => batch.update(document.ref, {
+      status: 'superseded',
+      supersededAt: now,
+      updatedAt: now,
+    }));
     await batch.commit();
-    await Promise.allSettled(expired.map((document) => resolveFriendRequestNotification(
+    await Promise.allSettled([...expired, ...superseded].map((document) => resolveFriendRequestNotification(
       String(document.data()?.toUserId ?? ''),
       document.id,
       typeof document.data()?.notificationId === 'string' ? document.data().notificationId : null,

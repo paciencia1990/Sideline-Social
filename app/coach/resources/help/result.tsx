@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AccessibilityInfo, Alert, findNodeHandle, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { AccessibilityInfo, Alert, findNodeHandle, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Edit3, Save, Send, Share2, Trash2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -130,7 +131,7 @@ export default function CoachHelpResultScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <CoachResourceHeader subtitle={t("coach.resources.resultSubtitle")} title={result.title} titleRef={resultHeadingRef} />
 
         {editing ? (
@@ -162,7 +163,7 @@ export default function CoachHelpResultScreen() {
           {result.canSendAsAnnouncement ? <Action Icon={Send} label={t("coach.resources.sendToTeam")} onPress={sendToComposer} primary /> : null}
           {saved ? <Action Icon={Trash2} label={t("coach.resources.deleteResult")} onPress={confirmDelete} primary={false} /> : null}
         </View>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

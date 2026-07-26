@@ -7,10 +7,7 @@ import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 
 export default function LegalScreen() {
   const { t } = useTranslation();
-  const openSupport = () => {
-    const destination = SUPPORT_URL ?? (SUPPORT_EMAIL ? `mailto:${SUPPORT_EMAIL}` : null);
-    if (destination) void Linking.openURL(destination);
-  };
+  const openSupportEmail = () => void Linking.openURL(`mailto:${SUPPORT_EMAIL}`);
 
   return (
     <ScreenWrapper>
@@ -21,9 +18,23 @@ export default function LegalScreen() {
         <LegalSection title={t("settings.communityTitle")} body={t("settings.communityBody")} />
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t("settings.supportTitle")}</Text>
-          <Text style={styles.body}>{SUPPORT_URL || SUPPORT_EMAIL ? t("settings.supportBody") : t("settings.supportPending")}</Text>
-          {SUPPORT_URL || SUPPORT_EMAIL ? (
-            <TouchableOpacity accessibilityRole="link" onPress={openSupport} style={styles.linkButton}>
+          <Text style={styles.body}>{t("settings.supportBody")}</Text>
+          <TouchableOpacity
+            accessibilityLabel={t("settings.supportEmailAccessibility", { email: SUPPORT_EMAIL })}
+            accessibilityRole="link"
+            onPress={openSupportEmail}
+            style={styles.linkButton}
+          >
+            <Text style={styles.linkText}>{t("settings.supportEmail", { email: SUPPORT_EMAIL })}</Text>
+          </TouchableOpacity>
+          {SUPPORT_URL ? (
+            <TouchableOpacity
+              accessibilityRole="link"
+              onPress={() => {
+                if (SUPPORT_URL) void Linking.openURL(SUPPORT_URL);
+              }}
+              style={styles.linkButton}
+            >
               <Text style={styles.linkText}>{t("settings.contactSupport")}</Text>
             </TouchableOpacity>
           ) : null}

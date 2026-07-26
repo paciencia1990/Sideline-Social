@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,6 +12,7 @@ import { Bomb, Play, Search, Trophy, Users, Zap, type LucideIcon } from "lucide-
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SquadSelector } from "@/components/SquadSelector";
 import { useAuth } from "@/context/AuthContext";
@@ -147,7 +147,7 @@ export default function GamesScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <Text style={styles.kicker}>{t("app.name")}</Text>
           <Text style={styles.title}>{t("games.title")}</Text>
@@ -257,7 +257,7 @@ export default function GamesScreen() {
             <Text style={styles.cardText}>{t("games.viewLeaderboard")}</Text>
           </View>
         </TouchableOpacity>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

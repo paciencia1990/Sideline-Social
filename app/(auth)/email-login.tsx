@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { PasswordInput } from "@/components/PasswordInput";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { FORGOT_PASSWORD_ROUTE } from "@/constants/routes";
@@ -38,8 +39,7 @@ export default function EmailLoginScreen() {
 
   return (
     <ScreenWrapper>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.flex}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView contentContainerStyle={styles.content}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <ChevronLeft size={24} color={Colors.textHeading} />
           </TouchableOpacity>
@@ -61,8 +61,7 @@ export default function EmailLoginScreen() {
           <TouchableOpacity onPress={() => router.push(FORGOT_PASSWORD_ROUTE as never)}>
             <Text style={styles.link}>Forgot password?</Text>
           </TouchableOpacity>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

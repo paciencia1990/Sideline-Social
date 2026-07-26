@@ -4,6 +4,7 @@ import {
   Alert,
   AppState,
   FlatList,
+  KeyboardAvoidingView,
   Linking,
   Platform,
   StyleSheet,
@@ -194,7 +195,8 @@ export default function SquadScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <FlatList
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.fill}>
+        <FlatList
         ref={listRef}
         contentContainerStyle={[
           styles.list,
@@ -202,6 +204,8 @@ export default function SquadScreen() {
         ]}
         data={nearbySquads}
         keyExtractor={(item) => item.squadId}
+        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+        keyboardShouldPersistTaps="handled"
         ListHeaderComponent={(
           <>
             <View style={styles.header}>
@@ -324,7 +328,8 @@ export default function SquadScreen() {
           />
         )}
         showsVerticalScrollIndicator={false}
-      />
+        />
+      </KeyboardAvoidingView>
 
       <CreateSquadSheet
         isOpen={showCreate}
@@ -342,6 +347,7 @@ function toRegion(coords: Coordinates): Region {
 
 const styles = StyleSheet.create({
   container: { backgroundColor: Colors.background, flex: 1 },
+  fill: { flex: 1 },
   header: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm },
   headerCopy: { flex: 1 },
   kicker: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 11, letterSpacing: 1, textTransform: "uppercase" },

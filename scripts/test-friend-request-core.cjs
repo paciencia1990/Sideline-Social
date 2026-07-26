@@ -120,6 +120,18 @@ assert.ok(functionsSource.includes("resolveFriendRequestNotification"));
 assert.equal(functionsSource.includes("declined notification"), false);
 assert.ok(friendChatSource.includes("status: 'canceled', canceledAt: now"), "blocking resolves pending requests");
 
+const activeRequests = functionsSource.slice(
+  functionsSource.indexOf("function publicFriendRequest"),
+  functionsSource.indexOf("export const sendFriendRequest"),
+);
+assert.ok(activeRequests.includes(".where('status', '==', 'pending')"));
+assert.equal(activeRequests.includes("deletePending"), false, "cleanup states are never active requests");
+assert.ok(activeRequests.includes("request.status !== 'pending'"));
+assert.ok(activeRequests.includes("friendUserIds.has(otherUserId)"));
+assert.ok(activeRequests.includes("status: 'superseded'"));
+assert.ok(activeRequests.includes("createdAt: timestampMillis(request.createdAt)"));
+assert.ok(activeRequests.includes("expiresAt: expiresAtMillis"));
+
 assert.ok(service.includes('"getActiveFriendRequests"'));
 assert.ok(service.includes('where("expiresAt", ">", Timestamp.now())'));
 assert.ok(service.includes("createSnapshotHandler"), "each listener owns its initialization gate");

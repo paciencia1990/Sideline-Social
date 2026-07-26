@@ -29,6 +29,7 @@ import {
   type PublicFriendProfileRecord,
   type PublicProfileInspectionCounts,
 } from "@/utils/friendRequestMapping";
+import { decodeFriendRequestDate } from "@/utils/friendRequestState";
 import { formatFullPublicName, formatPublicUserName, getSafeProfileName } from "@/utils/friendPrivacy";
 import { getPersistedDisplayName } from "@/utils/profileName";
 
@@ -79,8 +80,8 @@ export interface FriendRequest {
   recipientNameResolved: boolean;
   recipientProfileState: RequestProfileState;
   status: FriendRequestStatus;
-  createdAt: Date;
-  expiresAt: Date;
+  createdAt: Date | null;
+  expiresAt: Date | null;
 }
 
 export type HydratedIncomingFriendRequest = FriendRequest & {
@@ -136,13 +137,6 @@ function docToPrivateProfile(userDoc: { id: string; data: () => DocumentData | u
   };
 }
 
-function toDate(value: unknown): Date {
-  if (value instanceof Date) return value;
-  return value && typeof value === "object" && "toDate" in value && typeof value.toDate === "function"
-    ? value.toDate()
-    : new Date(0);
-}
-
 function dataToRequest(value: unknown): FriendRequest | null {
   if (!value || typeof value !== "object") return null;
   const data = value as Record<string, unknown>;
@@ -150,9 +144,9 @@ function dataToRequest(value: unknown): FriendRequest | null {
   const fromUserId = typeof data.fromUserId === "string" ? data.fromUserId : "";
   const toUserId = typeof data.toUserId === "string" ? data.toUserId : "";
   if (!id || !fromUserId || !toUserId) return null;
-  const status: FriendRequestStatus = ["accepted", "declined", "canceled", "expired"].includes(String(data.status))
-    ? data.status as FriendRequestStatus
-    : "pending";
+  if (data.status !== "pending") return null;
+  const expiresAt = decodeFriendRequestDate(data.expiresAt);
+  if (!expiresAt || expiresAt.getTime() <= Date.now()) return null;
 
   return {
     id,
@@ -174,9 +168,9 @@ function dataToRequest(value: unknown): FriendRequest | null {
     recipientPhotoURL: null,
     recipientNameResolved: false,
     recipientProfileState: "loading",
-    status,
-    createdAt: toDate(data.createdAt),
-    expiresAt: toDate(data.expiresAt),
+    status: "pending",
+    createdAt: decodeFriendRequestDate(data.createdAt),
+    expiresAt,
   };
 }
 

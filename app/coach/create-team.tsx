@@ -1,10 +1,11 @@
 import { router } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
 import React, { useCallback, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
@@ -43,7 +44,7 @@ export default function CreateCoachTeamScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.headerRow}>
           <TouchableOpacity accessibilityLabel={t("common.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
             <ArrowLeft color={Colors.textHeading} size={22} />
@@ -71,7 +72,7 @@ export default function CreateCoachTeamScreen() {
             {creating ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.primaryButtonText}>{t("coach.team.createTeam")}</Text>}
           </TouchableOpacity>
         </Card>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { ArrowLeft, Check, Shield, UserPlus, Users } from "lucide-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -98,7 +99,7 @@ export default function FriendChatManageScreen() {
   return (
     <ScreenWrapper>
       <View style={styles.header}><TouchableOpacity accessibilityLabel={t("chat.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.iconButton}><ArrowLeft color={Colors.textHeading} size={22} /></TouchableOpacity><Text numberOfLines={1} style={styles.headerTitle}>{t("chat.conversationSettings")}</Text></View>
-      <ScrollView contentContainerStyle={styles.content}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content}>
         <View><Text style={styles.title}>{title}</Text><Text style={styles.body}>{isGroup ? t("chat.groupConversation") : t("chat.directConversation")}</Text></View>
         {errorKey ? <Card style={styles.errorCard}><Text accessibilityRole="alert" style={styles.error}>{t(errorKey)}</Text></Card> : null}
 
@@ -116,7 +117,7 @@ export default function FriendChatManageScreen() {
           {isAdmin && availableFriends.length > 0 && (access.conversation.activeParticipantCount + access.conversation.invitedParticipantCount < MAX_CHAT_PARTICIPANTS) ? <Card style={styles.section}><View style={styles.sectionHeading}><UserPlus color={Colors.primary} size={20} /><Text style={styles.sectionTitle}>{t("chat.inviteFriends")}</Text></View><Text style={styles.bodyLeft}>{t("chat.inviteFriendsHint", { remaining: MAX_CHAT_PARTICIPANTS - access.conversation.activeParticipantCount - access.conversation.invitedParticipantCount })}</Text>{availableFriends.slice(0, 25).map((friend) => { const selected = selectedInviteIds.includes(friend.id); return <TouchableOpacity key={friend.id} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} onPress={() => setSelectedInviteIds((ids) => selected ? ids.filter((id) => id !== friend.id) : ids.length < MAX_CHAT_PARTICIPANTS - access.conversation.activeParticipantCount - access.conversation.invitedParticipantCount ? [...ids, friend.id] : ids)} style={styles.friendRow}><Text style={styles.memberName}>{friend.displayName}</Text><View style={[styles.check, selected && styles.checked]}>{selected ? <Check color={Colors.surface} size={14} /> : null}</View></TouchableOpacity>; })}<TouchableOpacity accessibilityRole="button" disabled={Boolean(busy) || selectedInviteIds.length === 0} onPress={() => conversationId && void run("invite", async () => { await inviteFriendsToGroupConversation(conversationId, selectedInviteIds); setSelectedInviteIds([]); })} style={[styles.primary, selectedInviteIds.length === 0 && styles.disabled]}><Text style={styles.primaryText}>{t("chat.sendInvitations", { count: selectedInviteIds.length })}</Text></TouchableOpacity></Card> : null}
           <Card style={styles.section}><TouchableOpacity accessibilityRole="button" onPress={() => Alert.alert(t("chat.leaveGroup"), t(isOwner && members.length > 1 ? "chat.ownerLeaveWarning" : "chat.leaveGroupBody"), [{ text: t("common.cancel"), style: "cancel" }, { text: t("chat.leave"), style: "destructive", onPress: () => conversationId && void run("leave", async () => { await leaveFriendConversation(conversationId); router.replace("/(social)/chat"); }, false) }])} style={styles.danger}><Text style={styles.dangerText}>{t("chat.leaveGroup")}</Text></TouchableOpacity></Card>
         </> : directFriendId ? <Card style={styles.section}><Text style={styles.sectionTitle}>{t("chat.safety")}</Text><TouchableOpacity accessibilityRole="button" onPress={() => void run("report", async () => { await reportFriendChatUser(conversationId!, directFriendId); Alert.alert(t("chat.reportSentTitle"), t("chat.reportSentBody")); }, false)} style={styles.outline}><Text style={styles.outlineText}>{t("chat.reportUser")}</Text></TouchableOpacity><TouchableOpacity accessibilityRole="button" onPress={() => Alert.alert(t("chat.blockUser"), t("chat.blockUserBody"), [{ text: t("common.cancel"), style: "cancel" }, { text: t("chat.block"), style: "destructive", onPress: () => void run("block", async () => { await blockFriendChatUser(directFriendId); router.replace("/(social)/chat"); }, false) }])} style={styles.danger}><Text style={styles.dangerText}>{t("chat.blockUser")}</Text></TouchableOpacity></Card> : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

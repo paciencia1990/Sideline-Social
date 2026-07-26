@@ -1,11 +1,12 @@
 import React, { useCallback, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { ChevronRight, ShieldAlert } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -94,7 +95,7 @@ export default function CoachResourceHelpScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <CoachResourceHeader subtitle={t("coach.resources.helpSubtitle")} title={t("coach.resources.needHelp")} />
 
         {!category ? (
@@ -164,7 +165,7 @@ export default function CoachResourceHelpScreen() {
             </TouchableOpacity>
           </>
         )}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

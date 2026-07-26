@@ -1,11 +1,12 @@
 import React, { useCallback, useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { ArrowLeft, ChevronRight, LockKeyhole, Mail, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ChildProfilePicker } from "@/components/ChildProfilePicker";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -160,7 +161,7 @@ export default function ParentTeamHubScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.headerRow}>
           <TouchableOpacity accessibilityLabel={t("myTeams.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
             <ArrowLeft color={Colors.textHeading} size={22} />
@@ -371,7 +372,7 @@ export default function ParentTeamHubScreen() {
             ))}
           </>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

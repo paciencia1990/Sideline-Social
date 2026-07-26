@@ -408,6 +408,7 @@ export function SquadSeasonManager({ squadId }: { squadId: string }) {
           <View style={styles.modalCard}>
             <ScrollView
               contentContainerStyle={styles.form}
+              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               style={styles.formScroll}

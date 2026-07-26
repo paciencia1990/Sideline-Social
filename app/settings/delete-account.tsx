@@ -1,10 +1,11 @@
 import { useCallback, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Alert, ScrollView, StyleSheet, Text, TextInput } from "react-native";
+import { Alert, StyleSheet, Text, TextInput } from "react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { PasswordInput } from "@/components/PasswordInput";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -47,7 +48,7 @@ export default function DeleteAccountScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>{t("settings.deleteAccount")}</Text>
         <Card style={styles.card}>
           <Text style={styles.warning}>{t("settings.deleteWarning")}</Text>
@@ -72,7 +73,7 @@ export default function DeleteAccountScreen() {
           <PrimaryButton disabled={!confirmed || busy} loading={busy} onPress={confirmDeletion} title={t("settings.deletePermanently")} />
           {error ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
         </Card>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

@@ -44,6 +44,7 @@ module.exports = ({ config }) => ({
   android: {
     package: ANDROID_PACKAGE,
     versionCode: 5,
+    softwareKeyboardLayoutMode: "resize",
     ...(IS_DEVELOPMENT
       ? (process.env.GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT
         ? { googleServicesFile: process.env.GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT }

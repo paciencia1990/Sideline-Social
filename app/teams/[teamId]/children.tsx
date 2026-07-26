@@ -1,11 +1,12 @@
 import React, { useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ChildProfilePicker } from "@/components/ChildProfilePicker";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { setParentTeamChildLinks } from "@/services/childService";
@@ -71,7 +72,7 @@ export default function ManageTeamChildrenScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.headerRow}>
           <TouchableOpacity
             accessibilityLabel={t("myTeams.back")}
@@ -121,7 +122,7 @@ export default function ManageTeamChildrenScreen() {
             </TouchableOpacity>
           </Card>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

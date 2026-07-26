@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { COACH_MODE_ROUTE, PARENT_PROFILE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
@@ -145,7 +146,7 @@ export default function ProfileScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.title}>{t("profile.title")}</Text>
 
         <Card style={styles.card}>
@@ -261,7 +262,7 @@ export default function ProfileScreen() {
           />
           {signOutError ? <Text style={styles.signOutError}>{signOutError}</Text> : null}
         </View>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }

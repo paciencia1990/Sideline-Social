@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { useFocusEffect } from "expo-router";
 import { MoreHorizontal } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -47,6 +58,12 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   const uploadCancel = useRef<(() => boolean) | null>(null);
   const sendInFlight = useRef(false);
   const deleteInFlight = useRef(false);
+  const messageScrollRef = useRef<ScrollView>(null);
+  const keyboardVisibleRef = useRef(false);
+
+  const scrollToLatest = useCallback((animated: boolean) => {
+    requestAnimationFrame(() => messageScrollRef.current?.scrollToEnd({ animated }));
+  }, []);
 
   useEffect(() => listenToPrivateTeamConversation(conversationId, setConversation, () => setError(t("teamMessages.loadError"))), [conversationId, t]);
   useEffect(() => listenToPrivateTeamMessages(conversationId, (next) => {
@@ -57,6 +74,21 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
     void markPrivateTeamConversationRead(conversationId).catch(() => {});
   }, [conversationId]));
   useEffect(() => () => { uploadCancel.current?.(); }, []);
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const showSubscription = Keyboard.addListener(showEvent, () => {
+      keyboardVisibleRef.current = true;
+      scrollToLatest(false);
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      keyboardVisibleRef.current = false;
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [scrollToLatest]);
 
   const otherName = useMemo(() => {
     const displayName = role === "coach" ? conversation?.parentDisplayName : conversation?.coachDisplayName;
@@ -218,59 +250,75 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
   }, [actionMessage, deleteMessage, hideMessage, selectedMine, t]);
 
   return (
-    <View style={styles.container}>
-      <Card style={styles.identityCard}>
-        <Text style={styles.name}>{conversation?.teamName ?? t("teamMessages.teamFallback")}</Text>
-        <Text style={styles.team}>{otherName}</Text>
-        <Text style={styles.privateLabel}>{t("teamMessages.privateLabel")}</Text>
-        <Text style={styles.privacy}>{t("teamMessages.privacy")}</Text>
-      </Card>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      style={styles.container}
+    >
+      <ScrollView
+        ref={messageScrollRef}
+        contentContainerStyle={styles.threadContent}
+        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+        keyboardShouldPersistTaps="handled"
+        onContentSizeChange={() => scrollToLatest(keyboardVisibleRef.current)}
+        onLayout={() => {
+          if (keyboardVisibleRef.current) scrollToLatest(false);
+        }}
+        showsVerticalScrollIndicator={false}
+        style={styles.messageScroll}
+      >
+        <Card style={styles.identityCard}>
+          <Text style={styles.name}>{conversation?.teamName ?? t("teamMessages.teamFallback")}</Text>
+          <Text style={styles.team}>{otherName}</Text>
+          <Text style={styles.privateLabel}>{t("teamMessages.privateLabel")}</Text>
+          <Text style={styles.privacy}>{t("teamMessages.privacy")}</Text>
+        </Card>
 
-      {error ? <Text accessibilityLiveRegion="polite" style={styles.error}>{error}</Text> : null}
-      {readOnly ? <Card style={styles.readOnlyCard}><Text style={styles.error}>{t("teamMessages.readOnly")}</Text></Card> : null}
+        {error ? <Text accessibilityLiveRegion="polite" style={styles.error}>{error}</Text> : null}
+        {readOnly ? <Card style={styles.readOnlyCard}><Text style={styles.error}>{t("teamMessages.readOnly")}</Text></Card> : null}
 
-      <View style={styles.messages}>
-        {messages.length === 0 ? <Text style={styles.empty}>{t("teamMessages.empty")}</Text> : null}
-        {messages.map((message) => {
-          const mine = message.senderUserId === auth.currentUser?.uid;
-          return (
-            <View key={message.id} style={[styles.bubble, message.contentType === "voice" && !message.isDeleted && styles.voiceBubble, mine ? styles.mine : styles.theirs]}>
-              <View style={styles.messageHeader}>
-                <Text style={styles.sender}>{mine ? t("teamMessages.you") : otherName}</Text>
-                {(mine ? !message.isDeleted : true) ? (
-                  <TouchableOpacity
-                    accessibilityLabel={t("teamMessages.messageActions")}
-                    accessibilityRole="button"
-                    onPress={() => setActionMessage(message)}
-                    style={styles.messageActions}
-                  >
-                    <MoreHorizontal accessible={false} color={Colors.primary} size={20} />
-                  </TouchableOpacity>
-                ) : null}
+        <View style={styles.messages}>
+          {messages.length === 0 ? <Text style={styles.empty}>{t("teamMessages.empty")}</Text> : null}
+          {messages.map((message) => {
+            const mine = message.senderUserId === auth.currentUser?.uid;
+            return (
+              <View key={message.id} style={[styles.bubble, message.contentType === "voice" && !message.isDeleted && styles.voiceBubble, mine ? styles.mine : styles.theirs]}>
+                <View style={styles.messageHeader}>
+                  <Text style={styles.sender}>{mine ? t("teamMessages.you") : otherName}</Text>
+                  {(mine ? !message.isDeleted : true) ? (
+                    <TouchableOpacity
+                      accessibilityLabel={t("teamMessages.messageActions")}
+                      accessibilityRole="button"
+                      onPress={() => setActionMessage(message)}
+                      style={styles.messageActions}
+                    >
+                      <MoreHorizontal accessible={false} color={Colors.primary} size={20} />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+                {message.isDeleted ? (
+                  <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>
+                    {mine ? t("teamMessages.youDeletedMessage") : t("teamMessages.messageDeleted")}
+                  </Text>
+                ) : message.contentType === "voice" && message.voiceMemo ? (
+                  <VoiceMemoPlayer
+                    durationMilliseconds={message.voiceMemo.durationMilliseconds}
+                    isOwnMessage={mine}
+                    source={{
+                      kind: "persisted-message",
+                      messageId: message.id,
+                      messageKind: "privateMessage",
+                      storagePath: message.voiceMemo.storagePath,
+                    }}
+                  />
+                ) : message.contentType === "voice"
+                  ? <VoiceMemoUnavailable />
+                  : <Text style={styles.messageText}>{message.text}</Text>}
+                {!message.isDeleted && message.caption ? <Text style={styles.caption}>{message.caption}</Text> : null}
               </View>
-              {message.isDeleted ? (
-                <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>
-                  {mine ? t("teamMessages.youDeletedMessage") : t("teamMessages.messageDeleted")}
-                </Text>
-              ) : message.contentType === "voice" && message.voiceMemo ? (
-                <VoiceMemoPlayer
-                  durationMilliseconds={message.voiceMemo.durationMilliseconds}
-                  isOwnMessage={mine}
-                  source={{
-                    kind: "persisted-message",
-                    messageId: message.id,
-                    messageKind: "privateMessage",
-                    storagePath: message.voiceMemo.storagePath,
-                  }}
-                />
-              ) : message.contentType === "voice"
-                ? <VoiceMemoUnavailable />
-                : <Text style={styles.messageText}>{message.text}</Text>}
-              {!message.isDeleted && message.caption ? <Text style={styles.caption}>{message.caption}</Text> : null}
-            </View>
-          );
-        })}
-      </View>
+            );
+          })}
+        </View>
+      </ScrollView>
 
       <MessageActionsModal
         actions={selectedActions}
@@ -296,10 +344,10 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
             ))}
           </View>
           {!voiceAudioAvailable ? <Text accessibilityLiveRegion="polite" style={styles.error}>{t("voiceMemo.updatedBuildRequired")}</Text> : null}
-          {mode === "text" ? <TextInput maxLength={2000} multiline onChangeText={setText} placeholder={t("teamMessages.messagePlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={text} /> : null}
+          {mode === "text" ? <TextInput maxLength={2000} multiline onChangeText={setText} onContentSizeChange={() => scrollToLatest(false)} onFocus={() => scrollToLatest(false)} placeholder={t("teamMessages.messagePlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={text} /> : null}
           {voiceAudioAvailable ? <View style={mode === "voice" ? undefined : styles.hidden}>
             <VoiceMemoComposer active={mode === "voice"} disabled={sending} key={voiceComposerKey} onChange={setVoiceDraft} uploadProgress={uploadProgress} />
-            <TextInput maxLength={500} multiline onChangeText={setCaption} placeholder={t("teamMessages.captionPlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={caption} />
+            <TextInput maxLength={500} multiline onChangeText={setCaption} onContentSizeChange={() => scrollToLatest(false)} onFocus={() => scrollToLatest(false)} placeholder={t("teamMessages.captionPlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={caption} />
           </View> : null}
           {sendPhase === "finalizing" ? <Text accessibilityLiveRegion="polite" style={styles.cancel}>{t("voiceMemo.finalizing")}</Text> : null}
           <TouchableOpacity accessibilityRole="button" disabled={sending || (mode === "text" ? !text.trim() : !voiceDraft)} onPress={mode === "text" ? sendText : sendVoice} style={[styles.send, (sending || (mode === "text" ? !text.trim() : !voiceDraft)) && styles.disabled]}>
@@ -308,7 +356,7 @@ export function PrivateTeamMessageThread({ conversationId, role }: { conversatio
           {uploadProgress != null ? <TouchableOpacity accessibilityRole="button" onPress={() => uploadCancel.current?.()}><Text style={styles.cancel}>{t("voiceMemo.cancelUpload")}</Text></TouchableOpacity> : null}
         </Card>
       ) : null}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -324,7 +372,9 @@ function getErrorCode(error: unknown) {
 }
 
 const styles = StyleSheet.create({
-  container: { gap: Spacing.md },
+  container: { flex: 1, gap: Spacing.md },
+  messageScroll: { flex: 1 },
+  threadContent: { gap: Spacing.md, paddingBottom: Spacing.xs },
   identityCard: { gap: 3 },
   privateLabel: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 12, textTransform: "uppercase" },
   name: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 20 },

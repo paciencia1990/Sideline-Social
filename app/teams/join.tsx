@@ -1,10 +1,11 @@
 import React, { useCallback, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { ChildProfilePicker } from "@/components/ChildProfilePicker";
 import { Card } from "@/components/Card";
+import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import { joinTeamByInviteCode } from "@/services/teamService";
@@ -47,7 +48,7 @@ export default function JoinTeamScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <Text style={styles.title}>{t("team.join.title")}</Text>
           <Text style={styles.subtitle}>{t("team.join.subtitle")}</Text>
@@ -93,7 +94,7 @@ export default function JoinTeamScreen() {
             {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.primaryButtonText}>{t("coach.team.joinTeam")}</Text>}
           </TouchableOpacity>
         </Card>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
 }
