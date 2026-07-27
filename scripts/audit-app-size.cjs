@@ -4,6 +4,11 @@ const crypto = require("node:crypto");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  compareWithPreviousAab,
+  selectAabArtifact,
+  summarizeSpotBundleEntries,
+} = require("./app-size-audit-core.cjs");
 
 const root = path.resolve(__dirname, "..");
 const outputDirectory = path.join(root, "build", "app-size-audit");
@@ -67,6 +72,13 @@ function bytesLabel(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
+}
+
+function comparisonLabel(comparison) {
+  if (comparison.reductionBytes >= 0) {
+    return `${bytesLabel(comparison.reductionBytes)} smaller (${comparison.reductionPercent.toFixed(2)}% reduction)`;
+  }
+  return `${bytesLabel(Math.abs(comparison.reductionBytes))} larger (${Math.abs(comparison.reductionPercent).toFixed(2)}% increase)`;
 }
 
 function dependencyName(specifier) {
@@ -240,19 +252,28 @@ const propertyValue = (name) => gradleProperties.match(new RegExp(`^${name.repla
 const versionCatalogValue = (name) => reactNativeVersions.match(new RegExp(`^${name}\\s*=\\s*"([^"]+)"$`, "m"))?.[1] ?? null;
 
 const artifactRoots = [path.join(root, "build"), path.join(root, "android", "app", "build", "outputs")];
-const artifactPaths = [...new Set(artifactRoots.flatMap((directory) => walk(directory, { exclude: new Set() })))]
+const artifactCandidates = [...new Set(artifactRoots.flatMap((directory) => walk(directory, { exclude: new Set() })))]
   .filter((filePath) => [".aab", ".apk"].includes(path.extname(filePath).toLowerCase()))
-  .map((filePath) => ({
-    path: toPosix(path.relative(root, filePath)),
-    sizeBytes: fs.statSync(filePath).size,
-  }))
+  .map((filePath) => {
+    const stats = fs.statSync(filePath);
+    return {
+      absolutePath: filePath,
+      modifiedAtMs: stats.mtimeMs,
+      path: toPosix(path.relative(root, filePath)),
+      sizeBytes: stats.size,
+    };
+  });
+const artifactPaths = artifactCandidates
+  .map(({ path: artifactPath, sizeBytes }) => ({ path: artifactPath, sizeBytes }))
   .sort((left, right) => left.path.localeCompare(right.path));
-const analyzedBundle = artifactPaths.find((artifact) => artifact.path.includes("google-play-release") && artifact.path.includes("code5"))
-  ?? [...artifactPaths].reverse().find((artifact) => artifact.path.endsWith(".aab"))
-  ?? null;
+const analyzedBundle = selectAabArtifact({
+  artifactCandidates,
+  explicitPath: process.env.APP_SIZE_AAB_PATH,
+  root,
+});
 let bundleAnalysis = null;
 if (analyzedBundle) {
-  const entries = readZipCentralDirectory(path.join(root, analyzedBundle.path));
+  const entries = readZipCentralDirectory(analyzedBundle.absolutePath);
   const contributionMap = new Map();
   for (const entry of entries) {
     const group = bundleContributionGroup(entry.name);
@@ -264,9 +285,13 @@ if (analyzedBundle) {
   }
   bundleAnalysis = {
     artifact: analyzedBundle.path,
+    comparisonToPreviousAab: compareWithPreviousAab(analyzedBundle.sizeBytes),
     contributionGroups: [...contributionMap.entries()]
       .map(([group, contribution]) => ({ group, ...contribution }))
       .sort((left, right) => right.compressedBytes - left.compressedBytes || left.group.localeCompare(right.group)),
+    selectionSource: analyzedBundle.selectionSource,
+    sizeBytes: analyzedBundle.sizeBytes,
+    spotTheDifference: summarizeSpotBundleEntries(entries),
     top30Entries: [...entries]
       .sort((left, right) => right.compressedBytes - left.compressedBytes || left.name.localeCompare(right.name))
       .slice(0, 30),
@@ -362,6 +387,7 @@ const markdown = [
   "# App Size Audit",
   "",
   "This report is generated deterministically by `npm run audit:app-size`. Candidate lists require human review before deletion.",
+  "Set `APP_SIZE_AAB_PATH` to the current `.aab` to analyze that exact artifact; otherwise the newest local AAB is selected by modification time.",
   "",
   "## Asset inventory",
   "",
@@ -425,7 +451,12 @@ const markdown = [
   "",
   ...(bundleAnalysis ? [
     `Analyzed read-only: ${bundleAnalysis.artifact}`,
-    "This is a historical local artifact; it does not include current working-tree asset or JavaScript changes.",
+    `Selection: ${bundleAnalysis.selectionSource === "APP_SIZE_AAB_PATH" ? "explicit APP_SIZE_AAB_PATH" : "newest local AAB by modification time"}`,
+    `AAB upload size: ${bytesLabel(bundleAnalysis.sizeBytes)}`,
+    `Compared with ${bundleAnalysis.comparisonToPreviousAab.baselineLabel} (${bytesLabel(bundleAnalysis.comparisonToPreviousAab.baselineSizeBytes)}): ${comparisonLabel(bundleAnalysis.comparisonToPreviousAab)}`,
+    `Spot-the-Difference WebP bundle entries: ${bundleAnalysis.spotTheDifference.webpEntryCount} (${bytesLabel(bundleAnalysis.spotTheDifference.webpCompressedBytes)} compressed; ${bytesLabel(bundleAnalysis.spotTheDifference.webpUncompressedBytes)} raw)`,
+    `Obsolete Spot-the-Difference PNG bundle entries: ${bundleAnalysis.spotTheDifference.obsoletePngEntryCount} (${bundleAnalysis.spotTheDifference.obsoletePngAbsent ? "absent" : "present"})`,
+    "The analysis reflects the selected local artifact; source or JavaScript changes made after that artifact was built are not included.",
     "",
     "| Bundle area | ZIP-compressed size | Uncompressed size | Entries |",
     "| --- | ---: | ---: | ---: |",
@@ -462,4 +493,7 @@ fs.writeFileSync(path.join(outputDirectory, "app-size-audit.md"), `${markdown}\n
 
 console.log(`App size audit: ${assets.length} assets, ${bytesLabel(report.assets.totalBytes)} total.`);
 console.log(`Spot the Differences: ${completeSpotPairs} pairs, ${bytesLabel(spotTotalBytes)}.`);
+if (bundleAnalysis) {
+  console.log(`AAB analyzed: ${bundleAnalysis.artifact} (${bytesLabel(bundleAnalysis.sizeBytes)}).`);
+}
 console.log(`Reports: ${path.relative(root, outputDirectory)}`);

@@ -13,6 +13,8 @@ const deletionFunction = read("functions", "src", "accountDeletion.ts");
 const notifications = read("components", "NotificationCoordinator.tsx");
 const pushService = read("services", "notificationService.ts");
 const validator = read("scripts", "validate-ios-production-config.cjs");
+const legalValidator = read("config", "legalConfig.js");
+const eas = JSON.parse(read("eas.json"));
 
 assert.equal(config.includes('bundleIdentifier: IOS_BUNDLE_IDENTIFIER'), true);
 assert.equal(config.includes('supportsTablet: false'), true);
@@ -40,6 +42,8 @@ assert.equal(moderation.includes("alreadyReported"), true);
 assert.equal(contentSafety.includes("content_not_allowed"), true);
 assert.equal(validator.includes('APP_STORE_SUBMISSION_READY === "true"'), true);
 assert.equal(validator.includes("GOOGLE_SERVICES_INFO_PLIST"), true);
-assert.equal(validator.includes("must use a public HTTPS URL"), true);
+assert.equal(validator.includes("validateProductionLegalConfig"), true);
+assert.equal(legalValidator.includes("must be a valid public HTTPS URL"), true);
+assert.equal(eas.build.production.env.REQUIRE_PRODUCTION_LEGAL_CONFIG, "true");
 
 console.log("iOS config, contextual permissions, account deletion, and legal/settings discoverability checks passed.");

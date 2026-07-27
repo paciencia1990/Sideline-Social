@@ -21,6 +21,260 @@ const root = process.cwd();
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), "utf8");
 const occurrences = (source, pattern) => (source.match(pattern) ?? []).length;
 
+function parseTsx(...parts) {
+  const filePath = path.join(root, ...parts);
+  return {
+    filePath,
+    sourceFile: ts.createSourceFile(
+      filePath,
+      fs.readFileSync(filePath, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    ),
+  };
+}
+
+function getImportedLocalName(sourceFile, moduleName, exportName) {
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== moduleName
+    ) {
+      continue;
+    }
+    const namedImports = statement.importClause?.namedBindings;
+    if (!namedImports || !ts.isNamedImports(namedImports)) continue;
+    const imported = namedImports.elements.find(
+      (element) => (element.propertyName ?? element.name).text === exportName,
+    );
+    if (imported) return imported.name.text;
+  }
+  return null;
+}
+
+function getJsxTagName(node) {
+  const tagName = ts.isJsxElement(node)
+    ? node.openingElement.tagName
+    : ts.isJsxSelfClosingElement(node)
+      ? node.tagName
+      : null;
+  return tagName?.getText() ?? null;
+}
+
+function getJsxAttributes(node) {
+  if (ts.isJsxElement(node)) return node.openingElement.attributes.properties;
+  if (ts.isJsxSelfClosingElement(node)) return node.attributes.properties;
+  return [];
+}
+
+function getJsxAttribute(node, name) {
+  return getJsxAttributes(node).find(
+    (property) =>
+      ts.isJsxAttribute(property) &&
+      ts.isIdentifier(property.name) &&
+      property.name.text === name,
+  );
+}
+
+function hasIdentifierAttribute(node, attributeName, identifierName) {
+  const attribute = getJsxAttribute(node, attributeName);
+  const expression = attribute?.initializer && ts.isJsxExpression(attribute.initializer)
+    ? attribute.initializer.expression
+    : null;
+  return Boolean(expression && ts.isIdentifier(expression) && expression.text === identifierName);
+}
+
+function collectJsx(sourceNode, predicate) {
+  const matches = [];
+  const visit = (node) => {
+    if (
+      (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) &&
+      predicate(node)
+    ) {
+      matches.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceNode);
+  return matches;
+}
+
+function getBindingDefault(sourceFile, functionName, bindingName) {
+  let initializer = null;
+  const visit = (node) => {
+    if (
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === functionName &&
+      node.parameters.length > 0 &&
+      ts.isObjectBindingPattern(node.parameters[0].name)
+    ) {
+      const binding = node.parameters[0].name.elements.find(
+        (element) => (element.propertyName ?? element.name).getText() === bindingName,
+      );
+      initializer = binding?.initializer ?? null;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return initializer;
+}
+
+function isPlatformIosCondition(node) {
+  if (!ts.isBinaryExpression(node)) return false;
+  const operator = node.operatorToken.kind;
+  if (operator !== ts.SyntaxKind.EqualsEqualsEqualsToken && operator !== ts.SyntaxKind.EqualsEqualsToken) {
+    return false;
+  }
+  const isPlatformOs = (candidate) =>
+    ts.isPropertyAccessExpression(candidate) &&
+    ts.isIdentifier(candidate.expression) &&
+    candidate.expression.text === "Platform" &&
+    candidate.name.text === "OS";
+  const isIos = (candidate) => ts.isStringLiteral(candidate) && candidate.text === "ios";
+  return (
+    (isPlatformOs(node.left) && isIos(node.right)) ||
+    (isIos(node.left) && isPlatformOs(node.right))
+  );
+}
+
+function assertConditionalDefault(initializer, trueValue, falseValue, message) {
+  assert.ok(initializer && ts.isConditionalExpression(initializer), message);
+  assert.ok(isPlatformIosCondition(initializer.condition), message);
+  assert.ok(ts.isStringLiteral(initializer.whenTrue) && initializer.whenTrue.text === trueValue, message);
+  if (falseValue === undefined) {
+    assert.ok(ts.isIdentifier(initializer.whenFalse) && initializer.whenFalse.text === "undefined", message);
+  } else {
+    assert.ok(ts.isStringLiteral(initializer.whenFalse) && initializer.whenFalse.text === falseValue, message);
+  }
+}
+
+function assertSharedKeyboardAwareContract() {
+  const { sourceFile } = parseTsx("components", "KeyboardAwareScrollView.tsx");
+  const avoidingViews = collectJsx(sourceFile, (node) => getJsxTagName(node) === "KeyboardAvoidingView");
+  assert.equal(avoidingViews.length, 1, "The shared keyboard-aware component must have one native keyboard-resizing root.");
+
+  const scrollViews = collectJsx(avoidingViews[0], (node) => getJsxTagName(node) === "ScrollView");
+  assert.equal(scrollViews.length, 1, "The shared keyboard-aware component must keep its ScrollView inside KeyboardAvoidingView.");
+  const protectedNodes = new Set();
+  const visitProtectedTree = (node) => {
+    protectedNodes.add(node);
+    ts.forEachChild(node, visitProtectedTree);
+  };
+  visitProtectedTree(scrollViews[0]);
+  assert.ok(
+    [...protectedNodes].some(
+      (node) => ts.isJsxExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "children",
+    ),
+    "The shared ScrollView must render its form children inside the keyboard-resizing layout.",
+  );
+
+  assert.ok(
+    hasIdentifierAttribute(scrollViews[0], "keyboardDismissMode", "keyboardDismissMode"),
+    "The shared ScrollView must forward its keyboard-dismissal mode.",
+  );
+  assert.ok(
+    hasIdentifierAttribute(scrollViews[0], "keyboardShouldPersistTaps", "keyboardShouldPersistTaps"),
+    "The shared ScrollView must forward its keyboard tap policy.",
+  );
+  assert.ok(getJsxAttribute(scrollViews[0], "onFocus"), "The shared ScrollView must reveal newly focused inputs.");
+  assert.ok(
+    getJsxAttribute(scrollViews[0], "onContentSizeChange"),
+    "The shared ScrollView must re-evaluate visibility when multiline content grows.",
+  );
+
+  const dismissModeDefault = getBindingDefault(sourceFile, "KeyboardAwareScrollView", "keyboardDismissMode");
+  assertConditionalDefault(
+    dismissModeDefault,
+    "interactive",
+    "on-drag",
+    "Keyboard dismissal must remain interactive on iOS and on-drag on Android.",
+  );
+  const persistTapsDefault = getBindingDefault(sourceFile, "KeyboardAwareScrollView", "keyboardShouldPersistTaps");
+  assert.ok(
+    persistTapsDefault && ts.isStringLiteral(persistTapsDefault) && persistTapsDefault.text === "handled",
+    "Handled controls must remain tappable while the keyboard is open.",
+  );
+
+  const avoidingBehavior = getJsxAttribute(avoidingViews[0], "behavior");
+  const avoidingBehaviorExpression =
+    avoidingBehavior?.initializer && ts.isJsxExpression(avoidingBehavior.initializer)
+      ? avoidingBehavior.initializer.expression
+      : null;
+  assertConditionalDefault(
+    avoidingBehaviorExpression,
+    "padding",
+    undefined,
+    "The shared layout must use iOS padding while Android relies on native resize.",
+  );
+
+  let revealsFocusedInput = false;
+  const findFocusedInputReveal = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "scrollResponderScrollNativeHandleToKeyboard"
+    ) {
+      revealsFocusedInput = true;
+    }
+    ts.forEachChild(node, findFocusedInputReveal);
+  };
+  findFocusedInputReveal(sourceFile);
+  assert.equal(
+    revealsFocusedInput,
+    true,
+    "The shared component must scroll the focused native input above the keyboard.",
+  );
+}
+
+function assertProtectedTypingSurface(parts, inputBindings, submitControl) {
+  const { filePath, sourceFile } = parseTsx(...parts);
+  const label = path.relative(root, filePath).replaceAll("\\", "/");
+  const keyboardAwareName = getImportedLocalName(
+    sourceFile,
+    "@/components/KeyboardAwareScrollView",
+    "KeyboardAwareScrollView",
+  );
+  assert.ok(keyboardAwareName, `${label} must import the shared KeyboardAwareScrollView.`);
+
+  const wrappers = collectJsx(sourceFile, (node) => getJsxTagName(node) === keyboardAwareName);
+  assert.equal(wrappers.length, 1, `${label} must render one shared keyboard-aware form wrapper.`);
+  const protectedJsx = new Set(collectJsx(wrappers[0], () => true));
+
+  for (const { tagName, valueBinding, changeHandler } of inputBindings) {
+    const inputs = collectJsx(
+      sourceFile,
+      (node) =>
+        getJsxTagName(node) === tagName &&
+        hasIdentifierAttribute(node, "value", valueBinding) &&
+        hasIdentifierAttribute(node, "onChangeText", changeHandler),
+    );
+    assert.equal(inputs.length, 1, `${label} must render the controlled ${valueBinding} input exactly once.`);
+    assert.ok(
+      protectedJsx.has(inputs[0]),
+      `${label} must keep the ${valueBinding} input inside KeyboardAwareScrollView.`,
+    );
+  }
+
+  const submitControls = collectJsx(
+    sourceFile,
+    (node) =>
+      getJsxTagName(node) === submitControl.tagName &&
+      hasIdentifierAttribute(node, "onPress", submitControl.handler),
+  );
+  assert.equal(
+    submitControls.length,
+    1,
+    `${label} must render the ${submitControl.handler} submission control exactly once.`,
+  );
+  assert.ok(
+    protectedJsx.has(submitControls[0]),
+    `${label} must keep the ${submitControl.handler} submission control inside KeyboardAwareScrollView.`,
+  );
+}
+
 const { getFirstName, getPersistedDisplayName, resolveDisplayName } = require(path.join(root, "utils", "profileName.ts"));
 assert.equal(getFirstName(" Joann   Pollard "), "Joann");
 assert.equal(getFirstName("Mary-Jane O'Neill"), "Mary-Jane");
@@ -46,9 +300,42 @@ assert.equal(fs.existsSync(path.join(root, "app", "(auth)", "forgot-password.tsx
 const authLayout = read("app", "(auth)", "_layout.tsx");
 assert.equal(authLayout.includes("Redirect"), false, "The public auth layout must not redirect Reset Password while signed out.");
 
+assertSharedKeyboardAwareContract();
+assertProtectedTypingSurface(
+  ["app", "(auth)", "forgot-password.tsx"],
+  [{ tagName: "TextInput", valueBinding: "email", changeHandler: "setEmail" }],
+  { tagName: "TouchableOpacity", handler: "handleReset" },
+);
+assertProtectedTypingSurface(
+  ["app", "(auth)", "email-login.tsx"],
+  [
+    { tagName: "TextInput", valueBinding: "email", changeHandler: "setEmail" },
+    { tagName: "PasswordInput", valueBinding: "password", changeHandler: "setPassword" },
+  ],
+  { tagName: "TouchableOpacity", handler: "handleSignIn" },
+);
+assertProtectedTypingSurface(
+  ["app", "(auth)", "sign-up.tsx"],
+  [
+    { tagName: "TextInput", valueBinding: "firstName", changeHandler: "setFirstName" },
+    { tagName: "TextInput", valueBinding: "lastName", changeHandler: "setLastName" },
+    { tagName: "TextInput", valueBinding: "email", changeHandler: "setEmail" },
+    { tagName: "PasswordInput", valueBinding: "password", changeHandler: "setPassword" },
+    { tagName: "TextInput", valueBinding: "zipCode", changeHandler: "setZipCode" },
+    { tagName: "TextInput", valueBinding: "sport", changeHandler: "setSport" },
+  ],
+  { tagName: "TouchableOpacity", handler: "handleCreate" },
+);
+assertProtectedTypingSurface(
+  ["app", "(tabs)", "profile.tsx"],
+  [
+    { tagName: "TextInput", valueBinding: "firstName", changeHandler: "setFirstName" },
+    { tagName: "TextInput", valueBinding: "lastName", changeHandler: "setLastName" },
+  ],
+  { tagName: "PrimaryButton", handler: "handleSaveName" },
+);
+
 const forgotPassword = read("app", "(auth)", "forgot-password.tsx");
-assert.ok(forgotPassword.includes('behavior={Platform.OS === "ios" ? "padding" : undefined}'), "Android must rely on native keyboard resizing instead of a second height adjustment.");
-assert.ok(forgotPassword.includes('value={email} onChangeText={setEmail}'), "Reset Password email must remain controlled and stable.");
 assert.equal(forgotPassword.includes("useEffect"), false, "Reset Password must not initialize or navigate from an Effect.");
 assert.equal(forgotPassword.includes("router.replace"), false, "Reset Password must not imperatively redirect.");
 assert.equal(forgotPassword.includes("setTimeout"), false, "The flicker fix must not use a delay.");
@@ -122,4 +409,4 @@ assert.equal(translations.includes("Your sideline circle is waiting"), false, "T
 assert.equal(translations.includes("Tu circulo en la cancha te espera"), false, "The removed Home subtitle must not remain in Spanish.");
 assert.equal(translations.includes("Welcome, {{name}}"), false, "The obsolete email-compatible greeting must be removed.");
 
-console.log("Sign-up sport, password reset stability, team-code typography, and compact Home header checks passed.");
+console.log("Auth/profile keyboard protection, sign-up sport, password reset stability, team-code typography, and compact Home header checks passed.");

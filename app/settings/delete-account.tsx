@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Alert, StyleSheet, Text, TextInput } from "react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -28,7 +27,6 @@ export default function DeleteAccountScreen() {
     setError(null);
     try {
       await deleteOwnAccount(password);
-      await AsyncStorage.clear();
       await signOut();
       router.dismissAll();
       router.replace(SIGN_IN_ROUTE as never);

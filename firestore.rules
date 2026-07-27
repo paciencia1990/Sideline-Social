@@ -707,14 +707,11 @@ service cloud.firestore {
 
     // -----------------------------------------------------------------------
     // activity collection
-    // Authenticated users can read app activity. Users can only write their own
-    // activity entries.
+    // Historical activity is server-managed and has no active client consumer.
+    // Trusted Admin SDK writers and account cleanup bypass client rules.
     // -----------------------------------------------------------------------
     match /activity/{activityId} {
-      allow read: if signedIn();
-      allow create: if signedIn() &&
-        request.resource.data.userId == request.auth.uid;
-      allow update, delete: if false;
+      allow read, write: if false;
     }
   }
 }

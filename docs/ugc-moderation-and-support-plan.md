@@ -34,4 +34,4 @@ Server-side severe-content screening covers friend chat, text/voice team announc
 - Compare deployed Functions/rules to the reviewed source, deploy any differences through the owner-controlled release process, and emulator/physical-device test reporting, blocking, filtering, deletion, and coach moderation.
 - Confirm the review backend remains monitored throughout TestFlight and App Review.
 
-Support URL/email: **[OWNER REQUIRED]**.
+Support URL: **[OWNER REQUIRED]**. Monitored support email: `joann@joinsidelinesocial.com`.

@@ -7,12 +7,16 @@ function read(...segments) {
 }
 
 const legalConfig = read("config", "legal.ts");
+const legalValidation = read("config", "legalConfig.js");
 const legalScreen = read("app", "settings", "legal.tsx");
 const translations = read("i18n", "index.ts");
 
-assert.match(legalConfig, /joann@joinsidelinesocial\.com/);
+assert.match(legalConfig, /normalizePublicHttpsUrl/);
+assert.match(legalValidation, /joann@joinsidelinesocial\.com/);
 assert.match(legalScreen, /`mailto:\$\{SUPPORT_EMAIL\}`/);
 assert.match(legalScreen, /accessibilityRole="link"/);
+assert.match(legalScreen, /Linking\.openURL\(url\)/);
+assert.match(legalScreen, /Linking\.openURL\(SUPPORT_URL\)/);
 assert.match(legalScreen, /settings\.supportEmailAccessibility/);
 assert.match(legalScreen, /settings\.supportEmail/);
 assert.match(legalScreen, /settings\.privacyTitle/);
@@ -28,5 +32,12 @@ assert.equal(
   2,
   "support email accessibility label is localized in English and Spanish",
 );
+for (const key of ["openFullPolicy", "openTerms", "contactSupport"]) {
+  assert.equal(
+    (translations.match(new RegExp(`${key}:`, "g")) ?? []).length,
+    2,
+    `${key} must be localized in English and Spanish`,
+  );
+}
 
 console.log("Support contact email, mailto link, accessibility, localization, and preserved legal sections tests passed.");

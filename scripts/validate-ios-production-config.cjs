@@ -1,5 +1,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  SUPPORT_EMAIL,
+  validateProductionLegalConfig,
+} = require("../config/legalConfig");
 
 const root = path.resolve(__dirname, "..");
 const expectedBundleIdentifier = "com.sidelinesocial.app";
@@ -43,27 +47,19 @@ if (nativeFirebaseFile) {
   else warnings.push(message);
 }
 
-const requiredOwnerValues = [
-  "EXPO_PUBLIC_PRIVACY_POLICY_URL",
-  "EXPO_PUBLIC_TERMS_OF_USE_URL",
-  "EXPO_PUBLIC_SUPPORT_URL",
-  "EXPO_PUBLIC_SUPPORT_EMAIL",
-];
-const missingOwnerValues = requiredOwnerValues.filter((name) => !process.env[name]?.trim());
-if (process.env.APP_STORE_SUBMISSION_READY === "true" && missingOwnerValues.length) {
-  failures.push(`App Store submission is locked: configure ${missingOwnerValues.join(", ")}.`);
-} else if (missingOwnerValues.length) {
-  warnings.push(`Owner-supplied release values remain: ${missingOwnerValues.join(", ")}. Set APP_STORE_SUBMISSION_READY=true to enforce the submission gate.`);
-}
-
-if (process.env.APP_STORE_SUBMISSION_READY === "true") {
-  for (const name of requiredOwnerValues.slice(0, 3)) {
-    const value = process.env[name]?.trim() ?? "";
-    if (value && !value.startsWith("https://")) failures.push(`${name} must use a public HTTPS URL.`);
-  }
-  const email = process.env.EXPO_PUBLIC_SUPPORT_EMAIL?.trim() ?? "";
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
-    failures.push("EXPO_PUBLIC_SUPPORT_EMAIL must be a valid monitored email address.");
+const legalConfig = validateProductionLegalConfig({
+  privacyPolicyUrl: process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL,
+  termsOfUseUrl: process.env.EXPO_PUBLIC_TERMS_OF_USE_URL,
+  supportUrl: process.env.EXPO_PUBLIC_SUPPORT_URL,
+  supportEmail: SUPPORT_EMAIL,
+});
+if (!legalConfig.valid) {
+  if (process.env.APP_STORE_SUBMISSION_READY === "true") {
+    failures.push(...legalConfig.errors);
+  } else {
+    warnings.push(
+      `Production legal configuration remains incomplete. ${legalConfig.errors.join(" ")} Set APP_STORE_SUBMISSION_READY=true to enforce the submission gate.`,
+    );
   }
 }
 

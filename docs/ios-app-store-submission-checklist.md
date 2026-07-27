@@ -37,9 +37,9 @@ Legend: `[x]` repository-verified, `[ ]` required external/manual action, `[~]` 
 
 - [ ] Publish legally approved public HTTPS Privacy Policy.
 - [ ] Publish public HTTPS Terms of Use.
-- [ ] Publish public HTTPS Support page and a monitored support email.
-- [ ] Set `EXPO_PUBLIC_PRIVACY_POLICY_URL`, `EXPO_PUBLIC_TERMS_OF_USE_URL`, `EXPO_PUBLIC_SUPPORT_URL`, and `EXPO_PUBLIC_SUPPORT_EMAIL` in EAS production.
-- [ ] Run `APP_STORE_SUBMISSION_READY=true npm run validate:ios` with the production values.
+- [ ] Publish public HTTPS Support page and confirm `joann@joinsidelinesocial.com` remains the monitored support email.
+- [ ] Set `EXPO_PUBLIC_PRIVACY_POLICY_URL`, `EXPO_PUBLIC_TERMS_OF_USE_URL`, and `EXPO_PUBLIC_SUPPORT_URL` in EAS production.
+- [ ] Run `npm run validate:legal` and `APP_STORE_SUBMISSION_READY=true npm run validate:ios` with the production values.
 - [ ] Approve App Privacy answers against the data inventory.
 - [ ] Approve child-data, retention/deletion, moderation, and law-enforcement escalation language.
 - [ ] Establish moderation staffing, response targets, sanctions, and appeals.

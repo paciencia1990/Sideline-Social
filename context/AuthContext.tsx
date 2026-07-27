@@ -10,7 +10,9 @@ import {
 } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc, type DocumentData } from "firebase/firestore";
 import { auth, db } from "@/config/firebase";
+import { clearSignedInUserLocalState } from "@/services/localUserStateService";
 import { unregisterCurrentDeviceNotificationToken } from "@/services/notificationService";
+import { completeLocalSignOut } from "@/utils/localUserStateCore";
 import { readModeOnboardingState, type AppMode } from "@/utils/onboardingMode";
 import { resolveDisplayName } from "@/utils/profileName";
 import { setVoicePlaybackAuthorizationContext } from "@/utils/voicePlaybackCore";
@@ -227,11 +229,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.warn("[Notifications] sign-out cleanup unavailable:", getErrorCode(error));
       }
-      await firebaseSignOut(auth);
-      profileLoadVersion.current += 1;
-      setFirebaseUser(null);
-      setUser(null);
-      setLoading(false);
+      await completeLocalSignOut({
+        firebaseSignOut: () => firebaseSignOut(auth),
+        clearLocalUserState: clearSignedInUserLocalState,
+        reportFailure: (stage, error) => {
+          const label = stage === "firebase-sign-out" ? "Firebase sign-out" : "local sign-out cleanup";
+          console.warn(`[Auth] ${label} unavailable:`, getErrorCode(error));
+        },
+        resetLocalAuthContext: () => {
+          setVoicePlaybackAuthorizationContext(null);
+          profileLoadVersion.current += 1;
+          setFirebaseUser(null);
+          setUser(null);
+          setLoading(false);
+        },
+      });
     },
     signInWithGoogle: async () => {
       console.warn("Google sign-in is not configured yet.");

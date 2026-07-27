@@ -203,6 +203,17 @@ async function run() {
   assert.equal(weeklyReward.pointsAwarded, 5);
   assert.equal(weeklyReward.sidelineStars, 76);
   assert.equal((await completeWeekly({ weekKey: assignment.weekKey })).data.pointsAwarded, 0);
+  const weeklyActivityId = `weeklyChallenge_${assignment.weekKey}_${parentA.uid}`;
+  const weeklyActivitySnapshot = await db.collection("activity").doc(weeklyActivityId).get();
+  assert.equal(weeklyActivitySnapshot.exists, true, "the trusted backend still creates weekly activity history");
+  const weeklyActivity = weeklyActivitySnapshot.data();
+  assert.equal(weeklyActivity.type, "complete_challenge");
+  assert.equal(weeklyActivity.userId, parentA.uid);
+  assert.equal(weeklyActivity.challengeId, assignment.challengeId);
+  assert.equal(weeklyActivity.weekKey, assignment.weekKey);
+  assert.equal(typeof weeklyActivity.createdAt?.toDate, "function");
+  const weeklyActivities = await db.collection("activity").where("userId", "==", parentA.uid).get();
+  assert.equal(weeklyActivities.size, 1, "an idempotent retry must not duplicate trusted activity history");
 
   const secondLeaderboard = (await getLeaderboardA({ squadId: secondSquadId })).data;
   await waitForSeasonStars(squadId, firstSeason.seasonId, parentA.uid, 66);

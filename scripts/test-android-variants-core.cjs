@@ -47,6 +47,9 @@ assert.equal(eas.build.development.autoIncrement, undefined);
 assert.equal(eas.build.production.developmentClient, false);
 assert.equal(eas.build.production.android.buildType, "app-bundle");
 assert.equal(eas.build.production.env.APP_VARIANT, "production");
+assert.equal(eas.build.production.env.REQUIRE_PRODUCTION_LEGAL_CONFIG, "true");
+assert.equal(eas.build.development.env.REQUIRE_PRODUCTION_LEGAL_CONFIG, undefined);
+assert.match(read("app.config.js"), /assertProductionLegalConfig\(\{/u);
 assert.equal(packageJson.scripts["start:dev-client"], "expo start --dev-client --scheme sidelinesquad-dev");
 
 const gradle = read("android", "app", "build.gradle");

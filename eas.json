@@ -29,7 +29,8 @@
       "environment": "production",
       "node": "24.16.0",
       "env": {
-        "APP_VARIANT": "production"
+        "APP_VARIANT": "production",
+        "REQUIRE_PRODUCTION_LEGAL_CONFIG": "true"
       },
       "android": {
         "buildType": "app-bundle"

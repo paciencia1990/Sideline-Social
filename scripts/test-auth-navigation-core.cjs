@@ -95,9 +95,19 @@ const authContext = read("context", "AuthContext.tsx");
 const listenerIndex = authContext.indexOf("onAuthStateChanged(auth");
 const listenerEffectEnd = authContext.indexOf("}, []);", listenerIndex);
 const cleanupIndex = authContext.indexOf("await unregisterCurrentDeviceNotificationToken();");
-const firebaseSignOutIndex = authContext.indexOf("await firebaseSignOut(auth);");
+const localSignOutIndex = authContext.indexOf("await completeLocalSignOut({", cleanupIndex);
+const firebaseSignOutIndex = authContext.indexOf(
+  "firebaseSignOut: () => firebaseSignOut(auth)",
+  localSignOutIndex,
+);
+const localStateCleanupIndex = authContext.indexOf(
+  "clearLocalUserState: clearSignedInUserLocalState",
+  localSignOutIndex,
+);
 assert.ok(listenerIndex >= 0 && listenerEffectEnd > listenerIndex, "The Firebase auth listener must be registered once.");
 assert.ok(cleanupIndex >= 0, "Notification-token cleanup must remain in sign-out.");
-assert.ok(firebaseSignOutIndex > cleanupIndex, "Firebase sign-out must follow notification cleanup.");
+assert.ok(localSignOutIndex > cleanupIndex, "Shared local sign-out must follow notification cleanup.");
+assert.ok(firebaseSignOutIndex > localSignOutIndex, "Shared sign-out must receive Firebase sign-out.");
+assert.ok(localStateCleanupIndex > localSignOutIndex, "Shared sign-out must receive local-state cleanup.");
 
 console.log("Declarative auth/onboarding protection, public routes, welcome buttons, and sign-out checks passed.");

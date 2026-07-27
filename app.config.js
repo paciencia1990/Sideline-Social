@@ -1,9 +1,23 @@
+const {
+  SUPPORT_EMAIL,
+  assertProductionLegalConfig,
+} = require("./config/legalConfig");
+
 const IOS_BUNDLE_IDENTIFIER = "com.sidelinesocial.app";
 const APP_VARIANT = process.env.APP_VARIANT === "development" ? "development" : "production";
 const IS_DEVELOPMENT = APP_VARIANT === "development";
 const ANDROID_PACKAGE = IS_DEVELOPMENT ? "com.sidelinesquad.app.dev" : "com.sidelinesquad.app";
 const APP_NAME = IS_DEVELOPMENT ? "Sideline Social Dev" : "Sideline Social";
 const APP_SCHEME = IS_DEVELOPMENT ? "sidelinesquad-dev" : "sidelinesquad";
+
+if (!IS_DEVELOPMENT && process.env.REQUIRE_PRODUCTION_LEGAL_CONFIG === "true") {
+  assertProductionLegalConfig({
+    privacyPolicyUrl: process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL,
+    termsOfUseUrl: process.env.EXPO_PUBLIC_TERMS_OF_USE_URL,
+    supportUrl: process.env.EXPO_PUBLIC_SUPPORT_URL,
+    supportEmail: SUPPORT_EMAIL,
+  });
+}
 
 module.exports = ({ config }) => ({
   ...config,
@@ -43,6 +57,7 @@ module.exports = ({ config }) => ({
 
   android: {
     package: ANDROID_PACKAGE,
+    allowBackup: false,
     versionCode: 5,
     softwareKeyboardLayoutMode: "resize",
     ...(IS_DEVELOPMENT
@@ -69,6 +84,7 @@ module.exports = ({ config }) => ({
   },
 
   plugins: [
+    "./plugins/withAndroidBackupProtection",
     "expo-router",
     "@react-native-community/datetimepicker",
     "expo-web-browser",
