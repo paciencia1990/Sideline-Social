@@ -11,6 +11,7 @@ const functionsPackagePath = path.join(functionsDirectory, "package.json");
 const functionsLockPath = path.join(functionsDirectory, "package-lock.json");
 const functionsPackage = readJson(functionsPackagePath);
 const firebaseConfig = readJson(path.join(root, "firebase.json"));
+const functionsRuntimePin = fs.readFileSync(path.join(functionsDirectory, ".nvmrc"), "utf8").trim();
 
 assert.equal(
   fs.existsSync(functionsLockPath),
@@ -19,6 +20,36 @@ assert.equal(
 );
 
 const functionsLock = readJson(functionsLockPath);
+assert.equal(
+  functionsPackage.engines?.node,
+  "22",
+  "Cloud Functions must declare the supported Node.js 22 runtime.",
+);
+assert.equal(
+  firebaseConfig.functions?.runtime,
+  "nodejs22",
+  "firebase.json must explicitly agree with the Functions Node.js 22 engine.",
+);
+assert.equal(
+  functionsLock.packages?.[""]?.engines?.node,
+  "22",
+  "The Functions lockfile root metadata must agree with the Node.js 22 runtime.",
+);
+assert.match(
+  functionsPackage.devDependencies?.["@types/node"] ?? "",
+  /^\^22(?:\.|$)/u,
+  "Functions TypeScript declarations must target Node.js 22.",
+);
+assert.match(
+  functionsRuntimePin,
+  /^22\./u,
+  "The Functions-specific .nvmrc must pin a Node.js 22 release.",
+);
+assert.notEqual(
+  rootPackage.engines?.node,
+  functionsPackage.engines?.node,
+  "The Expo application runtime declaration must remain separate from the Functions runtime.",
+);
 const dependencyGroups = [
   functionsPackage.dependencies,
   functionsPackage.devDependencies,
@@ -91,7 +122,7 @@ assert.ok(
   "Firebase Functions deployment must build TypeScript from a clean checkout before packaging.",
 );
 
-console.log("Cloud Functions package and lockfile contain no parent-package dependency or developer-machine path.");
+console.log("Cloud Functions Node.js 22 runtime, package, lockfile, and isolation checks passed.");
 
 function isLocalDependencySpecifier(value) {
   return typeof value === "string" && (

@@ -17,6 +17,7 @@
     "validate:legal": "node scripts/validate-production-legal-config.cjs",
     "validate:ios": "node scripts/validate-ios-production-config.cjs",
     "test:functions-packaging": "node scripts/test-functions-packaging.cjs",
+    "test:functions-node22-reproducibility": "node scripts/test-functions-node22-reproducibility.cjs",
     "test:android-backup-config": "node scripts/test-android-backup-config.cjs",
     "validate:android-backup-release": "node scripts/validate-android-backup-release.cjs",
     "test:android-variants": "node scripts/test-android-variants-core.cjs",

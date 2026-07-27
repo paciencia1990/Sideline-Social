@@ -3,6 +3,8 @@
 Date: 2026-07-27
 Repository: `C:\Dev\Sideline_Social_Code`
 
+> Historical snapshot: this report records the state of the original hardening audit. The public legal URLs were subsequently configured in the EAS production environment, the hardening work was committed as `f417d16`, and the local Cloud Functions configuration was migrated to Node.js 22. Production Functions remain on Node.js 20 until an explicitly authorized deployment. See `docs/node-22-functions-migration.md` for the current Functions migration state.
+
 ## Release recommendation
 
 **Not ready for a new signed build or store submission.**
