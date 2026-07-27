@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppState,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import { Image } from "expo-image";
 import {
   Gesture,
   GestureDetector,
@@ -43,7 +43,9 @@ import {
   type SpotDifferenceScene,
 } from "@/src/game/spotDifference/spotDifferenceScenes";
 import {
+  calculateContainedImageLayout,
   clampSpotDifferenceTranslation,
+  scaleSpotDifferenceTransformAroundFocalPoint,
   screenPointToSourcePoint,
   type ImageRect,
   type NormalizedPoint,
@@ -118,8 +120,14 @@ export default function SpotDifferenceScreen() {
   const isComplete = currentScene ? foundIds.length === differences.length : false;
   const elapsedSeconds = ROUND_SECONDS - secondsLeft;
   const imageRects = useMemo(() => ({
-    A: currentScene ? calculateContainedImageLayout(sceneLayouts.A, currentScene) : null,
-    B: currentScene ? calculateContainedImageLayout(sceneLayouts.B, currentScene) : null,
+    A: currentScene ? calculateContainedImageLayout(sceneLayouts.A, {
+      width: currentScene.sourceWidth,
+      height: currentScene.sourceHeight,
+    }) : null,
+    B: currentScene ? calculateContainedImageLayout(sceneLayouts.B, {
+      width: currentScene.sourceWidth,
+      height: currentScene.sourceHeight,
+    }) : null,
   }), [currentScene, sceneLayouts.A, sceneLayouts.B]);
   const zoomViewport = sceneLayouts.B.width && sceneLayouts.B.height ? sceneLayouts.B : sceneLayouts.A;
   const zoomImageRect = imageRects.B ?? imageRects.A;
@@ -599,6 +607,8 @@ function SceneCard({
   const panStartScale = useSharedValue(MIN_ZOOM);
   const panTouchStartX = useSharedValue(0);
   const panTouchStartY = useSharedValue(0);
+  const panWasActive = useSharedValue(false);
+  const pinchIsActive = useSharedValue(false);
   const tapBlockedByMultitouch = useSharedValue(false);
   const composedGesture = useMemo(() => {
     const settleTransform = () => {
@@ -645,6 +655,7 @@ function SceneCard({
     const pinch = Gesture.Pinch()
       .blocksExternalGesture(scrollGesture)
       .onBegin(() => {
+        pinchIsActive.value = true;
         tapBlockedByMultitouch.value = true;
       })
       .onStart(() => {
@@ -663,18 +674,33 @@ function SceneCard({
         const centerY = viewportHeight.value / 2;
         const focalX = Number.isFinite(event.focalX) ? event.focalX : centerX;
         const focalY = Number.isFinite(event.focalY) ? event.focalY : centerY;
-        const ratio = nextScale / pinchStartScale.value;
+        const nextTransform = scaleSpotDifferenceTransformAroundFocalPoint(
+          {
+            scale: pinchStartScale.value,
+            translateX: pinchStartTranslateX.value,
+            translateY: pinchStartTranslateY.value,
+          },
+          { x: focalX, y: focalY },
+          { width: viewportWidth.value, height: viewportHeight.value },
+          nextScale,
+          MIN_ZOOM,
+          MAX_ZOOM,
+        );
 
-        scale.value = nextScale;
-        translateX.value = focalX - centerX - ratio * (focalX - centerX - pinchStartTranslateX.value);
-        translateY.value = focalY - centerY - ratio * (focalY - centerY - pinchStartTranslateY.value);
+        scale.value = nextTransform.scale;
+        translateX.value = nextTransform.translateX;
+        translateY.value = nextTransform.translateY;
       })
-      .onFinalize(settleTransform);
+      .onFinalize(() => {
+        pinchIsActive.value = false;
+        settleTransform();
+      });
     const pan = Gesture.Pan()
       .maxPointers(1)
       .manualActivation(true)
       .blocksExternalGesture(scrollGesture)
       .onTouchesDown((event, state) => {
+        panWasActive.value = false;
         if (roundEnded.value || scale.value <= MIN_ZOOM + ZOOM_EPSILON) {
           state.fail();
           return;
@@ -701,6 +727,7 @@ function SceneCard({
         if (distance >= PAN_MIN_DISTANCE) state.activate();
       })
       .onStart(() => {
+        panWasActive.value = true;
         cancelAnimation(scale);
         cancelAnimation(translateX);
         cancelAnimation(translateY);
@@ -714,8 +741,10 @@ function SceneCard({
         translateX.value = panStartTranslateX.value + event.translationX;
         translateY.value = panStartTranslateY.value + event.translationY;
       })
-      .onFinalize((_event, success) => {
-        if (success) settleTransform();
+      .onFinalize(() => {
+        const shouldSettle = panWasActive.value && !pinchIsActive.value;
+        panWasActive.value = false;
+        if (shouldSettle) settleTransform();
       });
     const singleTap = Gesture.Tap()
       .maxDistance(PAN_MIN_DISTANCE)
@@ -745,9 +774,11 @@ function SceneCard({
     panStartTranslateY,
     panTouchStartX,
     panTouchStartY,
+    panWasActive,
     pinchStartScale,
     pinchStartTranslateX,
     pinchStartTranslateY,
+    pinchIsActive,
     roundEnded,
     scale,
     scrollGesture,
@@ -770,7 +801,7 @@ function SceneCard({
     >
       <Animated.View style={[styles.transformedSceneContent, zoomControls.animatedStyle]}>
         <Image
-          contentFit="contain"
+          resizeMode="contain"
           source={variant === "A" ? scene.imageA : scene.imageB}
           style={styles.sceneImage}
         />
@@ -826,23 +857,6 @@ function selectNextScene(usedSceneIds: string[]) {
   }
 
   return scenePool[Math.floor(Math.random() * scenePool.length)];
-}
-
-function calculateContainedImageLayout(container: SceneSize, scene: SpotDifferenceScene): ImageRect | null {
-  if (!container.width || !container.height) {
-    return null;
-  }
-
-  const baseImageScale = Math.min(container.width / scene.sourceWidth, container.height / scene.sourceHeight);
-  const width = scene.sourceWidth * baseImageScale;
-  const height = scene.sourceHeight * baseImageScale;
-
-  return {
-    width,
-    height,
-    offsetX: (container.width - width) / 2,
-    offsetY: (container.height - height) / 2,
-  };
 }
 
 function findDifferenceAtPoint(differences: SpotDifferencePoint[], tap: NormalizedPoint) {

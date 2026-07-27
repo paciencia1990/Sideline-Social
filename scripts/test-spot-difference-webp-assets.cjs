@@ -40,8 +40,9 @@ assert.equal(
   false,
   "The scene registry must not reference obsolete PNG assets.",
 );
-assert.match(screenSource, /import \{ Image \} from "expo-image";/u, "The renderer must use Expo Image for WebP scenes.");
-assert.match(screenSource, /contentFit="contain"/u, "The renderer must preserve contain sizing.");
+assert.match(screenSource, /AppState,\s+Image,/su, "The renderer must preserve React Native Image gesture behavior.");
+assert.match(screenSource, /resizeMode="contain"/u, "The renderer must preserve contain sizing.");
+assert.doesNotMatch(screenSource, /from "expo-image"/u, "The regressing Expo Image renderer must not be restored.");
 
 const metroConfig = require(path.join(root, "metro.config.js"));
 assert.ok(metroConfig.resolver.assetExts.includes("webp"), "Metro must recognize WebP as a static asset.");

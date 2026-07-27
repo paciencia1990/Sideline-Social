@@ -177,15 +177,25 @@ assert.deepEqual(
 );
 
 const spotScreen = read("src", "game", "spotDifference", "SpotDifferenceScreen.tsx");
-assert.match(spotScreen, /from "expo-image"/, "Spot-the-Difference scenes must use Expo Image for cross-platform WebP support.");
-assert.match(spotScreen, /contentFit="contain"/, "WebP scenes must preserve contained image layout.");
+assert.match(spotScreen, /AppState,\s+Image,/s, "Spot-the-Difference scenes must retain React Native Image gesture behavior.");
+assert.match(spotScreen, /resizeMode="contain"/, "WebP scenes must preserve contained image layout.");
+assert.doesNotMatch(spotScreen, /from "expo-image"/, "The regressing Expo Image renderer must not be restored.");
 assert.match(spotScreen, /Gesture\.Native\(\)/, "The parent ScrollView must participate in gesture arbitration.");
 assert.match(spotScreen, /simultaneousWithExternalGesture\(scrollGesture\)/, "Image gestures must coexist with native scrolling.");
 assert.match(spotScreen, /\.manualActivation\(true\)/, "One-finger image pan must use explicit activation arbitration.");
 assert.match(spotScreen, /scale\.value <= MIN_ZOOM \+ ZOOM_EPSILON[\s\S]*state\.fail\(\)/, "At default zoom, image pan must fail immediately so native scrolling wins.");
 assert.match(spotScreen, /\.blocksExternalGesture\(scrollGesture\)/, "Pinch and zoomed pan must take precedence over native scroll after activation.");
 assert.match(spotScreen, /\.maxDistance\(PAN_MIN_DISTANCE\)/, "A swipe must fail the tap recognizer.");
-assert.match(spotScreen, /\.onFinalize\(settleTransform\)/, "Pinch cancellation and failure must settle the transform.");
+assert.match(
+  spotScreen,
+  /pinchIsActive\.value = false;\s+settleTransform\(\);/,
+  "Pinch cancellation and failure must settle the transform.",
+);
+assert.match(
+  spotScreen,
+  /panWasActive\.value && !pinchIsActive\.value/,
+  "Interrupted active pans must settle without racing an active pinch.",
+);
 assert.match(spotScreen, /useSharedValue/, "Zoom and pan values must stay on the UI thread.");
 assert.match(spotScreen, /useAnimatedStyle/, "The scene transform must be driven by Reanimated.");
 assert.match(spotScreen, /runOnJS\(onTap\)/, "Only a completed tap should cross back to JavaScript.");
