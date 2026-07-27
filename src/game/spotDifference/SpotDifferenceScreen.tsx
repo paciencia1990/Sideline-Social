@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppState,
-  Image,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import {
   Gesture,
   GestureDetector,
@@ -769,7 +769,11 @@ function SceneCard({
       }}
     >
       <Animated.View style={[styles.transformedSceneContent, zoomControls.animatedStyle]}>
-        <Image source={variant === "A" ? scene.imageA : scene.imageB} style={styles.sceneImage} resizeMode="contain" />
+        <Image
+          contentFit="contain"
+          source={variant === "A" ? scene.imageA : scene.imageB}
+          style={styles.sceneImage}
+        />
         {imageRect ? scene.differences.map((zone) => (
           foundSet.has(zone.id) ? <FoundMarker key={zone.id} zone={zone} imageRect={imageRect} /> : null
         )) : null}

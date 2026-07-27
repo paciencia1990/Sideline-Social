@@ -20,6 +20,7 @@
     "test:auth-navigation": "node scripts/test-auth-navigation-core.cjs",
     "test:auth-profile-ui": "node scripts/test-auth-profile-ui-core.cjs",
     "test:post-sdk57-regressions": "node scripts/test-post-sdk57-regressions.cjs",
+    "test:spot-difference-assets": "node scripts/test-spot-difference-webp-assets.cjs",
     "test:trivia-answer-feedback": "node scripts/test-trivia-answer-feedback.cjs",
     "test:start-mode-onboarding": "node scripts/test-start-mode-onboarding-core.cjs",
     "test:icebreaker": "node scripts/test-icebreaker-core.cjs",

@@ -218,7 +218,7 @@ for (const asset of assets) {
   totalsByCategory[asset.category].sizeBytes += asset.sizeBytes;
 }
 
-const spotPattern = /^assets\/games\/spot-the-difference\/scene_(\d{3})_([AB])\.png$/;
+const spotPattern = /^assets\/games\/spot-the-difference\/scene_(\d{3})_([AB])\.webp$/;
 const spotSceneAssets = assets.filter((asset) => spotPattern.test(asset.path));
 const spotScenes = new Map();
 for (const asset of spotSceneAssets) {

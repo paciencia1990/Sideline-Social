@@ -177,6 +177,8 @@ assert.deepEqual(
 );
 
 const spotScreen = read("src", "game", "spotDifference", "SpotDifferenceScreen.tsx");
+assert.match(spotScreen, /from "expo-image"/, "Spot-the-Difference scenes must use Expo Image for cross-platform WebP support.");
+assert.match(spotScreen, /contentFit="contain"/, "WebP scenes must preserve contained image layout.");
 assert.match(spotScreen, /Gesture\.Native\(\)/, "The parent ScrollView must participate in gesture arbitration.");
 assert.match(spotScreen, /simultaneousWithExternalGesture\(scrollGesture\)/, "Image gestures must coexist with native scrolling.");
 assert.match(spotScreen, /\.manualActivation\(true\)/, "One-finger image pan must use explicit activation arbitration.");
@@ -201,8 +203,8 @@ for (let index = 1; index <= 21; index += 1) {
   const scene = JSON.parse(read("assets", "games", "spot-the-difference", `scene_${sceneId}.json`));
   const differences = Array.isArray(scene) ? scene : scene.differences;
   assert.equal(differences.length, 10, `scene_${sceneId} must keep its 10 differences.`);
-  assert.ok(fs.existsSync(path.join(root, "assets", "games", "spot-the-difference", `scene_${sceneId}_A.png`)));
-  assert.ok(fs.existsSync(path.join(root, "assets", "games", "spot-the-difference", `scene_${sceneId}_B.png`)));
+  assert.ok(fs.existsSync(path.join(root, "assets", "games", "spot-the-difference", `scene_${sceneId}_A.webp`)));
+  assert.ok(fs.existsSync(path.join(root, "assets", "games", "spot-the-difference", `scene_${sceneId}_B.webp`)));
 }
 
 const passwordInput = read("components", "PasswordInput.tsx");
