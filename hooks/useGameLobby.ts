@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { onSnapshot, orderBy, query } from 'firebase/firestore';
-import { onValue, ref, update } from 'firebase/database';
+import { onValue, ref } from 'firebase/database';
+import { useTranslation } from 'react-i18next';
 
 import { rtdb } from '@/config/firebase';
 import { useAuth } from '@/context/AuthContext';
@@ -12,6 +13,7 @@ import {
   getGameJoinCodeForSession,
   readGameJoinCodeFailureReason,
   releaseGameJoinCode,
+  setRealtimeGamePlayerReady,
   updateGameJoinCodeStatus,
   type GameJoinCodeFailureReason,
   type GameJoinCodeType,
@@ -38,6 +40,7 @@ type GameCodeState = 'loading' | 'ready' | 'error' | 'local';
 
 type GameLobbyState = {
   sessionId: string;
+  minPlayers: number;
   players: LobbyPlayers;
   codeState: GameCodeState;
   codeError: GameJoinCodeFailureReason | null;
@@ -64,6 +67,7 @@ type RealtimeLobbyRecord = {
 const COUNTDOWN_DURATION_MS = 3000;
 
 export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
+  const { t } = useTranslation();
   const { user, loading: authLoading } = useAuth();
   const { selectedSquadId } = useSquad();
   const params = useLocalSearchParams<{
@@ -72,12 +76,14 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     host?: string | string[];
   }>();
   const routeSessionId = normalizeParam(params.sessionId);
-  const isLocal = normalizeParam(params.local) === '1';
+  const isLocal = __DEV__ && normalizeParam(params.local) === '1';
   const isHostRoute = normalizeParam(params.host) === '1';
   const shouldHostSession = isHostRoute || !routeSessionId;
   const gameType = joinCodeGameType(gameId);
+  const minPlayers = minimumPlayersForGame(gameId);
   const currentUserId = user?.uid ?? '';
-  const currentUserName = getUserName(user?.displayName, user?.email);
+  const fallbackPlayerName = t('games.playerFallback');
+  const currentUserName = getUserName(user?.displayName, user?.email, fallbackPlayerName);
 
   const [sessionId, setSessionId] = useState(routeSessionId);
   const [joinCode, setJoinCode] = useState('');
@@ -174,7 +180,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
       const unsubscribePlayers = onSnapshot(playersQuery, (snapshot) => {
         setPlayerList(snapshot.docs.map((document) => ({
           id: document.id,
-          name: String(document.data().name ?? 'Player'),
+          name: String(document.data().name ?? fallbackPlayerName),
           ready: Boolean(document.data().ready),
         })));
       });
@@ -187,10 +193,10 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     return onValue(ref(rtdb, `/gameSessions/${sessionId}`), (snapshot) => {
       const session = snapshot.val() as RealtimeLobbyRecord | null;
       setHostUserId(session?.hostUserId ?? '');
-      setPlayerList(normalizeRealtimePlayers(session?.players));
+      setPlayerList(normalizeRealtimePlayers(session?.players, fallbackPlayerName));
       if (session?.status === 'active' || session?.status === 'countdown') setShowCountdown(true);
     });
-  }, [gameType, isLocal, sessionId]);
+  }, [fallbackPlayerName, gameType, isLocal, sessionId]);
 
   const activePlayerList = isLocal ? localPlayers : playerList;
   const effectiveUserId = currentUserId || 'local-player';
@@ -227,12 +233,8 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
       void togglePlayerReady(sessionId, currentUserId, !self.ready);
       return;
     }
-    void update(ref(rtdb, `/gameSessions/${sessionId}/players/${currentUserId}`), {
-      displayName: self.name || currentUserName,
-      isReady: !self.ready,
-      isConnected: true,
-    });
-  }, [currentUserId, currentUserName, effectiveUserId, gameType, isLocal, self.name, self.ready, sessionId]);
+    void setRealtimeGamePlayerReady({ sessionId, ready: !self.ready });
+  }, [currentUserId, effectiveUserId, gameType, isLocal, self.ready, sessionId]);
 
   const startGame = useCallback(() => {
     if (!players.isHost) return;
@@ -241,11 +243,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     void (async () => {
       if (gameType === 'triviaBlitz') {
         await startTriviaSession(sessionId);
-      } else {
-        await update(ref(rtdb, `/gameSessions/${sessionId}`), {
-          status: 'active',
-          startedAt: Date.now(),
-        });
+        return;
       }
       await updateGameJoinCodeStatus({ gameType, sessionId, status: 'started' });
     })().catch(() => setShowCountdown(false));
@@ -266,6 +264,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
 
   return {
     sessionId,
+    minPlayers,
     players,
     codeState,
     codeError,
@@ -291,23 +290,35 @@ function joinCodeGameType(gameId: LobbyGameId): GameJoinCodeType {
   return 'triviaBlitz';
 }
 
+function minimumPlayersForGame(gameId: LobbyGameId) {
+  if (gameId === 'spot-the-difference') return 4;
+  return 2;
+}
+
 function createLocalPlayers(currentUserId: string, currentUserName: string): LobbyPlayer[] {
   return [{ id: currentUserId, name: currentUserName, ready: false }];
 }
 
-function normalizeRealtimePlayers(players: RealtimeLobbyRecord['players']): LobbyPlayer[] {
+function normalizeRealtimePlayers(
+  players: RealtimeLobbyRecord['players'],
+  fallbackPlayerName: string,
+): LobbyPlayer[] {
   if (!players) return [];
   return Object.entries(players).map(([id, player]) => ({
     id,
-    name: player.displayName ?? player.name ?? 'Player',
+    name: player.displayName ?? player.name ?? fallbackPlayerName,
     ready: Boolean(player.isReady ?? player.ready),
   }));
 }
 
-function getUserName(displayName?: string | null, email?: string | null) {
+function getUserName(
+  displayName: string | null | undefined,
+  email: string | null | undefined,
+  fallbackPlayerName: string,
+) {
   if (displayName?.trim()) return displayName.trim();
-  if (email?.trim()) return email.split('@')[0] || 'Player';
-  return 'Player';
+  if (email?.trim()) return email.split('@')[0] || fallbackPlayerName;
+  return fallbackPlayerName;
 }
 
 export { COUNTDOWN_DURATION_MS };

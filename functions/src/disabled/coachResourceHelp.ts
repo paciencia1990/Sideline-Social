@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
 import {
   createCoachHelpSafetyResult,
   isCoachHelpSafetySensitive,
@@ -17,7 +17,9 @@ import {
   validateCoachHelpResult,
   type ValidatedCoachHelpRequest,
 } from '../coachResourceHelpCore';
+import { permanentAccountFunctions } from '../permanentAuth';
 
+const functions = permanentAccountFunctions(firebaseFunctions);
 const coachHelpFunctions = functions.region('us-central1').runWith({
   secrets: ['COACH_AI_API_KEY', 'COACH_AI_ENDPOINT'],
   timeoutSeconds: 30,

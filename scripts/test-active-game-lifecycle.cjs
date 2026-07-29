@@ -93,7 +93,16 @@ const functionSource = read("functions", "src", "gameJoinCodes.ts");
 assert.match(functionSource, /serverNowMs = Date\.now\(\)/);
 assert.match(functionSource, /expireRealtimeGameSession/);
 assert.match(functionSource, /status: 'expired'/);
-assert.match(functionSource, /startedAt: serverNowMs/, "game start time is normalized by trusted server time");
+assert.match(
+  functionSource,
+  /startRealtimeGameSession[\s\S]*reference\.transaction[\s\S]*startedAt: typeof session\.startedAt === 'number' \? session\.startedAt : serverNowMs/,
+  "game start time is normalized inside the trusted RTDB transaction",
+);
+assert.match(
+  functionSource,
+  /playerEntries\.length < configuredMinimum[\s\S]*participants_not_ready/,
+  "minimum-player and readiness checks execute in the same trusted start path",
+);
 assert.match(functionSource, /resolveRealtimeJoinState\(initialSession, joinCodeStatus, uid, Date\.now\(\)\)/);
 
 const serviceSource = read("services", "gameService.ts");

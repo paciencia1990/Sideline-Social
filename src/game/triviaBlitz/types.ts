@@ -1,5 +1,12 @@
 export type TriviaStatus = "lobby" | "playing" | "results";
 
+/**
+ * The public question projection that participants may read.
+ *
+ * The answer key deliberately does not belong in this type. Correctness is
+ * disclosed by the backend only in `answerResult`, after a submission has
+ * been accepted.
+ */
 export type TriviaQuestion = {
   id: string;
   category: string;
@@ -7,7 +14,6 @@ export type TriviaQuestion = {
   question_es: string;
   options_en: string[];
   options_es: string[];
-  answer: number;
 };
 
 export type TriviaPlayer = {
@@ -25,25 +31,41 @@ export type TriviaSelection = {
   selectedAt: number;
 };
 
+export type ScoreResult = {
+  correct: boolean;
+  pointsAwarded: number;
+  streakBonusAwarded: number;
+  correctAnswerIndex: number;
+};
+
+export type TriviaAnswerResult = ScoreResult & {
+  questionIndex: number;
+  playerId?: string;
+  answerIndex?: number;
+  submissionId?: string;
+  revealedAt?: unknown;
+};
+
 export type TriviaSession = {
   status: TriviaStatus;
   turnIndex: number;
   questionIndex: number;
+  questionCount: number;
   teamStreak: number;
   totalPoints: number;
   correctAnswers: number;
   answeredQuestions: number;
   totalPlayers: number;
-  selectedQuestions: TriviaQuestion[];
   allReady: boolean;
+  currentQuestion: TriviaQuestion | null;
   currentSelection: TriviaSelection | null;
-  selectionRevealed: boolean;
-  hostPlayerId?: string;
-  sessionCode?: string;
+  answerResult: TriviaAnswerResult | null;
+  hostPlayerId: string;
+  questionStartedAt: unknown | null;
+  questionEndsAt: unknown | null;
   createdAt?: unknown;
   updatedAt?: unknown;
 };
-
 
 export type TriviaParentSession = {
   sessionId: string;
@@ -55,6 +77,11 @@ export type TriviaParentSession = {
   createdAt?: unknown;
   updatedAt?: unknown;
 };
+
+/**
+ * Kept for the read-only Firebase helpers while permanent-account migration is
+ * completed. Session mutation code must use the authenticated callable APIs.
+ */
 export type PlayerIdentity = {
   id: string;
   name: string;

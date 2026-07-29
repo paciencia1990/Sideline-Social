@@ -2,12 +2,14 @@ import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
+import { useTranslation } from "react-i18next";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 
 export default function OnboardingScreen() {
+  const { t } = useTranslation();
   const finish = async () => {
     await AsyncStorage.setItem("onboardingComplete", "true");
     router.replace(SIGN_IN_ROUTE as never);
@@ -17,9 +19,9 @@ export default function OnboardingScreen() {
     <ScreenWrapper>
       <View style={styles.content}>
         <Text style={styles.title}>Sideline Social</Text>
-        <Text style={styles.tagline}>turn wait time into game time</Text>
-        <Text style={styles.body}>Find nearby parents, join a squad, and make youth sports days easier to enjoy.</Text>
-        <PrimaryButton title="Get Started" onPress={finish} />
+        <Text style={styles.tagline}>{t("onboarding.tagline")}</Text>
+        <Text style={styles.body}>{t("onboarding.body")}</Text>
+        <PrimaryButton title={t("onboarding.getStarted")} onPress={finish} />
       </View>
     </ScreenWrapper>
   );

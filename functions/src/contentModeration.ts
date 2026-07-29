@@ -2,10 +2,13 @@ import { createHash } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import { Timestamp } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
 
 import { canAccessTeamAnnouncement, isTeamActive } from './teamMembershipCore';
 import { isExplicitConversationParticipant } from './teamVoiceMessagingCore';
+import { permanentAccountFunctions } from './permanentAuth';
+
+const functions = permanentAccountFunctions(firebaseFunctions);
 
 type ReportKind = 'announcement' | 'announcementReply' | 'privateTeamMessage';
 type ReportReason = 'offensive' | 'harassment' | 'privacy' | 'spam' | 'other';

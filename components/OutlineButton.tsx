@@ -14,6 +14,8 @@ interface OutlineButtonProps {
 export function OutlineButton({ title, onPress, loading, disabled, style }: OutlineButtonProps) {
   return (
     <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityState={{ busy: Boolean(loading), disabled: Boolean(disabled || loading) }}
       style={flattenStyle([styles.button, disabled && styles.disabled, style])}
       onPress={onPress}
       disabled={disabled || loading}
@@ -34,7 +36,9 @@ const styles = StyleSheet.create({
     borderRadius: Radius.button,
     borderWidth: 1.5,
     borderColor: Colors.primary,
-    height: 48,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',

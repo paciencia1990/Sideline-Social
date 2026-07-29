@@ -5,9 +5,10 @@ import { Redirect } from "expo-router";
 import { CHOOSE_START_MODE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
+import { isPermanentFirebaseUser } from "@/utils/authIdentity";
 
 export function AuthenticatedRouteGate({ children }: { children: ReactNode }) {
-  const { loading, user } = useAuth();
+  const { firebaseUser, loading, user } = useAuth();
 
   if (loading) {
     return (
@@ -17,7 +18,7 @@ export function AuthenticatedRouteGate({ children }: { children: ReactNode }) {
     );
   }
 
-  if (!user) {
+  if (!user || !isPermanentFirebaseUser(firebaseUser)) {
     return <Redirect href={SIGN_IN_ROUTE as never} />;
   }
 

@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
 
 import { formatSuggestedConnectionName, resolvePublicProfileName } from './friendSuggestionCore';
 import { friendRequestIdFor } from './friendRequestCore';
 import { resolveFriendRequestNotification } from './friendRequestNotifications';
 import { sendPushToUser } from './pushNotificationDelivery';
 import { assertUserContentAllowed } from './contentSafety';
+import { permanentAccountFunctions } from './permanentAuth';
 import {
   CHAT_SEND_COOLDOWN_MS,
   MAX_CHAT_PARTICIPANTS,
@@ -24,6 +25,7 @@ import {
   sanitizeMessagePreview,
 } from './friendChatCore';
 
+const functions = permanentAccountFunctions(firebaseFunctions);
 const chatFunctions = functions.region('us-central1');
 const firestore = () => admin.firestore();
 
@@ -38,7 +40,7 @@ type ConversationData = admin.firestore.DocumentData & {
   lastMessageId?: string | null;
 };
 
-function requireUid(context: functions.https.CallableContext) {
+function requireUid(context: firebaseFunctions.https.CallableContext) {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.');
   return uid;

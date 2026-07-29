@@ -9,7 +9,7 @@ import { useGameLobby } from "@/hooks/useGameLobby";
 
 export default function TriviaBlitzLobby() {
   const { t } = useTranslation();
-  const { sessionId, players, codeState, codeError, isLocal, retryCode, cancelGame, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const { sessionId, minPlayers, players, codeState, codeError, isLocal, retryCode, cancelGame, toggleReady, startGame, showCountdown, setShowCountdown } =
     useGameLobby("trivia-blitz");
 
   const handleComplete = useCallback(() => {
@@ -24,6 +24,7 @@ export default function TriviaBlitzLobby() {
     <View style={styles.container}>
       <LobbyBase
         gameName={t("games.triviaBlitz.title")}
+        minPlayers={minPlayers}
         players={players}
         codeState={codeState}
         codeError={codeError}

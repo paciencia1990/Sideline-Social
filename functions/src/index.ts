@@ -11,7 +11,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import { FieldValue, GeoPoint, Timestamp } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
 import { distanceBetween, geohashForLocation, geohashQueryBounds } from 'geofire-common';
 import {
   countMutualConnections,
@@ -25,6 +25,7 @@ import {
   classifyFriendsCallableUnexpectedError,
   toSafeFriendsCallableError,
 } from './friendsCallableErrorCore';
+import { permanentAccountFunctions } from './permanentAuth';
 import {
   friendRequestIdFor,
   friendRequestExpiresAtMillis,
@@ -124,6 +125,8 @@ import {
 } from './sidelineStarsCore';
 import { readSeasonEligibleSquadIds } from './squadSeason';
 
+const functions = permanentAccountFunctions(firebaseFunctions);
+
 export {
   createSquadSeason,
   endSquadSeason,
@@ -160,8 +163,20 @@ export {
   recordSpotDifferenceFound,
   releaseGameJoinCode,
   resolveAndJoinGameByCode,
+  setRealtimeGamePlayerReady,
+  submitBombDefusalStep,
   updateGameJoinCodeStatus,
 } from './gameJoinCodes';
+export {
+  advanceTriviaGameSession,
+  createTriviaGameSession,
+  endTriviaGameSession,
+  resetTriviaGameSession,
+  resumeTriviaGameSession,
+  setTriviaPlayerReady,
+  startTriviaGameSession,
+  submitTriviaAnswer,
+} from './triviaGame';
 export {
   blockFriendChatUser,
   createFriendGroupConversation,
@@ -191,6 +206,7 @@ const TEAM_INVITE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const DEFAULT_SQUAD_RADIUS_MILES = 2;
 const MAX_SQUAD_RADIUS_MILES = 10;
 const SQUAD_MILES_TO_METERS = 1609.34;
+const SQUAD_ACTIVE_NOW_MS = 30 * 60 * 1000;
 
 type PersonalNotificationInput = {
   recipientUserId: string;
@@ -301,6 +317,7 @@ type SquadDocument = admin.firestore.DocumentData & {
   creatorId?: string;
   currentSeasonId?: string | null;
   timeZone?: string | null;
+  lastActivityAt?: Timestamp | null;
 };
 
 function readCallableCoordinates(data: unknown) {
@@ -345,6 +362,12 @@ function readGameSessionId(value: unknown) {
   return sessionId;
 }
 
+function readPositiveGameNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
 function readRewardGameType(value: unknown): SupportedRewardGame {
   if (value === 'triviaBlitz' || value === 'spotDifferences' || value === 'bombDefusal') return value;
   throw new functions.https.HttpsError('invalid-argument', 'A supported game type is required.');
@@ -383,7 +406,14 @@ async function readTriviaRewardEligibility(
   const parent = parentSnapshot.data()!;
   const game = gameSnapshot.data()!;
   const participantIds = readStringArray(parent.playerIds);
-  const questionCount = Array.isArray(game.selectedQuestions) ? game.selectedQuestions.length : 0;
+  const storedQuestionCount = game.questionCount;
+  const questionCount = Number.isInteger(storedQuestionCount) &&
+    storedQuestionCount > 0 &&
+    storedQuestionCount <= 10
+    ? storedQuestionCount
+    : Array.isArray(game.selectedQuestions)
+      ? game.selectedQuestions.length
+      : 0;
   const completedAllQuestions = parent.status === 'results' && game.status === 'results' &&
     questionCount > 0 && questionCount <= 10 && game.questionIndex === questionCount - 1 &&
     game.answeredQuestions === questionCount;
@@ -406,7 +436,11 @@ async function readLocalGameRewardEligibility(
   const sessionSnapshot = await transaction.get(sessionRef);
   if (!sessionSnapshot.exists) return null;
   const session = sessionSnapshot.data()!;
-  if (session.status !== 'completed' || !readStringArray(session.participantIds).includes(uid)) return null;
+  if (
+    session.mode !== 'multiplayer' ||
+    session.status !== 'completed' ||
+    !readStringArray(session.participantIds).includes(uid)
+  ) return null;
   const result = session.finalizedResult as Record<string, unknown> | undefined;
   if (!result) return null;
   const breakdown = gameType === 'spotDifferences'
@@ -451,29 +485,109 @@ function squadProjection(snapshot: admin.firestore.DocumentSnapshot) {
     : typeof squad.name === 'string' && squad.name.trim()
       ? squad.name.trim()
       : 'Sports Venue';
-  const point = squad.venueLocation;
+  const lastActivityAtMillis = timestampMillis(squad.lastActivityAt);
+  const elapsedSinceActivity = lastActivityAtMillis == null
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, Date.now() - lastActivityAtMillis);
   return {
     squadId: snapshot.id,
-    venueId: typeof squad.venueId === 'string' ? squad.venueId : `legacy_${snapshot.id}`,
     venueName,
-    normalizedVenueName: typeof squad.normalizedVenueName === 'string'
-      ? squad.normalizedVenueName
-      : normalizeVenueName(venueName),
     sportId,
     sportDisplayName: typeof squad.sportDisplayName === 'string' && squad.sportDisplayName.trim()
       ? squad.sportDisplayName.trim()
       : getSportDisplayName(sportId),
-    venueSportKey: typeof squad.venueSportKey === 'string' ? squad.venueSportKey : null,
-    venueLocation: point instanceof GeoPoint
-      ? { latitude: point.latitude, longitude: point.longitude }
-      : null,
-    venueGeohash: typeof squad.venueGeohash === 'string' ? squad.venueGeohash : null,
     memberCount: typeof squad.memberCount === 'number'
       ? Math.max(0, squad.memberCount)
       : Array.isArray(squad.memberIds) ? new Set(squad.memberIds).size : 0,
     activeMemberCount: typeof squad.activeMemberCount === 'number' ? Math.max(0, squad.activeMemberCount) : 0,
+    activityStatus: elapsedSinceActivity < SQUAD_ACTIVE_NOW_MS
+      ? 'active' as const
+      : elapsedSinceActivity < THREE_HOURS_MS
+        ? 'starting_soon' as const
+        : 'quiet' as const,
     isActive: squad.isActive !== false,
   };
+}
+
+function nearbySquadProjection(snapshot: admin.firestore.DocumentSnapshot) {
+  const squad = (snapshot.data() ?? {}) as SquadDocument;
+  const point = squad.venueLocation;
+  return {
+    ...squadProjection(snapshot),
+    venueLocation: point instanceof GeoPoint
+      ? { latitude: point.latitude, longitude: point.longitude }
+      : null,
+  };
+}
+
+async function hasAuthorizedSquadMembership(
+  uid: string,
+  squadSnapshot: admin.firestore.DocumentSnapshot,
+) {
+  const membership = await admin.firestore()
+    .collection('squadMemberships')
+    .doc(`${squadSnapshot.id}__${uid}`)
+    .get();
+  if (membership.exists) {
+    const data = membership.data();
+    return data?.userId === uid &&
+      data?.squadId === squadSnapshot.id &&
+      data?.membershipStatus === 'active';
+  }
+  const squad = (squadSnapshot.data() ?? {}) as SquadDocument;
+  return Array.isArray(squad.memberIds) && squad.memberIds.includes(uid);
+}
+
+async function readSquadMemberPreviews(
+  squadSnapshot: admin.firestore.DocumentSnapshot,
+) {
+  const firestore = admin.firestore();
+  const squadId = squadSnapshot.id;
+  const squad = (squadSnapshot.data() ?? {}) as SquadDocument;
+  const previewIds: string[] = [];
+  const activeMemberships = await firestore.collection('squadMemberships')
+    .where('squadId', '==', squadId)
+    .where('membershipStatus', '==', 'active')
+    .limit(20)
+    .get();
+  activeMemberships.docs.forEach((membership) => {
+    const userId = typeof membership.data().userId === 'string' ? membership.data().userId : '';
+    if (userId && !previewIds.includes(userId)) previewIds.push(userId);
+  });
+
+  const legacyCandidates = Array.from(new Set(
+    (Array.isArray(squad.memberIds) ? squad.memberIds : [])
+      .filter((userId): userId is string => typeof userId === 'string' && Boolean(userId)),
+  )).filter((userId) => !previewIds.includes(userId)).slice(0, 20);
+  if (legacyCandidates.length) {
+    const canonicalMemberships = await firestore.getAll(...legacyCandidates.map(
+      (userId) => firestore.collection('squadMemberships').doc(`${squadId}__${userId}`),
+    ));
+    canonicalMemberships.forEach((membership, index) => {
+      const data = membership.data();
+      if (
+        !membership.exists ||
+        (
+          data?.userId === legacyCandidates[index] &&
+          data?.squadId === squadId &&
+          data?.membershipStatus === 'active'
+        )
+      ) {
+        previewIds.push(legacyCandidates[index]);
+      }
+    });
+  }
+
+  if (!previewIds.length) return [];
+  const profiles = await firestore.getAll(...previewIds.slice(0, 32).map(
+    (userId) => firestore.collection('users').doc(userId),
+  ));
+  return profiles.flatMap((profile) => {
+    const displayName = resolveCanonicalPublicName(profile.data())?.displayName;
+    return displayName
+      ? [{ uid: profile.id, displayName, photoURL: null }]
+      : [];
+  }).slice(0, 8);
 }
 
 async function findLegacyVenueSportCandidate(input: {
@@ -772,9 +886,9 @@ export const findNearbyVenueSportSquads = functions.https.onCall(async (data, co
     .where('isActive', '==', true)
     .limit(60)
     .get()));
-  const results = new Map<string, ReturnType<typeof squadProjection> & { distanceMiles: number }>();
+  const results = new Map<string, ReturnType<typeof nearbySquadProjection> & { distanceMiles: number }>();
   snapshots.forEach((snapshot) => snapshot.docs.forEach((squadSnapshot) => {
-    const projection = squadProjection(squadSnapshot);
+    const projection = nearbySquadProjection(squadSnapshot);
     if (!projection.venueLocation) return;
     const distanceMiles = distanceBetween(
       [latitude, longitude],
@@ -801,6 +915,29 @@ export const searchVenueSportSquads = functions.https.onCall(async (data, contex
     .limit(50)
     .get();
   return { squads: snapshot.docs.map(squadProjection) };
+});
+
+export const getVenueSportSquadDetail = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to view this Squad.');
+  const squadId = readCallableSquadId(data?.squadId);
+  const snapshot = await admin.firestore().collection('squads').doc(squadId).get();
+  if (!snapshot.exists || snapshot.data()?.isActive === false) {
+    throw new functions.https.HttpsError('not-found', 'This Squad is unavailable.');
+  }
+  const viewerIsMember = await hasAuthorizedSquadMembership(uid, snapshot);
+  const squad = squadProjection(snapshot);
+  const members = viewerIsMember ? await readSquadMemberPreviews(snapshot) : [];
+  return {
+    squad: {
+      ...squad,
+      viewerIsMember,
+      members,
+      extraMemberCount: viewerIsMember
+        ? Math.max(0, squad.memberCount - members.length)
+        : 0,
+    },
+  };
 });
 
 // ---------------------------------------------------------------------------
@@ -1642,31 +1779,38 @@ export const createGameRewardSession = functions.https.onCall(async (data, conte
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in before starting a rewarded game.');
   const gameType = readLocalRewardGameType(data?.gameType);
   const requestedSessionId = data?.sessionId == null ? null : readGameSessionId(data.sessionId);
+  if (!requestedSessionId) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Bomb Defusal and Spot the Difference rewards require a server-managed game session.',
+    );
+  }
   const requestedSourceSquadId = data?.sourceSquadId == null ? null : readCallableSquadId(data.sourceSquadId);
   let sourceSquadId = requestedSourceSquadId;
 
-  if (requestedSessionId) {
-    const realtimeSnapshot = await admin.database().ref(`/gameSessions/${requestedSessionId}`).once('value');
-    if (!realtimeSnapshot.exists()) {
-      throw new functions.https.HttpsError('failed-precondition', 'The multiplayer game session was not found.');
-    }
-    const realtimeSession = realtimeSnapshot.val() as Record<string, unknown>;
-    const expectedLegacyType = gameType === 'spotDifferences' ? 'spot_difference' : 'bomb_defusal';
-    const participants = realtimeSession.players as Record<string, unknown> | undefined;
-    if (realtimeSession.gameType !== expectedLegacyType || !participants?.[uid]) {
-      throw new functions.https.HttpsError('permission-denied', 'You are not a participant in this game session.');
-    }
-    sourceSquadId = typeof realtimeSession.squadId === 'string' ? realtimeSession.squadId : sourceSquadId;
+  const realtimeSnapshot = await admin.database().ref(`/gameSessions/${requestedSessionId}`).once('value');
+  if (!realtimeSnapshot.exists()) {
+    throw new functions.https.HttpsError('failed-precondition', 'The multiplayer game session was not found.');
   }
+  const realtimeSession = realtimeSnapshot.val() as Record<string, unknown>;
+  const expectedLegacyType = gameType === 'spotDifferences' ? 'spot_difference' : 'bomb_defusal';
+  const participants = realtimeSession.players as Record<string, unknown> | undefined;
+  if (realtimeSession.gameType !== expectedLegacyType || !participants?.[uid]) {
+    throw new functions.https.HttpsError('permission-denied', 'You are not a participant in this game session.');
+  }
+  sourceSquadId = typeof realtimeSession.squadId === 'string' ? realtimeSession.squadId : sourceSquadId;
   if (sourceSquadId && !await hasDurableSquadMembership(uid, sourceSquadId)) sourceSquadId = null;
 
-  const sessionId = requestedSessionId ?? `solo_${randomBytes(18).toString('base64url')}`;
+  const sessionId = requestedSessionId;
   const sessionRef = admin.firestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
   const result = await admin.firestore().runTransaction(async (transaction) => {
     const existing = await transaction.get(sessionRef);
     if (existing.exists) {
       const participantIds = readStringArray(existing.data()?.participantIds);
-      if (existing.data()?.gameType !== gameType || (!requestedSessionId && !participantIds.includes(uid))) {
+      if (
+        existing.data()?.gameType !== gameType ||
+        existing.data()?.mode !== 'multiplayer'
+      ) {
         throw new functions.https.HttpsError('permission-denied', 'This game session is unavailable.');
       }
       if (!participantIds.includes(uid)) {
@@ -1683,7 +1827,7 @@ export const createGameRewardSession = functions.https.onCall(async (data, conte
       gameType,
       participantIds: [uid],
       sourceSquadId: sourceSquadId ?? null,
-      mode: requestedSessionId ? 'multiplayer' : 'solo',
+      mode: 'multiplayer',
       status: 'active',
       expectedTotal: gameType === 'spotDifferences' ? 10 : 5,
       createdAt: timestamp,
@@ -1691,7 +1835,7 @@ export const createGameRewardSession = functions.https.onCall(async (data, conte
     });
     return { sessionId, sourceSquadId: sourceSquadId ?? null };
   });
-  console.info('[createGameRewardSession] completed', { gameType, mode: requestedSessionId ? 'multiplayer' : 'solo' });
+  console.info('[createGameRewardSession] completed', { gameType, mode: 'multiplayer' });
   return result;
 });
 
@@ -1701,6 +1845,82 @@ export const recordGameSessionResult = functions.https.onCall(async (data, conte
   const gameType = readLocalRewardGameType(data?.gameType);
   const sessionId = readGameSessionId(data?.sessionId);
   const sessionRef = admin.firestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
+  const initialRewardSession = await sessionRef.get();
+  if (
+    !initialRewardSession.exists ||
+    !readStringArray(initialRewardSession.data()?.participantIds).includes(uid)
+  ) {
+    throw new functions.https.HttpsError('permission-denied', 'You are not a participant in this game session.');
+  }
+
+  if (initialRewardSession.data()?.mode !== 'multiplayer') {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'This game result does not have a server-managed session.',
+    );
+  }
+
+  let canonicalMultiplayerResult: Record<string, unknown> | null = null;
+  if (
+    initialRewardSession.data()?.status !== 'completed'
+  ) {
+    const realtimeSnapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+    const realtimeSession = realtimeSnapshot.val() as Record<string, unknown> | null;
+    const expectedLegacyType = gameType === 'spotDifferences' ? 'spot_difference' : 'bomb_defusal';
+    const participants = realtimeSession?.players as Record<string, unknown> | undefined;
+    if (!realtimeSession || realtimeSession.gameType !== expectedLegacyType || !participants?.[uid]) {
+      throw new functions.https.HttpsError('permission-denied', 'You are not a participant in this game session.');
+    }
+    const gameState = realtimeSession.gameState as Record<string, unknown> | undefined;
+    if (gameType === 'spotDifferences') {
+      const foundIds = Array.isArray(gameState?.foundDifferenceIds)
+        ? Array.from(new Set(gameState.foundDifferenceIds.filter(
+          (value): value is string =>
+            typeof value === 'string' && /^difference_(?:0[1-9]|10)$/.test(value),
+        )))
+        : [];
+      const foundCount = foundIds.length;
+      const requestedOutcome = data?.outcome;
+      const settings = realtimeSession.settings && typeof realtimeSession.settings === 'object'
+        ? realtimeSession.settings as Record<string, unknown>
+        : {};
+      const durationSeconds = readPositiveGameNumber(settings.roundDuration);
+      const startedAt = readPositiveGameNumber(realtimeSession.startedAt);
+      const timeExpired = Boolean(
+        durationSeconds &&
+        startedAt &&
+        Date.now() >= startedAt + durationSeconds * 1000,
+      );
+      if (
+        (requestedOutcome === 'completed' && foundCount !== 10) ||
+        (requestedOutcome === 'timeExpired' && !timeExpired && realtimeSession.status !== 'completed') ||
+        (requestedOutcome !== 'completed' && requestedOutcome !== 'timeExpired')
+      ) {
+        throw new functions.https.HttpsError('failed-precondition', 'The multiplayer game result is not final.');
+      }
+      canonicalMultiplayerResult = {
+        outcome: requestedOutcome,
+        foundCount,
+        totalDifferences: 10,
+      };
+    } else {
+      const outcome = gameState?.outcome;
+      const currentStepIndex = typeof gameState?.currentStepIndex === 'number'
+        ? gameState.currentStepIndex
+        : 0;
+      if (
+        realtimeSession.status !== 'completed' ||
+        (outcome !== 'defused' && outcome !== 'exploded')
+      ) {
+        throw new functions.https.HttpsError('failed-precondition', 'The multiplayer game result is not final.');
+      }
+      canonicalMultiplayerResult = {
+        outcome,
+        firstAttemptCorrectStepCount: outcome === 'defused' ? 5 : Math.min(Math.max(currentStepIndex, 0), 5),
+        totalSteps: 5,
+      };
+    }
+  }
 
   return admin.firestore().runTransaction(async (transaction) => {
     const sessionSnapshot = await transaction.get(sessionRef);
@@ -1711,9 +1931,9 @@ export const recordGameSessionResult = functions.https.onCall(async (data, conte
     const expectedTotal = sessionSnapshot.data()?.expectedTotal;
     let finalizedResult: Record<string, unknown>;
     if (gameType === 'spotDifferences') {
-      const outcome = data?.outcome;
-      const foundCount = data?.foundCount;
-      const totalDifferences = data?.totalDifferences;
+      const outcome = canonicalMultiplayerResult?.outcome ?? data?.outcome;
+      const foundCount = canonicalMultiplayerResult?.foundCount ?? data?.foundCount;
+      const totalDifferences = canonicalMultiplayerResult?.totalDifferences ?? data?.totalDifferences;
       const breakdown = calculateSpotDifferencesReward({ terminal: true, foundCount, totalDifferences });
       if (
         !breakdown || totalDifferences !== expectedTotal ||
@@ -1722,9 +1942,11 @@ export const recordGameSessionResult = functions.https.onCall(async (data, conte
       ) throw new functions.https.HttpsError('invalid-argument', 'The Spot the Differences result is invalid.');
       finalizedResult = { outcome, foundCount, totalDifferences };
     } else {
-      const outcome = data?.outcome;
-      const firstAttemptCorrectStepCount = data?.firstAttemptCorrectStepCount;
-      const totalSteps = data?.totalSteps;
+      const outcome = canonicalMultiplayerResult?.outcome ?? data?.outcome;
+      const firstAttemptCorrectStepCount =
+        canonicalMultiplayerResult?.firstAttemptCorrectStepCount ??
+        data?.firstAttemptCorrectStepCount;
+      const totalSteps = canonicalMultiplayerResult?.totalSteps ?? data?.totalSteps;
       const breakdown = calculateBombDefusalReward({ outcome, firstAttemptCorrectStepCount, totalSteps });
       if (
         !breakdown || totalSteps !== expectedTotal ||
@@ -1819,23 +2041,69 @@ export const cleanupExpiredGameSessions = functions.pubsub
     const cutoff = Date.now() - 5 * 60 * 1000; // 5 minutes ago
 
     const snap = await rtdb.ref('/gameSessions').once('value');
-    if (!snap.exists()) return null;
-
-    const sessions = snap.val() as Record<string, { status: string; completedAt: number | null }>;
+    const sessions = (snap.exists() ? snap.val() : {}) as Record<string, {
+      status: string;
+      completedAt: number | null;
+      expiresAt?: number | null;
+    }>;
     const toDelete: string[] = [];
 
     Object.entries(sessions).forEach(([id, session]) => {
       if (
-        (session.status === 'completed' || session.status === 'failed') &&
-        session.completedAt &&
-        session.completedAt < cutoff
+        (typeof session.expiresAt === 'number' && session.expiresAt <= Date.now()) ||
+        (
+          (session.status === 'completed' || session.status === 'failed') &&
+          session.completedAt &&
+          session.completedAt < cutoff
+        )
       ) {
         toDelete.push(id);
       }
     });
 
-    await Promise.all(toDelete.map((id) => rtdb.ref(`/gameSessions/${id}`).remove()));
-    console.log(`[cleanupExpiredGameSessions] Removed ${toDelete.length} expired sessions.`);
+    await Promise.all(toDelete.map((id) => rtdb.ref().update({
+      [`gameSessions/${id}`]: null,
+      [`gameSessionSecrets/${id}`]: null,
+    })));
+
+    const firestore = admin.firestore();
+    const expiredTrivia = await firestore.collection('sessions')
+      .where('expiresAt', '<=', Timestamp.now())
+      .limit(100)
+      .get();
+    let deletedTriviaSubmissions = 0;
+    for (const session of expiredTrivia.docs) {
+      while (true) {
+        const submissionSnapshot = await firestore.collection('triviaGameSubmissions')
+          .where('sessionId', '==', session.id)
+          .limit(500)
+          .get();
+        if (submissionSnapshot.empty) break;
+        const writer = firestore.bulkWriter();
+        submissionSnapshot.docs.forEach((submission) => writer.delete(submission.ref));
+        await writer.close();
+        deletedTriviaSubmissions += submissionSnapshot.size;
+      }
+      await firestore.collection('triviaGameSecrets').doc(session.id).delete();
+      await firestore.recursiveDelete(session.ref);
+    }
+
+    const staleTriviaRateLimits = await firestore.collection('triviaGameRateLimits')
+      .where('updatedAt', '<=', Timestamp.fromMillis(Date.now() - 24 * 60 * 60 * 1000))
+      .limit(200)
+      .get();
+    if (!staleTriviaRateLimits.empty) {
+      const writer = firestore.bulkWriter();
+      staleTriviaRateLimits.docs.forEach((rateLimit) => writer.delete(rateLimit.ref));
+      await writer.close();
+    }
+
+    console.info('[cleanupExpiredGameSessions] completed', {
+      realtimeSessions: toDelete.length,
+      triviaSessions: expiredTrivia.size,
+      triviaSubmissions: deletedTriviaSubmissions,
+      triviaRateLimits: staleTriviaRateLimits.size,
+    });
     return null;
   });
 // ---------------------------------------------------------------------------
@@ -3519,7 +3787,7 @@ function throwTeamMessagingError(error: unknown): never {
     'unsupported_audio_type',
     'voice_file_too_large',
   ]);
-  const code: functions.https.FunctionsErrorCode = reason === 'rate_limited'
+  const code: firebaseFunctions.https.FunctionsErrorCode = reason === 'rate_limited'
     ? 'resource-exhausted'
     : permissionReasons.has(reason)
       ? 'permission-denied'

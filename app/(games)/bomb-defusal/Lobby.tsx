@@ -9,7 +9,7 @@ import { useGameLobby } from "@/hooks/useGameLobby";
 
 export default function BombDefusalLobby() {
   const { t } = useTranslation();
-  const { sessionId, players, codeState, codeError, isLocal, retryCode, cancelGame, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const { sessionId, minPlayers, players, codeState, codeError, isLocal, retryCode, cancelGame, toggleReady, startGame, showCountdown, setShowCountdown } =
     useGameLobby("bomb-defusal");
 
   const handleComplete = useCallback(() => {
@@ -21,6 +21,7 @@ export default function BombDefusalLobby() {
     <View style={styles.container}>
       <LobbyBase
         gameName={t("games.bombDefusal.title")}
+        minPlayers={minPlayers}
         players={players}
         codeState={codeState}
         codeError={codeError}

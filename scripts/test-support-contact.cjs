@@ -16,7 +16,8 @@ assert.match(legalValidation, /joann@joinsidelinesocial\.com/);
 assert.match(legalScreen, /`mailto:\$\{SUPPORT_EMAIL\}`/);
 assert.match(legalScreen, /accessibilityRole="link"/);
 assert.match(legalScreen, /Linking\.openURL\(url\)/);
-assert.match(legalScreen, /Linking\.openURL\(SUPPORT_URL\)/);
+assert.match(legalScreen, /openExternalLink\(SUPPORT_URL\)/);
+assert.match(legalScreen, /catch\s*\{[\s\S]*settings\.linkErrorTitle[\s\S]*settings\.linkErrorBody/);
 assert.match(legalScreen, /settings\.supportEmailAccessibility/);
 assert.match(legalScreen, /settings\.supportEmail/);
 assert.match(legalScreen, /settings\.privacyTitle/);
@@ -32,7 +33,7 @@ assert.equal(
   2,
   "support email accessibility label is localized in English and Spanish",
 );
-for (const key of ["openFullPolicy", "openTerms", "contactSupport"]) {
+for (const key of ["openFullPolicy", "openTerms", "contactSupport", "linkErrorTitle", "linkErrorBody"]) {
   assert.equal(
     (translations.match(new RegExp(`${key}:`, "g")) ?? []).length,
     2,

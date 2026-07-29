@@ -38,6 +38,10 @@ async function run() {
     createClient("delete-account-owner"),
   ]);
   const joinRateLimitId = createHash("sha256").update(deletingUser.uid).digest("hex");
+  const triviaRateLimitId = joinRateLimitId;
+  const triviaCreateRateLimitId = createHash("sha256").update(`create:${deletingUser.uid}`).digest("hex");
+  const sharedTriviaSessionId = "shared-trivia-session";
+  const soloTriviaSessionId = "solo-trivia-session";
 
   await Promise.all([
     db.collection("users").doc(deletingUser.uid).set({ displayName: "Delete Me", friendIds: [friend.uid] }),
@@ -48,6 +52,73 @@ async function run() {
     db.collection("gameJoinSessionLinks").doc("delete-link").set({ hostUserId: deletingUser.uid }),
     db.collection("gameJoinRequests").doc("delete-request").set({ hostUserId: deletingUser.uid }),
     db.collection("gameJoinRateLimits").doc(joinRateLimitId).set({ attemptCount: 4 }),
+    db.collection("triviaGameRateLimits").doc(triviaRateLimitId).set({ attemptCount: 3 }),
+    db.collection("triviaGameRateLimits").doc(triviaCreateRateLimitId).set({
+      attemptCount: 2,
+      userId: deletingUser.uid,
+    }),
+    db.collection("triviaGameRateLimits").doc("answer-rate-delete-fixture").set({
+      attemptCount: 5,
+      userId: deletingUser.uid,
+    }),
+    db.collection("gameRewardSessions").doc("spot_shared").set({
+      gameType: "spotDifferences",
+      mode: "multiplayer",
+      participantIds: [deletingUser.uid, friend.uid],
+      status: "active",
+    }),
+    db.collection("gameRewardSessions").doc("bomb_solo").set({
+      gameType: "bombDefusal",
+      mode: "multiplayer",
+      participantIds: [deletingUser.uid],
+      status: "active",
+    }),
+    db.collection("sessions").doc(sharedTriviaSessionId).set({
+      gameType: "triviaBlitz",
+      hostPlayerId: deletingUser.uid,
+      playerIds: [deletingUser.uid, friend.uid],
+      status: "lobby",
+    }),
+    db.collection("sessions").doc(sharedTriviaSessionId).collection("games").doc("triviaBlitz").set({
+      hostPlayerId: deletingUser.uid,
+      status: "lobby",
+    }),
+    db.collection("sessions").doc(sharedTriviaSessionId).collection("games").doc("triviaBlitz")
+      .collection("players").doc(deletingUser.uid).set({ ready: true }),
+    db.collection("sessions").doc(sharedTriviaSessionId).collection("games").doc("triviaBlitz")
+      .collection("players").doc(friend.uid).set({ ready: true }),
+    db.collection("triviaGameSecrets").doc(sharedTriviaSessionId).set({
+      hostPlayerId: deletingUser.uid,
+      selectedQuestions: [{ questionId: "fixture-question" }],
+    }),
+    db.collection("triviaGameSubmissions").doc("shared-deleting-submission").set({
+      sessionId: sharedTriviaSessionId,
+      playerId: deletingUser.uid,
+    }),
+    db.collection("triviaGameSubmissions").doc("shared-friend-submission").set({
+      sessionId: sharedTriviaSessionId,
+      playerId: friend.uid,
+    }),
+    db.collection("sessions").doc(soloTriviaSessionId).set({
+      gameType: "triviaBlitz",
+      hostPlayerId: deletingUser.uid,
+      playerIds: [deletingUser.uid],
+      status: "lobby",
+    }),
+    db.collection("sessions").doc(soloTriviaSessionId).collection("games").doc("triviaBlitz").set({
+      hostPlayerId: deletingUser.uid,
+      status: "lobby",
+    }),
+    db.collection("sessions").doc(soloTriviaSessionId).collection("games").doc("triviaBlitz")
+      .collection("players").doc(deletingUser.uid).set({ ready: true }),
+    db.collection("triviaGameSecrets").doc(soloTriviaSessionId).set({
+      hostPlayerId: deletingUser.uid,
+      selectedQuestions: [{ questionId: "fixture-question" }],
+    }),
+    db.collection("triviaGameSubmissions").doc("solo-deleting-submission").set({
+      sessionId: soloTriviaSessionId,
+      playerId: deletingUser.uid,
+    }),
     db.collection("users").doc(friend.uid).set({ displayName: "Friend", friendIds: [deletingUser.uid] }),
     db.collection("userNotifications").doc(friend.uid).collection("notifications").doc("actor-reference").set({
       actorName: "Delete Me", actorUserId: deletingUser.uid, recipientUserId: friend.uid,
@@ -95,8 +166,16 @@ async function run() {
     db.collection("teamPrivateConversations").doc("privacy-team-conversation").collection("members").doc(deletingUser.uid)
       .collection("hiddenMessages").doc("hidden-private-message").set({
         hiddenAt: admin.firestore.Timestamp.now(), messageId: "hidden-private-message", userId: deletingUser.uid,
-      }),
+    }),
     admin.database().ref(`gameSessions/test-session/players/${deletingUser.uid}`).set({ score: 10 }),
+    admin.database().ref("gameSessions/hosted-delete-session").set({
+      gameType: "bomb_defusal",
+      hostUserId: deletingUser.uid,
+      players: { [deletingUser.uid]: { score: 0 } },
+    }),
+    admin.database().ref("gameSessionSecrets/hosted-delete-session").set({
+      bombSteps: [{ type: "cut_wire", color: "blue" }],
+    }),
   ]);
 
   const result = await deletingUser.call("deleteOwnAccount");
@@ -108,6 +187,32 @@ async function run() {
   assert.equal((await db.collection("gameJoinSessionLinks").doc("delete-link").get()).exists, false);
   assert.equal((await db.collection("gameJoinRequests").doc("delete-request").get()).exists, false);
   assert.equal((await db.collection("gameJoinRateLimits").doc(joinRateLimitId).get()).exists, false);
+  assert.equal((await db.collection("triviaGameRateLimits").doc(triviaRateLimitId).get()).exists, false);
+  assert.equal((await db.collection("triviaGameRateLimits").doc(triviaCreateRateLimitId).get()).exists, false);
+  assert.equal((await db.collection("triviaGameRateLimits").doc("answer-rate-delete-fixture").get()).exists, false);
+  assert.deepEqual(
+    (await db.collection("gameRewardSessions").doc("spot_shared").get()).data().participantIds,
+    [friend.uid],
+  );
+  assert.equal((await db.collection("gameRewardSessions").doc("bomb_solo").get()).exists, false);
+  const sharedTriviaSession = (await db.collection("sessions").doc(sharedTriviaSessionId).get()).data();
+  assert.deepEqual(sharedTriviaSession.playerIds, [friend.uid]);
+  assert.equal(sharedTriviaSession.hostPlayerId, friend.uid);
+  assert.equal(
+    (await db.collection("sessions").doc(sharedTriviaSessionId).collection("games").doc("triviaBlitz").get()).data().hostPlayerId,
+    friend.uid,
+  );
+  assert.equal((await db.collection("triviaGameSecrets").doc(sharedTriviaSessionId).get()).data().hostPlayerId, friend.uid);
+  assert.equal(
+    (await db.collection("sessions").doc(sharedTriviaSessionId).collection("games").doc("triviaBlitz")
+      .collection("players").doc(deletingUser.uid).get()).exists,
+    false,
+  );
+  assert.equal((await db.collection("triviaGameSubmissions").doc("shared-deleting-submission").get()).exists, false);
+  assert.equal((await db.collection("triviaGameSubmissions").doc("shared-friend-submission").get()).exists, true);
+  assert.equal((await db.collection("sessions").doc(soloTriviaSessionId).get()).exists, false);
+  assert.equal((await db.collection("triviaGameSecrets").doc(soloTriviaSessionId).get()).exists, false);
+  assert.equal((await db.collection("triviaGameSubmissions").doc("solo-deleting-submission").get()).exists, false);
   assert.deepEqual((await db.collection("users").doc(friend.uid).get()).data().friendIds, []);
   const notification = (await db.collection("userNotifications").doc(friend.uid).collection("notifications").doc("actor-reference").get()).data();
   assert.equal(notification.actorUserId, null);
@@ -134,6 +239,8 @@ async function run() {
   assert.equal((await db.collection("teamPrivateConversations").doc("privacy-team-conversation")
     .collection("members").doc(deletingUser.uid).collection("hiddenMessages").doc("hidden-private-message").get()).exists, false);
   assert.equal((await admin.database().ref(`gameSessions/test-session/players/${deletingUser.uid}`).get()).exists(), false);
+  assert.equal((await admin.database().ref("gameSessions/hosted-delete-session").get()).exists(), false);
+  assert.equal((await admin.database().ref("gameSessionSecrets/hosted-delete-session").get()).exists(), false);
   await assert.rejects(() => admin.auth().getUser(deletingUser.uid), (error) => error?.code === "auth/user-not-found");
 
   await Promise.all([

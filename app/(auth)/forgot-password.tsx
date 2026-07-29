@@ -27,7 +27,7 @@ export default function ForgotPasswordScreen() {
       await resetPassword(email);
       router.push(FORGOT_PASSWORD_SUCCESS_ROUTE as never);
     } catch (nextError) {
-      console.warn("[ForgotPassword] reset error:", nextError);
+      if (__DEV__) console.warn("[ForgotPassword] reset error:", nextError);
       setError(t("auth.errors.resetSendFailed"));
     } finally {
       setLoading(false);
@@ -37,8 +37,8 @@ export default function ForgotPasswordScreen() {
   return (
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <ChevronLeft size={24} color={Colors.textHeading} />
+          <TouchableOpacity accessibilityLabel={t("common.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
+            <ChevronLeft accessibilityElementsHidden importantForAccessibility="no-hide-descendants" size={24} color={Colors.textHeading} />
           </TouchableOpacity>
           <Text style={styles.title}>{t("auth.resetPassword")}</Text>
           <Text style={styles.body}>{t("auth.resetPasswordSubtitle")}</Text>
@@ -55,7 +55,7 @@ export default function ForgotPasswordScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: { flexGrow: 1, justifyContent: "center", padding: Spacing.lg, gap: Spacing.md },
-  backButton: { position: "absolute", top: Spacing.lg, left: Spacing.lg, width: 42, height: 42, alignItems: "center", justifyContent: "center" },
+  backButton: { position: "absolute", top: Spacing.lg, left: Spacing.lg, width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   title: { fontFamily: Typography.heading, fontSize: 32, color: Colors.textHeading, textAlign: "center" },
   body: { fontFamily: Typography.bodyRegular, color: Colors.textPrimary, textAlign: "center" },
   input: { height: 52, borderWidth: 1, borderColor: Colors.secondary, borderRadius: Radius.button, paddingHorizontal: Spacing.md, backgroundColor: Colors.surface, fontFamily: Typography.bodyRegular, ...Shadow.card },

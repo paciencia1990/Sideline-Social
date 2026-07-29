@@ -1,7 +1,12 @@
 const assert = require('node:assert/strict');
 const admin = require('../functions/node_modules/firebase-admin');
 const { initializeApp } = require('firebase/app');
-const { connectAuthEmulator, createUserWithEmailAndPassword, getAuth } = require('firebase/auth');
+const {
+  connectAuthEmulator,
+  createUserWithEmailAndPassword,
+  getAuth,
+  signInAnonymously,
+} = require('firebase/auth');
 const { connectFunctionsEmulator, getFunctions, httpsCallable } = require('firebase/functions');
 
 const projectId = process.env.GCLOUD_PROJECT || 'sideline-game-join-code-functions-test';
@@ -11,14 +16,16 @@ if (!admin.apps.length) {
 const firestore = admin.firestore();
 const database = admin.database();
 
-async function createClient(label, authenticated = true) {
+async function createClient(label, authentication = 'password') {
   const app = initializeApp({ apiKey: 'demo-key', projectId }, label);
   const auth = getAuth(app);
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
   let uid = null;
-  if (authenticated) {
+  if (authentication === 'password') {
     const credential = await createUserWithEmailAndPassword(auth, `${label}@example.test`, 'ValidPass123!');
     uid = credential.user.uid;
+  } else if (authentication === 'anonymous') {
+    uid = (await signInAnonymously(auth)).user.uid;
   }
   const callableFunctions = getFunctions(app, 'us-central1');
   connectFunctionsEmulator(callableFunctions, '127.0.0.1', 5001);
@@ -29,25 +36,46 @@ async function createClient(label, authenticated = true) {
 }
 
 function hasReason(reason) {
-  return (error) => error?.details?.reason === reason || String(error?.message).includes(reason);
+  return (error) =>
+    error?.details?.reason === reason ||
+    error?.details?.details?.reason === reason ||
+    String(error?.message).includes(reason);
 }
 
 async function run() {
   const squadId = 'active-game-squad';
-  const [hostA, hostB, player, outsider, brute, anonymous] = await Promise.all([
+  const [
+    hostA,
+    hostB,
+    player,
+    outsider,
+    spotPlayerTwo,
+    spotPlayerThree,
+    brute,
+    createBrute,
+    anonymous,
+    signedOut,
+  ] = await Promise.all([
     createClient('join-host-a'),
     createClient('join-host-b'),
     createClient('join-player'),
     createClient('join-outsider'),
+    createClient('join-spot-player-two'),
+    createClient('join-spot-player-three'),
     createClient('join-brute'),
-    createClient('join-anonymous', false),
+    createClient('create-brute'),
+    createClient('join-anonymous', 'anonymous'),
+    createClient('join-signed-out', 'none'),
   ]);
   await Promise.all([
     firestore.collection('users').doc(hostA.uid).set({ firstName: 'Host', lastName: 'Alpha' }),
     firestore.collection('users').doc(hostB.uid).set({ firstName: 'Host', lastName: 'Beta' }),
     firestore.collection('users').doc(player.uid).set({ firstName: 'Player', lastName: 'One' }),
     firestore.collection('users').doc(outsider.uid).set({ firstName: 'Player', lastName: 'Two' }),
+    firestore.collection('users').doc(spotPlayerTwo.uid).set({ firstName: 'Spot', lastName: 'Three' }),
+    firestore.collection('users').doc(spotPlayerThree.uid).set({ firstName: 'Spot', lastName: 'Four' }),
     firestore.collection('users').doc(brute.uid).set({ firstName: 'Rate', lastName: 'Limit' }),
+    firestore.collection('users').doc(createBrute.uid).set({ firstName: 'Create', lastName: 'Limit' }),
     firestore.collection('squads').doc(squadId).set({ venueName: 'Fixture Field', isActive: true }),
     firestore.collection('squadMemberships').doc(`${squadId}__${hostA.uid}`).set({ squadId, userId: hostA.uid, membershipStatus: 'active' }),
     firestore.collection('squadMemberships').doc(`${squadId}__${player.uid}`).set({ squadId, userId: player.uid, membershipStatus: 'active' }),
@@ -55,10 +83,14 @@ async function run() {
 
   await assert.rejects(
     () => anonymous.call('createGameJoinCode', { gameType: 'bombDefusal', idempotencyKey: 'anonymous-request-1' }),
-    (error) => String(error?.code).includes('unauthenticated'),
+    (error) => String(error?.code).includes('permission-denied'),
   );
   await assert.rejects(
     () => anonymous.call('resolveAndJoinGameByCode', { code: '7KPM' }),
+    (error) => String(error?.code).includes('permission-denied'),
+  );
+  await assert.rejects(
+    () => signedOut.call('createGameJoinCode', { gameType: 'bombDefusal', idempotencyKey: 'signed-out-request-1' }),
     (error) => String(error?.code).includes('unauthenticated'),
   );
 
@@ -82,8 +114,11 @@ async function run() {
   assert.equal(bombSession.gameType, 'bomb_defusal');
   assert.equal(bombSession.squadId, squadId);
   assert.equal('joinCode' in bombSession, false, 'short routing credentials are not stored in queryable RTDB sessions');
-  assert.equal(Array.isArray(bombSession.gameState.bombSteps), true);
-  assert.equal(bombSession.gameState.bombSteps.length, 5);
+  assert.equal('bombSteps' in bombSession.gameState, false, 'future Bomb steps are never participant-readable');
+  assert.equal(typeof bombSession.gameState.currentStep?.type, 'string');
+  const bombSecret = (await database.ref(`gameSessionSecrets/${createdBomb.sessionId}`).get()).val();
+  assert.equal(Array.isArray(bombSecret.bombSteps), true);
+  assert.equal(bombSecret.bombSteps.length, 5);
 
   const activeForHost = await hostA.call('getActiveSquadGameSession', { squadId });
   assert.deepEqual(
@@ -103,7 +138,7 @@ async function run() {
   );
   await assert.rejects(
     () => anonymous.call('getActiveSquadGameSession', { squadId }),
-    (error) => String(error?.code).includes('unauthenticated'),
+    (error) => String(error?.code).includes('permission-denied'),
   );
 
   const mapping = (await firestore.collection('gameJoinCodes').doc(createdBomb.joinCode).get()).data();
@@ -112,6 +147,14 @@ async function run() {
     ['code', 'createdAt', 'expiresAt', 'gameType', 'hostUserId', 'sessionId', 'status', 'updatedAt'].sort(),
   );
   assert.equal(['displayName', 'email', 'childId', 'location', 'token'].some((field) => field in mapping), false);
+  await hostA.call('setRealtimeGamePlayerReady', { sessionId: createdBomb.sessionId, ready: true });
+  await assert.rejects(
+    () => hostA.call('updateGameJoinCodeStatus', {
+      gameType: 'bombDefusal', sessionId: createdBomb.sessionId, status: 'started',
+    }),
+    hasReason('minimum_players_required'),
+    'Bomb Defusal cannot start with only its host',
+  );
 
   const pastedCode = `${createdBomb.joinCode.slice(0, 2).toLowerCase()}-${createdBomb.joinCode.slice(2).toLowerCase()}`;
   const joinedBomb = await player.call('resolveAndJoinGameByCode', { code: pastedCode });
@@ -119,23 +162,107 @@ async function run() {
   assert.equal(joinedBomb.sessionId, createdBomb.sessionId);
   assert.equal(joinedBomb.participantState, 'joined');
   assert.equal((await database.ref(`gameSessions/${createdBomb.sessionId}/players/${player.uid}`).get()).exists(), true);
+  assert.equal(
+    (await database.ref(`gameSessions/${createdBomb.sessionId}/players/${player.uid}/isReady`).get()).val(),
+    false,
+  );
+  await assert.rejects(
+    () => outsider.call('setRealtimeGamePlayerReady', { sessionId: createdBomb.sessionId, ready: true }),
+    hasReason('not_authorized'),
+  );
   const participantCode = await player.call('getGameJoinCodeForSession', {
     gameType: 'bombDefusal', sessionId: createdBomb.sessionId,
   });
   assert.equal(participantCode.joinCode, createdBomb.joinCode);
 
+  await assert.rejects(
+    () => hostA.call('updateGameJoinCodeStatus', {
+      gameType: 'bombDefusal', sessionId: createdBomb.sessionId, status: 'started',
+    }),
+    hasReason('participants_not_ready'),
+    'a host cannot start while any multiplayer participant is not ready',
+  );
+  assert.deepEqual(
+    await player.call('setRealtimeGamePlayerReady', { sessionId: createdBomb.sessionId, ready: true }),
+    { ready: true },
+  );
   await hostA.call('updateGameJoinCodeStatus', {
     gameType: 'bombDefusal', sessionId: createdBomb.sessionId, status: 'started',
   });
+  const firstBombStep = (await database.ref(`gameSessions/${createdBomb.sessionId}/gameState/currentStep`).get()).val();
+  const firstBombAction = actionForBombStep(firstBombStep);
+  const bombStepResult = await player.call('submitBombDefusalStep', {
+    sessionId: createdBomb.sessionId,
+    stepIndex: 0,
+    action: firstBombAction,
+    submissionId: 'bomb-step-idempotency-0001',
+  });
+  assert.equal(bombStepResult.correct, true);
+  assert.equal(bombStepResult.nextStepIndex, 1);
+  assert.deepEqual(
+    bombStepResult.nextStep,
+    (await database.ref(`gameSessions/${createdBomb.sessionId}/gameState/currentStep`).get()).val(),
+    'only the newly revealed current step is returned',
+  );
+  assert.deepEqual(
+    await player.call('submitBombDefusalStep', {
+      sessionId: createdBomb.sessionId,
+      stepIndex: 0,
+      action: firstBombAction,
+      submissionId: 'bomb-step-idempotency-0001',
+    }),
+    bombStepResult,
+  );
+  await assert.rejects(
+    () => outsider.call('submitBombDefusalStep', {
+      sessionId: createdBomb.sessionId,
+      stepIndex: 1,
+      action: { label: 'A' },
+      submissionId: 'bomb-outsider-attempt-0001',
+    }),
+    hasReason('game_already_started'),
+  );
   await assert.rejects(
     () => outsider.call('resolveAndJoinGameByCode', { code: createdBomb.joinCode }),
     hasReason('game_already_started'),
   );
   const reconnected = await player.call('resolveAndJoinGameByCode', { code: createdBomb.joinCode });
   assert.equal(reconnected.participantState, 'reconnected');
-  await hostA.call('updateGameJoinCodeStatus', {
-    gameType: 'bombDefusal', sessionId: createdBomb.sessionId, status: 'ended',
-  });
+  let terminalBombResult = bombStepResult;
+  for (let stepIndex = 1; stepIndex < 5; stepIndex += 1) {
+    const currentStep = (
+      await database.ref(`gameSessions/${createdBomb.sessionId}/gameState/currentStep`).get()
+    ).val();
+    terminalBombResult = await player.call('submitBombDefusalStep', {
+      sessionId: createdBomb.sessionId,
+      stepIndex,
+      action: actionForBombStep(currentStep),
+      submissionId: `bomb-terminal-step-${stepIndex}-0001`,
+    });
+  }
+  assert.equal(terminalBombResult.outcome, 'defused');
+  assert.equal(
+    (await firestore.collection('gameJoinCodes').doc(createdBomb.joinCode).get()).data().status,
+    'ended',
+    'server completion closes the routing mapping without a client lifecycle write',
+  );
+  await assert.rejects(
+    () => player.call('submitBombDefusalStep', {
+      sessionId: createdBomb.sessionId,
+      stepIndex: 4,
+      action: actionForBombStep(bombSecret.bombSteps[4]),
+      submissionId: 'bomb-terminal-step-4-0001',
+    }),
+    hasReason('game_already_started'),
+    'a stored Bomb submission cannot be replayed after terminal state',
+  );
+  await assert.rejects(
+    () => hostA.call('updateGameJoinCodeStatus', {
+      gameType: 'bombDefusal', sessionId: createdBomb.sessionId, status: 'started',
+    }),
+    hasReason('game_already_started'),
+    'a terminal session cannot be reopened',
+  );
 
   const [spotA, spotB] = await Promise.all([
     hostA.call('createGameJoinCode', { gameType: 'spotTheDifferences', idempotencyKey: 'spot-host-request-a' }),
@@ -149,11 +276,33 @@ async function run() {
     hasReason('game_full'),
   );
   await player.call('resolveAndJoinGameByCode', { code: spotA.joinCode });
-  await database.ref(`gameSessions/${spotA.sessionId}/status`).set('active');
+  await Promise.all([
+    hostA.call('setRealtimeGamePlayerReady', { sessionId: spotA.sessionId, ready: true }),
+    player.call('setRealtimeGamePlayerReady', { sessionId: spotA.sessionId, ready: true }),
+  ]);
+  await assert.rejects(
+    () => hostA.call('updateGameJoinCodeStatus', {
+      gameType: 'spotTheDifferences', sessionId: spotA.sessionId, status: 'started',
+    }),
+    hasReason('minimum_players_required'),
+    'Spot the Difference cannot start with only two players',
+  );
+  await Promise.all([
+    spotPlayerTwo.call('resolveAndJoinGameByCode', { code: spotA.joinCode }),
+    spotPlayerThree.call('resolveAndJoinGameByCode', { code: spotA.joinCode }),
+  ]);
+  await Promise.all([
+    spotPlayerTwo.call('setRealtimeGamePlayerReady', { sessionId: spotA.sessionId, ready: true }),
+    spotPlayerThree.call('setRealtimeGamePlayerReady', { sessionId: spotA.sessionId, ready: true }),
+  ]);
   await hostA.call('updateGameJoinCodeStatus', { gameType: 'spotTheDifferences', sessionId: spotA.sessionId, status: 'started' });
-  const found = await player.call('recordSpotDifferenceFound', { sessionId: spotA.sessionId, differenceId: 'difference_1' });
+  const found = await player.call('recordSpotDifferenceFound', { sessionId: spotA.sessionId, differenceId: 'difference_01' });
   assert.equal(found.foundCount, 1);
-  assert.deepEqual((await database.ref(`gameSessions/${spotA.sessionId}/gameState/foundDifferenceIds`).get()).val(), ['difference_1']);
+  assert.deepEqual((await database.ref(`gameSessions/${spotA.sessionId}/gameState/foundDifferenceIds`).get()).val(), ['difference_01']);
+  await assert.rejects(
+    () => player.call('recordSpotDifferenceFound', { sessionId: spotA.sessionId, differenceId: 'difference_99' }),
+    (error) => String(error?.code).includes('invalid-argument'),
+  );
   await hostA.call('updateGameJoinCodeStatus', {
     gameType: 'spotTheDifferences', sessionId: spotA.sessionId, status: 'ended',
   });
@@ -167,7 +316,17 @@ async function run() {
     idempotencyKey: 'spot-expiration-request-a',
     squadId,
   });
-  await player.call('resolveAndJoinGameByCode', { code: staleSpot.joinCode });
+  await Promise.all([
+    player.call('resolveAndJoinGameByCode', { code: staleSpot.joinCode }),
+    spotPlayerTwo.call('resolveAndJoinGameByCode', { code: staleSpot.joinCode }),
+    spotPlayerThree.call('resolveAndJoinGameByCode', { code: staleSpot.joinCode }),
+  ]);
+  await Promise.all([
+    hostA.call('setRealtimeGamePlayerReady', { sessionId: staleSpot.sessionId, ready: true }),
+    player.call('setRealtimeGamePlayerReady', { sessionId: staleSpot.sessionId, ready: true }),
+    spotPlayerTwo.call('setRealtimeGamePlayerReady', { sessionId: staleSpot.sessionId, ready: true }),
+    spotPlayerThree.call('setRealtimeGamePlayerReady', { sessionId: staleSpot.sessionId, ready: true }),
+  ]);
   await hostA.call('updateGameJoinCodeStatus', {
     gameType: 'spotTheDifferences',
     sessionId: staleSpot.sessionId,
@@ -191,22 +350,70 @@ async function run() {
     hasReason('invalid_or_expired_code'),
   );
   await assert.rejects(
-    () => player.call('recordSpotDifferenceFound', { sessionId: staleSpot.sessionId, differenceId: 'difference_2' }),
+    () => player.call('recordSpotDifferenceFound', { sessionId: staleSpot.sessionId, differenceId: 'difference_02' }),
     hasReason('game_already_started'),
   );
 
-  const triviaSessionId = 'triviaCanonicalSessionA';
-  const questionOrder = [{ id: 'question-1', options_en: ['A', 'B', 'C', 'D'], answer: 0 }];
-  await firestore.collection('sessions').doc(triviaSessionId).set({
-    sessionId: triviaSessionId, gameId: 'triviaBlitz', gameType: 'triviaBlitz', hostPlayerId: hostA.uid,
-    playerIds: [hostA.uid], status: 'lobby', createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now(),
+  const expiredBombLobby = await hostB.call('createGameJoinCode', {
+    gameType: 'bombDefusal',
+    idempotencyKey: 'bomb-expired-lobby-request-1',
   });
-  await firestore.collection('sessions').doc(triviaSessionId).collection('games').doc('triviaBlitz').set({
-    status: 'lobby', hostPlayerId: hostA.uid, selectedQuestions: questionOrder, totalPlayers: 1, allReady: false,
+  await database.ref(`gameSessions/${expiredBombLobby.sessionId}/expiresAt`).set(Date.now() - 1000);
+  await assert.rejects(
+    () => hostB.call('setRealtimeGamePlayerReady', {
+      sessionId: expiredBombLobby.sessionId,
+      ready: true,
+    }),
+    hasReason('invalid_or_expired_code'),
+  );
+  await assert.rejects(
+    () => hostB.call('updateGameJoinCodeStatus', {
+      gameType: 'bombDefusal',
+      sessionId: expiredBombLobby.sessionId,
+      status: 'started',
+    }),
+    hasReason('invalid_or_expired_code'),
+  );
+  const expiredActiveBomb = await hostB.call('createGameJoinCode', {
+    gameType: 'bombDefusal',
+    idempotencyKey: 'bomb-expired-active-request-1',
   });
-  await firestore.collection('sessions').doc(triviaSessionId).collection('games').doc('triviaBlitz').collection('players').doc(hostA.uid).set({
-    name: 'Host Alpha', playerIndex: 0, score: 0, ready: false,
+  await spotPlayerTwo.call('resolveAndJoinGameByCode', { code: expiredActiveBomb.joinCode });
+  await Promise.all([
+    hostB.call('setRealtimeGamePlayerReady', {
+      sessionId: expiredActiveBomb.sessionId,
+      ready: true,
+    }),
+    spotPlayerTwo.call('setRealtimeGamePlayerReady', {
+      sessionId: expiredActiveBomb.sessionId,
+      ready: true,
+    }),
+  ]);
+  await hostB.call('updateGameJoinCodeStatus', {
+    gameType: 'bombDefusal',
+    sessionId: expiredActiveBomb.sessionId,
+    status: 'started',
   });
+  const expiredBombStep = (
+    await database.ref(`gameSessions/${expiredActiveBomb.sessionId}/gameState/currentStep`).get()
+  ).val();
+  await database.ref(`gameSessions/${expiredActiveBomb.sessionId}/expiresAt`).set(Date.now() - 1000);
+  await assert.rejects(
+    () => spotPlayerTwo.call('submitBombDefusalStep', {
+      sessionId: expiredActiveBomb.sessionId,
+      stepIndex: 0,
+      action: actionForBombStep(expiredBombStep),
+      submissionId: 'bomb-expired-active-step-0001',
+    }),
+    hasReason('game_already_started'),
+  );
+  assert.equal(
+    (await database.ref(`gameSessions/${expiredActiveBomb.sessionId}/status`).get()).val(),
+    'completed',
+  );
+
+  const createdTrivia = await hostA.call('createTriviaGameSession');
+  const triviaSessionId = createdTrivia.sessionId;
   const triviaCode = await hostA.call('createGameJoinCode', {
     gameType: 'triviaBlitz', sessionId: triviaSessionId, idempotencyKey: 'trivia-host-request-1',
   });
@@ -214,7 +421,13 @@ async function run() {
   assert.equal(joinedTrivia.gameType, 'triviaBlitz');
   assert.equal(joinedTrivia.sessionId, triviaSessionId);
   const triviaAfter = (await firestore.collection('sessions').doc(triviaSessionId).collection('games').doc('triviaBlitz').get()).data();
-  assert.deepEqual(triviaAfter.selectedQuestions, questionOrder, 'joining never selects a second Trivia question order');
+  assert.equal('selectedQuestions' in triviaAfter, false, 'participant-readable Trivia state never contains answer keys');
+  assert.equal(triviaAfter.questionCount, 10);
+  assert.equal(
+    (await firestore.collection('triviaGameSecrets').doc(triviaSessionId).get()).data().selectedQuestions.length,
+    10,
+    'joining never selects a second private Trivia question order',
+  );
   assert.equal((await firestore.collection('sessions').doc(triviaSessionId).collection('games').doc('triviaBlitz').collection('players').doc(outsider.uid).get()).exists, true);
 
   await firestore.collection('gameJoinCodes').doc(spotB.joinCode).update({ expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() - 1000) });
@@ -244,8 +457,33 @@ async function run() {
   }
   assert.equal(hasReason('rate_limited')(lastRateError), true);
 
+  let lastCreateRateError = null;
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    try {
+      await createBrute.call('createGameJoinCode', {
+        gameType: 'bombDefusal',
+        idempotencyKey: `create-rate-request-${String(attempt).padStart(2, '0')}`,
+      });
+    } catch (error) {
+      lastCreateRateError = error;
+    }
+  }
+  assert.equal(
+    hasReason('rate_limited')(lastCreateRateError),
+    true,
+    'creating join codes shares the server-side abuse limit',
+  );
+
   console.log('Game Join Code Functions emulator creation, idempotency, joining, routing, reconnect, lifecycle, rate-limit, and canonical-session tests passed.');
   await admin.app().delete();
+}
+
+function actionForBombStep(step) {
+  if (step.type === 'cut_wire') return { color: step.color };
+  if (step.type === 'press_button') return { label: step.label };
+  if (step.type === 'rotate_dial') return { target: step.target };
+  if (step.type === 'enter_code') return { code: step.code };
+  throw new Error(`Unknown Bomb Defusal step: ${String(step?.type)}`);
 }
 
 run().catch((error) => {

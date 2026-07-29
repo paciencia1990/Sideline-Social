@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
+import { useTranslation } from "react-i18next";
 
 import { Colors, Typography } from "@/constants/theme";
 
@@ -11,6 +12,7 @@ type CountdownOverlayProps = {
 };
 
 function CountdownOverlay({ onComplete, onCancel }: CountdownOverlayProps) {
+  const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const [count, setCount] = useState(3);
   const completedRef = useRef(false);
@@ -83,11 +85,15 @@ function CountdownOverlay({ onComplete, onCancel }: CountdownOverlayProps) {
           style={[styles.cancelButton, { top: insets.top + 16 }]}
           onPress={onCancel}
         >
-          <Text style={styles.cancelText}>Cancel</Text>
+          <Text style={styles.cancelText}>{t("common.cancel")}</Text>
         </Pressable>
       )}
-      <Animated.Text style={[styles.countdownText, { opacity, transform: [{ scale }] }]}>
-        {count <= 0 ? "GO!" : count.toString()}
+      <Animated.Text
+        accessibilityLabel={count <= 0 ? t("games.countdown.go") : count.toString()}
+        accessibilityLiveRegion="assertive"
+        style={[styles.countdownText, { opacity, transform: [{ scale }] }]}
+      >
+        {count <= 0 ? t("games.countdown.go") : count.toString()}
       </Animated.Text>
     </View>
   );

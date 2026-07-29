@@ -123,12 +123,9 @@ for (const selected of firstGame.selectedQuestions) {
 
 const gameState = read("src", "game", "triviaBlitz", "gameState.ts");
 assert.doesNotMatch(gameState, /sort\(\(\)\s*=>\s*Math\.random\(\)\s*-\s*0\.5\)/, "Production Trivia must not use random comparator sorting.");
-const initializeSessionSource = gameState.slice(
-  gameState.indexOf("export async function initializeFirestoreSession"),
-  gameState.indexOf("export async function submitSessionSelection"),
-);
-assert.ok(initializeSessionSource.indexOf("if (childSnapshot.exists())") < initializeSessionSource.indexOf("selectTriviaQuestions({"), "Rejoining an existing session must not generate a replacement selection.");
-assert.match(gameState, /selectedQuestions,[\s\S]*await setDoc\(sessionRef, session\)/, "The host selection must be stored in the canonical session.");
+assert.match(gameState, /["']createTriviaGameSession["']/, "Trivia session creation must use the server-authoritative callable.");
+assert.match(gameState, /["']resumeTriviaGameSession["']/, "Trivia reconnection must use the server-authoritative callable.");
+assert.doesNotMatch(gameState, /questions\.json|selectedQuestions|setDoc|updateDoc|writeBatch/, "The participant client must not select answer-bearing questions or mutate Trivia session documents.");
 
 const viewport = { width: 200, height: 100 };
 const imageRect = { width: 200, height: 100, offsetX: 0, offsetY: 0 };

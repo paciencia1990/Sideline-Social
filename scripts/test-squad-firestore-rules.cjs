@@ -15,9 +15,21 @@ async function run() {
       const db = context.firestore();
       await setDoc(doc(db, "users", "parent-a"), { displayName: "Parent A", squadIds: ["venue__baseball"], selectedSquadId: "venue__baseball", sidelineStars: 0 });
       await setDoc(doc(db, "users", "parent-b"), { displayName: "Parent B", squadIds: [], selectedSquadId: null, sidelineStars: 0 });
-      await setDoc(doc(db, "squads", "venue__baseball"), { venueName: "Venue", sportId: "baseball", isActive: true, memberIds: ["parent-a"] });
+      await setDoc(doc(db, "squads", "venue__baseball"), {
+        venueName: "Venue",
+        sportId: "baseball",
+        isActive: true,
+        memberIds: ["parent-a", "left-user", "legacy-user"],
+      });
+      await setDoc(doc(db, "squads", "other__soccer"), {
+        venueName: "Other Venue",
+        sportId: "soccer",
+        isActive: true,
+        memberIds: ["other-member"],
+      });
       await setDoc(doc(db, "squadMemberships", "venue__baseball__parent-a"), { userId: "parent-a", squadId: "venue__baseball", membershipStatus: "active", squadRole: "admin", presenceStatus: "away", lastSeenAt: Timestamp.now() });
       await setDoc(doc(db, "squadMemberships", "venue__baseball__parent-b"), { userId: "parent-b", squadId: "venue__baseball", membershipStatus: "active", squadRole: "member", presenceStatus: "away", lastSeenAt: Timestamp.now() });
+      await setDoc(doc(db, "squadMemberships", "venue__baseball__left-user"), { userId: "left-user", squadId: "venue__baseball", membershipStatus: "left", squadRole: "member" });
       await setDoc(doc(db, "squadAdminInvitations", "venue__baseball__parent-b"), { squadId: "venue__baseball", targetUserId: "parent-b", invitedByUserId: "parent-a", status: "pending", expiresAt: Timestamp.now() });
       await setDoc(doc(db, "squadAdminAccessRequests", "venue__baseball__parent-b"), { squadId: "venue__baseball", requesterUserId: "parent-b", status: "pending", createdAt: Timestamp.now() });
       await setDoc(doc(db, "squads", "venue__baseball", "seasons", "spring"), {
@@ -33,8 +45,28 @@ async function run() {
     });
     const parentA = testEnv.authenticatedContext("parent-a").firestore();
     const parentB = testEnv.authenticatedContext("parent-b").firestore();
+    const outsider = testEnv.authenticatedContext("outsider").firestore();
+    const coach = testEnv.authenticatedContext("coach").firestore();
+    const staff = testEnv.authenticatedContext("staff").firestore();
+    const leftUser = testEnv.authenticatedContext("left-user").firestore();
+    const legacyUser = testEnv.authenticatedContext("legacy-user").firestore();
+    const anonymous = testEnv.authenticatedContext(
+      "anonymous-user",
+      { firebase: { sign_in_provider: "anonymous" } },
+    ).firestore();
+    const signedOut = testEnv.unauthenticatedContext().firestore();
     await assertSucceeds(getDoc(doc(parentA, "squads", "venue__baseball")));
-    await assertSucceeds(getDocs(collection(parentA, "squads")));
+    await assertSucceeds(getDoc(doc(parentB, "squads", "venue__baseball")));
+    await assertSucceeds(getDoc(doc(legacyUser, "squads", "venue__baseball")));
+    await assertFails(getDocs(collection(parentA, "squads")));
+    await assertFails(getDoc(doc(parentA, "squads", "other__soccer")));
+    await assertFails(getDoc(doc(outsider, "squads", "venue__baseball")));
+    await assertFails(getDoc(doc(coach, "squads", "venue__baseball")));
+    await assertFails(getDoc(doc(staff, "squads", "venue__baseball")));
+    await assertFails(getDoc(doc(leftUser, "squads", "venue__baseball")));
+    await assertFails(getDoc(doc(anonymous, "squads", "venue__baseball")));
+    await assertFails(getDocs(collection(anonymous, "squads")));
+    await assertFails(getDoc(doc(signedOut, "squads", "venue__baseball")));
     await assertSucceeds(getDoc(doc(parentA, "squadMemberships", "venue__baseball__parent-a")));
     await assertFails(getDoc(doc(parentA, "squads", "venue__baseball", "seasons", "spring")));
     await assertFails(getDoc(doc(parentB, "squads", "venue__baseball", "seasons", "spring")));

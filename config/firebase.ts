@@ -11,6 +11,7 @@ import { getDatabase } from "firebase/database";
 import { getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
 import { getStorage } from "firebase/storage";
+import { Platform } from "react-native";
 
 const firebaseConfig: FirebaseOptions = {
   apiKey: "AIzaSyCG4ym5jJQPG724Pp_Da7yBj3wBdPEOdOs",
@@ -18,7 +19,9 @@ const firebaseConfig: FirebaseOptions = {
   projectId: "sideline-squad",
   storageBucket: "sideline-squad.firebasestorage.app",
   messagingSenderId: "903830626771",
-  appId: "1:903830626771:android:01ec28e1c555059bdfcf26",
+  appId: Platform.OS === "ios"
+    ? "1:903830626771:ios:548f99d119be8948dfcf26"
+    : "1:903830626771:android:01ec28e1c555059bdfcf26",
   databaseURL: "https://sideline-squad-default-rtdb.firebaseio.com",
 };
 

@@ -24,6 +24,7 @@ type LobbyPlayers = {
 
 type LobbyBaseProps = {
   gameName: string;
+  minPlayers: number;
   players: LobbyPlayers;
   codeState: GameCodeState;
   codeError: GameJoinCodeFailureReason | null;
@@ -36,6 +37,7 @@ type LobbyBaseProps = {
 
 export default function LobbyBase({
   gameName,
+  minPlayers,
   players,
   codeState,
   codeError,
@@ -49,6 +51,7 @@ export default function LobbyBase({
   const insets = useSafeAreaInsets();
   const readyCount = players.list.filter((player) => player.ready).length;
   const totalPlayers = players.list.length;
+  const canStart = totalPlayers >= minPlayers && readyCount === totalPlayers;
   const spokenCode = spokenGameJoinCode(players.joinCode);
 
   const handleShareCode = async () => {
@@ -112,6 +115,11 @@ export default function LobbyBase({
         <Text style={styles.readySummary}>
           {t("games.joinCode.readySummary", { ready: readyCount, total: totalPlayers })}
         </Text>
+        {totalPlayers < minPlayers ? (
+          <Text accessibilityLiveRegion="polite" style={styles.readySummary}>
+            {t("games.joinCode.minimumPlayers", { count: minPlayers })}
+          </Text>
+        ) : null}
       </View>
 
       <ScrollView
@@ -178,8 +186,10 @@ export default function LobbyBase({
 
           {players.isHost && (
             <Pressable
+              accessibilityState={{ disabled: !canStart }}
               accessibilityRole="button"
-              style={[styles.button, styles.primaryButton]}
+              disabled={!canStart}
+              style={[styles.button, styles.primaryButton, !canStart && styles.disabledButton]}
               onPress={onStart}
             >
               <Text style={[styles.buttonText, styles.primaryButtonText]}>{t("games.joinCode.startGame")}</Text>
@@ -392,6 +402,9 @@ const styles = StyleSheet.create({
     minWidth: 0,
     paddingHorizontal: 18,
     paddingVertical: 12,
+  },
+  disabledButton: {
+    opacity: 0.5,
   },
   primaryButton: {
     backgroundColor: Colors.primary,

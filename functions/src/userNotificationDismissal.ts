@@ -1,12 +1,15 @@
 import * as admin from 'firebase-admin';
 import { FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
 
 import {
   getNotificationCleanupReason,
   isVisibleStoredNotification,
   normalizeNotificationId,
 } from './notificationDismissalCore';
+import { permanentAccountFunctions } from './permanentAuth';
+
+const functions = permanentAccountFunctions(firebaseFunctions);
 
 const notificationFunctions = functions.region('us-central1');
 const PAGE_SIZE = 400;

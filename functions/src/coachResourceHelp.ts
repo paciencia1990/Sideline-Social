@@ -1,4 +1,8 @@
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
+
+import { permanentAccountFunctions } from './permanentAuth';
+
+const functions = permanentAccountFunctions(firebaseFunctions);
 
 const coachHelpFunctions = functions.region('us-central1').runWith({
   timeoutSeconds: 30,

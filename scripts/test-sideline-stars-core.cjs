@@ -66,6 +66,20 @@ const lobbySources = [
 
 assert.doesNotMatch(functionsSource, /export const awardGameStars\s*=/, "unsafe legacy callable is not exported");
 assert.match(functionsSource, /export const finalizeGameReward/);
+const localRewardBoundary = functionsSource.slice(
+  functionsSource.indexOf("export const createGameRewardSession"),
+  functionsSource.indexOf("export const finalizeGameReward"),
+);
+assert.match(
+  localRewardBoundary,
+  /if \(!requestedSessionId\)[\s\S]*failed-precondition/,
+  "local-only Bomb and Spot games cannot mint reward sessions",
+);
+assert.match(
+  localRewardBoundary,
+  /gameSessions\/\$\{requestedSessionId\}[\s\S]*participants\?\.\[uid\][\s\S]*mode:\s*'multiplayer'/,
+  "reward eligibility must be rooted in a canonical RTDB participant session",
+);
 assert.match(seasonFunctionsSource, /membership\.membershipStatus === 'active'/, "leaderboard uses durable membership");
 assert.doesNotMatch(seasonFunctionsSource.slice(seasonFunctionsSource.indexOf("getSquadLeaderboard"), seasonFunctionsSource.indexOf("readSeasonEligibleSquadIds")), /presenceStatus|lastSeenAt/, "presence does not determine ranking eligibility");
 assert.match(leaderboardSource, /selectedSquadId/);

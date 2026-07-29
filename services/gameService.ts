@@ -1,9 +1,6 @@
 import {
   onValue,
   ref,
-  remove,
-  set,
-  update,
   type DataSnapshot,
 } from "firebase/database";
 import { httpsCallable } from "firebase/functions";
@@ -60,66 +57,6 @@ export const GAME_CONFIG: Record<
 function snapshotToSession(snapshot: DataSnapshot): GameSession | null {
   if (!snapshot.exists()) return null;
   return snapshot.val() as GameSession;
-}
-
-export async function setPlayerReady(sessionId: string, userId: string, ready: boolean): Promise<void> {
-  try {
-    await set(ref(rtdb, `gameSessions/${sessionId}/players/${userId}/isReady`), ready);
-  } catch (error) {
-    console.error("[GameService] setPlayerReady error:", error);
-    throw error;
-  }
-}
-
-export async function setPlayerConnected(sessionId: string, userId: string, connected: boolean): Promise<void> {
-  try {
-    await set(ref(rtdb, `gameSessions/${sessionId}/players/${userId}/isConnected`), connected);
-  } catch (error) {
-    console.error("[GameService] setPlayerConnected error:", error);
-  }
-}
-
-export async function startCountdown(sessionId: string): Promise<void> {
-  try {
-    await set(ref(rtdb, `gameSessions/${sessionId}/status`), "countdown");
-  } catch (error) {
-    console.error("[GameService] startCountdown error:", error);
-    throw error;
-  }
-}
-
-export async function startGame(sessionId: string): Promise<void> {
-  try {
-    await update(ref(rtdb, `gameSessions/${sessionId}`), {
-      status: "active",
-      startedAt: Date.now(),
-    });
-  } catch (error) {
-    console.error("[GameService] startGame error:", error);
-    throw error;
-  }
-}
-
-export async function completeGame(
-  sessionId: string,
-  outcome: "completed" | "failed",
-  finalScores: Record<string, number>
-): Promise<void> {
-  try {
-    const scoreUpdates: Record<string, unknown> = {
-      status: outcome,
-      completedAt: Date.now(),
-    };
-
-    Object.entries(finalScores).forEach(([uid, score]) => {
-      scoreUpdates[`players/${uid}/score`] = score;
-    });
-
-    await update(ref(rtdb, `gameSessions/${sessionId}`), scoreUpdates);
-  } catch (error) {
-    console.error("[GameService] completeGame error:", error);
-    throw error;
-  }
 }
 
 export function fetchActiveSquadSession(squadId: string): Promise<ActiveSquadSessionFetchResult> {
@@ -198,42 +135,14 @@ export function subscribeToSession(
   }
 }
 
-export async function removePlayer(sessionId: string, userId: string): Promise<void> {
-  try {
-    await remove(ref(rtdb, `gameSessions/${sessionId}/players/${userId}`));
-  } catch (error) {
-    console.error("[GameService] removePlayer error:", error);
-  }
-}
-
-export async function deleteSession(sessionId: string): Promise<void> {
-  try {
-    await remove(ref(rtdb, `gameSessions/${sessionId}`));
-  } catch (error) {
-    console.error("[GameService] deleteSession error:", error);
-  }
-}
-
-export async function updateGameState(
-  sessionId: string,
-  gameState: Record<string, unknown>
-): Promise<void> {
-  try {
-    await update(ref(rtdb, `gameSessions/${sessionId}/gameState`), gameState);
-  } catch (error) {
-    console.error("[GameService] updateGameState error:", error);
-    throw error;
-  }
-}
-
-export function getGameLabel(gameType: GameType): string {
+export function getGameLabelKey(gameType: GameType): string {
   switch (gameType) {
     case "bomb_defusal":
-      return "Bomb Defusal";
+      return "games.bombDefusal.title";
     case "spot_difference":
-      return "Spot the Differences";
+      return "games.spotDifference.title";
     case "trivia_blitz":
-      return "Trivia Blitz";
+      return "games.triviaBlitz.title";
   }
 }
 

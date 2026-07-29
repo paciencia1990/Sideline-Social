@@ -30,7 +30,7 @@ module.exports = ({ config }) => ({
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: APP_SCHEME,
-  userInterfaceStyle: "automatic",
+  userInterfaceStyle: "light",
   newArchEnabled: true,
 
   locales: {
@@ -50,8 +50,16 @@ module.exports = ({ config }) => ({
       CFBundleAllowMixedLocalizations: true,
       CFBundleDevelopmentRegion: "en",
       ITSAppUsesNonExemptEncryption: false,
+      ...(!IS_DEVELOPMENT
+        ? {
+            NSAppTransportSecurity: {
+              NSAllowsArbitraryLoads: false,
+              NSAllowsLocalNetworking: false,
+            },
+          }
+        : {}),
       NSLocationWhenInUseUsageDescription: "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.",
-      NSMicrophoneUsageDescription: "Sideline Social uses your microphone only when you choose to record a team voice message.",
+      NSMicrophoneUsageDescription: "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.",
     },
   },
 
@@ -96,7 +104,7 @@ module.exports = ({ config }) => ({
     [
       "expo-audio",
       {
-        microphonePermission: "Sideline Social uses your microphone only when you choose to record a team voice message.",
+        microphonePermission: "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.",
         recordAudioAndroid: true,
         enableBackgroundRecording: false,
         enableBackgroundPlayback: false,
@@ -105,7 +113,10 @@ module.exports = ({ config }) => ({
     [
       "expo-location",
       {
-        locationWhenInUsePermission: "Sideline Social uses your current location to find nearby sports communities. Your precise location is not shown to other parents.",
+        locationAlwaysAndWhenInUsePermission: false,
+        locationAlwaysPermission: false,
+        locationWhenInUsePermission: "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.",
+        motionUsagePermission: false,
       },
     ],
     [

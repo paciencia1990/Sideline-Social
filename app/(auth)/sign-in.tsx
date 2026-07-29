@@ -1,6 +1,7 @@
 import React, { useCallback } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
+import { useTranslation } from "react-i18next";
 
 import { OutlineButton } from "@/components/OutlineButton";
 import { PrimaryButton } from "@/components/PrimaryButton";
@@ -10,6 +11,7 @@ import { Colors, Spacing, Typography } from "@/constants/theme";
 
 export default function SignInScreen() {
   const router = useRouter();
+  const { t } = useTranslation();
 
   const handleEmailSignIn = useCallback(() => {
     if (__DEV__) console.info("[AuthDebug] Email login pressed");
@@ -24,10 +26,10 @@ export default function SignInScreen() {
   return (
     <ScreenWrapper>
       <View style={styles.content}>
-        <Text style={styles.title}>Welcome back</Text>
-        <Text style={styles.body}>Sign in to find your Sideline Social circle.</Text>
-        <PrimaryButton title="Sign in with Email" onPress={handleEmailSignIn} />
-        <OutlineButton title="Create Account" onPress={handleCreateAccount} />
+        <Text style={styles.title}>{t("auth.welcomeBack")}</Text>
+        <Text style={styles.body}>{t("auth.signInSubtitle")}</Text>
+        <PrimaryButton title={t("auth.signInWithEmail")} onPress={handleEmailSignIn} />
+        <OutlineButton title={t("auth.createAccount")} onPress={handleCreateAccount} />
       </View>
     </ScreenWrapper>
   );

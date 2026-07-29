@@ -18,6 +18,7 @@ import { MoreVertical, Settings, Users } from 'lucide-react-native';
 
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
+import { OutlineButton } from '@/components/OutlineButton';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Card } from '@/components/Card';
 import { SquadIdentity } from '@/components/SquadIdentity';
@@ -45,6 +46,7 @@ export default function SquadDetailScreen() {
 
   const [squadDetail, setSquadDetail] = useState<SquadDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [joining, setJoining] = useState(false);
   const [administration, setAdministration] = useState<SquadAdministration | null>(null);
@@ -56,18 +58,34 @@ export default function SquadDetailScreen() {
   const pendingAdministrationFocusRef = useRef(false);
   const administrationScrollTargetRef = useRef<number | null>(null);
 
-  const isMember = mySquadIds.includes(squadId ?? '');
+  const isMember =
+    mySquadIds.includes(squadId ?? '') &&
+    squadDetail?.viewerIsMember === true;
   const emoji = getSquadSportOption(squadDetail?.sportId).emoji;
 
-  useEffect(() => {
-    if (!squadId) return;
-    (async () => {
-      setLoading(true);
+  const loadSquadDetail = useCallback(async () => {
+    if (!squadId) {
+      setSquadDetail(null);
+      setLoadError(false);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setLoadError(false);
+    try {
       const detail = await fetchSquadDetail(squadId);
       setSquadDetail(detail);
+    } catch {
+      setSquadDetail(null);
+      setLoadError(true);
+    } finally {
       setLoading(false);
-    })();
+    }
   }, [squadId]);
+
+  useEffect(() => {
+    void loadSquadDetail();
+  }, [loadSquadDetail]);
 
   const focusAdministrationHeading = useCallback(() => {
     if (!pendingAdministrationFocusRef.current || !administrationCardRef.current) return;
@@ -175,11 +193,30 @@ export default function SquadDetailScreen() {
     );
   }
 
+  if (loadError) {
+    return (
+      <ScreenWrapper>
+        <View style={styles.centered}>
+          <Text style={styles.errorTitle}>{t('squad.detailUnavailableTitle')}</Text>
+          <Text style={styles.errorText}>{t('squad.detailUnavailableBody')}</Text>
+          <View style={styles.errorActions}>
+            <PrimaryButton title={t('common.retry')} onPress={() => void loadSquadDetail()} />
+            <OutlineButton title={t('common.back')} onPress={() => router.back()} />
+          </View>
+        </View>
+      </ScreenWrapper>
+    );
+  }
+
   if (!squadDetail) {
     return (
       <ScreenWrapper>
         <View style={styles.centered}>
-          <Text style={styles.errorText}>Squad not found.</Text>
+          <Text style={styles.errorTitle}>{t('squad.detailNotFoundTitle')}</Text>
+          <Text style={styles.errorText}>{t('squad.detailNotFoundBody')}</Text>
+          <View style={styles.errorActions}>
+            <OutlineButton title={t('common.back')} onPress={() => router.back()} />
+          </View>
         </View>
       </ScreenWrapper>
     );
@@ -287,7 +324,7 @@ export default function SquadDetailScreen() {
         </View>
 
         {/* Member Avatars */}
-        {squadDetail.members.length > 0 && (
+        {isMember && squadDetail.members.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{t('squad.members')}</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -364,7 +401,11 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: Spacing.md,
+    padding: Spacing.lg,
   },
+  errorActions: { gap: Spacing.sm, maxWidth: 360, width: '100%' },
+  errorTitle: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 26, textAlign: 'center' },
   errorText: {
     fontFamily: Typography.bodyRegular,
     fontSize: 14,
@@ -396,6 +437,8 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodyRegular,
     fontSize: 13,
     color: Colors.textPrimary,
+    lineHeight: 21,
+    textAlign: 'center',
   },
   manageSquadCard: {
     gap: Spacing.sm,

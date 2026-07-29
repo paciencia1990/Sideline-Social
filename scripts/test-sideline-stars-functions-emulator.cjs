@@ -5,8 +5,10 @@ const { connectAuthEmulator, createUserWithEmailAndPassword, getAuth } = require
 const { connectFunctionsEmulator, getFunctions, httpsCallable } = require("firebase/functions");
 
 const projectId = process.env.GCLOUD_PROJECT || "sideline-stars-functions-test";
-if (!admin.apps.length) admin.initializeApp({ projectId });
+const databaseURL = `https://${projectId}.firebaseio.com`;
+if (!admin.apps.length) admin.initializeApp({ projectId, databaseURL });
 const db = admin.firestore();
+const rtdb = admin.database();
 
 async function createClient(label) {
   const app = initializeApp({ apiKey: "demo-key", projectId }, label);
@@ -146,7 +148,29 @@ async function run() {
   const createSession = httpsCallable(parentA.functions, "createGameRewardSession");
   const recordResult = httpsCallable(parentA.functions, "recordGameSessionResult");
   const finalize = httpsCallable(parentA.functions, "finalizeGameReward");
-  const firstSession = (await createSession({ gameType: "spotDifferences", sourceSquadId: squadId })).data.sessionId;
+  await assert.rejects(
+    () => createSession({ gameType: "spotDifferences", sourceSquadId: squadId }),
+    (error) => String(error?.code).includes("failed-precondition"),
+    "local-only games must not mint a reward session",
+  );
+
+  const firstSession = "spot-multiplayer-timeout";
+  await seedRealtimeGameSession({
+    sessionId: firstSession,
+    gameType: "spot_difference",
+    participantUid: parentA.uid,
+    squadId,
+    status: "started",
+    startedAt: Date.now() - 11 * 60 * 1000,
+    settings: { roundDuration: 600 },
+    gameState: {
+      foundDifferenceIds: Array.from({ length: 6 }, (_, index) => `difference_${String(index + 1).padStart(2, "0")}`),
+    },
+  });
+  assert.equal(
+    (await createSession({ gameType: "spotDifferences", sessionId: firstSession, sourceSquadId: squadId })).data.sessionId,
+    firstSession,
+  );
   await recordResult({ gameType: "spotDifferences", sessionId: firstSession, outcome: "timeExpired", foundCount: 6, totalDifferences: 10 });
   const firstReward = (await finalize({ gameType: "spotDifferences", sessionId: firstSession, starsAwarded: 999 })).data;
   assert.equal(firstReward.status, "awarded");
@@ -161,20 +185,48 @@ async function run() {
   assert.equal(deniedReward.status, "notEligible");
   assert.equal(deniedReward.starsAwarded, 0);
 
-  const secondSession = (await createSession({ gameType: "spotDifferences" })).data.sessionId;
+  const secondSession = "spot-multiplayer-complete";
+  await seedRealtimeGameSession({
+    sessionId: secondSession,
+    gameType: "spot_difference",
+    participantUid: parentA.uid,
+    status: "completed",
+    startedAt: Date.now() - 60_000,
+    settings: { roundDuration: 600 },
+    gameState: {
+      foundDifferenceIds: Array.from({ length: 10 }, (_, index) => `difference_${String(index + 1).padStart(2, "0")}`),
+    },
+  });
+  await createSession({ gameType: "spotDifferences", sessionId: secondSession });
   await recordResult({ gameType: "spotDifferences", sessionId: secondSession, outcome: "completed", foundCount: 10, totalDifferences: 10 });
   const secondReward = (await finalize({ gameType: "spotDifferences", sessionId: secondSession })).data;
   assert.equal(secondReward.starsAwarded, 15, "a different session remains independently rewardable");
   assert.equal(secondReward.totalSidelineStars, 36);
 
-  const explodedBombSession = (await createSession({ gameType: "bombDefusal" })).data.sessionId;
+  const explodedBombSession = "bomb-multiplayer-exploded";
+  await seedRealtimeGameSession({
+    sessionId: explodedBombSession,
+    gameType: "bomb_defusal",
+    participantUid: parentA.uid,
+    status: "completed",
+    gameState: { currentStepIndex: 3, outcome: "exploded" },
+  });
+  await createSession({ gameType: "bombDefusal", sessionId: explodedBombSession });
   await recordResult({ gameType: "bombDefusal", sessionId: explodedBombSession, outcome: "exploded", firstAttemptCorrectStepCount: 3, totalSteps: 5 });
   const explodedBombReward = (await finalize({ gameType: "bombDefusal", sessionId: explodedBombSession })).data;
   assert.equal(explodedBombReward.starsAwarded, 8);
   assert.equal(explodedBombReward.breakdown.performanceStars, 3);
   assert.equal(explodedBombReward.totalSidelineStars, 44);
 
-  const defusedBombSession = (await createSession({ gameType: "bombDefusal" })).data.sessionId;
+  const defusedBombSession = "bomb-multiplayer-defused";
+  await seedRealtimeGameSession({
+    sessionId: defusedBombSession,
+    gameType: "bomb_defusal",
+    participantUid: parentA.uid,
+    status: "completed",
+    gameState: { currentStepIndex: 5, outcome: "defused" },
+  });
+  await createSession({ gameType: "bombDefusal", sessionId: defusedBombSession });
   await recordResult({ gameType: "bombDefusal", sessionId: defusedBombSession, outcome: "defused", firstAttemptCorrectStepCount: 5, totalSteps: 5 });
   const defusedBombReward = (await finalize({ gameType: "bombDefusal", sessionId: defusedBombSession })).data;
   assert.equal(defusedBombReward.starsAwarded, 15);
@@ -265,6 +317,36 @@ async function run() {
 function membership(squadId, userId, membershipStatus, presenceStatus) {
   return db.collection("squadMemberships").doc(`${squadId}__${userId}`).set({
     squadId, userId, membershipStatus, presenceStatus,
+  });
+}
+
+function seedRealtimeGameSession({
+  sessionId,
+  gameType,
+  participantUid,
+  squadId = null,
+  status,
+  startedAt = Date.now(),
+  settings = {},
+  gameState,
+}) {
+  return rtdb.ref(`gameSessions/${sessionId}`).set({
+    sessionId,
+    gameType,
+    squadId,
+    status,
+    startedAt,
+    expiresAt: Date.now() + 60 * 60 * 1000,
+    settings,
+    players: {
+      [participantUid]: {
+        uid: participantUid,
+        displayName: "Reward Test Player",
+        isHost: true,
+        isReady: true,
+      },
+    },
+    gameState,
   });
 }
 

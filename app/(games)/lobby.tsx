@@ -1,5 +1,5 @@
-import { GamePlaceholder } from "@/components/GamePlaceholder";
+import { Redirect } from "expo-router";
 
 export default function LobbyScreen() {
-  return <GamePlaceholder title="Game Lobby" body="Lobby state has been kept out of the Expo Go build until the backend is finalized." />;
+  return <Redirect href="/(tabs)/games" />;
 }

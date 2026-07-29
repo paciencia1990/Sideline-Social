@@ -14,28 +14,77 @@ async function run() {
   const testEnv = await initializeTestEnvironment({ projectId, database: { rules } });
   try {
     await testEnv.clearDatabase();
+    const now = Date.now();
     await Promise.all([
       admin.database().ref('gameSessions/session-a').set({
         sessionId: 'session-a', gameType: 'bomb_defusal', squadId: 'squad-a', hostUserId: 'host',
         players: { host: { displayName: 'Host', isReady: false }, player: { displayName: 'Player', isReady: false } },
         status: 'lobby',
+        expiresAt: Date.now() + 60_000,
+      }),
+      admin.database().ref('gameSessions/session-expired').set({
+        sessionId: 'session-expired', gameType: 'bomb_defusal', squadId: 'squad-a', hostUserId: 'host',
+        players: { host: { displayName: 'Host', isReady: true }, player: { displayName: 'Player', isReady: true } },
+        status: 'lobby',
+        expiresAt: Date.now() - 1_000,
+      }),
+      admin.database().ref('gameSessionSecrets/session-a').set({
+        expiresAt: Date.now() + 60_000,
+        bombSteps: [{ type: 'cut_wire', color: 'blue' }],
+      }),
+      admin.database().ref('gameSessions/session-legacy-sequence').set({
+        sessionId: 'session-legacy-sequence', gameType: 'bomb_defusal', hostUserId: 'host',
+        players: { host: { displayName: 'Host' }, player: { displayName: 'Player' } },
+        status: 'active',
+        expiresAt: now + 600_000,
+        gameState: { bombSteps: [{ type: 'cut_wire', color: 'blue' }] },
+      }),
+      admin.database().ref('gameSessions/session-results-grace').set({
+        sessionId: 'session-results-grace', gameType: 'bomb_defusal', hostUserId: 'host',
+        players: { host: { displayName: 'Host' }, player: { displayName: 'Player' } },
+        status: 'completed',
+        completedAt: now - 1000,
+        expiresAt: now + 600_000,
+      }),
+      admin.database().ref('gameSessions/session-results-stale').set({
+        sessionId: 'session-results-stale', gameType: 'bomb_defusal', hostUserId: 'host',
+        players: { host: { displayName: 'Host' }, player: { displayName: 'Player' } },
+        status: 'completed',
+        completedAt: now - 301_000,
+        expiresAt: now + 600_000,
       }),
       admin.database().ref('sessions/legacy').set({ joinCode: 'LOCAL' }),
     ]);
-    const hostDb = testEnv.authenticatedContext('host').database();
-    const playerDb = testEnv.authenticatedContext('player').database();
-    const outsiderDb = testEnv.authenticatedContext('outsider').database();
-    const anonDb = testEnv.unauthenticatedContext().database();
+    const permanentClaims = { firebase: { sign_in_provider: 'password' } };
+    const anonymousClaims = { firebase: { sign_in_provider: 'anonymous' } };
+    const hostDb = testEnv.authenticatedContext('host', permanentClaims).database();
+    const playerDb = testEnv.authenticatedContext('player', permanentClaims).database();
+    const outsiderDb = testEnv.authenticatedContext('outsider', permanentClaims).database();
+    const anonymousDb = testEnv.authenticatedContext('anonymous-player', anonymousClaims).database();
+    const signedOutDb = testEnv.unauthenticatedContext().database();
 
     await assertSucceeds(get(ref(hostDb, 'gameSessions/session-a')));
     await assertSucceeds(get(ref(playerDb, 'gameSessions/session-a')));
     await assertFails(get(ref(outsiderDb, 'gameSessions/session-a')));
-    await assertFails(get(ref(anonDb, 'gameSessions/session-a')));
+    await assertFails(get(ref(anonymousDb, 'gameSessions/session-a')));
+    await assertFails(get(ref(signedOutDb, 'gameSessions/session-a')));
+    await assertFails(get(ref(hostDb, 'gameSessions/session-expired')));
+    await assertFails(get(ref(playerDb, 'gameSessions/session-expired/players/player')));
+    await assertFails(get(ref(hostDb, 'gameSessions/session-legacy-sequence')));
+    await assertFails(get(ref(playerDb, 'gameSessions/session-legacy-sequence')));
+    await assertSucceeds(get(ref(hostDb, 'gameSessions/session-results-grace')));
+    await assertSucceeds(get(ref(playerDb, 'gameSessions/session-results-grace')));
+    await assertFails(get(ref(hostDb, 'gameSessions/session-results-stale')));
+    await assertFails(get(ref(playerDb, 'gameSessions/session-results-stale')));
+    await assertFails(get(ref(hostDb, 'gameSessionSecrets/session-a')));
+    await assertFails(get(ref(playerDb, 'gameSessionSecrets/session-a')));
     await assertFails(get(query(ref(hostDb, 'gameSessions'), orderByChild('squadId'), equalTo('squad-a'))));
     await assertFails(get(query(ref(outsiderDb, 'gameSessions'), orderByChild('joinCode'), equalTo('7KPM'))));
     await assertFails(get(ref(outsiderDb, 'gameSessions')));
     await assertFails(set(ref(outsiderDb, 'gameSessions/session-a/players/outsider'), { displayName: 'Outsider' }));
-    await assertSucceeds(update(ref(playerDb, 'gameSessions/session-a/players/player'), { isReady: true }));
+    await assertFails(update(ref(playerDb, 'gameSessions/session-a/players/player'), { isReady: true }));
+    await assertFails(update(ref(hostDb, 'gameSessions/session-a'), { status: 'active' }));
+    await assertFails(update(ref(anonymousDb, 'gameSessions/session-a/players/anonymous-player'), { isReady: true }));
     await assertFails(get(ref(hostDb, 'sessions/legacy')));
     await assertFails(set(ref(hostDb, 'sessions/new/joinCode'), '7KPM'));
 

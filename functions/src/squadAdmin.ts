@@ -1,7 +1,8 @@
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
 
+import { permanentAccountFunctions } from './permanentAuth';
 import { isCanonicalPublicProfile, resolveCanonicalPublicProfile, toMinimalPublicUserProfile } from './publicUserProfileCore';
 import {
   SQUAD_ADMIN_INVITATION_MS,
@@ -22,6 +23,7 @@ import {
 import { resolveSelectionAfterLeave } from './squadCore';
 import { sendPushToUser } from './pushNotificationDelivery';
 
+const functions = permanentAccountFunctions(firebaseFunctions);
 const MAX_ACTIVE_MEMBERS = 250;
 // Each invitation may also update one notification in the same atomic batch.
 // Keeping this at 200 stays safely below Firestore's 500-write batch limit.
@@ -77,7 +79,7 @@ function firestore() {
   return admin.firestore();
 }
 
-function authenticatedUserId(context: functions.https.CallableContext): string {
+function authenticatedUserId(context: firebaseFunctions.https.CallableContext): string {
   const userId = context.auth?.uid;
   if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to manage this Squad.');
   return userId;
@@ -94,7 +96,7 @@ function readId(value: unknown, label: string): string {
 function fail(
   reason: string,
   squadId: string,
-  code: functions.https.FunctionsErrorCode = 'failed-precondition',
+  code: firebaseFunctions.https.FunctionsErrorCode = 'failed-precondition',
 ): never {
   throw new functions.https.HttpsError(code, 'The Squad administrator request could not be completed.', {
     reason,

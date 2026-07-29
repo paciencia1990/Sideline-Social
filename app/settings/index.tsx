@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { SettingsBackButton } from "@/components/SettingsBackButton";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import {
   getNotificationPermissionStatus,
@@ -37,6 +38,7 @@ export default function SettingsScreen() {
   return (
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.content}>
+        <SettingsBackButton />
         <Text style={styles.title}>{t("settings.title")}</Text>
         <Text style={styles.subtitle}>{t("settings.subtitle")}</Text>
 

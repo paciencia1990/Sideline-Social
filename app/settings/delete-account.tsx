@@ -8,6 +8,7 @@ import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { PasswordInput } from "@/components/PasswordInput";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { SettingsBackButton } from "@/components/SettingsBackButton";
 import { SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -47,6 +48,7 @@ export default function DeleteAccountScreen() {
   return (
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content}>
+        <SettingsBackButton />
         <Text style={styles.title}>{t("settings.deleteAccount")}</Text>
         <Card style={styles.card}>
           <Text style={styles.warning}>{t("settings.deleteWarning")}</Text>

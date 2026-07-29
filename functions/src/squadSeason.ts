@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
 
 import { formatPublicUserName, resolvePublicProfileName } from './friendSuggestionCore';
+import { permanentAccountFunctions } from './permanentAuth';
 import { LEADERBOARD_RESPONSE_LIMIT, getSidelineStarsTier, normalizeStars } from './sidelineStarsCore';
 import {
   addCalendarDays,
@@ -23,6 +24,7 @@ import {
 } from './squadSeasonCore';
 import { getSportDisplayName, normalizeSportId } from './squadCore';
 
+const functions = permanentAccountFunctions(firebaseFunctions);
 const regionalFunctions = functions.region('us-central1');
 const MAX_ELIGIBLE_SQUADS = 25;
 
@@ -91,7 +93,7 @@ function readIdempotencyKey(value: unknown): string {
   return key;
 }
 
-function isPlatformAdmin(context: functions.https.CallableContext): boolean {
+function isPlatformAdmin(context: firebaseFunctions.https.CallableContext): boolean {
   return context.auth?.token.admin === true || context.auth?.token.platformAdmin === true;
 }
 
@@ -122,7 +124,7 @@ async function readActiveMembership(
 }
 
 async function assertSquadAccess(input: {
-  context: functions.https.CallableContext;
+  context: firebaseFunctions.https.CallableContext;
   squadId: string;
   requireAdmin?: boolean;
 }) {

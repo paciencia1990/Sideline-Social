@@ -11,6 +11,7 @@ export type GameJoinCodeFailureReason =
   | 'game_not_found'
   | 'game_already_started'
   | 'game_full'
+  | 'minimum_players_required'
   | 'not_authorized'
   | 'already_joined'
   | 'host_cannot_join_as_player'
@@ -87,6 +88,35 @@ export async function recordSpotDifferenceFound(input: {
   return (await callable(input)).data;
 }
 
+export async function setRealtimeGamePlayerReady(input: {
+  sessionId: string;
+  ready: boolean;
+}) {
+  const callable = httpsCallable<typeof input, { ready: boolean }>(
+    functions,
+    'setRealtimeGamePlayerReady',
+  );
+  return (await callable(input)).data;
+}
+
+export async function submitBombDefusalStep(input: {
+  sessionId: string;
+  stepIndex: number;
+  action: Record<string, string | number>;
+  submissionId: string;
+}) {
+  const callable = httpsCallable<
+    typeof input,
+    {
+      correct: boolean;
+      nextStepIndex: number;
+      outcome: 'playing' | 'defused' | 'exploded';
+      nextStep: Record<string, string | number> | null;
+    }
+  >(functions, 'submitBombDefusalStep');
+  return (await callable(input)).data;
+}
+
 export function readGameJoinCodeFailureReason(error: unknown): GameJoinCodeFailureReason {
   if (isRecord(error)) {
     const details = isRecord(error.details) ? error.details : null;
@@ -104,6 +134,7 @@ function isGameJoinCodeFailureReason(value: unknown): value is GameJoinCodeFailu
     'game_not_found',
     'game_already_started',
     'game_full',
+    'minimum_players_required',
     'not_authorized',
     'already_joined',
     'host_cannot_join_as_player',

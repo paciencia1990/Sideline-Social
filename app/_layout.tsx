@@ -2,12 +2,11 @@ import "@/i18n";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useMemo } from "react";
-import { StyleSheet, useColorScheme, type ColorSchemeName } from "react-native";
+import { StyleSheet } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Stack } from "expo-router";
 import {
-  DarkTheme,
   DefaultTheme,
   ThemeProvider,
   type Theme,
@@ -31,13 +30,11 @@ const Caveat_400Regular = require("@expo-google-fonts/caveat/Caveat_400Regular.t
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
-function createNavigationTheme(colorScheme: ColorSchemeName): Theme {
-  const baseTheme = colorScheme === "dark" ? DarkTheme : DefaultTheme;
-
+function createNavigationTheme(): Theme {
   return {
-    ...baseTheme,
+    ...DefaultTheme,
     colors: {
-      ...baseTheme.colors,
+      ...DefaultTheme.colors,
       primary: Colors.primary,
       background: Colors.background,
       card: Colors.surface,
@@ -49,8 +46,7 @@ function createNavigationTheme(colorScheme: ColorSchemeName): Theme {
 }
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
-  const navigationTheme = useMemo(() => createNavigationTheme(colorScheme), [colorScheme]);
+  const navigationTheme = useMemo(() => createNavigationTheme(), []);
 
   const [fontsLoaded, fontError] = useFonts({
     SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
@@ -110,7 +106,7 @@ export default function RootLayout() {
                     />
                     <Stack.Screen name="+not-found" />
                   </Stack>
-                  <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
+                  <StatusBar style="dark" />
                 </AppProvider>
               </SquadProvider>
             </AuthProvider>

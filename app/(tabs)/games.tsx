@@ -20,7 +20,7 @@ import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { useActiveSquadGameSession } from "@/hooks/useActiveSquadGameSession";
 import {
-  getGameLabel,
+  getGameLabelKey,
   type GameType,
 } from "@/services/gameService";
 import {
@@ -37,7 +37,7 @@ type GameCardConfig = {
   bodyKey: string;
   route: string;
   players: string;
-  duration: string;
+  durationMinutes: { min: number; max?: number };
   Icon: LucideIcon;
   supportsLocalTest?: boolean;
 };
@@ -49,7 +49,7 @@ const GAME_CARDS: GameCardConfig[] = [
     bodyKey: "games.bombDefusal.desc",
     route: "/(games)/bomb-defusal/Lobby",
     players: "2-6",
-    duration: "3-8 min",
+    durationMinutes: { min: 3, max: 8 },
     Icon: Bomb,
   },
   {
@@ -58,7 +58,7 @@ const GAME_CARDS: GameCardConfig[] = [
     bodyKey: "games.spotDifference.desc",
     route: "/(games)/spot-the-difference/Lobby",
     players: "4-12",
-    duration: "7 min",
+    durationMinutes: { min: 7 },
     Icon: Search,
   },
   {
@@ -66,10 +66,9 @@ const GAME_CARDS: GameCardConfig[] = [
     titleKey: "games.triviaBlitz.title",
     bodyKey: "games.triviaBlitz.desc",
     route: "/(games)/trivia-blitz/Lobby",
-    players: "3-20",
-    duration: "5-15 min",
+    players: "2-20",
+    durationMinutes: { min: 5, max: 15 },
     Icon: Zap,
-    supportsLocalTest: true,
   },
 ];
 
@@ -109,8 +108,8 @@ export default function GamesScreen() {
   const sessionLoadFailed = activeSessionState.status === "permission-error" || activeSessionState.status === "network-error";
 
   const activeGameName = useMemo(() => {
-    return activeSession ? getGameLabel(activeSession.gameType) : "";
-  }, [activeSession]);
+    return activeSession ? t(getGameLabelKey(activeSession.gameType)) : "";
+  }, [activeSession, t]);
 
   useEffect(() => {
     if (params.join === "1") {
@@ -284,14 +283,21 @@ function GameCard({ config, onLocalTest, onOpen }: { config: GameCardConfig; onL
           <Text style={styles.metaText}>{config.players} {t("games.players")}</Text>
         </View>
         <View style={styles.metaPill}>
-          <Text style={styles.metaText}>{config.duration}</Text>
+          <Text style={styles.metaText}>
+            {config.durationMinutes.max
+              ? t("games.durationMinutes", {
+                  min: config.durationMinutes.min,
+                  max: config.durationMinutes.max,
+                })
+              : t("games.durationMinutesExact", { count: config.durationMinutes.min })}
+          </Text>
         </View>
       </View>
 
       <TouchableOpacity activeOpacity={0.86} onPress={onOpen} style={styles.primaryButton}>
         <Text style={styles.primaryButtonText}>{t("games.playNow")}</Text>
       </TouchableOpacity>
-      {config.supportsLocalTest ? (
+      {__DEV__ && config.supportsLocalTest ? (
         <TouchableOpacity activeOpacity={0.86} onPress={onLocalTest} style={styles.localTestButton}>
           <Text style={styles.localTestButtonText}>{t("games.joinCode.localTest")}</Text>
         </TouchableOpacity>

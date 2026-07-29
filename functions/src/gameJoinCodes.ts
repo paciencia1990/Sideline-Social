@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
 
 import {
   GameJoinCodeReservationError,
@@ -15,13 +15,17 @@ import {
   type GameJoinCodeType,
 } from './gameJoinCodeCore';
 import { resolveJoinableGameSession } from './gameJoinSessionState';
+import { permanentAccountFunctions } from './permanentAuth';
 import { resolveCanonicalPublicName } from './publicUserProfileCore';
 
+const functions = permanentAccountFunctions(firebaseFunctions);
 const JOIN_CODE_TTL_MS = 2 * 60 * 60 * 1000;
 const JOIN_ATTEMPT_WINDOW_MS = 60 * 1000;
 const JOIN_ATTEMPT_LIMIT = 12;
 const JOIN_RATE_LIMIT_MS = 5 * 60 * 1000;
 const CLEANUP_BATCH_SIZE = 200;
+const RESULTS_GRACE_MS = 5 * 60 * 1000;
+const TRIVIA_MIN_PLAYERS = 2;
 
 const registry = () => admin.firestore().collection('gameJoinCodes');
 const sessionLinks = () => admin.firestore().collection('gameJoinSessionLinks');
@@ -49,8 +53,11 @@ type ActiveSquadGameSession = {
   endsAtMs: number;
 };
 
+type BombStepRecord = Record<string, string | number>;
+
 export const createGameJoinCode = functions.https.onCall(async (data, context): Promise<ReservationResult> => {
   const uid = requireUid(context);
+  await consumeJoinAttempt(uid);
   const gameType = requireGameType(data?.gameType);
   const idempotencyKey = readIdempotencyKey(data?.idempotencyKey);
   const requestedSessionId = data?.sessionId == null ? null : readSessionId(data.sessionId);
@@ -72,6 +79,11 @@ export const createGameJoinCode = functions.https.onCall(async (data, context): 
       hostUserId: uid,
       sessionId: existingRequestData.sessionId,
     }, Date.now())) {
+      await assertHostOwnsCanonicalSession(
+        uid,
+        gameType,
+        existingRequestData.sessionId,
+      );
       return {
         gameType,
         sessionId: existingRequestData.sessionId,
@@ -185,7 +197,10 @@ export const createGameJoinCode = functions.https.onCall(async (data, context): 
     });
   } catch (error) {
     if (createdRealtimeSession) {
-      await admin.database().ref(`/gameSessions/${sessionId}`).remove().catch(() => undefined);
+      await admin.database().ref().update({
+        [`gameSessions/${sessionId}`]: null,
+        [`gameSessionSecrets/${sessionId}`]: null,
+      }).catch(() => undefined);
     }
     if (error instanceof GameJoinCodeReservationError) {
       throw safeError('resource-exhausted', 'code_reservation_failed');
@@ -290,6 +305,7 @@ export const getActiveSquadGameSession = functions.https.onCall(async (data, con
     .sort((left, right) => right.createdAt - left.createdAt);
 
   for (const candidate of candidates) {
+    if (Array.isArray(readRecord(candidate.raw.gameState).bombSteps)) continue;
     const joinCodeType = candidate.gameType === 'bomb_defusal' ? 'bombDefusal' : 'spotTheDifferences';
     const linkSnapshot = await sessionLinks().doc(hashIdentifier(`${joinCodeType}:${candidate.sessionId}`)).get();
     const link = linkSnapshot.data();
@@ -353,16 +369,41 @@ export const updateGameJoinCodeStatus = functions.https.onCall(async (data, cont
   const sessionId = readSessionId(data?.sessionId);
   const status = readLifecycleStatus(data?.status);
   await assertHostOwnsCanonicalSession(uid, gameType, sessionId, true);
-  await setJoinCodeStatus(gameType, sessionId, uid, status);
+  if (status === 'started') {
+    await assertCanonicalSessionCanStart(gameType, sessionId);
+    if (gameType === 'triviaBlitz') {
+      await assertPlayersReadyForStart(gameType, sessionId);
+    }
+  }
+  let realtimeStart: { startedNow: boolean; startedAtMs: number } | null = null;
+  if (gameType !== 'triviaBlitz' && status === 'started') {
+    realtimeStart = await startRealtimeGameSession(sessionId);
+  }
+  try {
+    await setJoinCodeStatus(gameType, sessionId, uid, status);
+  } catch (error) {
+    if (
+      gameType !== 'triviaBlitz' &&
+      status === 'started' &&
+      realtimeStart?.startedNow
+    ) {
+      const mappingStarted = await isGameJoinCodeStatusStarted(gameType, sessionId);
+      if (mappingStarted) {
+        return { status };
+      }
+      await rollbackRealtimeGameSessionStart(sessionId, realtimeStart.startedAtMs);
+    }
+    throw error;
+  }
   if (gameType !== 'triviaBlitz') {
-    const serverNowMs = Date.now();
-    await admin.database().ref(`/gameSessions/${sessionId}`).update(status === 'started'
-      ? { status: 'active', startedAt: serverNowMs, updatedAt: serverNowMs }
-      : {
+    if (status !== 'started') {
+      const serverNowMs = Date.now();
+      await admin.database().ref(`/gameSessions/${sessionId}`).update({
         status: status === 'ended' ? 'completed' : 'failed',
         completedAt: serverNowMs,
         updatedAt: serverNowMs,
       });
+    }
   }
   return { status };
 });
@@ -375,24 +416,95 @@ export const releaseGameJoinCode = functions.https.onCall(async (data, context) 
   await setJoinCodeStatus(gameType, sessionId, uid, 'canceled');
   if (gameType === 'triviaBlitz') {
     const parentRef = admin.firestore().collection('sessions').doc(sessionId);
-    await Promise.all([
-      parentRef.set({ status: 'results', updatedAt: Timestamp.now() }, { merge: true }),
-      parentRef.collection('games').doc('triviaBlitz').set(
-        { status: 'results', updatedAt: Timestamp.now() },
+    await admin.firestore().runTransaction(async (transaction) => {
+      const parent = await transaction.get(parentRef);
+      const now = Timestamp.now();
+      const currentExpiry = readTimestampMillis(parent.data()?.expiresAt);
+      transaction.set(parentRef, {
+        status: 'results',
+        completedAt: now,
+        expiresAt: Timestamp.fromMillis(Math.min(
+          currentExpiry || now.toMillis() + RESULTS_GRACE_MS,
+          now.toMillis() + RESULTS_GRACE_MS,
+        )),
+        updatedAt: now,
+      }, { merge: true });
+      transaction.set(
+        parentRef.collection('games').doc('triviaBlitz'),
+        { status: 'results', updatedAt: now },
         { merge: true },
-      ),
-    ]);
+      );
+    });
   } else {
     await admin.database().ref(`/gameSessions/${sessionId}`).update({ status: 'failed', completedAt: Date.now() });
   }
   return { status: 'canceled' as const };
 });
 
+export const setRealtimeGamePlayerReady = functions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const sessionId = readSessionId(data?.sessionId);
+  if (typeof data?.ready !== 'boolean') {
+    throw safeError('invalid-argument', 'not_authorized');
+  }
+  const ready = data.ready;
+  let reason: string | null = null;
+  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const initialSnapshot = await reference.once('value');
+  if (!initialSnapshot.exists()) throw safeError('not-found', 'game_not_found');
+  const initialSession = initialSnapshot.val();
+  if (
+    typeof initialSession?.expiresAt !== 'number' ||
+    initialSession.expiresAt <= Date.now() ||
+    Array.isArray(initialSession?.gameState?.bombSteps)
+  ) {
+    throw safeError('failed-precondition', 'invalid_or_expired_code');
+  }
+  let mayUseInitialCacheFallback = true;
+  const result = await reference.transaction((cachedSession) => {
+    const session = cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
+    mayUseInitialCacheFallback = false;
+    if (!session || typeof session !== 'object') {
+      reason = 'game_not_found';
+      return;
+    }
+    if (
+      (session.gameType !== 'bomb_defusal' && session.gameType !== 'spot_difference') ||
+      session.status !== 'lobby' ||
+      typeof session.expiresAt !== 'number' ||
+      session.expiresAt <= Date.now() ||
+      Array.isArray(session.gameState?.bombSteps) ||
+      !session.players?.[uid]
+    ) {
+      reason = session.status === 'lobby' ? 'not_authorized' : 'game_already_started';
+      return;
+    }
+    return {
+      ...session,
+      players: {
+        ...session.players,
+        [uid]: {
+          ...session.players[uid],
+          isReady: ready,
+        },
+      },
+      updatedAt: Date.now(),
+    };
+  });
+  if (!result.committed) {
+    throw safeError(
+      reason === 'game_not_found' ? 'not-found' : 'failed-precondition',
+      reason ?? 'not_authorized',
+    );
+  }
+  return { ready };
+});
+
 export const recordSpotDifferenceFound = functions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const sessionId = readSessionId(data?.sessionId);
   const differenceId = typeof data?.differenceId === 'string' ? data.differenceId.trim() : '';
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(differenceId)) {
+  if (!/^difference_(?:0[1-9]|10)$/.test(differenceId)) {
     throw safeError('invalid-argument', 'not_authorized');
   }
   let reason: string | null = null;
@@ -451,19 +563,191 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
   return { foundCount };
 });
 
+export const submitBombDefusalStep = functions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const sessionId = readSessionId(data?.sessionId);
+  const stepIndex = Number.isInteger(data?.stepIndex) ? data.stepIndex as number : -1;
+  const submissionId =
+    typeof data?.submissionId === 'string' ? data.submissionId.trim() : '';
+  if (stepIndex < 0 || stepIndex > 4 || !/^[A-Za-z0-9_-]{10,200}$/.test(submissionId)) {
+    throw safeError('invalid-argument', 'not_authorized');
+  }
+  const action = readBombAction(data?.action);
+  const actionHash = hashIdentifier(JSON.stringify(action));
+  const submissionKey = hashIdentifier(`${uid}:${submissionId}`);
+  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const secretReference = admin.database().ref(`/gameSessionSecrets/${sessionId}`);
+  const [initialSnapshot, secretSnapshot] = await Promise.all([
+    reference.once('value'),
+    secretReference.once('value'),
+  ]);
+  if (!initialSnapshot.exists()) throw safeError('not-found', 'game_not_found');
+  const initialSession = initialSnapshot.val() as Record<string, unknown>;
+  const secret = readRecord(secretSnapshot.val());
+  const bombSteps = Array.isArray(secret.bombSteps)
+    ? secret.bombSteps
+    : [];
+  if (bombSteps.length !== 5 || bombSteps.some((step) => !isSafeBombStep(step))) {
+    throw safeError('failed-precondition', 'game_not_found');
+  }
+
+  const linkSnapshot = await sessionLinks()
+    .doc(hashIdentifier(`bombDefusal:${sessionId}`))
+    .get();
+  const joinCodeStatus = linkSnapshot.data()?.status;
+  const initialState = resolveRealtimeJoinState(initialSession, joinCodeStatus, uid, Date.now());
+  if (!initialState.isJoinable || initialSession.status !== 'active') {
+    if (initialState.isExpired) {
+      await expireRealtimeGameSession('bombDefusal', sessionId, Date.now());
+    }
+    throw safeError('failed-precondition', 'game_already_started');
+  }
+  const existingResult = readBombSubmissionResult(
+    initialSession,
+    submissionKey,
+    uid,
+    stepIndex,
+    actionHash,
+  );
+  if (existingResult) return existingResult;
+
+  let resultPayload: {
+    correct: boolean;
+    nextStepIndex: number;
+    outcome: 'playing' | 'defused' | 'exploded';
+    nextStep: BombStepRecord | null;
+  } | null = null;
+  let reason: string | null = null;
+  let mayUseInitialCacheFallback = true;
+  let expiredDuringSubmission = false;
+  const transactionResult = await reference.transaction((cachedSession) => {
+    const session = cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
+    mayUseInitialCacheFallback = false;
+    if (!session || session.gameType !== 'bomb_defusal' || !session.players?.[uid]) {
+      reason = 'not_authorized';
+      return;
+    }
+    const repeated = readBombSubmissionResult(
+      session,
+      submissionKey,
+      uid,
+      stepIndex,
+      actionHash,
+    );
+    if (repeated) {
+      resultPayload = repeated;
+      return session;
+    }
+    if (
+      session.status !== 'active' ||
+      typeof session.expiresAt !== 'number' ||
+      session.expiresAt <= Date.now()
+    ) {
+      expiredDuringSubmission =
+        typeof session.expiresAt !== 'number' || session.expiresAt <= Date.now();
+      reason = 'game_already_started';
+      return;
+    }
+    const currentStepIndex = Number.isInteger(session.gameState?.currentStepIndex)
+      ? session.gameState.currentStepIndex
+      : 0;
+    if (stepIndex !== currentStepIndex || !bombSteps[stepIndex]) {
+      reason = 'not_authorized';
+      return;
+    }
+
+    const correct = bombActionMatches(bombSteps[stepIndex], action);
+    const isComplete = correct && stepIndex + 1 >= bombSteps.length;
+    const nextStepIndex = correct ? Math.min(stepIndex + 1, bombSteps.length) : stepIndex;
+    const outcome = correct ? (isComplete ? 'defused' : 'playing') : 'exploded';
+    const nextStep = outcome === 'playing' ? bombSteps[nextStepIndex] as BombStepRecord : null;
+    resultPayload = { correct, nextStepIndex, outcome, nextStep };
+    const now = Date.now();
+    const safeGameState = Object.fromEntries(
+      Object.entries(readRecord(session.gameState)).filter(([key]) => key !== 'bombSteps'),
+    );
+    const processedSubmissions = {
+      ...readRecord(safeGameState.processedSubmissions),
+      [submissionKey]: {
+        playerId: uid,
+        stepIndex,
+        actionHash,
+        result: resultPayload,
+        createdAt: now,
+      },
+    };
+    return {
+      ...session,
+      status: outcome === 'playing' ? session.status : 'completed',
+      completedAt: outcome === 'playing' ? session.completedAt ?? null : now,
+      gameState: {
+        ...safeGameState,
+        currentStepIndex: nextStepIndex,
+        currentStep: nextStep,
+        outcome: outcome === 'playing' ? null : outcome,
+        processedSubmissions,
+      },
+      updatedAt: now,
+    };
+  });
+  const completedPayload = resultPayload as {
+    correct: boolean;
+    nextStepIndex: number;
+    outcome: 'playing' | 'defused' | 'exploded';
+    nextStep: BombStepRecord | null;
+  } | null;
+  if (!transactionResult.committed || !completedPayload) {
+    if (expiredDuringSubmission) {
+      await expireRealtimeGameSession('bombDefusal', sessionId, Date.now());
+    }
+    throw safeError(
+      reason === 'game_already_started' ? 'failed-precondition' : 'permission-denied',
+      reason ?? 'not_authorized',
+    );
+  }
+  if (completedPayload.outcome !== 'playing') {
+    await markGameJoinCodeEndedFromServer('bombDefusal', sessionId);
+  }
+  return completedPayload;
+});
+
 export const cleanupExpiredGameJoinCodes = functions.pubsub.schedule('every 30 minutes').onRun(async () => {
   const now = Timestamp.now();
   const snapshot = await registry().where('expiresAt', '<=', now).limit(CLEANUP_BATCH_SIZE).get();
-  if (snapshot.empty) {
-    console.info('[cleanupExpiredGameJoinCodes] completed', { reviewed: 0, expired: 0 });
-    return null;
+  if (!snapshot.empty) {
+    const batch = admin.firestore().batch();
+    for (const document of snapshot.docs) {
+      const gameType = readGameJoinCodeType(document.data()?.gameType);
+      const sessionId = readStoredSessionId(document.data()?.sessionId);
+      batch.delete(document.ref);
+      if (gameType && sessionId) {
+        const linkRef = sessionLinks().doc(hashIdentifier(`${gameType}:${sessionId}`));
+        const link = await linkRef.get();
+        if (
+          link.data()?.code === document.id &&
+          readTimestampMillis(link.data()?.expiresAt) <= now.toMillis()
+        ) {
+          batch.delete(linkRef);
+        }
+      }
+    }
+    await batch.commit();
   }
-  const batch = admin.firestore().batch();
-  snapshot.docs.forEach((document) => {
-    batch.delete(document.ref);
+
+  const expiredRequests = await requests()
+    .where('expiresAt', '<=', now)
+    .limit(CLEANUP_BATCH_SIZE)
+    .get();
+  if (!expiredRequests.empty) {
+    const requestBatch = admin.firestore().batch();
+    expiredRequests.docs.forEach((document) => requestBatch.delete(document.ref));
+    await requestBatch.commit();
+  }
+
+  console.info('[cleanupExpiredGameJoinCodes] completed', {
+    expiredCodes: snapshot.size,
+    expiredRequests: expiredRequests.size,
   });
-  await batch.commit();
-  console.info('[cleanupExpiredGameJoinCodes] completed', { reviewed: snapshot.size, expired: snapshot.size });
   return null;
 });
 
@@ -475,8 +759,14 @@ async function createRealtimeSession(input: {
   const sessionId = `game_${randomBytes(18).toString('base64url')}`;
   const displayName = await resolvePlayerDisplayName(input.hostUserId);
   const now = Date.now();
-  const gameState = input.gameType === 'bombDefusal'
-    ? { bombSteps: createBombPattern() }
+  const bombSteps = input.gameType === 'bombDefusal' ? createBombPattern() : null;
+  const gameState = bombSteps
+    ? {
+      currentStep: bombSteps[0],
+      currentStepIndex: 0,
+      outcome: null,
+      processedSubmissions: {},
+    }
     : { sceneId: `scene_${String(randomInt(1, 22)).padStart(3, '0')}`, foundDifferenceIds: [] };
   const maxPlayers = input.gameType === 'bombDefusal' ? 6 : 12;
   const session = {
@@ -505,8 +795,16 @@ async function createRealtimeSession(input: {
       ? { timerSeconds: 60 }
       : { roundDuration: 90 },
   };
-  const result = await admin.database().ref(`/gameSessions/${sessionId}`).transaction((current) => current ?? session);
-  if (!result.committed) throw safeError('internal', 'session_creation_failed');
+  const updates: Record<string, unknown> = {
+    [`gameSessions/${sessionId}`]: session,
+  };
+  if (bombSteps) {
+    updates[`gameSessionSecrets/${sessionId}`] = {
+      bombSteps,
+      expiresAt: session.expiresAt,
+    };
+  }
+  await admin.database().ref().update(updates);
   return sessionId;
 }
 
@@ -522,12 +820,10 @@ function resolveRealtimeJoinState(
   return resolveJoinableGameSession({
     status,
     startedAtMs: readPositiveNumber(session.startedAt),
-    endsAtMs: status === 'active' || status === 'playing' || status === 'started'
-      ? readPositiveNumber(session.endsAt)
-      : earliestPositiveNumber(
-        readPositiveNumber(session.endsAt),
-        readPositiveNumber(session.expiresAt),
-      ),
+    endsAtMs: earliestPositiveNumber(
+      readPositiveNumber(session.endsAt),
+      readPositiveNumber(session.expiresAt),
+    ),
     durationSeconds: gameType === 'bomb_defusal' || gameType === 'spot_difference'
       ? readRealtimeDurationSeconds(gameType, session.settings)
       : null,
@@ -587,6 +883,9 @@ async function assertHostOwnsCanonicalSession(
     if (!parent.exists || !game.exists || parent.data()?.hostPlayerId !== uid) {
       throw safeError('permission-denied', 'not_authorized');
     }
+    if (readTimestampMillis(parent.data()?.expiresAt) <= Date.now()) {
+      throw safeError('failed-precondition', 'invalid_or_expired_code');
+    }
     if (!allowFinished && parent.data()?.status !== 'lobby') {
       throw safeError('failed-precondition', 'game_already_started');
     }
@@ -596,6 +895,12 @@ async function assertHostOwnsCanonicalSession(
   const session = snapshot.val() as Record<string, unknown> | null;
   if (!session || session.hostUserId !== uid || session.gameType !== legacyRealtimeGameType(gameType)) {
     throw safeError('permission-denied', 'not_authorized');
+  }
+  if (Array.isArray(readRecord(session.gameState).bombSteps)) {
+    throw safeError('failed-precondition', 'invalid_or_expired_code');
+  }
+  if (readPositiveNumber(session.expiresAt) == null || Number(session.expiresAt) <= Date.now()) {
+    throw safeError('failed-precondition', 'invalid_or_expired_code');
   }
   if (!allowFinished && session.status !== 'lobby') {
     throw safeError('failed-precondition', 'game_already_started');
@@ -609,11 +914,18 @@ async function assertParticipant(uid: string, gameType: GameJoinCodeType, sessio
     if (!parent.exists || (parent.data()?.hostPlayerId !== uid && !participantIds.includes(uid))) {
       throw safeError('permission-denied', 'not_authorized');
     }
+    if (readTimestampMillis(parent.data()?.expiresAt) <= Date.now()) {
+      throw safeError('failed-precondition', 'invalid_or_expired_code');
+    }
     return;
   }
   const snapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
   if (!snapshot.exists() || !snapshot.child(`players/${uid}`).exists()) {
     throw safeError('permission-denied', 'not_authorized');
+  }
+  const expiresAt = snapshot.child('expiresAt').val();
+  if (typeof expiresAt !== 'number' || expiresAt <= Date.now()) {
+    throw safeError('failed-precondition', 'invalid_or_expired_code');
   }
 }
 
@@ -630,6 +942,9 @@ async function joinRealtimeSession(input: {
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) throw safeError('not-found', 'invalid_or_expired_code');
   const initialSession = initialSnapshot.val();
+  if (Array.isArray(initialSession?.gameState?.bombSteps)) {
+    throw safeError('not-found', 'invalid_or_expired_code');
+  }
   const initialState = resolveRealtimeJoinState(
     initialSession,
     input.mappingStatus,
@@ -711,9 +1026,20 @@ async function joinTriviaSession(input: {
       transaction.get(playerRef),
     ]);
     if (!parent.exists || !game.exists) throw safeError('not-found', 'invalid_or_expired_code');
+    if (readTimestampMillis(parent.data()?.expiresAt) <= Date.now()) {
+      throw safeError('not-found', 'invalid_or_expired_code');
+    }
     const participantIds = readStringArray(parent.data()?.playerIds);
     const existing = player.exists || parent.data()?.hostPlayerId === input.uid || participantIds.includes(input.uid);
-    if (existing) return 'reconnected' as const;
+    const parentStatus = parent.data()?.status;
+    const gameStatus = game.data()?.status;
+    if (existing) {
+      const canReconnect =
+        (input.mappingStatus === 'lobby' && parentStatus === 'lobby' && gameStatus === 'lobby') ||
+        (input.mappingStatus === 'started' && parentStatus === 'playing' && gameStatus === 'playing');
+      if (!canReconnect) throw safeError('failed-precondition', 'game_already_started');
+      return 'reconnected' as const;
+    }
     if (input.mappingStatus !== 'lobby' || parent.data()?.status !== 'lobby' || game.data()?.status !== 'lobby') {
       throw safeError('failed-precondition', 'game_already_started');
     }
@@ -756,9 +1082,265 @@ async function setJoinCodeStatus(
     if (!mapping.exists || mapping.data()?.sessionId !== sessionId || mapping.data()?.gameType !== gameType) {
       throw safeError('not-found', 'invalid_or_expired_code');
     }
+    const linkStatus = readStoredLifecycleStatus(link.data()?.status);
+    const mappingStatus = readStoredLifecycleStatus(mapping.data()?.status);
+    if (
+      !linkStatus ||
+      !mappingStatus ||
+      linkStatus !== mappingStatus ||
+      readTimestampMillis(link.data()?.expiresAt) <= Date.now() ||
+      readTimestampMillis(mapping.data()?.expiresAt) <= Date.now() ||
+      !canTransitionGameJoinCodeStatus(mappingStatus, status)
+    ) {
+      throw safeError('failed-precondition', 'invalid_lifecycle_transition');
+    }
+    if (mappingStatus === status) return;
     transaction.update(codeRef, { status, updatedAt: Timestamp.now() });
     transaction.update(linkRef, { status, updatedAt: Timestamp.now() });
   });
+}
+
+async function assertCanonicalSessionCanStart(
+  gameType: GameJoinCodeType,
+  sessionId: string,
+) {
+  if (gameType === 'triviaBlitz') {
+    const [parent, game] = await Promise.all([
+      admin.firestore().collection('sessions').doc(sessionId).get(),
+      admin.firestore().collection('sessions').doc(sessionId).collection('games').doc('triviaBlitz').get(),
+    ]);
+    const parentStatus = parent.data()?.status;
+    const gameStatus = game.data()?.status;
+    if (
+      !parent.exists ||
+      !game.exists ||
+      readTimestampMillis(parent.data()?.expiresAt) <= Date.now() ||
+      parentStatus !== gameStatus ||
+      parentStatus !== 'playing'
+    ) {
+      throw safeError('failed-precondition', 'game_already_started');
+    }
+    return;
+  }
+
+  const snapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+  const session = readRecord(snapshot.val());
+  const gameState = readRecord(session.gameState);
+  if (
+    !snapshot.exists() ||
+    readPositiveNumber(session.expiresAt) == null ||
+    Number(session.expiresAt) <= Date.now() ||
+    Array.isArray(gameState.bombSteps) ||
+    (session.status !== 'lobby' && session.status !== 'active')
+  ) {
+    throw safeError('failed-precondition', 'game_already_started');
+  }
+}
+
+async function startRealtimeGameSession(sessionId: string) {
+  let reason:
+    | 'game_not_found'
+    | 'game_already_started'
+    | 'invalid_or_expired_code'
+    | 'minimum_players_required'
+    | 'participants_not_ready'
+    | null = null;
+  let startedNow = false;
+  let startedAtMs = 0;
+  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const initialSnapshot = await reference.once('value');
+  if (!initialSnapshot.exists()) {
+    throw safeError('not-found', 'game_not_found');
+  }
+  const initialSession = initialSnapshot.val();
+  let mayUseInitialCacheFallback = true;
+  const result = await reference.transaction((cachedSession) => {
+    const session =
+      cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
+    mayUseInitialCacheFallback = false;
+    if (!session || typeof session !== 'object') {
+      reason = 'game_not_found';
+      return;
+    }
+    if (typeof session.expiresAt !== 'number' || session.expiresAt <= Date.now()) {
+      reason = 'invalid_or_expired_code';
+      return;
+    }
+    const players = readRecord(session.players);
+    const playerEntries = Object.values(players);
+    const configuredMinimum = Number.isInteger(session.minPlayers)
+      ? Number(session.minPlayers)
+      : session.gameType === 'bomb_defusal' ? 2 : 4;
+    if (playerEntries.length < configuredMinimum) {
+      reason = 'minimum_players_required';
+      return;
+    }
+    if (playerEntries.some((player) => readRecord(player).isReady !== true)) {
+      reason = 'participants_not_ready';
+      return;
+    }
+    if (session.status === 'active') {
+      startedAtMs = typeof session.startedAt === 'number' ? session.startedAt : 0;
+      return session;
+    }
+    if (session.status !== 'lobby') {
+      reason = 'game_already_started';
+      return;
+    }
+    const serverNowMs = Date.now();
+    startedNow = true;
+    startedAtMs = serverNowMs;
+    return {
+      ...session,
+      status: 'active',
+      startedAt: typeof session.startedAt === 'number' ? session.startedAt : serverNowMs,
+      updatedAt: serverNowMs,
+    };
+  });
+  if (!result.committed) {
+    throw safeError(
+      reason === 'game_not_found' ? 'not-found' : 'failed-precondition',
+      reason ?? 'game_already_started',
+    );
+  }
+  return { startedNow, startedAtMs };
+}
+
+async function isGameJoinCodeStatusStarted(
+  gameType: Exclude<GameJoinCodeType, 'triviaBlitz'>,
+  sessionId: string,
+) {
+  const link = await sessionLinks().doc(hashIdentifier(`${gameType}:${sessionId}`)).get();
+  const code = normalizeGameJoinCode(link.data()?.code);
+  if (
+    !link.exists ||
+    !code ||
+    link.data()?.gameType !== gameType ||
+    link.data()?.sessionId !== sessionId ||
+    link.data()?.status !== 'started'
+  ) {
+    return false;
+  }
+  const mapping = await registry().doc(code).get();
+  return (
+    mapping.exists &&
+    mapping.data()?.gameType === gameType &&
+    mapping.data()?.sessionId === sessionId &&
+    mapping.data()?.status === 'started'
+  );
+}
+
+async function rollbackRealtimeGameSessionStart(
+  sessionId: string,
+  startedAtMs: number,
+) {
+  if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) return;
+  await admin.database().ref(`/gameSessions/${sessionId}`).transaction((session) => {
+    if (
+      !session ||
+      session.status !== 'active' ||
+      session.startedAt !== startedAtMs ||
+      session.updatedAt !== startedAtMs
+    ) {
+      return session;
+    }
+    return {
+      ...session,
+      status: 'lobby',
+      startedAt: null,
+      updatedAt: Date.now(),
+    };
+  });
+}
+
+async function markGameJoinCodeEndedFromServer(
+  gameType: GameJoinCodeType,
+  sessionId: string,
+) {
+  const linkRef = sessionLinks().doc(hashIdentifier(`${gameType}:${sessionId}`));
+  try {
+    await admin.firestore().runTransaction(async (transaction) => {
+      const link = await transaction.get(linkRef);
+      const code = normalizeGameJoinCode(link.data()?.code);
+      if (!link.exists || link.data()?.sessionId !== sessionId || link.data()?.gameType !== gameType || !code) {
+        return;
+      }
+      const mappingRef = registry().doc(code);
+      const mapping = await transaction.get(mappingRef);
+      if (!mapping.exists || mapping.data()?.sessionId !== sessionId || mapping.data()?.gameType !== gameType) {
+        return;
+      }
+      const linkStatus = readStoredLifecycleStatus(link.data()?.status);
+      const mappingStatus = readStoredLifecycleStatus(mapping.data()?.status);
+      if (linkStatus === 'ended' && mappingStatus === 'ended') return;
+      if (
+        (linkStatus !== 'lobby' && linkStatus !== 'started') ||
+        (mappingStatus !== 'lobby' && mappingStatus !== 'started')
+      ) {
+        return;
+      }
+      const updatedAt = Timestamp.now();
+      transaction.update(linkRef, { status: 'ended', updatedAt });
+      transaction.update(mappingRef, { status: 'ended', updatedAt });
+    });
+  } catch (error) {
+    firebaseFunctions.logger.warn('game_join_terminal_mapping_update_failed', {
+      gameType,
+      errorCode: readErrorCode(error),
+    });
+  }
+}
+
+async function assertPlayersReadyForStart(
+  gameType: GameJoinCodeType,
+  sessionId: string,
+) {
+  if (gameType === 'triviaBlitz') {
+    const players = await admin.firestore()
+      .collection('sessions')
+      .doc(sessionId)
+      .collection('games')
+      .doc('triviaBlitz')
+      .collection('players')
+      .get();
+    if (players.size < TRIVIA_MIN_PLAYERS) {
+      throw safeError('failed-precondition', 'minimum_players_required');
+    }
+    if (players.docs.some((player) => player.data().ready !== true)) {
+      throw safeError('failed-precondition', 'participants_not_ready');
+    }
+    return;
+  }
+
+  const snapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+  const session = readRecord(snapshot.val());
+  const players = readRecord(session.players);
+  const entries = Object.values(players);
+  const configuredMinimum = Number.isInteger(session.minPlayers)
+    ? Number(session.minPlayers)
+    : gameType === 'bombDefusal' ? 2 : 4;
+  if (entries.length < configuredMinimum) {
+    throw safeError('failed-precondition', 'minimum_players_required');
+  }
+  if (entries.some((player) => readRecord(player).isReady !== true)) {
+    throw safeError('failed-precondition', 'participants_not_ready');
+  }
+}
+
+function canTransitionGameJoinCodeStatus(
+  current: GameJoinCodeStatus,
+  next: Exclude<GameJoinCodeStatus, 'lobby' | 'expired'>,
+) {
+  if (current === next) return true;
+  if (current === 'lobby') return next === 'started' || next === 'canceled';
+  if (current === 'started') return next === 'ended' || next === 'canceled';
+  return false;
+}
+
+function readStoredLifecycleStatus(value: unknown): GameJoinCodeStatus | null {
+  return ['lobby', 'started', 'ended', 'canceled', 'expired'].includes(String(value))
+    ? value as GameJoinCodeStatus
+    : null;
 }
 
 async function consumeJoinAttempt(uid: string) {
@@ -823,7 +1405,117 @@ function createBombPattern() {
   return steps;
 }
 
-function requireUid(context: functions.https.CallableContext) {
+function readBombAction(value: unknown): Record<string, string | number> {
+  const action = readRecord(value);
+  const keys = Object.keys(action);
+  if (keys.length !== 1) throw safeError('invalid-argument', 'not_authorized');
+  if (
+    keys[0] === 'color' &&
+    typeof action.color === 'string' &&
+    ['red', 'blue', 'yellow', 'green'].includes(action.color)
+  ) {
+    return { color: action.color };
+  }
+  if (
+    keys[0] === 'label' &&
+    typeof action.label === 'string' &&
+    ['A', 'B', 'C', 'D'].includes(action.label)
+  ) {
+    return { label: action.label };
+  }
+  if (
+    keys[0] === 'target' &&
+    Number.isInteger(action.target) &&
+    Number(action.target) >= 1 &&
+    Number(action.target) <= 10
+  ) {
+    return { target: Number(action.target) };
+  }
+  if (
+    keys[0] === 'code' &&
+    Number.isInteger(action.code) &&
+    Number(action.code) >= 100 &&
+    Number(action.code) <= 999
+  ) {
+    return { code: Number(action.code) };
+  }
+  throw safeError('invalid-argument', 'not_authorized');
+}
+
+function bombActionMatches(
+  stepValue: unknown,
+  action: Record<string, string | number>,
+) {
+  const step = readRecord(stepValue);
+  if (step.type === 'cut_wire') return action.color === step.color;
+  if (step.type === 'press_button') return action.label === step.label;
+  if (step.type === 'rotate_dial') return action.target === step.target;
+  if (step.type === 'enter_code') return action.code === step.code;
+  return false;
+}
+
+function isSafeBombStep(value: unknown): value is BombStepRecord {
+  const step = readRecord(value);
+  if (step.type === 'cut_wire') {
+    return typeof step.color === 'string' && ['red', 'blue', 'yellow', 'green'].includes(step.color);
+  }
+  if (step.type === 'press_button') {
+    return typeof step.label === 'string' && ['A', 'B', 'C', 'D'].includes(step.label);
+  }
+  if (step.type === 'rotate_dial') {
+    return Number.isInteger(step.target) && Number(step.target) >= 1 && Number(step.target) <= 10;
+  }
+  if (step.type === 'enter_code') {
+    return Number.isInteger(step.code) && Number(step.code) >= 100 && Number(step.code) <= 999;
+  }
+  return false;
+}
+
+function readBombSubmissionResult(
+  sessionValue: unknown,
+  submissionKey: string,
+  uid: string,
+  stepIndex: number,
+  actionHash: string,
+): {
+  correct: boolean;
+  nextStepIndex: number;
+  outcome: 'playing' | 'defused' | 'exploded';
+  nextStep: BombStepRecord | null;
+} | null {
+  const session = readRecord(sessionValue);
+  const gameState = readRecord(session.gameState);
+  const processed = readRecord(gameState.processedSubmissions);
+  const stored = readRecord(processed[submissionKey]);
+  if (Object.keys(stored).length === 0) return null;
+  if (
+    stored.playerId !== uid ||
+    stored.stepIndex !== stepIndex ||
+    stored.actionHash !== actionHash
+  ) {
+    throw safeError('already-exists', 'not_authorized');
+  }
+  const result = readRecord(stored.result);
+  const outcome = result.outcome;
+  const nextStep = result.nextStep;
+  if (
+    typeof result.correct !== 'boolean' ||
+    !Number.isInteger(result.nextStepIndex) ||
+    (outcome !== 'playing' && outcome !== 'defused' && outcome !== 'exploded') ||
+    nextStep === undefined ||
+    (nextStep !== null && !isSafeBombStep(nextStep))
+  ) {
+    throw safeError('internal', 'not_authorized');
+  }
+  return {
+    correct: result.correct,
+    nextStepIndex: result.nextStepIndex as number,
+    outcome,
+    nextStep: nextStep as BombStepRecord | null,
+  };
+}
+
+function requireUid(context: firebaseFunctions.https.CallableContext) {
   const uid = context.auth?.uid;
   if (!uid) throw safeError('unauthenticated', 'not_authorized');
   return uid;
@@ -919,11 +1611,19 @@ function hashIdentifier(value: string) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function safeError(code: functions.https.FunctionsErrorCode, reason: string) {
+function readErrorCode(error: unknown) {
+  return error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : 'unknown';
+}
+
+function safeError(code: firebaseFunctions.https.FunctionsErrorCode, reason: string) {
   const message = reason === 'game_already_started'
     ? 'This game has already started.'
     : reason === 'game_full'
       ? 'This game is full.'
+      : reason === 'minimum_players_required'
+        ? 'More players must join before this game can start.'
       : reason === 'rate_limited'
         ? 'Please wait before trying another game code.'
         : reason === 'code_reservation_failed'

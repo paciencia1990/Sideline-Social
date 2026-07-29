@@ -26,7 +26,7 @@ export default function SignUpScreen() {
   const handleCreate = async () => {
     setError("");
     if (!firstName.trim() || !lastName.trim() || !email.trim() || password.length < 8) {
-      setError("Add your name, email, and an 8-character password.");
+      setError(t("auth.errors.signupRequired"));
       return;
     }
 
@@ -41,8 +41,8 @@ export default function SignUpScreen() {
       await AsyncStorage.setItem("onboardingComplete", "true");
       router.replace(CHOOSE_START_MODE_ROUTE as never);
     } catch (nextError) {
-      console.warn("[SignUp] create account error:", nextError);
-      setError("Could not create this account.");
+      if (__DEV__) console.warn("[SignUp] create account error:", nextError);
+      setError(t("auth.errors.createFailed"));
     } finally {
       setLoading(false);
     }
@@ -51,29 +51,29 @@ export default function SignUpScreen() {
   return (
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <ChevronLeft size={24} color={Colors.textHeading} />
+          <TouchableOpacity accessibilityLabel={t("common.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
+            <ChevronLeft accessibilityElementsHidden importantForAccessibility="no-hide-descendants" size={24} color={Colors.textHeading} />
           </TouchableOpacity>
-          <Text style={styles.title}>Create account</Text>
+          <Text style={styles.title}>{t("auth.createAccount")}</Text>
           <View style={styles.row}>
-            <TextInput style={[styles.input, styles.half]} placeholder="First name" value={firstName} onChangeText={setFirstName} />
-            <TextInput style={[styles.input, styles.half]} placeholder="Last name" value={lastName} onChangeText={setLastName} />
+            <TextInput style={[styles.input, styles.half]} placeholder={t("auth.firstName")} value={firstName} onChangeText={setFirstName} />
+            <TextInput style={[styles.input, styles.half]} placeholder={t("auth.lastName")} value={lastName} onChangeText={setLastName} />
           </View>
-          <TextInput style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+          <TextInput style={styles.input} placeholder={t("auth.email")} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
           <PasswordInput
             autoCapitalize="none"
             autoComplete="new-password"
             containerStyle={styles.input}
             onChangeText={setPassword}
-            placeholder="Password"
+            placeholder={t("auth.password")}
             textContentType="newPassword"
             value={password}
           />
-          <TextInput style={styles.input} placeholder="Zip code" value={zipCode} onChangeText={setZipCode} keyboardType="number-pad" />
+          <TextInput style={styles.input} placeholder={t("auth.zipCode")} value={zipCode} onChangeText={setZipCode} keyboardType="number-pad" />
           <TextInput style={styles.input} placeholder={t("auth.selectSportOptional")} value={sport} onChangeText={setSport} />
           {!!error && <Text style={styles.error}>{error}</Text>}
           <TouchableOpacity style={styles.button} onPress={handleCreate} disabled={loading}>
-            {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>Create account</Text>}
+            {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>{t("auth.createAccountButton")}</Text>}
           </TouchableOpacity>
       </KeyboardAwareScrollView>
     </ScreenWrapper>
@@ -83,7 +83,7 @@ export default function SignUpScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: { flexGrow: 1, justifyContent: "center", padding: Spacing.lg, gap: Spacing.md },
-  backButton: { position: "absolute", top: Spacing.lg, left: Spacing.lg, width: 42, height: 42, alignItems: "center", justifyContent: "center" },
+  backButton: { position: "absolute", top: Spacing.lg, left: Spacing.lg, width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   title: { fontFamily: Typography.heading, fontSize: 32, color: Colors.textHeading, textAlign: "center" },
   row: { flexDirection: "row", gap: Spacing.sm },
   half: { flex: 1 },

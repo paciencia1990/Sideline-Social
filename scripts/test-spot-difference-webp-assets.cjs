@@ -7,10 +7,15 @@ const root = path.resolve(__dirname, "..");
 const assetDirectory = path.join(root, "assets", "games", "spot-the-difference");
 const registryPath = path.join(root, "src", "game", "spotDifference", "spotDifferenceScenes.ts");
 const screenPath = path.join(root, "src", "game", "spotDifference", "SpotDifferenceScreen.tsx");
+const triviaBankPath = path.join(root, "functions", "src", "triviaQuestions.json");
 const sceneAssetPattern = /^scene_(\d{3})_([AB])\.webp$/u;
 const expectedSceneCount = 21;
 const expectedAssetCount = expectedSceneCount * 2;
 const expectedDimension = 1024;
+const privateTriviaMarkers = JSON.parse(fs.readFileSync(triviaBankPath, "utf8"))
+  .slice(0, 5)
+  .map((question) => question.question_en)
+  .filter((question) => typeof question === "string" && question.length >= 20);
 
 const assetNames = fs.readdirSync(assetDirectory)
   .filter((name) => sceneAssetPattern.test(name))
@@ -94,7 +99,9 @@ for (let sceneNumber = 1; sceneNumber <= expectedSceneCount; sceneNumber += 1) {
 }
 
 for (const exportDirectoryArgument of process.argv.slice(2)) {
-  validateProductionExport(path.resolve(root, exportDirectoryArgument), sourceAssetHashes);
+  const exportDirectory = path.resolve(root, exportDirectoryArgument);
+  validateProductionExport(exportDirectory, sourceAssetHashes);
+  assertPrivateTriviaBankAbsent(exportDirectory);
 }
 
 console.log(
@@ -160,7 +167,8 @@ function validateProductionExport(exportDirectory, expectedHashes) {
   const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
   const platformMetadata = Object.values(metadata.fileMetadata ?? {});
   assert.equal(platformMetadata.length, 1, `${exportDirectory} must describe exactly one platform export.`);
-  const webpAssets = (platformMetadata[0].assets ?? []).filter((asset) => asset.ext === "webp");
+  const exportedAssets = platformMetadata[0].assets ?? [];
+  const webpAssets = exportedAssets.filter((asset) => asset.ext === "webp");
   assert.equal(webpAssets.length, expectedAssetCount, `${exportDirectory} must contain all 42 WebP scene assets.`);
 
   const exportedHashes = new Set(webpAssets.map((asset) => {
@@ -169,4 +177,26 @@ function validateProductionExport(exportDirectory, expectedHashes) {
     return hash(fs.readFileSync(exportedPath));
   }));
   assert.deepEqual(exportedHashes, expectedHashes, `${exportDirectory} must contain the exact source WebP images.`);
+}
+
+function assertPrivateTriviaBankAbsent(exportDirectory) {
+  assert.equal(privateTriviaMarkers.length, 5, "The server Trivia bank must provide stable export-scan markers.");
+  const searchableExtensions = new Set([".bundle", ".hbc", ".js", ".json", ".map", ".txt"]);
+  const exposedFiles = walkFiles(exportDirectory).filter((filename) => {
+    if (!searchableExtensions.has(path.extname(filename).toLowerCase())) return false;
+    const content = fs.readFileSync(filename);
+    return privateTriviaMarkers.filter((marker) => content.includes(Buffer.from(marker, "utf8"))).length >= 2;
+  });
+  assert.equal(
+    exposedFiles.length,
+    0,
+    `${exportDirectory} must not contain the private server-side Trivia answer bank.`,
+  );
+}
+
+function walkFiles(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const resolved = path.join(directory, entry.name);
+    return entry.isDirectory() ? walkFiles(resolved) : [resolved];
+  });
 }

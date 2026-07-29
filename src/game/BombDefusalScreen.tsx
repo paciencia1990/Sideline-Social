@@ -12,6 +12,7 @@ import {
 import LottieView from "lottie-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { GameEndActions } from "@/components/GameEndActions";
 import { GameRewardSummary } from "@/components/GameRewardSummary";
 import { useSquad } from "@/context/SquadContext";
@@ -21,7 +22,11 @@ import {
   recordGameSessionResult,
   type GameRewardResult,
 } from "@/services/sidelineStarsService";
-import { updateGameJoinCodeStatus } from "@/services/gameJoinCodeService";
+import {
+  createGameJoinIdempotencyKey,
+  submitBombDefusalStep,
+  updateGameJoinCodeStatus,
+} from "@/services/gameJoinCodeService";
 import { subscribeToSession } from "@/services/gameService";
 import {
   generateBombPattern,
@@ -33,6 +38,13 @@ import {
 const WIRE_COLORS = ["red", "blue", "yellow", "green"] as const;
 const BUTTON_LABELS = ["A", "B", "C", "D"] as const;
 const STARTING_TIME = 60;
+type BombMessageKey =
+  | "bomb.followSequence"
+  | "bomb.timeRanOut"
+  | "bomb.wrongMove"
+  | "bomb.defused"
+  | "bomb.correctKeepGoing"
+  | "bomb.actionFailed";
 
 const wireCutAnimation = require("../../assets/animations/wireCut.json");
 const explosionAnimation = require("../../assets/animations/explosion.json");
@@ -49,7 +61,8 @@ export default function BombDefusalScreen() {
   const [codeInput, setCodeInput] = useState("");
   const [dialValue, setDialValue] = useState(1);
   const [status, setStatus] = useState<"playing" | "defused" | "exploded">("playing");
-  const [message, setMessage] = useState("Follow the sequence before time runs out.");
+  const [messageKey, setMessageKey] = useState<BombMessageKey>("bomb.followSequence");
+  const [actionSubmitting, setActionSubmitting] = useState(false);
   const [showWireCut, setShowWireCut] = useState(false);
   const [rewardSessionId, setRewardSessionId] = useState("");
   const [rewardSetupAttempt, setRewardSetupAttempt] = useState(0);
@@ -57,8 +70,8 @@ export default function BombDefusalScreen() {
   const [rewardLoading, setRewardLoading] = useState(false);
   const [rewardError, setRewardError] = useState<string | null>(null);
   const finalizedRewardKeyRef = useRef("");
-  const multiplayerStateLoadedRef = useRef(false);
   const lifecycleEndedRef = useRef("");
+  const submissionIdsRef = useRef(new Map<string, string>());
   const dialRotation = useRef(new Animated.Value(0)).current;
   const currentStep = steps[currentStepIndex];
 
@@ -66,10 +79,29 @@ export default function BombDefusalScreen() {
     if (!requestedSessionId) return;
     return subscribeToSession(requestedSessionId, (session) => {
       if (!session) return;
-      const sharedSteps = session.gameState?.bombSteps;
-      if (!multiplayerStateLoadedRef.current && Array.isArray(sharedSteps) && sharedSteps.length === 5) {
-        multiplayerStateLoadedRef.current = true;
-        setSteps(sharedSteps as BombStep[]);
+      const sharedStepIndex = session.gameState?.currentStepIndex;
+      const sharedStep = session.gameState?.currentStep;
+      if (
+        typeof sharedStepIndex === "number" &&
+        Number.isInteger(sharedStepIndex) &&
+        sharedStepIndex >= 0 &&
+        sharedStepIndex <= 5
+      ) {
+        if (sharedStepIndex < 5 && isBombStep(sharedStep)) {
+          setSteps((current) => current.map((step, index) => (
+            index === sharedStepIndex ? sharedStep : step
+          )));
+        }
+        setCurrentStepIndex(sharedStepIndex);
+        setCodeInput("");
+      }
+      const sharedOutcome = session.gameState?.outcome;
+      if (sharedOutcome === "defused") {
+        setStatus("defused");
+        setMessageKey("bomb.defused");
+      } else if (sharedOutcome === "exploded") {
+        setStatus("exploded");
+        setMessageKey("bomb.wrongMove");
       }
       if (typeof session.startedAt === "number") {
         const remaining = Math.max(0, STARTING_TIME - Math.floor((Date.now() - session.startedAt) / 1000));
@@ -84,9 +116,12 @@ export default function BombDefusalScreen() {
     setRewardResult(null);
     setRewardError(null);
     finalizedRewardKeyRef.current = "";
+    if (!requestedSessionId) {
+      return () => { active = false; };
+    }
     void createGameRewardSession({
       gameType: "bombDefusal",
-      sessionId: attemptNumber === 0 ? requestedSessionId || null : null,
+      sessionId: requestedSessionId,
       sourceSquadId: currentSquad?.squadId ?? null,
     }).then((created) => {
       if (active) setRewardSessionId(created.sessionId);
@@ -98,9 +133,9 @@ export default function BombDefusalScreen() {
 
 
   const finishGame = useCallback(
-    (nextStatus: "defused" | "exploded", nextMessage: string) => {
+    (nextStatus: "defused" | "exploded", nextMessageKey: BombMessageKey) => {
       setStatus(nextStatus);
-      setMessage(nextMessage);
+      setMessageKey(nextMessageKey);
     },
     [],
   );
@@ -111,7 +146,7 @@ export default function BombDefusalScreen() {
     }
 
     if (timeLeft <= 0) {
-      finishGame("exploded", "Time ran out.");
+      finishGame("exploded", "bomb.timeRanOut");
       return;
     }
 
@@ -136,8 +171,10 @@ export default function BombDefusalScreen() {
     setCodeInput("");
     setDialValue(1);
     setStatus("playing");
-    setMessage("Follow the sequence before time runs out.");
+    setMessageKey("bomb.followSequence");
     setShowWireCut(false);
+    setActionSubmitting(false);
+    submissionIdsRef.current.clear();
   };
 
   const awardCurrentResult = useCallback(async () => {
@@ -186,15 +223,50 @@ export default function BombDefusalScreen() {
     resetGame();
   }, [requestedSessionId]);
 
-  const submitStep = (input: Record<string, string | number>) => {
+  const submitStep = async (input: Record<string, string | number>) => {
     if (!currentStep || status !== "playing") {
       return;
     }
 
-    const { correct } = validateStep(currentStep, input, rewardSessionId);
+    if (actionSubmitting) return;
+    let correct: boolean;
+    let nextIndex = currentStepIndex + 1;
+    let serverOutcome: "playing" | "defused" | "exploded" | null = null;
+
+    if (requestedSessionId) {
+      const submissionKey = `${currentStepIndex}:${JSON.stringify(input)}`;
+      const existingSubmissionId = submissionIdsRef.current.get(submissionKey);
+      const submissionId = existingSubmissionId ?? createGameJoinIdempotencyKey();
+      submissionIdsRef.current.set(submissionKey, submissionId);
+      setActionSubmitting(true);
+      try {
+        const result = await submitBombDefusalStep({
+          sessionId: requestedSessionId,
+          stepIndex: currentStepIndex,
+          action: input,
+          submissionId,
+        });
+        correct = result.correct;
+        nextIndex = result.nextStepIndex;
+        serverOutcome = result.outcome;
+        if (result.nextStep && isBombStep(result.nextStep) && nextIndex < steps.length) {
+          setSteps((current) => current.map((step, index) => (
+            index === nextIndex ? result.nextStep as BombStep : step
+          )));
+        }
+        submissionIdsRef.current.delete(submissionKey);
+      } catch {
+        setMessageKey("bomb.actionFailed");
+        setActionSubmitting(false);
+        return;
+      }
+      setActionSubmitting(false);
+    } else {
+      correct = validateStep(currentStep, input, rewardSessionId).correct;
+    }
 
     if (!correct) {
-      finishGame("exploded", "Wrong move. The bomb exploded.");
+      finishGame("exploded", "bomb.wrongMove");
       return;
     }
 
@@ -203,15 +275,14 @@ export default function BombDefusalScreen() {
       setTimeout(() => setShowWireCut(false), 1200);
     }
 
-    const nextIndex = currentStepIndex + 1;
-    if (nextIndex >= steps.length) {
-      finishGame("defused", "Bomb defused. Great work.");
+    if (serverOutcome === "defused" || nextIndex >= steps.length) {
+      finishGame("defused", "bomb.defused");
       return;
     }
 
     setCurrentStepIndex(nextIndex);
     setCodeInput("");
-    setMessage("Correct. Keep going.");
+    setMessageKey("bomb.correctKeepGoing");
   };
 
   const rotateDial = (direction: -1 | 1) => {
@@ -242,11 +313,18 @@ export default function BombDefusalScreen() {
           <View style={styles.controlGrid}>
             {WIRE_COLORS.map((color) => (
               <Pressable
+                accessibilityLabel={t("bomb.accessibility.cutWire", {
+                  color: t(`bomb.colors.${color}`),
+                })}
+                accessibilityRole="button"
                 key={color}
                 style={[styles.wireButton, wireStyles[color]]}
-                onPress={() => submitStep({ color })}
+                onPress={() => void submitStep({ color })}
+                disabled={actionSubmitting}
               >
-                <Text style={styles.wireLabel}>{color.toUpperCase()}</Text>
+                <Text style={styles.wireLabel}>
+                  {t(`bomb.colors.${color}`).toLocaleUpperCase()}
+                </Text>
               </Pressable>
             ))}
           </View>
@@ -255,7 +333,14 @@ export default function BombDefusalScreen() {
         return (
           <View style={styles.controlGrid}>
             {BUTTON_LABELS.map((label) => (
-              <Pressable key={label} style={styles.letterButton} onPress={() => submitStep({ label })}>
+              <Pressable
+                accessibilityLabel={t("bomb.accessibility.pressButton", { label })}
+                accessibilityRole="button"
+                key={label}
+                style={styles.letterButton}
+                onPress={() => void submitStep({ label })}
+                disabled={actionSubmitting}
+              >
                 <Text style={styles.letterText}>{label}</Text>
               </Pressable>
             ))}
@@ -283,13 +368,29 @@ export default function BombDefusalScreen() {
               <Text style={styles.dialValue}>{dialValue}</Text>
             </Animated.View>
             <View style={styles.dialActions}>
-              <Pressable style={styles.panelButton} onPress={() => rotateDial(-1)}>
+              <Pressable
+                accessibilityLabel={t("bomb.accessibility.decreaseDial")}
+                accessibilityRole="button"
+                style={styles.panelButton}
+                onPress={() => rotateDial(-1)}
+              >
                 <Text style={styles.panelButtonText}>-</Text>
               </Pressable>
-              <Pressable style={styles.submitButton} onPress={() => submitStep({ target: dialValue })}>
-                <Text style={styles.submitButtonText}>SET</Text>
+              <Pressable
+                accessibilityLabel={t("bomb.accessibility.setDial", { value: dialValue })}
+                accessibilityRole="button"
+                style={styles.submitButton}
+                onPress={() => void submitStep({ target: dialValue })}
+                disabled={actionSubmitting}
+              >
+                <Text style={styles.submitButtonText}>{t("bomb.controls.set")}</Text>
               </Pressable>
-              <Pressable style={styles.panelButton} onPress={() => rotateDial(1)}>
+              <Pressable
+                accessibilityLabel={t("bomb.accessibility.increaseDial")}
+                accessibilityRole="button"
+                style={styles.panelButton}
+                onPress={() => rotateDial(1)}
+              >
                 <Text style={styles.panelButtonText}>+</Text>
               </Pressable>
             </View>
@@ -301,21 +402,34 @@ export default function BombDefusalScreen() {
             <Text style={styles.codeReadout}>{codeInput.padEnd(3, "_")}</Text>
             <View style={styles.keypad}>
               {["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"].map((digit) => (
-                <Pressable key={digit} style={styles.key} onPress={() => submitCodeDigit(digit)}>
+                <Pressable
+                  accessibilityLabel={t("bomb.accessibility.digit", { digit })}
+                  accessibilityRole="button"
+                  key={digit}
+                  style={styles.key}
+                  onPress={() => submitCodeDigit(digit)}
+                >
                   <Text style={styles.keyText}>{digit}</Text>
                 </Pressable>
               ))}
             </View>
             <View style={styles.dialActions}>
-              <Pressable style={styles.panelButton} onPress={() => setCodeInput("")}>
-                <Text style={styles.panelButtonText}>CLR</Text>
+              <Pressable
+                accessibilityLabel={t("bomb.accessibility.clearCode")}
+                accessibilityRole="button"
+                style={styles.panelButton}
+                onPress={() => setCodeInput("")}
+              >
+                <Text style={styles.panelButtonText}>{t("bomb.controls.clear")}</Text>
               </Pressable>
               <Pressable
+                accessibilityLabel={t("bomb.accessibility.enterCode")}
+                accessibilityRole="button"
                 style={styles.submitButton}
-                onPress={() => submitStep({ code: Number(codeInput) })}
-                disabled={codeInput.length !== 3}
+                onPress={() => void submitStep({ code: Number(codeInput) })}
+                disabled={codeInput.length !== 3 || actionSubmitting}
               >
-                <Text style={styles.submitButtonText}>ENTER</Text>
+                <Text style={styles.submitButtonText}>{t("bomb.controls.enter")}</Text>
               </Pressable>
             </View>
           </View>
@@ -327,17 +441,28 @@ export default function BombDefusalScreen() {
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.title}>Bomb Defusal</Text>
-          <Text style={[styles.timer, timeLeft <= 10 && styles.dangerTimer]}>{timeLeft}s</Text>
+          <Text style={styles.title}>{t("games.bombDefusal.title")}</Text>
+          <Text
+            accessibilityLabel={t("bomb.secondsRemaining", { count: timeLeft })}
+            accessibilityLiveRegion="polite"
+            style={[styles.timer, timeLeft <= 10 && styles.dangerTimer]}
+          >
+            {t("bomb.secondsShort", { count: timeLeft })}
+          </Text>
         </View>
 
         <View style={styles.bombBody}>
           <View style={styles.statusLight} />
           <Text style={styles.stepCounter}>
-            Step {Math.min(currentStepIndex + 1, steps.length)} of {steps.length}
+            {t("bomb.stepProgress", {
+              current: Math.min(currentStepIndex + 1, steps.length),
+              total: steps.length,
+            })}
           </Text>
-          <Text style={styles.instruction}>{getInstruction(currentStep)}</Text>
-          <Text style={styles.message}>{message}</Text>
+          <Text style={styles.instruction}>{getInstruction(currentStep, t)}</Text>
+          <Text accessibilityLiveRegion="polite" style={styles.message}>
+            {t(messageKey)}
+          </Text>
         </View>
 
         {showWireCut && (
@@ -393,20 +518,42 @@ function normalizeRouteParam(value?: string | string[]) {
   return raw?.trim() ?? "";
 }
 
-function getInstruction(step?: BombStep) {
+function isBombStep(value: unknown): value is BombStep {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const step = value as Record<string, unknown>;
+  if (step.type === STEP_TYPES.CUT_WIRE) {
+    return typeof step.color === "string" &&
+      WIRE_COLORS.includes(step.color as typeof WIRE_COLORS[number]);
+  }
+  if (step.type === STEP_TYPES.PRESS_BUTTON) {
+    return typeof step.label === "string" &&
+      BUTTON_LABELS.includes(step.label as typeof BUTTON_LABELS[number]);
+  }
+  if (step.type === STEP_TYPES.ROTATE_DIAL) {
+    return Number.isInteger(step.target) && Number(step.target) >= 1 && Number(step.target) <= 10;
+  }
+  if (step.type === STEP_TYPES.ENTER_CODE) {
+    return Number.isInteger(step.code) && Number(step.code) >= 100 && Number(step.code) <= 999;
+  }
+  return false;
+}
+
+function getInstruction(step: BombStep | undefined, t: TFunction) {
   if (!step) {
-    return "Sequence complete.";
+    return t("bomb.instructions.complete");
   }
 
   switch (step.type) {
     case STEP_TYPES.CUT_WIRE:
-      return "Cut the correct wire.";
+      return t("bomb.instructions.cutWire", {
+        color: t(`bomb.colors.${step.color}`),
+      });
     case STEP_TYPES.PRESS_BUTTON:
-      return "Press the matching button.";
+      return t("bomb.instructions.pressButton", { label: step.label });
     case STEP_TYPES.ROTATE_DIAL:
-      return "Rotate the dial to the target number.";
+      return t("bomb.instructions.rotateDial", { target: step.target });
     case STEP_TYPES.ENTER_CODE:
-      return "Enter the three-digit code.";
+      return t("bomb.instructions.enterCode", { code: step.code });
   }
 }
 

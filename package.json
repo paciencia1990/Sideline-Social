@@ -30,6 +30,9 @@
     "test:spot-difference-assets": "node scripts/test-spot-difference-webp-assets.cjs",
     "test:spot-difference-geometry": "node scripts/test-spot-difference-geometry.cjs",
     "test:trivia-answer-feedback": "node scripts/test-trivia-answer-feedback.cjs",
+    "test:trivia-callable-client": "node scripts/test-trivia-callable-client-contract.cjs",
+    "test:game-localization": "node scripts/test-game-localization.cjs",
+    "test:auth-identity": "tsx scripts/test-auth-identity.ts && node scripts/test-permanent-auth-boundary.cjs",
     "test:start-mode-onboarding": "node scripts/test-start-mode-onboarding-core.cjs",
     "test:icebreaker": "node scripts/test-icebreaker-core.cjs",
     "test:friend-privacy": "node scripts/test-friend-privacy-core.cjs",
@@ -74,7 +77,7 @@
     "test:weekly-challenge": "npm --prefix functions run build && node scripts/test-weekly-challenge-core.cjs",
     "test:weekly-challenge-localization": "npm --prefix functions run build && node scripts/test-weekly-challenge-localization.cjs",
     "test:sideline-stars": "npm --prefix functions run build && node scripts/test-sideline-stars-core.cjs",
-    "test:emulator:sideline-stars": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-stars-functions-test --only auth,firestore,functions \"node scripts/test-sideline-stars-functions-emulator.cjs\"",
+    "test:emulator:sideline-stars": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-stars-functions-test --only auth,database,firestore,functions \"node scripts/test-sideline-stars-functions-emulator.cjs\"",
     "test:squads": "npm --prefix functions run build && node scripts/test-squad-core.cjs && node scripts/test-squad-ui-core.cjs",
     "test:home-squad": "node scripts/test-home-squad-consolidation.cjs",
     "test:squad-seasons": "npm --prefix functions run build && node scripts/test-squad-season-core.cjs && node scripts/test-squad-season-normalization.cjs && node scripts/test-squad-season-ui.cjs && node scripts/test-season-picker-compatibility.cjs",
@@ -96,7 +99,8 @@
     "test:game-join-code": "npm --prefix functions run build && node scripts/test-game-join-code-core.cjs",
     "test:firestore:game-join-code-rules": "firebase.cmd emulators:exec --project sideline-game-join-code-rules-test --only firestore \"node scripts/test-game-join-code-firestore-rules.cjs\"",
     "test:rtdb:game-join-code-rules": "firebase.cmd emulators:exec --project sideline-game-join-code-rtdb-rules-test --only database \"node scripts/test-game-join-code-rtdb-rules.cjs\"",
-    "test:emulator:game-join-code": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-game-join-code-functions-test --only auth,database,firestore,functions \"node scripts/test-game-join-code-functions-emulator.cjs\""
+    "test:emulator:game-join-code": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-game-join-code-functions-test --only auth,database,firestore,functions \"node scripts/test-game-join-code-functions-emulator.cjs\"",
+    "test:emulator:game-security": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-game-security-functions-test --only auth,database,firestore,functions \"node scripts/test-game-security-functions-emulator.cjs\""
   },
   "engines": {
     "node": ">=22.13 <25",

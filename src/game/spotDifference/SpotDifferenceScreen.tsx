@@ -25,6 +25,7 @@ import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 
 import { GameEndActions } from "@/components/GameEndActions";
 import { GameRewardSummary } from "@/components/GameRewardSummary";
+import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { useSquad } from "@/context/SquadContext";
@@ -54,6 +55,12 @@ import {
 } from "@/src/game/spotDifference/geometry";
 
 type ImageSide = "A" | "B";
+type SpotFeedback =
+  | { kind: "instructions" }
+  | { kind: "missed" }
+  | { kind: "alreadyFound" }
+  | { kind: "actionFailed" }
+  | { kind: "found"; number: number };
 
 type SceneLayouts = Record<ImageSide, SceneSize>;
 
@@ -102,7 +109,7 @@ export default function SpotDifferenceScreen() {
   const [foundIds, setFoundIds] = useState<string[]>([]);
   const [roundInstance, setRoundInstance] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(ROUND_SECONDS);
-  const [feedback, setFeedback] = useState(t("spot.instructions"));
+  const [feedback, setFeedback] = useState<SpotFeedback>({ kind: "instructions" });
   const [rewardSessionId, setRewardSessionId] = useState("");
   const [rewardSetupAttempt, setRewardSetupAttempt] = useState(0);
   const [rewardResult, setRewardResult] = useState<GameRewardResult | null>(null);
@@ -110,12 +117,27 @@ export default function SpotDifferenceScreen() {
   const [rewardError, setRewardError] = useState<string | null>(null);
   const finalizedRewardKeyRef = useRef("");
   const lifecycleEndedRef = useRef("");
+  const submittingDifferenceIdsRef = useRef(new Set<string>());
   const [sceneLayouts, setSceneLayouts] = useState<SceneLayouts>({
     A: { width: 0, height: 0 },
     B: { width: 0, height: 0 },
   });
 
   const foundSet = useMemo(() => new Set(foundIds), [foundIds]);
+  const feedbackText = useMemo(() => {
+    switch (feedback.kind) {
+      case "missed":
+        return t("spot.missed");
+      case "alreadyFound":
+        return t("spot.alreadyFound");
+      case "actionFailed":
+        return t("spot.actionFailed");
+      case "found":
+        return t("spot.foundNumber", { number: feedback.number });
+      default:
+        return t("spot.instructions");
+    }
+  }, [feedback, t]);
   const differences = currentScene?.differences ?? [];
   const isComplete = currentScene ? foundIds.length === differences.length : false;
   const elapsedSeconds = ROUND_SECONDS - secondsLeft;
@@ -170,9 +192,12 @@ export default function SpotDifferenceScreen() {
     setRewardResult(null);
     setRewardError(null);
     finalizedRewardKeyRef.current = "";
+    if (!requestedSessionId) {
+      return () => { active = false; };
+    }
     void createGameRewardSession({
       gameType: "spotDifferences",
-      sessionId: roundInstance === 0 ? requestedSessionId || null : null,
+      sessionId: requestedSessionId,
       sourceSquadId: currentSquad?.squadId ?? null,
     }).then((created) => {
       if (active) setRewardSessionId(created.sessionId);
@@ -198,10 +223,10 @@ export default function SpotDifferenceScreen() {
     setFoundIds([]);
     setRoundInstance((value) => value + 1);
     setSecondsLeft(ROUND_SECONDS);
-    setFeedback(t("spot.instructions"));
+    setFeedback({ kind: "instructions" });
     setCurrentScene(nextScene);
     setUsedSceneIds(nextScene && nextUsedIds.length < playableSpotDifferenceScenes.length ? nextUsedIds : []);
-  }, [currentScene, t, usedSceneIds]);
+  }, [currentScene, usedSceneIds]);
 
   const awardCurrentResult = useCallback(async () => {
     if (!rewardSessionId || (!isComplete && secondsLeft > 0)) return;
@@ -281,38 +306,54 @@ export default function SpotDifferenceScreen() {
       transform,
     );
     if (!tap) {
-      setFeedback(t("spot.missed"));
+      setFeedback({ kind: "missed" });
       return;
     }
 
     const match = findDifferenceAtPoint(currentScene.differences, tap);
     if (!match) {
-      setFeedback(t("spot.missed"));
+      setFeedback({ kind: "missed" });
       return;
     }
 
     if (foundSet.has(match.id)) {
-      setFeedback(t("spot.alreadyFound"));
+      setFeedback({ kind: "alreadyFound" });
       return;
     }
 
-    setFoundIds((current) => [...current, match.id]);
+    const differenceNumber = currentScene.differences.findIndex((difference) => difference.id === match.id) + 1;
     if (requestedSessionId) {
-      void recordSpotDifferenceFound({ sessionId: requestedSessionId, differenceId: match.id }).catch(() => undefined);
+      if (submittingDifferenceIdsRef.current.has(match.id)) return;
+      submittingDifferenceIdsRef.current.add(match.id);
+      void recordSpotDifferenceFound({
+        sessionId: requestedSessionId,
+        differenceId: match.id,
+      }).then(() => {
+        setFoundIds((current) => current.includes(match.id) ? current : [...current, match.id]);
+        setFeedback({ kind: "found", number: Math.max(differenceNumber, 1) });
+      }).catch(() => {
+        setFeedback({ kind: "actionFailed" });
+      }).finally(() => {
+        submittingDifferenceIdsRef.current.delete(match.id);
+      });
+      return;
     }
-    setFeedback(t("spot.found", { label: match.label ?? match.id.replace("difference_", "#") }));
-  }, [currentScene, foundSet, imageRects, isComplete, requestedSessionId, sceneLayouts, t]);
+    setFoundIds((current) => [...current, match.id]);
+    setFeedback({ kind: "found", number: Math.max(differenceNumber, 1) });
+  }, [currentScene, foundSet, imageRects, isComplete, requestedSessionId, sceneLayouts]);
 
   if (!currentScene) {
     return (
       <ScreenWrapper>
         <View style={styles.emptyState}>
-          <Text style={styles.resultTitle}>Spot the Differences</Text>
-          <Text style={styles.resultText}>No valid Spot the Differences scenes are available. Check the scene JSON files in development logs.</Text>
+          <Text style={styles.resultTitle}>{t("spot.unavailableTitle")}</Text>
+          <Text style={styles.resultText}>{t("spot.unavailableBody")}</Text>
+          <PrimaryButton title={t("game.games")} onPress={() => router.replace("/(tabs)/games")} />
         </View>
       </ScreenWrapper>
     );
   }
+  const sceneTitle = t("spot.sceneTitle", { number: getSpotSceneNumber(currentScene.id) });
 
   return (
     <ScreenWrapper>
@@ -324,7 +365,7 @@ export default function SpotDifferenceScreen() {
         >
         <View style={styles.header}>
           <Text style={styles.kicker}>{t("games.spotDifference.title")}</Text>
-          <Text style={styles.title}>{currentScene.title}</Text>
+          <Text style={styles.title}>{sceneTitle}</Text>
           <Text style={styles.subtitle}>{t("spot.subtitle")}</Text>
         </View>
 
@@ -334,29 +375,39 @@ export default function SpotDifferenceScreen() {
             <Text style={styles.statLabel}>{t("spot.progressLabel")}</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statValue}>{secondsLeft}s</Text>
+            <Text
+              accessibilityLabel={t("spot.secondsRemaining", { count: secondsLeft })}
+              accessibilityLiveRegion="polite"
+              style={styles.statValue}
+            >
+              {t("spot.secondsShort", { count: secondsLeft })}
+            </Text>
             <Text style={styles.statLabel}>{t("spot.timer")}</Text>
           </View>
         </View>
 
-        <Text style={styles.instructions}>{feedback}</Text>
+        <Text accessibilityLiveRegion="polite" style={styles.instructions}>{feedbackText}</Text>
         <Text style={styles.zoomHint}>{t("spot.zoomHint")}</Text>
 
         {zoomControls.isZoomed ? (
           <View style={styles.resetToolbar}>
             <TouchableOpacity
-              accessibilityLabel="Reset image view"
+              accessibilityHint={t("spot.resetViewHint")}
+              accessibilityLabel={t("spot.resetView")}
+              accessibilityRole="button"
               activeOpacity={0.82}
               onPress={() => zoomControls.resetView()}
               style={styles.resetButton}
             >
-              <Text style={styles.resetButtonText}>Reset View</Text>
+              <Text style={styles.resetButtonText}>{t("spot.resetView")}</Text>
             </TouchableOpacity>
           </View>
         ) : null}
 
         <View style={styles.scenesWrap}>
           <SceneCard
+            accessibilityHint={t("spot.zoomHint")}
+            accessibilityLabel={t("spot.original")}
             scene={currentScene}
             title={t("spot.original")}
             variant="A"
@@ -368,6 +419,8 @@ export default function SpotDifferenceScreen() {
             zoomControls={zoomControls}
           />
           <SceneCard
+            accessibilityHint={t("spot.zoomHint")}
+            accessibilityLabel={t("spot.changed")}
             scene={currentScene}
             title={t("spot.changed")}
             variant="B"
@@ -391,7 +444,7 @@ export default function SpotDifferenceScreen() {
         {isComplete ? (
           <View style={styles.resultPanel}>
             <Text style={styles.resultTitle}>{t("spot.completeTitle")}</Text>
-            <Text style={styles.resultText}>{t("spot.completeBody", { seconds: elapsedSeconds })}</Text>
+            <Text style={styles.resultText}>{t("spot.completeBody", { count: elapsedSeconds })}</Text>
             <GameRewardSummary
               detailLines={[
                 t("rewards.differencesFound", { found: foundIds.length, total: differences.length }),
@@ -566,6 +619,8 @@ function useSpotDifferenceZoom(scene: SpotDifferenceScene | null, viewport: Scen
 }
 
 function SceneCard({
+  accessibilityHint,
+  accessibilityLabel,
   foundSet,
   imageRect,
   onLayout,
@@ -576,6 +631,8 @@ function SceneCard({
   variant,
   zoomControls,
 }: {
+  accessibilityHint: string;
+  accessibilityLabel: string;
   foundSet: Set<string>;
   imageRect: ImageRect | null;
   onLayout?: (size: SceneSize) => void;
@@ -801,6 +858,9 @@ function SceneCard({
     >
       <Animated.View style={[styles.transformedSceneContent, zoomControls.animatedStyle]}>
         <Image
+          accessible
+          accessibilityHint={accessibilityHint}
+          accessibilityLabel={accessibilityLabel}
           resizeMode="contain"
           source={variant === "A" ? scene.imageA : scene.imageB}
           style={styles.sceneImage}
@@ -845,6 +905,11 @@ function FoundMarker({ imageRect, zone }: { imageRect: ImageRect; zone: SpotDiff
       ]}
     />
   );
+}
+
+function getSpotSceneNumber(sceneId: string) {
+  const parsed = Number.parseInt(sceneId.replace(/^scene_/, ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : sceneId;
 }
 
 function selectNextScene(usedSceneIds: string[]) {

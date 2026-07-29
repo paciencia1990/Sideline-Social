@@ -5,8 +5,19 @@ service cloud.firestore {
     // -----------------------------------------------------------------------
     // Helper functions
     // -----------------------------------------------------------------------
-    function signedIn() {
+    function authenticated() {
       return request.auth != null;
+    }
+
+    function anonymousAuth() {
+      return authenticated() &&
+        request.auth.token.firebase.sign_in_provider == "anonymous";
+    }
+
+    // Sideline Social has no accountless gameplay flow. A Firebase anonymous
+    // token is authenticated cryptographically, but it is not a social account.
+    function signedIn() {
+      return authenticated() && !anonymousAuth();
     }
 
     function isSelf(userId) {
@@ -55,14 +66,6 @@ service cloud.firestore {
       return /databases/$(database)/documents/sessions/$(sessionId);
     }
 
-    function triviaGamePath(sessionId) {
-      return /databases/$(database)/documents/sessions/$(sessionId)/games/triviaBlitz;
-    }
-
-    function triviaPlayerPath(sessionId, userId) {
-      return /databases/$(database)/documents/sessions/$(sessionId)/games/triviaBlitz/players/$(userId);
-    }
-
     function sessionExists(sessionId) {
       return exists(sessionPath(sessionId));
     }
@@ -74,107 +77,31 @@ service cloud.firestore {
     function isSessionHost(sessionId) {
       return signedIn() &&
         sessionExists(sessionId) &&
+        sessionData(sessionId).expiresAt is timestamp &&
+        sessionData(sessionId).expiresAt > request.time &&
+        sessionLifecycleReadable(sessionId) &&
         sessionData(sessionId).hostPlayerId == request.auth.uid;
+    }
+
+    function sessionLifecycleReadable(sessionId) {
+      return sessionData(sessionId).status in ["lobby", "playing"] ||
+        (
+          sessionData(sessionId).status == "results" &&
+          sessionData(sessionId).completedAt is timestamp &&
+          sessionData(sessionId).completedAt + duration.value(5, "m") > request.time
+        );
     }
 
     function isSessionPlayer(sessionId) {
       return signedIn() &&
         sessionExists(sessionId) &&
+        sessionData(sessionId).expiresAt is timestamp &&
+        sessionData(sessionId).expiresAt > request.time &&
+        sessionLifecycleReadable(sessionId) &&
         (
           sessionData(sessionId).hostPlayerId == request.auth.uid ||
           request.auth.uid in sessionData(sessionId).playerIds
         );
-    }
-
-    function isTriviaParentCreate(sessionId) {
-      return signedIn() &&
-        request.resource.data.keys().hasOnly(["sessionId", "gameId", "gameType", "hostPlayerId", "playerIds", "status", "createdAt", "updatedAt"]) &&
-        request.resource.data.sessionId == sessionId &&
-        request.resource.data.gameId == "triviaBlitz" &&
-        request.resource.data.gameType == "triviaBlitz" &&
-        request.resource.data.hostPlayerId == request.auth.uid &&
-        request.resource.data.playerIds is list &&
-        request.resource.data.playerIds.size() == 1 &&
-        request.resource.data.playerIds.hasAll([request.auth.uid]) &&
-        request.resource.data.status == "lobby";
-    }
-
-    function keepsTriviaParentIdentity() {
-      return request.resource.data.sessionId == resource.data.sessionId &&
-        request.resource.data.gameId == resource.data.gameId &&
-        request.resource.data.gameType == resource.data.gameType &&
-        request.resource.data.hostPlayerId == resource.data.hostPlayerId;
-    }
-
-    function isTriviaParentHostUpdate(sessionId) {
-      return isSessionHost(sessionId) &&
-        keepsTriviaParentIdentity() &&
-        request.resource.data.playerIds == resource.data.playerIds &&
-        request.resource.data.status in ["lobby", "playing", "results"] &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "updatedAt"]);
-    }
-
-    function isTriviaParentJoinUpdate() {
-      return signedIn() &&
-        resource.data.gameId == "triviaBlitz" &&
-        resource.data.status == "lobby" &&
-        keepsTriviaParentIdentity() &&
-        request.resource.data.status == resource.data.status &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["playerIds", "updatedAt"]) &&
-        request.resource.data.playerIds is list &&
-        request.resource.data.playerIds.hasAll(resource.data.playerIds) &&
-        request.auth.uid in request.resource.data.playerIds &&
-        (
-          (
-            request.auth.uid in resource.data.playerIds &&
-            request.resource.data.playerIds.size() == resource.data.playerIds.size()
-          ) ||
-          (
-            !(request.auth.uid in resource.data.playerIds) &&
-            request.resource.data.playerIds.size() == resource.data.playerIds.size() + 1
-          )
-        );
-    }
-
-    function isTriviaGameCreate(sessionId, gameId) {
-      return gameId == "triviaBlitz" &&
-        isSessionHost(sessionId) &&
-        request.resource.data.keys().hasOnly(["status", "turnIndex", "questionIndex", "teamStreak", "totalPoints", "correctAnswers", "answeredQuestions", "totalPlayers", "selectedQuestions", "allReady", "currentSelection", "selectionRevealed", "hostPlayerId", "sessionCode", "createdAt", "updatedAt"]) &&
-        request.resource.data.hostPlayerId == request.auth.uid &&
-        request.resource.data.sessionCode == sessionId &&
-        request.resource.data.status == "lobby" &&
-        request.resource.data.turnIndex == 0 &&
-        request.resource.data.questionIndex == 0 &&
-        request.resource.data.teamStreak == 0 &&
-        request.resource.data.totalPoints == 0 &&
-        request.resource.data.correctAnswers == 0 &&
-        request.resource.data.answeredQuestions == 0 &&
-        request.resource.data.totalPlayers == 1 &&
-        request.resource.data.selectedQuestions is list &&
-        request.resource.data.selectedQuestions.size() > 0 &&
-        request.resource.data.allReady == false &&
-        request.resource.data.currentSelection == null &&
-        request.resource.data.selectionRevealed == false;
-    }
-
-    function keepsTriviaGameIdentity() {
-      return request.resource.data.hostPlayerId == resource.data.hostPlayerId &&
-        request.resource.data.sessionCode == resource.data.sessionCode;
-    }
-
-    function isTriviaHostGameUpdate(sessionId) {
-      return isSessionHost(sessionId) &&
-        keepsTriviaGameIdentity() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "turnIndex", "questionIndex", "teamStreak", "totalPoints", "correctAnswers", "answeredQuestions", "totalPlayers", "selectedQuestions", "allReady", "currentSelection", "selectionRevealed", "updatedAt"]);
-    }
-
-    function isTriviaAnswerSubmission(sessionId) {
-      return isSessionPlayer(sessionId) &&
-        keepsTriviaGameIdentity() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["currentSelection", "selectionRevealed", "updatedAt"]) &&
-        request.resource.data.currentSelection.playerId == request.auth.uid &&
-        request.resource.data.currentSelection.answerIndex is int &&
-        request.resource.data.selectionRevealed == false;
     }
 
     function announcementPath(teamId, announcementId) {
@@ -199,9 +126,12 @@ service cloud.firestore {
         (
           (
             exists(squadMembershipPath(squadId, request.auth.uid)) &&
+            get(squadMembershipPath(squadId, request.auth.uid)).data.userId == request.auth.uid &&
+            get(squadMembershipPath(squadId, request.auth.uid)).data.squadId == squadId &&
             get(squadMembershipPath(squadId, request.auth.uid)).data.membershipStatus == "active"
           ) ||
           (
+            !exists(squadMembershipPath(squadId, request.auth.uid)) &&
             get(squadPath(squadId)).data.memberIds is list &&
             request.auth.uid in get(squadPath(squadId)).data.memberIds
           )
@@ -463,7 +393,8 @@ service cloud.firestore {
     // write privileges.
     // -----------------------------------------------------------------------
     match /squads/{squadId} {
-      allow read: if signedIn();
+      allow get: if isSquadMember(squadId);
+      allow list: if false;
       // Canonical identity, membership projections, and counts are managed by
       // trusted callable functions so concurrent clients cannot create a
       // duplicate venue-and-sport Squad or modify another membership.
@@ -645,53 +576,37 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /triviaGameSecrets/{sessionId} {
+      allow read, write: if false;
+    }
+
+    match /triviaGameSubmissions/{submissionId} {
+      allow read, write: if false;
+    }
+
+    match /triviaGameRateLimits/{rateLimitId} {
+      allow read, write: if false;
+    }
+
     // -----------------------------------------------------------------------
     // Trivia Blitz game sessions
-    // A parent sessions/{sessionId} document establishes host ownership and
-    // player membership before the nested games/triviaBlitz document is written.
+    // Cloud Functions are the only writers. Participants receive only the
+    // server-projected current question; answer keys stay in a server-only
+    // collection that has no client rule.
     // -----------------------------------------------------------------------
     match /sessions/{sessionId} {
-      allow create: if isTriviaParentCreate(sessionId);
       allow get: if isSessionPlayer(sessionId);
       allow list: if false;
-      allow update: if isTriviaParentHostUpdate(sessionId);
-      allow delete: if false;
+      allow write: if false;
 
       match /games/{gameId} {
         allow get: if gameId == "triviaBlitz" && isSessionPlayer(sessionId);
         allow list: if false;
-        allow create: if isTriviaGameCreate(sessionId, gameId);
-        allow update: if gameId == "triviaBlitz" &&
-          (isTriviaHostGameUpdate(sessionId) || isTriviaAnswerSubmission(sessionId));
-        allow delete: if false;
+        allow write: if false;
 
         match /players/{playerId} {
           allow get, list: if gameId == "triviaBlitz" && isSessionPlayer(sessionId);
-
-          allow create: if gameId == "triviaBlitz" &&
-            isSessionPlayer(sessionId) &&
-            isSelf(playerId) &&
-            exists(triviaGamePath(sessionId)) &&
-            request.resource.data.keys().hasOnly(["name", "playerIndex", "score", "ready", "createdAt"]) &&
-            request.resource.data.name is string &&
-            request.resource.data.playerIndex is int &&
-            request.resource.data.score == 0 &&
-            request.resource.data.ready == false;
-
-          allow update: if gameId == "triviaBlitz" &&
-            (
-              (
-                isSessionHost(sessionId) &&
-                request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "playerIndex", "score", "ready", "createdAt"])
-              ) ||
-              (
-                isSessionPlayer(sessionId) &&
-                isSelf(playerId) &&
-                request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "ready", "createdAt"])
-              )
-            );
-
-          allow delete: if false;
+          allow write: if false;
         }
       }
     }

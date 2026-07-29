@@ -46,21 +46,21 @@ export default function CoachResourcesScreen() {
           </Card>
         </TouchableOpacity>
 
-        <View style={styles.helpArea}>
-          <Text style={styles.helpPrompt}>{t("coach.resources.notFinding")}</Text>
-          <TouchableOpacity
-            accessibilityHint={FEATURE_FLAGS.coachAiEnabled ? t("coach.resources.helpHint") : t("coach.resources.coachAiUnavailableBody")}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: !FEATURE_FLAGS.coachAiEnabled }}
-            activeOpacity={0.86}
-            disabled={!FEATURE_FLAGS.coachAiEnabled}
-            onPress={FEATURE_FLAGS.coachAiEnabled ? () => router.push("/coach/resources/help" as never) : undefined}
-            style={[styles.helpButton, !FEATURE_FLAGS.coachAiEnabled && styles.helpButtonDisabled]}
-          >
-            <Sparkles color={Colors.surface} size={20} />
-            <Text style={styles.helpButtonText}>{FEATURE_FLAGS.coachAiEnabled ? t("coach.resources.needHelp") : t("coach.resources.coachAiComingSoon")}</Text>
-          </TouchableOpacity>
-        </View>
+        {FEATURE_FLAGS.coachAiEnabled ? (
+          <View style={styles.helpArea}>
+            <Text style={styles.helpPrompt}>{t("coach.resources.notFinding")}</Text>
+            <TouchableOpacity
+              accessibilityHint={t("coach.resources.helpHint")}
+              accessibilityRole="button"
+              activeOpacity={0.86}
+              onPress={() => router.push("/coach/resources/help" as never)}
+              style={styles.helpButton}
+            >
+              <Sparkles color={Colors.surface} size={20} />
+              <Text style={styles.helpButtonText}>{t("coach.resources.needHelp")}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
       </ScrollView>
     </ScreenWrapper>
   );
@@ -94,6 +94,5 @@ const styles = StyleSheet.create({
   helpArea: { alignItems: "center", gap: Spacing.sm, paddingTop: Spacing.md },
   helpPrompt: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 16, textAlign: "center" },
   helpButton: { alignItems: "center", backgroundColor: Colors.textHeading, borderRadius: Radius.button, flexDirection: "row", gap: Spacing.sm, justifyContent: "center", minHeight: 52, paddingHorizontal: Spacing.lg, width: "100%", ...Shadow.card },
-  helpButtonDisabled: { opacity: 0.68 },
   helpButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 16, textAlign: "center" },
 });

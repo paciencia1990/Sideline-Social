@@ -42,8 +42,8 @@ assert.match(checklistDetail, /Alert\.alert[\s\S]*resetCoachChecklistProgress/, 
 assert.match(communicationDetail, /TextInput[\s\S]*findUnresolvedCoachPlaceholders[\s\S]*\/coach\/messages/, "templates must be editable, validated, and routed to the composer");
 assert.match(composer, /draftBody[\s\S]*draftTitle[\s\S]*selectedTeamId/, "announcement composer must accept drafts and require explicit team context");
 assert.match(featureFlags, /coachAiEnabled:\s*false/, "Coach AI must be disabled through the central typed feature flag");
-assert.match(hub, /disabled=\{!FEATURE_FLAGS\.coachAiEnabled\}/, "Coach Resources must disable the AI entry point");
-assert.match(hub, /coachAiComingSoon/, "Coach Resources must show the coming-soon label");
+assert.match(hub, /\{FEATURE_FLAGS\.coachAiEnabled \? \(/, "Coach AI entry point must be hidden unless enabled");
+assert.doesNotMatch(hub, /coachAiComingSoon/, "Coach Resources must not ship a visible coming-soon control");
 assert.match(help, /if \(!FEATURE_FLAGS\.coachAiEnabled\)[\s\S]*coachAiUnavailableTitle/, "direct help links must render a safe unavailable state");
 assert.match(helpResult, /if \(!FEATURE_FLAGS\.coachAiEnabled\)[\s\S]*coachAiUnavailableTitle/, "direct result links must render a safe unavailable state");
 assert.doesNotMatch(help, /apiKey|COACH_AI_API_KEY|provider/i, "the client help route must not contain provider credentials");

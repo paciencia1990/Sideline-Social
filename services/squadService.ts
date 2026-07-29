@@ -15,8 +15,6 @@ import {
   normalizeSquadSportId,
   type SquadSportId,
 } from "@/constants/sports";
-import { getPublicUserProfiles } from "@/services/publicProfileService";
-import { getSafeProfileName } from "@/utils/friendPrivacy";
 
 export const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 export const STARTING_SOON_MS = 30 * 60 * 1000;
@@ -49,6 +47,7 @@ export interface Squad {
   currentSeasonId: string | null;
   timeZone: string | null;
   distanceMiles?: number;
+  activityStatus?: SquadStatus;
   // Compatibility aliases for legacy UI and stored documents.
   name: string;
   sport: string;
@@ -100,6 +99,7 @@ export interface MemberPreview {
 export interface SquadDetail extends Squad {
   members: MemberPreview[];
   extraMemberCount: number;
+  viewerIsMember: boolean;
 }
 
 export type SquadAdminMember = {
@@ -158,6 +158,7 @@ export type SquadStatus = "active" | "starting_soon" | "quiet";
 type FirestoreDate = Timestamp | number | Date | null | undefined;
 type NearbyResponse = { squads: Record<string, unknown>[]; radiusMiles: number };
 type SearchResponse = { squads: Record<string, unknown>[] };
+type DetailResponse = { squad: Record<string, unknown> };
 
 function toMillis(value: FirestoreDate): number {
   if (!value) return 0;
@@ -202,12 +203,14 @@ export function normalizeSquadDocument(id: string, data: DocumentData): Squad {
     currentSeasonId: readString(data.currentSeasonId) || null,
     timeZone: readString(data.timeZone) || null,
     distanceMiles: typeof data.distanceMiles === "number" ? data.distanceMiles : undefined,
+    activityStatus: isSquadStatus(data.activityStatus) ? data.activityStatus : undefined,
     name: venueName,
     sport: sportOption.englishName,
   };
 }
 
 export function getSquadStatus(squad: Squad): SquadStatus {
+  if (squad.activityStatus) return squad.activityStatus;
   if (!squad.lastActivityAt) return "quiet";
   const elapsed = Date.now() - squad.lastActivityAt;
   if (elapsed < STARTING_SOON_MS) return "active";
@@ -427,19 +430,34 @@ export async function updateMemberLastActive(): Promise<void> {
 
 export async function fetchSquadDetail(squadId: string): Promise<SquadDetail | null> {
   try {
-    const snapshot = await getDoc(doc(db, "squads", squadId));
-    if (!snapshot.exists()) return null;
-    const squad = normalizeSquadDocument(snapshot.id, snapshot.data());
-    const publicProfiles = await getPublicUserProfiles(squad.memberIds.slice(0, 8));
-    const members = publicProfiles.map((profile) => ({
-      uid: profile.userId,
-      displayName: getSafeProfileName(profile.displayName),
-      photoURL: null,
-    }));
-    return { ...squad, members, extraMemberCount: Math.max(0, squad.memberCount - members.length) };
+    const callable = httpsCallable<{ squadId: string }, DetailResponse>(
+      functions,
+      "getVenueSportSquadDetail",
+    );
+    const response = await callable({ squadId });
+    const data = response.data.squad;
+    const squad = normalizeSquadDocument(readString(data.squadId) || squadId, data);
+    const members = Array.isArray(data.members)
+      ? data.members.flatMap((value) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+        const member = value as Record<string, unknown>;
+        const uid = readString(member.uid);
+        const displayName = readString(member.displayName);
+        return uid && displayName
+          ? [{ uid, displayName, photoURL: null }]
+          : [];
+      })
+      : [];
+    return {
+      ...squad,
+      members,
+      extraMemberCount: readFiniteNumber(data.extraMemberCount, 0),
+      viewerIsMember: data.viewerIsMember === true,
+    };
   } catch (error) {
+    if (readErrorCode(error).endsWith("not-found")) return null;
     logSquadDiagnostic("detail", error);
-    return null;
+    throw error;
   }
 }
 
@@ -459,6 +477,16 @@ function readStringArray(value: unknown): string[] {
 
 function readFiniteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
+function isSquadStatus(value: unknown): value is SquadStatus {
+  return value === "active" || value === "starting_soon" || value === "quiet";
+}
+
+function readErrorCode(error: unknown) {
+  return error && typeof error === "object" && "code" in error
+    ? String(error.code)
+    : "";
 }
 
 function locationResult(position: Location.LocationObject, source: "current" | "last-known"): CurrentLocationResult {

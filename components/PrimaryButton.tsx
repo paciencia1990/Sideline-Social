@@ -14,6 +14,8 @@ interface PrimaryButtonProps {
 export function PrimaryButton({ title, onPress, loading, disabled, style }: PrimaryButtonProps) {
   return (
     <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityState={{ busy: Boolean(loading), disabled: Boolean(disabled || loading) }}
       style={flattenStyle([styles.button, disabled && styles.disabled, style])}
       onPress={onPress}
       disabled={disabled || loading}
@@ -32,7 +34,9 @@ const styles = StyleSheet.create({
   button: {
     backgroundColor: Colors.primary,
     borderRadius: Radius.button,
-    height: 48,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',

@@ -2,11 +2,14 @@ import { createHash } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import { FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions';
 
 import { activeSquadAdminIds, isActiveSquadAdmin } from './squadAdminCore';
 import { hasCoachAccess, isTeamActive } from './teamMembershipCore';
 import { deleteTeamAnnouncementData } from './teamAnnouncementDeletionCore';
+import { permanentAccountFunctions } from './permanentAuth';
+
+const functions = permanentAccountFunctions(firebaseFunctions);
 
 type DeletionSummary = {
   deletedDocuments: number;
@@ -63,6 +66,7 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (_data, con
   await removePrivateTeamConversationMemberships(firestore, uid, summary);
   await removeMessageVisibilityReferences(firestore, uid, summary);
   await removeTriviaParticipation(firestore, uid, summary);
+  await removeGameRewardParticipation(firestore, uid, summary);
 
   summary.deletedDocuments += await deleteMatchingDocuments(
     firestore.collection('friendRequests').where('fromUserId', '==', uid),
@@ -80,18 +84,21 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (_data, con
     firestore.collection('coachAiRequests').where('userId', '==', uid),
     true,
   );
-  summary.deletedDocuments += await deleteMatchingDocuments(
-    firestore.collection('gameRewardSessions').where('userId', '==', uid),
-    true,
-  );
   for (const collectionName of ['gameJoinCodes', 'gameJoinSessionLinks', 'gameJoinRequests']) {
     summary.deletedDocuments += await deleteMatchingDocuments(
       firestore.collection(collectionName).where('hostUserId', '==', uid),
       true,
     );
   }
-  await firestore.collection('gameJoinRateLimits').doc(hashIdentifier(uid)).delete();
-  summary.deletedDocuments += 1;
+  await Promise.all([
+    firestore.collection('gameJoinRateLimits').doc(hashIdentifier(uid)).delete(),
+    firestore.collection('triviaGameRateLimits').doc(hashIdentifier(uid)).delete(),
+    firestore.collection('triviaGameRateLimits').doc(hashIdentifier(`create:${uid}`)).delete(),
+  ]);
+  summary.deletedDocuments += 3;
+  summary.deletedDocuments += await deleteMatchingDocuments(
+    firestore.collection('triviaGameRateLimits').where('userId', '==', uid),
+  );
 
   await deleteSquadAdministrationRequests(firestore, uid, summary);
   await deleteUserBlocks(firestore, uid, summary);
@@ -433,27 +440,83 @@ async function removeTriviaParticipation(
   uid: string,
   summary: DeletionSummary,
 ) {
+  summary.deletedDocuments += await deleteMatchingDocuments(
+    firestore.collection('triviaGameSubmissions').where('playerId', '==', uid),
+  );
+
   while (true) {
     const snapshot = await firestore.collection('sessions').where('playerIds', 'array-contains', uid).limit(100).get();
     if (snapshot.empty) return;
     for (const session of snapshot.docs) {
       const remainingPlayerIds = stringArray(session.data()?.playerIds).filter((playerId) => playerId !== uid);
       if (remainingPlayerIds.length === 0) {
+        summary.deletedDocuments += await deleteMatchingDocuments(
+          firestore.collection('triviaGameSubmissions').where('sessionId', '==', session.id),
+        );
+        await firestore.collection('triviaGameSecrets').doc(session.id).delete();
         await firestore.recursiveDelete(session.ref);
-        summary.deletedDocuments += 1;
+        summary.deletedDocuments += 2;
         continue;
       }
       const update: Record<string, unknown> = {
         playerIds: remainingPlayerIds,
         updatedAt: FieldValue.serverTimestamp(),
       };
-      if (session.data()?.hostPlayerId === uid) update.hostPlayerId = remainingPlayerIds[0];
-      await Promise.all([
-        session.ref.set(update, { merge: true }),
-        session.ref.collection('games').doc('triviaBlitz').collection('players').doc(uid).delete(),
-      ]);
+      const gameRef = session.ref.collection('games').doc('triviaBlitz');
+      const secretRef = firestore.collection('triviaGameSecrets').doc(session.id);
+      const [game, secret] = await Promise.all([gameRef.get(), secretRef.get()]);
+      const batch = firestore.batch();
+      if (session.data()?.hostPlayerId === uid) {
+        const replacementHostId = remainingPlayerIds[0];
+        update.hostPlayerId = replacementHostId;
+        if (game.exists) {
+          batch.update(gameRef, {
+            hostPlayerId: replacementHostId,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+        if (secret.exists) {
+          batch.update(secretRef, {
+            hostPlayerId: replacementHostId,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      }
+      batch.set(session.ref, update, { merge: true });
+      batch.delete(gameRef.collection('players').doc(uid));
+      await batch.commit();
       summary.deletedDocuments += 1;
     }
+  }
+}
+
+async function removeGameRewardParticipation(
+  firestore: FirebaseFirestore.Firestore,
+  uid: string,
+  summary: DeletionSummary,
+) {
+  while (true) {
+    const snapshot = await firestore.collection('gameRewardSessions')
+      .where('participantIds', 'array-contains', uid)
+      .limit(100)
+      .get();
+    if (snapshot.empty) return;
+    const writer = firestore.bulkWriter();
+    snapshot.docs.forEach((session) => {
+      const remainingParticipantIds = stringArray(session.data()?.participantIds)
+        .filter((participantId) => participantId !== uid);
+      if (remainingParticipantIds.length === 0) {
+        writer.delete(session.ref);
+        summary.deletedDocuments += 1;
+      } else {
+        writer.set(session.ref, {
+          participantIds: remainingParticipantIds,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+        summary.anonymizedDocuments += 1;
+      }
+    });
+    await writer.close();
   }
 }
 
@@ -528,13 +591,17 @@ async function anonymizeNotificationReferences(
 }
 
 async function deleteRealtimeGameParticipation(uid: string) {
-  const root = admin.database().ref('gameSessions');
-  const snapshot = await root.get();
+  const root = admin.database().ref();
+  const snapshot = await root.child('gameSessions').get();
   if (!snapshot.exists()) return;
   const updates: Record<string, null> = {};
   snapshot.forEach((session) => {
-    if (session.child('hostUserId').val() === uid) updates[session.key as string] = null;
-    else if (session.child(`players/${uid}`).exists()) updates[`${session.key}/players/${uid}`] = null;
+    if (session.child('hostUserId').val() === uid) {
+      updates[`gameSessions/${session.key}`] = null;
+      updates[`gameSessionSecrets/${session.key}`] = null;
+    } else if (session.child(`players/${uid}`).exists()) {
+      updates[`gameSessions/${session.key}/players/${uid}`] = null;
+    }
   });
   if (Object.keys(updates).length) await root.update(updates);
 }

@@ -2,7 +2,8 @@ import type { TriviaQuestion } from "./types";
 
 export const RECENT_TRIVIA_QUESTION_LIMIT = 50;
 
-type QuestionInput = Omit<TriviaQuestion, "id"> & { id?: string };
+type TriviaQuestionWithAnswer = TriviaQuestion & { answer: number };
+type QuestionInput = Omit<TriviaQuestionWithAnswer, "id"> & { id?: string };
 
 type SelectTriviaQuestionsOptions = {
   category?: string;
@@ -45,9 +46,9 @@ export function selectTriviaQuestions({
   return { nextRecentQuestionIds, selectedQuestions };
 }
 
-export function normalizeQuestionBank(questions: QuestionInput[]): TriviaQuestion[] {
+export function normalizeQuestionBank(questions: QuestionInput[]): TriviaQuestionWithAnswer[] {
   const seenIds = new Set<string>();
-  const normalized: TriviaQuestion[] = [];
+  const normalized: TriviaQuestionWithAnswer[] = [];
 
   questions.forEach((question) => {
     const id = question.id?.trim() || createStableQuestionId(question);

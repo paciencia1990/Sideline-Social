@@ -29,7 +29,7 @@ import {
 } from "@/services/notificationService";
 import { formatUnreadBadgeCount } from "@/utils/notificationCore";
 import { subscribeToUnreadFriendConversationCount } from "@/services/chatService";
-import { getGameLabel } from "@/services/gameService";
+import { getGameLabelKey } from "@/services/gameService";
 import {
   getParentTeamsOverview,
   getTeamChildNames,
@@ -282,7 +282,9 @@ export default function HomeScreen() {
             </View>
             <View style={styles.cardCopy}>
               <Text style={styles.cardEyebrow}>{t("home.activeGame")}</Text>
-              <Text style={styles.cardTitle}>{t("games.squadPlaying", { game: getGameLabel(activeSession.gameType) })}</Text>
+              <Text style={styles.cardTitle}>
+                {t("games.squadPlaying", { game: t(getGameLabelKey(activeSession.gameType)) })}
+              </Text>
             </View>
           </TouchableOpacity>
         ) : null}

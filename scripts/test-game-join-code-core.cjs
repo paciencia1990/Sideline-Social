@@ -66,8 +66,8 @@ async function run() {
   assert.match(gamesScreen, /disabled=\{joining \|\| !isCompleteGameJoinCode\(joinCode\)\}/);
   assert.match(translations, /Join my Sideline Social game with code \{\{code\}\}\./);
   assert.match(translations, /Únete a mi juego de Sideline Social con el código \{\{code\}\}\./);
-  assert.match(translations, /Local Test/);
-  assert.match(translations, /Prueba local/);
+  assert.match(gamesScreen, /__DEV__ && config\.supportsLocalTest/);
+  assert.match(lobbyHook, /const isLocal = __DEV__ && normalizeParam\(params\.local\) === '1'/);
 
   console.log('Game Join Code generation, normalization, collision, input, and routing core tests passed.');
 }

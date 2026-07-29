@@ -10,8 +10,10 @@ import {
 } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc, type DocumentData } from "firebase/firestore";
 import { auth, db } from "@/config/firebase";
+import i18n from "@/i18n";
 import { clearSignedInUserLocalState } from "@/services/localUserStateService";
 import { unregisterCurrentDeviceNotificationToken } from "@/services/notificationService";
+import { resolveFirebaseIdentityKind } from "@/utils/authIdentity";
 import { completeLocalSignOut } from "@/utils/localUserStateCore";
 import { readModeOnboardingState, type AppMode } from "@/utils/onboardingMode";
 import { resolveDisplayName } from "@/utils/profileName";
@@ -96,16 +98,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let disposed = false;
 
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
-      setVoicePlaybackAuthorizationContext(nextUser?.uid ?? null);
       const loadVersion = ++profileLoadVersion.current;
-      setFirebaseUser(nextUser);
       setUser(null);
 
       if (!nextUser) {
+        setVoicePlaybackAuthorizationContext(null);
+        setFirebaseUser(null);
         setLoading(false);
         return;
       }
 
+      if (resolveFirebaseIdentityKind(nextUser) === "anonymous") {
+        setVoicePlaybackAuthorizationContext(null);
+        setFirebaseUser(null);
+        setLoading(false);
+        void firebaseSignOut(auth).catch((error) => {
+          console.warn("[Auth] anonymous session cleanup failed:", getErrorCode(error));
+        });
+        void clearSignedInUserLocalState().catch((error) => {
+          console.warn("[Auth] anonymous local-state cleanup failed:", getErrorCode(error));
+        });
+        return;
+      }
+
+      setVoicePlaybackAuthorizationContext(nextUser.uid);
+      setFirebaseUser(nextUser);
       setLoading(true);
       void getDoc(doc(db, "users", nextUser.uid))
         .then((profileDoc) => profileDoc.data())
@@ -136,7 +153,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshProfile = useCallback(async () => {
     const currentUser = auth.currentUser;
-    if (!currentUser) {
+    if (!currentUser || resolveFirebaseIdentityKind(currentUser) !== "permanent") {
+      if (currentUser) {
+        void firebaseSignOut(auth).catch((error) => {
+          console.warn("[Auth] anonymous session cleanup failed:", getErrorCode(error));
+        });
+        void clearSignedInUserLocalState().catch((error) => {
+          console.warn("[Auth] anonymous local-state cleanup failed:", getErrorCode(error));
+        });
+      }
       setFirebaseUser(null);
       setUser(null);
       setLoading(false);
@@ -206,7 +231,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         sidelineStars: 0,
         squadIds: [],
         friendIds: [],
-        preferredLanguage: "en",
+        preferredLanguage: i18n.resolvedLanguage?.startsWith("es") ? "es" : "en",
         profileVisibility: "squad_only",
         modeOnboardingCompleted: false,
       }, { merge: true });

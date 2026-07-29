@@ -3,6 +3,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View
 import { useTranslation } from "react-i18next";
 
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { SettingsBackButton } from "@/components/SettingsBackButton";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { getBlockedFriendChatUserIds, unblockFriendChatUser } from "@/services/chatService";
 import { getPublicUserProfiles } from "@/services/publicProfileService";
@@ -57,6 +58,7 @@ export default function BlockedUsersScreen() {
   return (
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.content}>
+        <SettingsBackButton />
         <Text style={styles.title}>{t("settings.blockedUsers")}</Text>
         <Text style={styles.body}>{t("settings.blockedUsersBody")}</Text>
         {loading ? <ActivityIndicator color={Colors.primary} /> : null}

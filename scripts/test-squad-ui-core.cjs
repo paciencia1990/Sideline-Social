@@ -15,6 +15,8 @@ const administration = read("components/SquadAdministrationCard.tsx");
 const adminFunctions = read("functions/src/squadAdmin.ts");
 const adminCore = read("functions/src/squadAdminCore.ts");
 const nearbyCallable = functions.slice(functions.indexOf("export const findNearbyVenueSportSquads"), functions.indexOf("export const searchVenueSportSquads"));
+const detailCallable = functions.slice(functions.indexOf("export const getVenueSportSquadDetail"), functions.indexOf("// ---------------------------------------------------------------------------", functions.indexOf("export const getVenueSportSquadDetail")));
+const detailService = service.slice(service.indexOf("export async function fetchSquadDetail"), service.indexOf("function selectedSquadStorageKey"));
 const presenceCleanup = functions.slice(functions.indexOf("export const deactivateInactiveMembers"), functions.indexOf("export const awardGameStars"));
 
 assert.match(identity, /venueName[\s\S]*sportName/, "venue and sport must be rendered as separate text lines");
@@ -28,12 +30,25 @@ assert.doesNotMatch(squadScreen, /useEffect\([\s\S]{0,300}requestLocationPermiss
 assert.doesNotMatch(`${service}\n${squadScreen}\n${home}`, /updateUserLocation/, "parent coordinates must not be persisted");
 assert.doesNotMatch(`${service}\n${squadScreen}`, /startLocationUpdatesAsync|watchPositionAsync|requestBackgroundPermissionsAsync|startGeofencingAsync/, "continuous/background tracking must not be introduced");
 assert.doesNotMatch(nearbyCallable, /joinVenueSportSquad|memberIds|userId|child|email/i, "nearby search must not join or expose private membership/profile data");
+assert.match(detailService, /getVenueSportSquadDetail/, "Squad detail must use the field-limited callable");
+assert.doesNotMatch(detailService, /getDoc|publicUserProfiles|getPublicUserProfiles/, "Squad detail must not read raw Squad or profile documents");
+assert.equal(
+  (service.match(/getDoc\(doc\(db,\s*["']squads["']/g) ?? []).length,
+  1,
+  "only member bootstrap may point-read a raw Squad document",
+);
+assert.match(detailCallable, /viewerIsMember[\s\S]*members[\s\S]*extraMemberCount/, "detail returns an explicit member-aware projection");
+assert.doesNotMatch(detailCallable, /venueGeohash|normalizedVenueName|venueSportKey|createdBy|creatorId/, "detail omits internal Squad identity fields");
 assert.match(functions, /membershipStatus:\s*'active'/);
 assert.match(functions, /presenceStatus:\s*'away'/);
 assert.doesNotMatch(presenceCleanup, /membershipStatus:\s*'left'|isActive:\s*false/, "presence expiration must never end durable membership");
 assert.doesNotMatch(functions, /sidelineStars[\s\S]{0,300}joinVenueSportSquad/, "Squad join must not award Stars");
 assert.match(detail, /SquadAdministrationCard/, "the active Squad details route must render administration");
+assert.match(detail, /isMember && squadDetail\.members\.length > 0/, "nonmembers cannot render roster previews");
 assert.match(detail, /last_active_admin[\s\S]*showLastAdminExplanation/, "last-admin leave receives a dedicated explanation");
+assert.match(detail, /loadError[\s\S]*detailUnavailableTitle[\s\S]*loadSquadDetail/, "transient detail failures must show retry recovery");
+assert.match(detail, /detailNotFoundTitle[\s\S]*common\.back/, "missing Squads must remain distinct from transient failures");
+assert.match(service, /logSquadDiagnostic\("detail", error\);\s*throw error;/, "Squad detail service must preserve backend failures");
 assert.match(administration, /accessibilityRole="button"/, "administration controls retain button semantics");
 assert.match(administration, /helpManageBody[\s\S]*responsibilityBody/, "recipients see responsibility copy before accepting");
 assert.match(administration, /requestSquadAdminAccess/, "orphaned Squads expose manual recovery request UI");
