@@ -12,3 +12,13 @@ export async function clearSignedInUserLocalState() {
     removeStorageKeys: (keys) => AsyncStorage.multiRemove([...keys]),
   });
 }
+
+export async function clearRestrictedUserLocalState() {
+  await clearLocalUserStateWithDependencies({
+    clearInMemoryState: clearVoicePlaybackUrlCache,
+    clearNotificationResponse: () => Notifications.clearLastNotificationResponseAsync(),
+    getAllStorageKeys: async () => (await AsyncStorage.getAllKeys())
+      .filter((key) => !key.startsWith("firebase:authUser:")),
+    removeStorageKeys: (keys) => AsyncStorage.multiRemove([...keys]),
+  });
+}

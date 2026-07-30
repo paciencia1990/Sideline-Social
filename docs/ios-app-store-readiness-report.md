@@ -1,8 +1,9 @@
 # Sideline Social iOS App Store Readiness Report
 
 Audit date: 2026-07-29
+Moderation-enforcement update: 2026-07-30
 Repository: `C:\Dev\Sideline_Social_Code`
-Baseline: `main` at `1d181c7` (`Migrate Cloud Functions to Node.js 22`)
+Current integration baseline: `main` at `e764f92`
 Audited product: Sideline Social 1.0.0, iPhone
 Audited EAS project: `@paciencia1990/sideline-squad` (`7ea7aaf2-355d-4aec-a175-82898c8cc0c7`)
 Audited Firebase project: `sideline-squad`
@@ -15,9 +16,18 @@ Do not start the production iOS App Store build yet.
 
 The Expo/iOS toolchain is capable of producing an Apple-acceptable iOS 26 SDK binary, the production legal URLs are live, and the automated source/export checks are strong. The original anonymous-game privacy blocker has been resolved in the working tree: released game routes now require a permanent Sideline Social account, anonymous Firebase identities are rejected at every client/rules/callable boundary, and Squad discovery no longer returns raw identity-bearing documents.
 
-The next stage remains blocked by one separate P0 issue:
+The mobile moderation enforcement gap is technically resolved in the local
+working trees. A separate secured moderation console and writer now exist in
+the website repository, and the mobile repository now enforces their canonical
+standing and removal contract across Functions, Firestore, RTDB, Storage,
+notifications, media grants, and the client navigation boundary.
 
-1. The app accepts user reports but the repository contains no actual operator workflow that reads, triages, resolves, removes, or escalates reported content. Apple Guideline 1.2 requires reporting **and timely responses**, blocking, filtering, published contact information, and actual removal of violating content.
+The P0 moderation launch gate remains open because this implementation is not
+deployed, production moderator roles/MFA/alerts and response coverage are not
+proved, no production-like report-to-removal smoke test has run, and a
+compatible client binary has not been installed. Apple Guideline 1.2 requires
+reporting **and timely responses**, blocking, filtering, published contact
+information, and actual removal of violating content.
 
 Additional P1 issues include incomplete server-side block enforcement in existing group chats, brute-forceable/non-expiring team invite codes, incomplete server-side deletion assurance, unresolved adult/minor and Terms-assent decisions, absent reviewer credentials/sample data, and required archive/device/App Store Connect work.
 
@@ -34,6 +44,10 @@ This verdict is not a prediction or guarantee about Apple review. It is an evide
 - Email/password is the only primary user-facing login, so Guideline 4.8 does not independently require Sign in with Apple.
 - No payments, subscriptions, donation links, external digital unlocks, advertising, analytics SDK, IDFA use, or cross-app tracking implementation was found.
 - Narrow test/placeholder, localization, light-appearance, recovery, accessibility, and Firebase-ID fixes made during this audit pass TypeScript and ESLint.
+- Mobile account-standing enforcement, localized restricted-account/appeal
+  screens, content-removal tombstones, server-side notification/media checks,
+  and coordinated Rules pass the complete registered local test matrix. See
+  `docs/mobile-moderation-enforcement-report.md`.
 
 ## 2. Authoritative requirements consulted
 
@@ -119,21 +133,44 @@ It also lists project-scoped file secret `GOOGLE_SERVICES_INFO_PLIST`. No duplic
 - **Verification:** Provider-aware client and source-boundary tests, Firestore/RTDB/Storage rules suites, real Auth/Firestore/RTDB/Functions emulator identities, full Trivia lifecycle, JOIN-code/Bomb/Spot suites, account deletion, and safe Squad projection tests exercise the new boundary. Fresh local JavaScript exports generated with the EAS production environment contain no private Trivia-answer markers.
 - **Status:** **RESOLVED IN WORKING TREE.** Deployment and physical-device/TestFlight verification are still required before release.
 
-### P0-2 — Reports have no implemented operational moderation workflow
+### P0-2 — Moderation workflow is implemented locally but not operational in production
 
 - **Requirement:** Apple Guideline 1.2 requires filtering, reporting, timely responses, blocking, published contact information, and removal of violating content.
 - **Evidence:**
-  - Team/content reports are written as open records: `functions/src/contentModeration.ts:15-107`.
-  - Friend message/user reports are accepted: `functions/src/friendChat.ts:670-702`.
-  - Client rules correctly deny access to moderation reports: `firestore.rules:439-445`.
-  - Repository-wide collection/reference review found creators but no privileged queue reader, triage/resolution callable, moderation console, removal workflow, sanction workflow, escalation, or appeal workflow.
-  - `docs/ugc-moderation-and-support-plan.md:18-37` and `docs/cross-platform-privacy-data-inventory.md:96-102` identify staffing, SLA, sanctions, appeals, CSAM escalation, and deployed parity as unverified.
-- **User impact:** A user can submit a report but there is no demonstrated mechanism for anyone to respond or remove harmful content.
-- **App Review risk:** Direct Guideline 1.2 failure.
-- **Required fix/decision:** The owner must establish a real workflow. It may be an external secured operator process, but it must demonstrably ingest reports, preserve minimum evidence, authorize staff, resolve reports, remove content, restrict accounts, handle urgent safety escalation, and meet a documented response target. Do not expose the moderation collection to clients.
-- **Verification required:** Use a benign test report from parent and coach/staff experiences; show it arriving in the secured queue; resolve it; remove content/restrict the actor; verify audit history and user-facing follow-up.
-- **Verification performed:** Static repository-wide workflow/reference audit.
-- **Status:** **OPEN — release blocker.** No operational or legal policy was invented during this audit.
+  - The website repository contains a secured moderation console and a
+    separate Node.js 22 `moderation` Functions codebase for queueing, triage,
+    evidence access, actions, sanctions, appeals, audit, alerts, and roles.
+  - The mobile Functions and Rules now use a canonical server-controlled
+    account-standing record and check it at every sensitive backend boundary.
+  - Suspension/ban revokes refresh tokens; stale tokens remain constrained by
+    per-operation standing checks.
+  - Moderator content removal scrubs user-facing content, preserves evidence
+    separately, reconciles previews/notifications, denies media grants, and is
+    reversible only by authorized moderation administration.
+  - The client supplies localized English/Spanish restriction, appeal, failed
+    refresh, and removed-content states without exposing private moderation
+    data.
+  - All registered mobile tests/Rules/emulator suites and the website
+    moderation unit/emulator suites pass locally.
+- **User impact:** Once deployed together, sanctions and removals have
+  application-wide effect. Until that rollout and a compatible client build,
+  the local implementation provides no production operational coverage.
+- **App Review risk:** Direct Guideline 1.2 failure remains if submitted before
+  staffing, deployment, production alerting, and response/removal evidence are
+  demonstrated.
+- **Required fix/decision:** Approve response targets, retention/permanent-ban
+  policy, shared-group behavior, moderator roles/MFA, and alert delivery.
+  Deploy in the documented order, install compatible client builds, and
+  perform a benign production-like end-to-end smoke test. Do not expose
+  moderation collections to clients.
+- **Verification required:** From separate parent and coach/staff test
+  accounts, submit benign reports; show secured queue arrival; resolve/remove
+  content and restrict the actor; verify audit, appeal, alert, notification,
+  cache, media, and restoration behavior on installed devices.
+- **Verification performed:** Complete local mobile and website build,
+  unit/emulator/Rules, localization, export, secret, and diff verification.
+- **Status:** **TECHNICALLY RESOLVED LOCALLY; OPEN PRODUCTION RELEASE
+  BLOCKER.** See `docs/mobile-moderation-enforcement-report.md`.
 
 ### P1-1 — Blocks are not enforced server-side in existing group conversations
 
@@ -699,13 +736,17 @@ No COPPA or other legal conclusion is made here.
 | Unblock | Settings | N/A | callable | Present |
 | Search/suggestion suppression | partial | role-based | mixed | Needs block matrix |
 | Push suppression | direct/new invite paths check | team policy | mixed | Existing group path needs proof |
-| Moderator queue | no client access (correct) | no client access | no consumer found | **Missing** |
-| Content removal/sanction | own-message removal only | author/admin paths | no moderator operation found | **Missing** |
-| Appeal/escalation/SLA | no | no | external process unverified | **Missing** |
+| Moderator queue | no client access (correct) | no client access | secured local console/Functions | Local pass; not deployed |
+| Content removal/sanction | neutral tombstone | neutral tombstone | canonical standing/removal workflow | Local pass; not deployed |
+| Appeal/escalation/SLA | localized appeal | localized appeal | one appeal per standing revision | SLA/operations unverified |
 | Support contact | yes | yes | N/A | Verified |
 | Terms/Guidelines | Settings/legal | Settings/legal | N/A | Verified links/copy |
 
-The report collection must remain privileged. The fix is not to weaken rules; it is to add an authorized operational consumer and tested enforcement workflow.
+The report collection remains privileged. The authorized consumer and tested
+enforcement workflow now exist locally. The remaining work is the coordinated
+deployment, role/MFA/alert provisioning, policy approval, compatible client
+release, and end-to-end operational proof described in
+`docs/mobile-moderation-enforcement-report.md`.
 
 ## 10. Account-deletion verification
 
@@ -997,6 +1038,28 @@ iPad native support is disabled. No iPad screenshots are required for the iPhone
 
 ## 17. Verification record
 
+### 2026-07-30 moderation-enforcement verification
+
+- Root TypeScript, Functions build, and ESLint passed.
+- All 81 currently registered root test commands passed sequentially,
+  including every Firebase emulator and Rules command.
+- The new account-standing emulator covers active parent/coach/staff,
+  messaging restriction, suspension, ban, blocking, moderator/admin
+  identities, standing forgery denial, stale authentication, refresh-token
+  revocation, artifact cancellation, anonymous denial, appeal, safety
+  block/report access, expiration/restoration plus reauthentication,
+  Firestore, RTDB, and Storage.
+- Existing messaging/voice, reporting/blocking, notifications, friends, teams,
+  Squad, games, account deletion, and Rules regressions passed.
+- Website moderation Functions build, two unit tests, and the full local
+  moderation emulator authorization/evidence/audit/alert suite passed.
+- Fresh production-mode iOS and Android JavaScript exports passed. Registered
+  legal-release checks validated the exact Privacy, Terms, Support, and
+  support-email destinations.
+- Secret scans and `git diff --check` passed in both repositories.
+- Full details and exact later rollout commands are in
+  `docs/mobile-moderation-enforcement-report.md`.
+
 ### Passed
 
 - Clean root install: committed `package-lock.json` plus committed `.npmrc`, 1,005 packages.
@@ -1005,9 +1068,9 @@ iPad native support is disabled. No iPad screenshots are required for the iPhone
 - Functions TypeScript/build: passed.
 - Root TypeScript: `npm.cmd run typecheck`
 - ESLint: `npm.cmd run lint` — zero findings (legacy-config informational warning only)
-- Current registry: 80 test commands covering 85 `scripts/test-*.cjs` files.
-  - All 55 non-emulator commands passed sequentially on the final game implementation.
-  - All 25 Firebase emulator-backed commands passed on the final implementation, including permanent/anonymous identity isolation, Squad projections, Trivia lifecycle/rematch/round replay, JOIN-code rules and Functions, Bomb/Spot minimum-player/readiness/expiry behavior, rewards and account deletion.
+- Current registry: 81 test commands. All 81 passed sequentially on the final
+  moderation implementation, including every unit/configuration check and all
+  Firebase emulator/Rules suites.
 - EAS production legal validation: passed through `env:exec production`
 - EAS production iOS config validation: passed; `env:exec` cannot materialize the secret plist, so it warned that the native file remained unverified
 - EAS production profile/config resolution: passed with `environment: production`, store distribution, `developmentClient: false`, Node 24.16.0, and auto-increment.
@@ -1108,10 +1171,13 @@ The report itself can be removed without affecting runtime behavior.
 ## 20. Final repository and external-state record
 
 - Branch: `main`
-- Baseline commit: `1d181c7`
-- `HEAD` and `origin/main`: `1d181c79db2ba09dfa3296da297ab17d1fd95973`
-- Audit edits: 85 uncommitted paths (74 modified, one deleted, ten untracked)
-- Temporary clean-install, test-runner and prebuild-inspection artifacts were removed. Fresh local JS exports remain under ignored `dist/game-audit-20260729-ios-final` and `dist/game-audit-20260729-android-final` for verification, and the pre-existing ignored July 27 generated Android bundle remains for the distribution/rotation decision above.
+- Baseline commit: `e764f92`
+- `HEAD` and `origin/main`: `e764f92e07c923a8ad8de649af7b119a57676144`
+- Audit edits: 34 uncommitted mobile paths plus one coordinated uncommitted
+  moderation-website path.
+- Temporary moderation export/test artifacts were removed after verification.
+  Any older ignored game-audit bundles remain outside this update and were not
+  modified.
 - Final `git diff --check`: passed
 - Deployed during audit: **nothing**
 - EAS build created: **no**
@@ -1124,7 +1190,8 @@ Final `git status --short` is intentionally dirty and contains the same 85 paths
 
 ### Owner decisions required before the verdict can change
 
-1. Establish and prove a real staffed moderation/removal/sanction/escalation workflow.
+1. Deploy and prove the locally implemented moderation/removal/sanction/appeal
+   workflow with staffed response coverage, MFA, and production alerts.
 2. Define block semantics for shared friend groups and safety-critical team communication.
 3. Approve adult/minimum-age, child-data authorization, Terms/Guidelines assent, and Kids Category posture with qualified legal review.
 4. Approve data-retention/deletion periods for reports, messages/audio, logs, backups and residual records.

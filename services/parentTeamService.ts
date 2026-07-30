@@ -278,10 +278,12 @@ async function resolveCoachName(team: Team): Promise<{
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): ParentTeamAnnouncement {
   const voice = normalizeVoiceMessageFields(data);
+  const isModerated = data.moderationState === "hidden" ||
+    data.moderationState === "removed";
   return {
     id,
-    title: readString(data.title) ?? "",
-    body: readString(data.body) ?? "",
+    title: isModerated ? "" : readString(data.title) ?? "",
+    body: isModerated ? "" : readString(data.body) ?? "",
     createdBy: readString(data.createdBy) ?? "",
     createdByName: formatPublicUserName(readString(data.createdByName)) ?? "",
     audience: data.audience === "staff"
@@ -291,8 +293,9 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): Paren
         : "parents",
     allowReplies: data.allowReplies !== false,
     contentType: voice.contentType,
-    voiceMemo: voice.voiceMemo,
-    isDeleted: data.isDeleted === true,
+    voiceMemo: isModerated ? null : voice.voiceMemo,
+    isDeleted: isModerated || data.isDeleted === true,
+    isModerated,
     deletedBy: readString(data.deletedBy),
     deletedAt: data.deletedAt,
     createdAt: data.createdAt,

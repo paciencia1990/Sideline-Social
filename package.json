@@ -58,6 +58,7 @@
     "test:legal-release": "node scripts/test-legal-release-config.cjs",
     "test:ios-release": "node scripts/test-ios-release-core.cjs",
     "test:emulator:account-deletion": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-account-deletion-functions-test --only auth,database,firestore,functions \"node scripts/test-account-deletion-functions-emulator.cjs\"",
+    "test:emulator:account-standing": "npm --prefix functions run build && npx.cmd firebase-tools@latest emulators:exec --project sideline-account-standing-test --only auth,database,firestore,functions,storage \"node scripts/test-account-standing-emulator.cjs\"",
     "test:team-messages": "npm --prefix functions run build && node scripts/test-team-voice-private-core.cjs",
     "test:firestore:team-messages": "firebase.cmd emulators:exec --only firestore \"node scripts/test-team-messages-firestore-rules.cjs\"",
     "test:storage:team-voice": "firebase.cmd emulators:exec --project sideline-team-voice-storage-rules-test --only firestore,storage \"node scripts/test-team-voice-storage-rules.cjs\"",

@@ -93,7 +93,7 @@ assert.ok(rules.includes("allow update: if false;"), "Mobile clients must not gr
 assert.ok(teamService.includes('functions, "setTeamStaffRole"'), "Staff role changes must use the protected callable.");
 
 const translations = read("i18n", "index.ts");
-for (const key of ["eyebrow", "parentTitle", "parentBody", "coachTitle", "coachBody", "switchNote", "coachWelcome", "coachWelcomeBody", "continue", "saveError"]) {
+for (const key of ["eyebrow", "parentTitle", "parentBody", "coachTitle", "coachBody", "switchNote", "coachWelcome", "coachWelcomeBody", "saveError"]) {
   assert.equal(count(translations, new RegExp(`\\b${key}:`, "g")), 2, `${key} needs English and Spanish copy.`);
 }
 

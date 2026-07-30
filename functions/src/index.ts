@@ -25,7 +25,12 @@ import {
   classifyFriendsCallableUnexpectedError,
   toSafeFriendsCallableError,
 } from './friendsCallableErrorCore';
-import { permanentAccountFunctions } from './permanentAuth';
+import {
+  accountCanCommunicate,
+  accountCanUseApp,
+  permanentAccountFunctions,
+  requireAccountCapability,
+} from './permanentAuth';
 import {
   friendRequestIdFor,
   friendRequestExpiresAtMillis,
@@ -126,6 +131,10 @@ import {
 import { readSeasonEligibleSquadIds } from './squadSeason';
 
 const functions = permanentAccountFunctions(firebaseFunctions);
+const communicationFunctions = permanentAccountFunctions(
+  firebaseFunctions,
+  "communication",
+);
 
 export {
   createSquadSeason,
@@ -155,6 +164,11 @@ export {
 export { generateCoachResourceHelp } from './coachResourceHelp';
 export { deleteOwnAccount } from './accountDeletion';
 export { reportTeamContent } from './contentModeration';
+export {
+  getMyAccountStanding,
+  onAccountStandingChanged,
+  submitMyModerationAppeal,
+} from './accountStanding';
 export {
   cleanupExpiredGameJoinCodes,
   createGameJoinCode,
@@ -229,6 +243,11 @@ type PersonalNotificationInput = {
 
 async function createPersonalNotificationAndPush(input: PersonalNotificationInput) {
   if (!input.recipientUserId || !input.eventId) return false;
+  if (!await accountCanUseApp(input.recipientUserId)) return false;
+  if (
+    input.actorUserId &&
+    !await accountCanCommunicate(input.actorUserId)
+  ) return false;
   const firestore = admin.firestore();
   const notificationRef = firestore
     .collection('userNotifications')
@@ -270,6 +289,13 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
   });
 
   if (!created) return false;
+  if (
+    !await accountCanUseApp(input.recipientUserId) ||
+    (input.actorUserId && !await accountCanCommunicate(input.actorUserId))
+  ) {
+    await notificationRef.delete();
+    return false;
+  }
   const results = await Promise.allSettled([
     sendPushToUser(input.recipientUserId, {
       ...input.pushData,
@@ -631,7 +657,7 @@ async function findLegacyVenueSportCandidate(input: {
 
 // A venue-and-sport key is the canonical Squad identity. The deterministic
 // document ID makes concurrent creation of the same combination race-safe.
-export const findOrCreateVenueSportSquad = functions.https.onCall(async (data, context) => {
+export const findOrCreateVenueSportSquad = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to create a Squad.');
   const venueName = readCallableVenueName(data?.venueName);
@@ -739,7 +765,7 @@ export const findOrCreateVenueSportSquad = functions.https.onCall(async (data, c
   return { squadId: canonicalSquadId, status };
 });
 
-export const joinVenueSportSquad = functions.https.onCall(async (data, context) => {
+export const joinVenueSportSquad = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to join a Squad.');
   const squadId = readCallableSquadId(data?.squadId);
@@ -843,7 +869,7 @@ export const setSelectedSquad = functions.https.onCall(async (data, context) => 
   });
 });
 
-export const refreshSquadPresence = functions.https.onCall(async (_data, context) => {
+export const refreshSquadPresence = communicationFunctions.https.onCall(async (_data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to update Squad presence.');
   const firestore = admin.firestore();
@@ -1288,7 +1314,7 @@ export const getActiveFriendRequests = functions.https.onCall(async (_data, cont
   },
 ));
 
-export const sendFriendRequest = functions.https.onCall(async (data, context) => {
+export const sendFriendRequest = communicationFunctions.https.onCall(async (data, context) => {
   const senderUserId = context.auth?.uid;
   if (!senderUserId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to send a friend request.');
 
@@ -1405,7 +1431,7 @@ export const sendFriendRequest = functions.https.onCall(async (data, context) =>
   return { requestId, status: result.status };
 });
 
-export const respondToFriendRequest = functions.https.onCall(async (data, context) => {
+export const respondToFriendRequest = communicationFunctions.https.onCall(async (data, context) => {
   const userId = context.auth?.uid;
   if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to respond to a friend request.');
   const requestId = typeof data?.requestId === 'string' ? data.requestId.trim() : '';
@@ -1483,7 +1509,7 @@ export const respondToFriendRequest = functions.https.onCall(async (data, contex
   return { status: result.status, alreadyHandled: result.alreadyHandled };
 });
 
-export const cancelFriendRequest = functions.https.onCall(async (data, context) => {
+export const cancelFriendRequest = communicationFunctions.https.onCall(async (data, context) => {
   const userId = context.auth?.uid;
   if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to cancel a friend request.');
   const requestId = typeof data?.requestId === 'string' ? data.requestId.trim() : '';
@@ -1774,7 +1800,7 @@ export const deactivateInactiveMembers = functions.pubsub
 // and client-provided scores without authentication or idempotency. The only
 // active game award entry point is finalizeGameReward below.
 
-export const createGameRewardSession = functions.https.onCall(async (data, context) => {
+export const createGameRewardSession = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in before starting a rewarded game.');
   const gameType = readLocalRewardGameType(data?.gameType);
@@ -1839,7 +1865,7 @@ export const createGameRewardSession = functions.https.onCall(async (data, conte
   return result;
 });
 
-export const recordGameSessionResult = functions.https.onCall(async (data, context) => {
+export const recordGameSessionResult = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to finish this game.');
   const gameType = readLocalRewardGameType(data?.gameType);
@@ -1965,7 +1991,7 @@ export const recordGameSessionResult = functions.https.onCall(async (data, conte
   });
 });
 
-export const finalizeGameReward = functions.https.onCall(async (data, context) => {
+export const finalizeGameReward = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to receive Sideline Stars.');
   const gameType = readRewardGameType(data?.gameType);
@@ -2157,7 +2183,7 @@ export const getCurrentWeeklyChallenge = functions.https.onCall(async (data, con
   return { challenge: serializeWeeklyChallenge(assignment, nextWeekKey) };
 });
 
-export const completeWeeklyChallenge = functions.https.onCall(async (data, context) => {
+export const completeWeeklyChallenge = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to complete your weekly challenge.');
   const weekKey = typeof data?.weekKey === 'string' ? data.weekKey : '';
@@ -2338,6 +2364,7 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
   .document('teams/{teamId}/announcements/{announcementId}')
   .onCreate(async (snapshot, context) => {
     const announcement = snapshot.data();
+    if (contentIsModerated(announcement) || announcement.isDeleted === true) return null;
     let audience: ReturnType<typeof readAnnouncementAudience>;
     try {
       audience = readAnnouncementAudience(announcement.audience);
@@ -2352,6 +2379,7 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
     if (!teamSnapshot.exists || !isTeamActive(teamSnapshot.data())) return null;
 
     const authorUserId = typeof announcement.createdBy === 'string' ? announcement.createdBy : '';
+    if (!authorUserId || !await accountCanCommunicate(authorUserId)) return null;
     const storedRecipientUserIds = storedAnnouncementRecipientUserIds(announcement.recipientUserIds);
     const recipientUserIds = storedRecipientUserIds ?? resolveAnnouncementRecipientUserIds(
       teamAnnouncementMembers(await firestore.collection('teams').doc(teamId).collection('members')
@@ -2406,6 +2434,12 @@ const teamMessagingFunctions = functions.region('us-central1').runWith({
   timeoutSeconds: 30,
   memory: '256MB',
 });
+const communicationTeamMessagingFunctions = communicationFunctions
+  .region('us-central1')
+  .runWith({
+    timeoutSeconds: 30,
+    memory: '256MB',
+  });
 const TEAM_VOICE_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 const TEAM_VOICE_SIGNED_URL_MS = 5 * 60 * 1000;
 
@@ -2439,7 +2473,7 @@ function isEligiblePrivateTeamParent(
     !isActiveBlockSnapshot(blockedByParent);
 }
 
-export const getTeamAnnouncementRecipientCounts = teamMessagingFunctions.https.onCall(async (data, context) => {
+export const getTeamAnnouncementRecipientCounts = communicationTeamMessagingFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
@@ -2466,7 +2500,7 @@ export const getTeamAnnouncementRecipientCounts = teamMessagingFunctions.https.o
   }
 });
 
-export const getEligiblePrivateTeamParents = teamMessagingFunctions.https.onCall(async (data, context) => {
+export const getEligiblePrivateTeamParents = communicationTeamMessagingFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
@@ -2517,7 +2551,7 @@ export const getEligiblePrivateTeamParents = teamMessagingFunctions.https.onCall
   }
 });
 
-export const getOrCreatePrivateTeamConversation = teamMessagingFunctions.https.onCall(async (data, context) => {
+export const getOrCreatePrivateTeamConversation = communicationTeamMessagingFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
@@ -2633,7 +2667,7 @@ export const getOrCreatePrivateTeamConversation = teamMessagingFunctions.https.o
   }
 });
 
-export const sendPrivateTeamTextMessage = teamMessagingFunctions.https.onCall(async (data, context) => {
+export const sendPrivateTeamTextMessage = communicationTeamMessagingFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
@@ -2659,7 +2693,7 @@ export const sendPrivateTeamTextMessage = teamMessagingFunctions.https.onCall(as
   }
 });
 
-export const createTeamVoiceMemoUpload = teamMessagingFunctions.https.onCall(async (data, context) => {
+export const createTeamVoiceMemoUpload = communicationTeamMessagingFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
@@ -2739,7 +2773,7 @@ export const createTeamVoiceMemoUpload = teamMessagingFunctions.https.onCall(asy
   }
 });
 
-export const finalizeTeamVoiceAnnouncement = teamMessagingFunctions.https.onCall(async (data, context) => {
+export const finalizeTeamVoiceAnnouncement = communicationTeamMessagingFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
@@ -2798,7 +2832,7 @@ export const finalizeTeamVoiceAnnouncement = teamMessagingFunctions.https.onCall
   }
 });
 
-export const finalizePrivateTeamVoiceMessage = teamMessagingFunctions.https.onCall(async (data, context) => {
+export const finalizePrivateTeamVoiceMessage = communicationTeamMessagingFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
@@ -3113,6 +3147,7 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
         if (
           !announcementSnapshot.exists ||
           announcement?.isDeleted === true ||
+          contentIsModerated(announcement) ||
           announcement?.voiceMemo?.storagePath !== storagePath ||
         !canAccessTeamAnnouncement(memberSnapshot.data(), announcement?.audience)
       ) {
@@ -3132,6 +3167,7 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
           !messageSnapshot.exists ||
           hiddenSnapshot.exists ||
           messageSnapshot.data()?.isDeleted === true ||
+          contentIsModerated(messageSnapshot.data()) ||
           messageSnapshot.data()?.voiceMemo?.storagePath !== storagePath ||
         !isExplicitConversationParticipant(conversationSnapshot.data(), uid)
       ) {
@@ -3216,6 +3252,7 @@ export const streamTeamVoiceMemo = teamMessagingFunctions.https.onRequest(async 
     }
 
     const userId = readRequiredIdentifier(grant?.userId, 'invalid_playback_grant');
+    await requireAccountCapability(userId, 'app');
     const storagePath = readBoundedText(grant?.storagePath, 1, 1024, 'invalid_playback_grant');
     const storageReference = parseTeamVoiceStoragePath(storagePath);
     if (
@@ -3351,6 +3388,7 @@ async function canStreamGrantedTeamVoiceMemo(
     return Boolean(
       announcementSnapshot.exists &&
       announcement?.isDeleted !== true &&
+      !contentIsModerated(announcement) &&
       announcement?.voiceMemo?.storagePath === storagePath &&
       canAccessTeamAnnouncement(memberSnapshot.data(), announcement?.audience),
     );
@@ -3374,9 +3412,15 @@ async function canStreamGrantedTeamVoiceMemo(
     messageSnapshot.exists &&
     !hiddenSnapshot.exists &&
     message?.isDeleted !== true &&
+    !contentIsModerated(message) &&
     message?.voiceMemo?.storagePath === storagePath &&
     isExplicitConversationParticipant(conversationSnapshot.data(), userId),
   );
+}
+
+function contentIsModerated(value: FirebaseFirestore.DocumentData | undefined) {
+  return value?.moderationState === 'hidden' ||
+    value?.moderationState === 'removed';
 }
 
 function parseVoiceByteRange(value: string | undefined, sizeBytes: number) {
@@ -3827,7 +3871,7 @@ export const syncPublicUserProfile = functions.firestore
     return null;
   });
 
-export const updatePublicUserProfile = functions.https.onCall(async (data, context) => {
+export const updatePublicUserProfile = communicationFunctions.https.onCall(async (data, context) => {
   const userId = context.auth?.uid;
   if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to update your profile.');
   const firstName = typeof data?.firstName === 'string' ? data.firstName : '';
@@ -4010,7 +4054,7 @@ async function enforcePublicUserSearchRateLimit(userId: string) {
   }
 }
 
-export const searchPublicUserProfiles = functions.https.onCall(async (data, context) => runFriendsCallable(
+export const searchPublicUserProfiles = communicationFunctions.https.onCall(async (data, context) => runFriendsCallable(
   'searchPublicUserProfiles',
   context.auth?.uid,
   async (setValidationStage) => {
@@ -4164,7 +4208,7 @@ export const searchPublicUserProfiles = functions.https.onCall(async (data, cont
   },
 ));
 
-export const getSuggestedConnections = functions.https.onCall(async (data, context) => runFriendsCallable(
+export const getSuggestedConnections = communicationFunctions.https.onCall(async (data, context) => runFriendsCallable(
   'getSuggestedConnections',
   context.auth?.uid,
   async (setValidationStage) => {
@@ -4334,7 +4378,7 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
 // author, timestamp, or role-based deletion permission.
 // ---------------------------------------------------------------------------
 
-export const createTeamAnnouncement = teamMessagingFunctions.https.onCall(async (data, context) => {
+export const createTeamAnnouncement = communicationTeamMessagingFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to create an announcement.');
   try {
@@ -4389,7 +4433,7 @@ export const createTeamAnnouncement = teamMessagingFunctions.https.onCall(async 
   }
 });
 
-export const createTeamAnnouncementReply = functions.https.onCall(async (data, context) => {
+export const createTeamAnnouncementReply = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to reply.');
 
@@ -4530,7 +4574,7 @@ function readReplyPathId(value: unknown, label: string): string {
 // prohibit clients from listing or querying the teams collection.
 // ---------------------------------------------------------------------------
 
-export const joinParentTeamByInviteCode = functions.https.onCall(async (data, context) => {
+export const joinParentTeamByInviteCode = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to join a team.');
 
@@ -4649,7 +4693,7 @@ export const joinParentTeamByInviteCode = functions.https.onCall(async (data, co
 
 // Staff access is a team-scoped secondary role. The authenticated caller is
 // always taken from context.auth; requester identity is never client supplied.
-export const setTeamStaffRole = functions.https.onCall(async (data, context) => {
+export const setTeamStaffRole = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to manage team staff.');
 
@@ -4720,7 +4764,7 @@ export const setTeamStaffRole = functions.https.onCall(async (data, context) => 
   });
 });
 
-export const setParentTeamChildLinks = functions.https.onCall(async (data, context) => {
+export const setParentTeamChildLinks = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to update team children.');
   const teamId = typeof data?.teamId === 'string' ? data.teamId.trim() : '';
@@ -4861,7 +4905,7 @@ export const leaveParentTeam = functions.https.onCall(async (data, context) => {
   });
 });
 
-export const setTeamArchived = functions.https.onCall(async (data, context) => {
+export const setTeamArchived = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to manage a team.');
   const teamId = typeof data?.teamId === 'string' ? data.teamId.trim() : '';

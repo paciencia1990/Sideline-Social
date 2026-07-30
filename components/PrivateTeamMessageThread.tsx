@@ -337,7 +337,11 @@ export function PrivateTeamMessageThread({
                 </View>
                 {message.isDeleted ? (
                   <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>
-                    {mine ? t("teamMessages.youDeletedMessage") : t("teamMessages.messageDeleted")}
+                    {message.isModerated
+                      ? t("teamMessages.contentRemoved")
+                      : mine
+                        ? t("teamMessages.youDeletedMessage")
+                        : t("teamMessages.messageDeleted")}
                   </Text>
                 ) : message.contentType === "voice" && message.voiceMemo ? (
                   <VoiceMemoPlayer

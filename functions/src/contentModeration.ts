@@ -8,7 +8,7 @@ import { canAccessTeamAnnouncement, isTeamActive } from './teamMembershipCore';
 import { isExplicitConversationParticipant } from './teamVoiceMessagingCore';
 import { permanentAccountFunctions } from './permanentAuth';
 
-const functions = permanentAccountFunctions(firebaseFunctions);
+const functions = permanentAccountFunctions(firebaseFunctions, "safety");
 
 type ReportKind = 'announcement' | 'announcementReply' | 'privateTeamMessage';
 type ReportReason = 'offensive' | 'harassment' | 'privacy' | 'spam' | 'other';

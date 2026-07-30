@@ -15,13 +15,41 @@ service firebase.storage {
       return authenticated() && !anonymousAuth();
     }
 
+    function standingPath() {
+      return /databases/(default)/documents/accountStanding/$(request.auth.uid);
+    }
+
+    function hasCurrentStanding() {
+      return signedIn() &&
+        firestore.exists(standingPath()) &&
+        (
+          !("expiresAt" in firestore.get(standingPath()).data) ||
+          !(firestore.get(standingPath()).data.expiresAt is timestamp) ||
+          firestore.get(standingPath()).data.expiresAt > request.time
+        );
+    }
+
+    function canCommunicate() {
+      return signedIn() &&
+        (
+          !hasCurrentStanding() ||
+          (
+            firestore.get(standingPath()).data.status == "active" &&
+            (
+              !("messagingRestricted" in firestore.get(standingPath()).data) ||
+              firestore.get(standingPath()).data.messagingRestricted != true
+            )
+          )
+        );
+    }
+
     function reservation(reservationId) {
       return firestore.get(/databases/(default)/documents/teamVoiceUploadReservations/$(reservationId)).data;
     }
 
     function validVoiceUpload(reservationId, teamId, kind, targetId) {
       let upload = reservation(reservationId);
-      return signedIn() &&
+      return canCommunicate() &&
         upload.status == "pending" &&
         upload.userId == request.auth.uid &&
         upload.teamId == teamId &&

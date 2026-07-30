@@ -24,6 +24,10 @@ import { resolveSelectionAfterLeave } from './squadCore';
 import { sendPushToUser } from './pushNotificationDelivery';
 
 const functions = permanentAccountFunctions(firebaseFunctions);
+const communicationFunctions = permanentAccountFunctions(
+  firebaseFunctions,
+  "communication",
+);
 const MAX_ACTIVE_MEMBERS = 250;
 // Each invitation may also update one notification in the same atomic batch.
 // Keeping this at 200 stays safely below Firestore's 500-write batch limit.
@@ -393,7 +397,7 @@ export const getSquadAdministration = functions.https.onCall(async (data, contex
   };
 });
 
-export const inviteSquadAdmin = functions.https.onCall(async (data, context) => {
+export const inviteSquadAdmin = communicationFunctions.https.onCall(async (data, context) => {
   const userId = authenticatedUserId(context);
   const squadId = readId(data?.squadId, 'Squad reference');
   const targetUserId = readId(data?.targetUserId, 'member reference');
@@ -463,7 +467,7 @@ export const inviteSquadAdmin = functions.https.onCall(async (data, context) => 
   return { status: 'pending' as const, invitationId: result.invitationId };
 });
 
-export const respondToSquadAdminInvitation = functions.https.onCall(async (data, context) => {
+export const respondToSquadAdminInvitation = communicationFunctions.https.onCall(async (data, context) => {
   const userId = authenticatedUserId(context);
   const squadId = readId(data?.squadId, 'Squad reference');
   const decision = data?.decision === 'accept' || data?.decision === 'decline' ? data.decision : null;
@@ -539,7 +543,7 @@ export const respondToSquadAdminInvitation = functions.https.onCall(async (data,
   return { status: result.outcome };
 });
 
-export const cancelSquadAdminInvitation = functions.https.onCall(async (data, context) => {
+export const cancelSquadAdminInvitation = communicationFunctions.https.onCall(async (data, context) => {
   const userId = authenticatedUserId(context);
   const squadId = readId(data?.squadId, 'Squad reference');
   const targetUserId = readId(data?.targetUserId, 'member reference');
@@ -572,7 +576,7 @@ export const cancelSquadAdminInvitation = functions.https.onCall(async (data, co
   return { status: result.status };
 });
 
-export const removeSquadAdmin = functions.https.onCall(async (data, context) => {
+export const removeSquadAdmin = communicationFunctions.https.onCall(async (data, context) => {
   const userId = authenticatedUserId(context);
   const squadId = readId(data?.squadId, 'Squad reference');
   const targetUserId = readId(data?.targetUserId, 'member reference');
@@ -667,7 +671,7 @@ export const leaveVenueSportSquad = functions.https.onCall(async (data, context)
   return { squadId, status: 'left' as const, selectedSquadId: result.selectedSquadId };
 });
 
-export const requestSquadAdminAccess = functions.https.onCall(async (data, context) => {
+export const requestSquadAdminAccess = communicationFunctions.https.onCall(async (data, context) => {
   const userId = authenticatedUserId(context);
   const squadId = readId(data?.squadId, 'Squad reference');
   const db = firestore();
@@ -713,7 +717,7 @@ export const requestSquadAdminAccess = functions.https.onCall(async (data, conte
   return { status: 'pending' as const, requestId };
 });
 
-export const reviewSquadAdminAccessRequest = functions.https.onCall(async (data, context) => {
+export const reviewSquadAdminAccessRequest = communicationFunctions.https.onCall(async (data, context) => {
   authenticatedUserId(context);
   if (context.auth?.token.admin !== true && context.auth?.token.platformAdmin !== true) {
     throw new functions.https.HttpsError('permission-denied', 'Trusted platform administrator access is required.');

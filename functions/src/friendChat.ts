@@ -9,7 +9,11 @@ import { friendRequestIdFor } from './friendRequestCore';
 import { resolveFriendRequestNotification } from './friendRequestNotifications';
 import { sendPushToUser } from './pushNotificationDelivery';
 import { assertUserContentAllowed } from './contentSafety';
-import { permanentAccountFunctions } from './permanentAuth';
+import {
+  accountCanCommunicate,
+  accountCanUseApp,
+  permanentAccountFunctions,
+} from './permanentAuth';
 import {
   CHAT_SEND_COOLDOWN_MS,
   MAX_CHAT_PARTICIPANTS,
@@ -27,6 +31,10 @@ import {
 
 const functions = permanentAccountFunctions(firebaseFunctions);
 const chatFunctions = functions.region('us-central1');
+const communicationFunctions = permanentAccountFunctions(firebaseFunctions, "communication");
+const communicationChatFunctions = communicationFunctions.region('us-central1');
+const safetyFunctions = permanentAccountFunctions(firebaseFunctions, "safety");
+const safetyChatFunctions = safetyFunctions.region('us-central1');
 const firestore = () => admin.firestore();
 
 type ConversationData = admin.firestore.DocumentData & {
@@ -134,7 +142,7 @@ async function getBlockSnapshots(
   return snapshots.some((snapshot) => snapshot.exists);
 }
 
-export const createOrOpenDirectConversation = chatFunctions.https.onCall(async (data, context) => {
+export const createOrOpenDirectConversation = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const friendUserId = normalizeChatUserId(data?.friendUserId);
   if (!friendUserId) invalid('A valid friendUserId is required.');
@@ -221,7 +229,7 @@ export const createOrOpenDirectConversation = chatFunctions.https.onCall(async (
   });
 });
 
-export const createFriendGroupConversation = chatFunctions.https.onCall(async (data, context) => {
+export const createFriendGroupConversation = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const requestedIds = Array.isArray(data?.friendUserIds) ? data.friendUserIds : null;
   if (!requestedIds) invalid('friendUserIds must be an array.');
@@ -295,7 +303,7 @@ export const createFriendGroupConversation = chatFunctions.https.onCall(async (d
   return { conversationId, invitedCount: friendUserIds.length };
 });
 
-export const respondToFriendGroupInvitation = chatFunctions.https.onCall(async (data, context) => {
+export const respondToFriendGroupInvitation = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   const response = data?.response;
@@ -330,7 +338,7 @@ export const respondToFriendGroupInvitation = chatFunctions.https.onCall(async (
   });
 });
 
-export const inviteFriendsToGroupConversation = chatFunctions.https.onCall(async (data, context) => {
+export const inviteFriendsToGroupConversation = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   if (!conversationId || !Array.isArray(data?.friendUserIds)) invalid('Conversation and friends are required.');
@@ -395,7 +403,7 @@ export const inviteFriendsToGroupConversation = chatFunctions.https.onCall(async
   return { invitedCount: invitations.length };
 });
 
-export const renameFriendGroupConversation = chatFunctions.https.onCall(async (data, context) => {
+export const renameFriendGroupConversation = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   if (!conversationId) invalid('Conversation required.');
@@ -412,7 +420,7 @@ export const renameFriendGroupConversation = chatFunctions.https.onCall(async (d
   return { groupName };
 });
 
-export const setFriendGroupAdminRole = chatFunctions.https.onCall(async (data, context) => {
+export const setFriendGroupAdminRole = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   const memberUserId = normalizeChatUserId(data?.memberUserId);
@@ -435,7 +443,7 @@ export const setFriendGroupAdminRole = chatFunctions.https.onCall(async (data, c
   return { updated: true };
 });
 
-export const transferFriendGroupOwnership = chatFunctions.https.onCall(async (data, context) => {
+export const transferFriendGroupOwnership = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   const memberUserId = normalizeChatUserId(data?.memberUserId);
@@ -460,7 +468,7 @@ export const transferFriendGroupOwnership = chatFunctions.https.onCall(async (da
   return { transferred: true };
 });
 
-export const removeFriendGroupMember = chatFunctions.https.onCall(async (data, context) => {
+export const removeFriendGroupMember = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   const memberUserId = normalizeChatUserId(data?.memberUserId);
@@ -531,7 +539,7 @@ export const markFriendConversationRead = chatFunctions.https.onCall(async (data
   return { markedRead: true };
 });
 
-export const sendFriendChatMessage = chatFunctions.https.onCall(async (data, context) => {
+export const sendFriendChatMessage = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   const clientMessageId = normalizeClientMessageId(data?.clientMessageId);
@@ -616,7 +624,7 @@ export const removeOwnFriendChatMessage = chatFunctions.https.onCall(async (data
   return { removed: true };
 });
 
-export const blockFriendChatUser = chatFunctions.https.onCall(async (data, context) => {
+export const blockFriendChatUser = safetyChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const blockedUserId = normalizeChatUserId(data?.blockedUserId);
   if (!blockedUserId || blockedUserId === uid) invalid('A different user is required.');
@@ -661,7 +669,7 @@ export const getBlockedFriendChatUserIds = chatFunctions.https.onCall(async (_da
   return { blockedUserIds: snapshot.docs.map((document) => document.id) };
 });
 
-export const unblockFriendChatUser = chatFunctions.https.onCall(async (data, context) => {
+export const unblockFriendChatUser = safetyChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const blockedUserId = normalizeChatUserId(data?.blockedUserId);
   if (!blockedUserId || blockedUserId === uid) invalid('A blocked user is required.');
@@ -669,7 +677,7 @@ export const unblockFriendChatUser = chatFunctions.https.onCall(async (data, con
   return { unblocked: true };
 });
 
-export const reportFriendChatUser = chatFunctions.https.onCall(async (data, context) => {
+export const reportFriendChatUser = safetyChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const reportedUserId = normalizeChatUserId(data?.reportedUserId);
   const conversationId = normalizeConversationId(data?.conversationId);
@@ -682,7 +690,7 @@ export const reportFriendChatUser = chatFunctions.https.onCall(async (data, cont
   return { reportId: ref.id, reported: true };
 });
 
-export const reportFriendChatMessage = chatFunctions.https.onCall(async (data, context) => {
+export const reportFriendChatMessage = safetyChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   const messageId = normalizeConversationId(data?.messageId);
@@ -713,6 +721,8 @@ async function createGroupInvitationNotification(
   conversationId: string,
   invitation: { userId: string; invitationId: string; inviterUserId: string; inviterName: string; groupName: string | null },
 ) {
+  if (!await accountCanCommunicate(invitation.inviterUserId) ||
+    !await accountCanUseApp(invitation.userId)) return;
   const eventId = `chatGroupInvitation_${conversationId}_${invitation.invitationId}`;
   const ref = firestore().collection('userNotifications').doc(invitation.userId).collection('notifications').doc(eventId);
   const created = await firestore().runTransaction(async (transaction) => {
@@ -731,6 +741,11 @@ async function createGroupInvitationNotification(
     return true;
   });
   if (!created) return;
+  if (!await accountCanCommunicate(invitation.inviterUserId) ||
+    !await accountCanUseApp(invitation.userId)) {
+    await ref.delete();
+    return;
+  }
   await sendPushToUser(
     invitation.userId,
     { type: 'chatGroupInvitation', conversationId, notificationId: eventId },
@@ -740,6 +755,7 @@ async function createGroupInvitationNotification(
 
 async function sendMessagePushes(conversationId: string, senderUserId: string, text: string, conversationType: 'direct' | 'group') {
   try {
+    if (!await accountCanCommunicate(senderUserId)) return;
     const [conversation, members] = await Promise.all([
       conversationRef(conversationId).get(),
       conversationRef(conversationId).collection('members').where('status', '==', 'active').limit(MAX_CHAT_PARTICIPANTS).get(),
@@ -752,6 +768,7 @@ async function sendMessagePushes(conversationId: string, senderUserId: string, t
         blockRef(senderUserId, member.id).get(), blockRef(member.id, senderUserId).get(),
       ]);
       if (blockedBySender.exists || blockedByRecipient.exists) return;
+      if (!await accountCanCommunicate(senderUserId)) return;
       await sendPushToUser(
         member.id,
         { type: 'friendChatMessage', conversationId, conversationType },

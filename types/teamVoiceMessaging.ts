@@ -44,6 +44,7 @@ export type TeamPrivateMessage = {
   caption: string | null;
   voiceMemo: StoredVoiceMemo | null;
   isDeleted: boolean;
+  isModerated: boolean;
   deletedBy: string | null;
   deletedAt?: unknown;
   createdAt?: unknown;

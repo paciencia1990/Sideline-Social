@@ -14,10 +14,40 @@ service cloud.firestore {
         request.auth.token.firebase.sign_in_provider == "anonymous";
     }
 
-    // Sideline Social has no accountless gameplay flow. A Firebase anonymous
-    // token is authenticated cryptographically, but it is not a social account.
-    function signedIn() {
+    function permanentSignedIn() {
       return authenticated() && !anonymousAuth();
+    }
+
+    function accountStandingPath(userId) {
+      return /databases/$(database)/documents/accountStanding/$(userId);
+    }
+
+    function hasCurrentStandingRecord(userId) {
+      return exists(accountStandingPath(userId)) &&
+        (
+          !("expiresAt" in get(accountStandingPath(userId)).data) ||
+          !(get(accountStandingPath(userId)).data.expiresAt is timestamp) ||
+          get(accountStandingPath(userId)).data.expiresAt > request.time
+        );
+    }
+
+    // Missing and expired standing records are active. Suspensions and bans
+    // fail closed for every ordinary social read/write.
+    function signedIn() {
+      return permanentSignedIn() &&
+        (
+          !hasCurrentStandingRecord(request.auth.uid) ||
+          get(accountStandingPath(request.auth.uid)).data.status == "active"
+        );
+    }
+
+    function canCommunicate() {
+      return signedIn() &&
+        (
+          !hasCurrentStandingRecord(request.auth.uid) ||
+          !("messagingRestricted" in get(accountStandingPath(request.auth.uid)).data) ||
+          get(accountStandingPath(request.auth.uid)).data.messagingRestricted != true
+        );
     }
 
     function isSelf(userId) {
@@ -75,7 +105,7 @@ service cloud.firestore {
     }
 
     function isSessionHost(sessionId) {
-      return signedIn() &&
+      return canCommunicate() &&
         sessionExists(sessionId) &&
         sessionData(sessionId).expiresAt is timestamp &&
         sessionData(sessionId).expiresAt > request.time &&
@@ -93,7 +123,7 @@ service cloud.firestore {
     }
 
     function isSessionPlayer(sessionId) {
-      return signedIn() &&
+      return canCommunicate() &&
         sessionExists(sessionId) &&
         sessionData(sessionId).expiresAt is timestamp &&
         sessionData(sessionId).expiresAt > request.time &&
@@ -236,20 +266,23 @@ service cloud.firestore {
       allow get: if isSelf(userId);
       allow list: if false;
       allow create: if isSelf(userId) &&
+        canCommunicate() &&
         (!("sidelineStars" in request.resource.data) || request.resource.data.sidelineStars == 0) &&
         (!("squadIds" in request.resource.data) || (
           request.resource.data.squadIds is list && request.resource.data.squadIds.size() == 0
         )) &&
         (!("selectedSquadId" in request.resource.data) || request.resource.data.selectedSquadId == null);
       allow update: if isSelf(userId) &&
+        canCommunicate() &&
         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          "squadIds", "selectedSquadId", "sidelineStars"
+          "accountStanding", "squadIds", "selectedSquadId", "sidelineStars"
         ]);
       allow delete: if false;
 
       match /children/{childId} {
         allow get, list: if isSelf(userId);
         allow create: if isSelf(userId) &&
+          canCommunicate() &&
           request.resource.data.keys().hasOnly(["displayName", "createdAt", "updatedAt"]) &&
           request.resource.data.keys().hasAll(["displayName", "createdAt", "updatedAt"]) &&
           request.resource.data.displayName is string &&
@@ -258,6 +291,7 @@ service cloud.firestore {
           request.resource.data.createdAt is timestamp &&
           request.resource.data.updatedAt is timestamp;
         allow update: if isSelf(userId) &&
+          canCommunicate() &&
           request.resource.data.keys().hasOnly(["displayName", "createdAt", "updatedAt"]) &&
           request.resource.data.createdAt == resource.data.createdAt &&
           request.resource.data.displayName is string &&
@@ -459,7 +493,7 @@ service cloud.firestore {
       allow get: if isTeamMember(teamId);
       allow list: if false;
 
-      allow create: if signedIn() &&
+      allow create: if canCommunicate() &&
         request.resource.data.createdBy == request.auth.uid &&
         request.resource.data.status == "active" &&
         request.resource.data.coachIds is list &&
@@ -468,7 +502,8 @@ service cloud.firestore {
         request.resource.data.parentIds is list &&
         request.resource.data.parentIds.size() == 0;
 
-      allow update: if isTeamCoach(teamId) &&
+      allow update: if canCommunicate() &&
+        isTeamCoach(teamId) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           "name", "sport", "ageRange", "division", "season", "leagueId", "squadId", "updatedAt"
         ]);
@@ -478,7 +513,7 @@ service cloud.firestore {
         allow get: if isSelf(userId) || isCoachStaff(teamId);
         allow list: if isCoachStaff(teamId);
 
-        allow create: if signedIn() &&
+        allow create: if canCommunicate() &&
           request.resource.data.userId == userId &&
           request.resource.data.teamId == teamId &&
           request.resource.data.status == "active" &&
@@ -609,6 +644,57 @@ service cloud.firestore {
           allow write: if false;
         }
       }
+    }
+
+    // Canonical standing and moderation records are server-only. The separate
+    // self-readable projection contains no moderator identity, evidence, notes,
+    // action path, reporter information, or child data.
+    match /accountStanding/{userId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /accountStandingPublic/{userId} {
+      allow get: if permanentSignedIn() && request.auth.uid == userId;
+      allow list, create, update, delete: if false;
+    }
+
+    match /moderationCases/{caseId} {
+      allow read, create, update, delete: if false;
+      match /{document=**} {
+        allow read, create, update, delete: if false;
+      }
+    }
+
+    match /moderationEvidence/{caseId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationAuditEvents/{eventId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationAlerts/{alertId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationPlaybackGrants/{grantId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationIdempotency/{requestId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationRateLimits/{rateLimitId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderatorDirectory/{userId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /userEnforcements/{userId}/{document=**} {
+      allow read, create, update, delete: if false;
     }
 
     // -----------------------------------------------------------------------

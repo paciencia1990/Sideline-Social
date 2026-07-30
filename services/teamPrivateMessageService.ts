@@ -329,6 +329,8 @@ async function hydrateConversationNames(conversations: TeamPrivateConversation[]
 
 function normalizeMessage(id: string, data: Record<string, unknown>): TeamPrivateMessage {
   const voice = normalizeVoiceMessageFields(data);
+  const isModerated = data.moderationState === "hidden" ||
+    data.moderationState === "removed";
   return {
     id,
     conversationId: readString(data.conversationId),
@@ -336,10 +338,11 @@ function normalizeMessage(id: string, data: Record<string, unknown>): TeamPrivat
     senderUserId: voice.senderUserId,
     senderRole: data.senderRole === "coach" ? "coach" : "parent",
     contentType: voice.contentType,
-    text: typeof data.text === "string" ? data.text : null,
-    caption: voice.caption,
-    voiceMemo: voice.voiceMemo,
-    isDeleted: data.isDeleted === true,
+    text: isModerated ? null : typeof data.text === "string" ? data.text : null,
+    caption: isModerated ? null : voice.caption,
+    voiceMemo: isModerated ? null : voice.voiceMemo,
+    isDeleted: data.isDeleted === true || isModerated,
+    isModerated,
     deletedBy: typeof data.deletedBy === "string" ? data.deletedBy : null,
     deletedAt: data.deletedAt,
     createdAt: data.createdAt,

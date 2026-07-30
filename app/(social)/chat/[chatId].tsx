@@ -205,7 +205,11 @@ function MessageBubble({ message, isMine, onActions }: { message: FriendChatMess
   const sender = isMine
     ? t("chat.you")
     : message.senderDisplayName || t(message.senderProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember");
-  const text = message.status === "removed" ? t("chat.messageRemoved") : message.text;
+  const text = message.isModerated
+    ? t("teamMessages.contentRemoved")
+    : message.status === "removed"
+      ? t("chat.messageRemoved")
+      : message.text;
   return <View accessibilityLabel={t("chat.messageAccessibility", { sender, text, time })} style={[styles.messageRow, isMine && styles.mineRow]}><View style={[styles.bubble, isMine && styles.mineBubble]}>{!isMine && message.senderDisplayName ? <Text style={styles.sender}>{message.senderDisplayName}</Text> : null}<View style={styles.messageTop}><Text style={[styles.messageText, isMine && styles.mineText, message.status === "removed" && styles.removed]}>{text}</Text>{message.status === "active" ? <TouchableOpacity accessibilityLabel={t("teamMessages.messageActions")} accessibilityRole="button" onPress={onActions} style={styles.messageMenu}><MoreHorizontal accessible={false} color={isMine ? Colors.surface : Colors.primary} size={20} /></TouchableOpacity> : null}</View><Text style={[styles.time, isMine && styles.mineTime]}>{time}</Text></View></View>;
 }
 

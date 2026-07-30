@@ -9,7 +9,7 @@ import { hasCoachAccess, isTeamActive } from './teamMembershipCore';
 import { deleteTeamAnnouncementData } from './teamAnnouncementDeletionCore';
 import { permanentAccountFunctions } from './permanentAuth';
 
-const functions = permanentAccountFunctions(firebaseFunctions);
+const functions = permanentAccountFunctions(firebaseFunctions, "safety");
 
 type DeletionSummary = {
   deletedDocuments: number;

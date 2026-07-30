@@ -18,7 +18,12 @@ async function run() {
     await Promise.all([
       admin.database().ref('gameSessions/session-a').set({
         sessionId: 'session-a', gameType: 'bomb_defusal', squadId: 'squad-a', hostUserId: 'host',
-        players: { host: { displayName: 'Host', isReady: false }, player: { displayName: 'Player', isReady: false } },
+        players: {
+          host: { displayName: 'Host', isReady: false },
+          player: { displayName: 'Player', isReady: false },
+          restricted: { displayName: 'Restricted', isReady: false },
+          suspended: { displayName: 'Suspended', isReady: false },
+        },
         status: 'lobby',
         expiresAt: Date.now() + 60_000,
       }),
@@ -54,6 +59,16 @@ async function run() {
         expiresAt: now + 600_000,
       }),
       admin.database().ref('sessions/legacy').set({ joinCode: 'LOCAL' }),
+      admin.database().ref('accountStanding/suspended').set({
+        status: 'suspended',
+        expiresAt: now + 60_000,
+        revision: 1,
+      }),
+      admin.database().ref('accountStanding/restricted').set({
+        status: 'messagingRestricted',
+        expiresAt: null,
+        revision: 1,
+      }),
     ]);
     const permanentClaims = { firebase: { sign_in_provider: 'password' } };
     const anonymousClaims = { firebase: { sign_in_provider: 'anonymous' } };
@@ -61,6 +76,8 @@ async function run() {
     const playerDb = testEnv.authenticatedContext('player', permanentClaims).database();
     const outsiderDb = testEnv.authenticatedContext('outsider', permanentClaims).database();
     const anonymousDb = testEnv.authenticatedContext('anonymous-player', anonymousClaims).database();
+    const suspendedDb = testEnv.authenticatedContext('suspended', permanentClaims).database();
+    const restrictedDb = testEnv.authenticatedContext('restricted', permanentClaims).database();
     const signedOutDb = testEnv.unauthenticatedContext().database();
 
     await assertSucceeds(get(ref(hostDb, 'gameSessions/session-a')));
@@ -68,6 +85,8 @@ async function run() {
     await assertFails(get(ref(outsiderDb, 'gameSessions/session-a')));
     await assertFails(get(ref(anonymousDb, 'gameSessions/session-a')));
     await assertFails(get(ref(signedOutDb, 'gameSessions/session-a')));
+    await assertFails(get(ref(suspendedDb, 'gameSessions/session-a')));
+    await assertFails(get(ref(restrictedDb, 'gameSessions/session-a')));
     await assertFails(get(ref(hostDb, 'gameSessions/session-expired')));
     await assertFails(get(ref(playerDb, 'gameSessions/session-expired/players/player')));
     await assertFails(get(ref(hostDb, 'gameSessions/session-legacy-sequence')));

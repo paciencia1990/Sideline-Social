@@ -5,7 +5,7 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import * as firebaseFunctions from 'firebase-functions';
 
 import { formatPublicUserName, resolvePublicProfileName } from './friendSuggestionCore';
-import { permanentAccountFunctions } from './permanentAuth';
+import { accountCanCommunicate, permanentAccountFunctions } from './permanentAuth';
 import { LEADERBOARD_RESPONSE_LIMIT, getSidelineStarsTier, normalizeStars } from './sidelineStarsCore';
 import {
   addCalendarDays,
@@ -26,6 +26,8 @@ import { getSportDisplayName, normalizeSportId } from './squadCore';
 
 const functions = permanentAccountFunctions(firebaseFunctions);
 const regionalFunctions = functions.region('us-central1');
+const communicationFunctions = permanentAccountFunctions(firebaseFunctions, 'communication');
+const communicationRegionalFunctions = communicationFunctions.region('us-central1');
 const MAX_ELIGIBLE_SQUADS = 25;
 
 type SquadData = FirebaseFirestore.DocumentData & {
@@ -447,7 +449,7 @@ export async function synchronizeSquadSeasonStates(squadId: string, now = Timest
   });
 }
 
-export const createSquadSeason = regionalFunctions.https.onCall(async (data, context) => {
+export const createSquadSeason = communicationRegionalFunctions.https.onCall(async (data, context) => {
   const squadId = readSquadId(data?.squadId);
   const access = await assertSquadAccess({ context, squadId, requireAdmin: true });
   const idempotencyKey = readIdempotencyKey(data?.idempotencyKey);
@@ -540,7 +542,7 @@ export const createSquadSeason = regionalFunctions.https.onCall(async (data, con
   return result;
 });
 
-export const updateSquadSeason = regionalFunctions.https.onCall(async (data, context) => {
+export const updateSquadSeason = communicationRegionalFunctions.https.onCall(async (data, context) => {
   const squadId = readSquadId(data?.squadId);
   const seasonId = readSeasonId(data?.seasonId);
   const access = await assertSquadAccess({ context, squadId, requireAdmin: true });
@@ -638,7 +640,7 @@ export const updateSquadSeason = regionalFunctions.https.onCall(async (data, con
   });
 });
 
-export const endSquadSeason = regionalFunctions.https.onCall(async (data, context) => {
+export const endSquadSeason = communicationRegionalFunctions.https.onCall(async (data, context) => {
   const squadId = readSquadId(data?.squadId);
   const seasonId = readSeasonId(data?.seasonId);
   const access = await assertSquadAccess({ context, squadId, requireAdmin: true });
@@ -940,6 +942,9 @@ export async function projectRewardRecord(
 ) {
   const reward = readTrustedReward(rewardId, data);
   if (!reward) return { status: 'ignored' as const, projectedCount: 0 };
+  if (!await accountCanCommunicate(userId)) {
+    return { status: 'restricted' as const, projectedCount: 0 };
+  }
   const results = await Promise.all(reward.seasonEligibleSquadIds
     .map((squadId) => projectRewardToSquad(userId, reward, squadId)));
   return {

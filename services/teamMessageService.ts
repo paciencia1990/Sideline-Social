@@ -31,6 +31,7 @@ export type TeamAnnouncement = {
   contentType: "text" | "voice";
   voiceMemo: StoredVoiceMemo | null;
   isDeleted: boolean;
+  isModerated: boolean;
   deletedBy: string | null;
   deletedAt?: unknown;
   createdAt?: unknown;
@@ -45,6 +46,7 @@ export type AnnouncementReply = {
   body: string;
   replyType: ReplyType;
   isDeleted: boolean;
+  isModerated: boolean;
   deletedBy: string | null;
   deletedAt?: unknown;
   createdAt?: unknown;
@@ -266,6 +268,7 @@ export async function replyToAnnouncement(
     createdAt: new Date(response.data.reply.createdAtMillis),
     deletedBy: null,
     isDeleted: false,
+    isModerated: false,
   } satisfies AnnouncementReply;
 }
 
@@ -306,17 +309,19 @@ function requireUser() {
 
 function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamAnnouncement {
   const voice = normalizeVoiceMessageFields(data);
+  const isModerated = contentIsModerated(data);
   return {
     id,
-    title: readString(data.title),
-    body: readString(data.body),
+    title: isModerated ? "" : readString(data.title),
+    body: isModerated ? "" : readString(data.body),
     createdBy: readString(data.createdBy),
     createdByName: formatPublicUserName(readString(data.createdByName)) ?? "",
     audience: readAudience(data.audience),
     allowReplies: data.allowReplies !== false,
     contentType: voice.contentType,
-    voiceMemo: voice.voiceMemo,
-    isDeleted: data.isDeleted === true,
+    voiceMemo: isModerated ? null : voice.voiceMemo,
+    isDeleted: data.isDeleted === true || isModerated,
+    isModerated,
     deletedBy: readNullableString(data.deletedBy),
     deletedAt: data.deletedAt,
     createdAt: data.createdAt,
@@ -325,13 +330,15 @@ function normalizeAnnouncement(id: string, data: Record<string, unknown>): TeamA
 }
 
 function normalizeReply(id: string, data: Record<string, unknown>): AnnouncementReply {
+  const isModerated = contentIsModerated(data);
   return {
     id,
     userId: readString(data.userId),
     displayName: formatPublicUserName(readString(data.displayName)) ?? "",
-    body: readString(data.body),
+    body: isModerated ? "" : readString(data.body),
     replyType: data.replyType === "privateToCoach" ? "privateToCoach" : "team",
-    isDeleted: data.isDeleted === true,
+    isDeleted: data.isDeleted === true || isModerated,
+    isModerated,
     deletedBy: readNullableString(data.deletedBy),
     deletedAt: data.deletedAt,
     createdAt: data.createdAt,
@@ -357,6 +364,10 @@ async function resolveReplyDisplayNames(replies: AnnouncementReply[]) {
       displayName: resolveSafeDisplayName(reply.displayName, ""),
     }));
   }
+}
+
+function contentIsModerated(data: Record<string, unknown>) {
+  return data.moderationState === "hidden" || data.moderationState === "removed";
 }
 
 async function resolveAnnouncementDisplayNames(announcements: TeamAnnouncement[]) {

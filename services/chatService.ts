@@ -85,6 +85,7 @@ export type FriendChatMessage = {
   createdAt: Date | null;
   createdAtTimestamp: Timestamp | null;
   status: "active" | "removed";
+  isModerated: boolean;
   clientMessageId: string | null;
 };
 
@@ -167,16 +168,19 @@ function toMember(document: { id: string; data: () => DocumentData | undefined }
 
 function toMessage(document: QueryDocumentSnapshot<DocumentData>): FriendChatMessage {
   const data = document.data();
+  const isModerated = data.moderationState === "hidden" ||
+    data.moderationState === "removed";
   return {
     messageId: document.id,
     conversationId: typeof data.conversationId === "string" ? data.conversationId : "",
     messageType: data.messageType === "system" ? "system" : "text",
     senderUserId: typeof data.senderUserId === "string" ? data.senderUserId : null,
     senderDisplayName: safeName(data.senderDisplayName) || null,
-    text: typeof data.text === "string" ? data.text : "",
+    text: isModerated ? "" : typeof data.text === "string" ? data.text : "",
     createdAt: toDate(data.createdAt as FirestoreDate),
     createdAtTimestamp: data.createdAt && typeof data.createdAt.toDate === "function" ? data.createdAt as Timestamp : null,
-    status: data.status === "removed" ? "removed" : "active",
+    status: isModerated || data.status === "removed" ? "removed" : "active",
+    isModerated,
     clientMessageId: typeof data.clientMessageId === "string" ? data.clientMessageId : null,
   };
 }

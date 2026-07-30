@@ -8,7 +8,7 @@ import { permanentAccountFunctions, requirePermanentUid } from './permanentAuth'
 import { resolveCanonicalPublicName } from './publicUserProfileCore';
 import rawTriviaQuestions from './triviaQuestions.json';
 
-const functions = permanentAccountFunctions(firebaseFunctions);
+const functions = permanentAccountFunctions(firebaseFunctions, "communication");
 const DEFAULT_QUESTION_COUNT = 10;
 const MIN_PLAYERS = 2;
 const QUESTION_DURATION_MS = 15_000;

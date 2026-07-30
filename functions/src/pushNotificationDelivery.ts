@@ -3,6 +3,8 @@ import * as https from 'node:https';
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
+import { accountCanUseApp } from './permanentAuth';
+
 const EXPO_PUSH_HOST = 'exp.host';
 const EXPO_SEND_PATH = '/--/api/v2/push/send';
 const EXPO_RECEIPTS_PATH = '/--/api/v2/push/getReceipts';
@@ -22,6 +24,7 @@ export async function sendPushToUser(
   data: PushData,
   androidChannelId: 'coach-updates' | 'chat-messages' = 'coach-updates',
 ) {
+  if (!await accountCanUseApp(uid)) return;
   const snapshot = await admin.firestore().collection('notificationTokens').where('uid', '==', uid).limit(20).get();
   await sendPushToTokenDocuments(snapshot.docs, data, androidChannelId);
 }

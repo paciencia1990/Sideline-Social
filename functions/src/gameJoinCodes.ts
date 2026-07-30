@@ -18,7 +18,7 @@ import { resolveJoinableGameSession } from './gameJoinSessionState';
 import { permanentAccountFunctions } from './permanentAuth';
 import { resolveCanonicalPublicName } from './publicUserProfileCore';
 
-const functions = permanentAccountFunctions(firebaseFunctions);
+const functions = permanentAccountFunctions(firebaseFunctions, "communication");
 const JOIN_CODE_TTL_MS = 2 * 60 * 60 * 1000;
 const JOIN_ATTEMPT_WINDOW_MS = 60 * 1000;
 const JOIN_ATTEMPT_LIMIT = 12;
