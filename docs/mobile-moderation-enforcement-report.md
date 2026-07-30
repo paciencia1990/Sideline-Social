@@ -499,3 +499,93 @@ At report creation:
 - No App Check enforcement changed.
 - No EAS build or App Store action occurred.
 - No commit or push occurred.
+
+## Production Functions and rules deployment - 2026-07-30
+
+Deployment operator and authorization:
+
+- Authorized Firebase account: joannggarcia1@gmail.com.
+- Responsible operator: Joann, available during deployment and immediate monitoring.
+- Firebase project: sideline-squad (903830626771).
+- Blaze/Pay-as-you-go status: confirmed directly by Joann in Firebase Console before deployment.
+- Release commit deployed from mobile repo: 768fc92048b2d92d935739a1ff363971e91c18e5 (Add server-enforced moderation and account restrictions).
+- Deployment start window record: local $stampLocal, $stampUtc.
+
+Preflight checks repeated from the beginning:
+
+- GitHub state: local main matched origin/main; worktree was clean before deployment.
+- Tooling: Node 22.23.1, npm 10.9.8, Firebase CLI 15.25.0.
+- Firebase identity: CLI was logged in as joannggarcia1@gmail.com.
+- Project targeting: .firebaserc default project was sideline-squad; irebase.json targeted Functions runtime 
+odejs22, Firestore rules, Realtime Database rules, and Storage rules.
+- Firebase app/database targets verified: production Android app com.sidelinesquad.app, iOS app com.sidelinesocial.app, RTDB sideline-squad-default-rtdb, Firestore (default) in 
+am7, app storage bucket sideline-squad.firebasestorage.app.
+- Billing CLI verification: gcloud was not installed locally, so billing state was accepted from Joann's direct Firebase Console Blaze confirmation.
+- App Check verification: active source/config contained no initializeAppCheck, enforceAppCheck, or App Check enforcement setting; this deployment did not enable App Check enforcement.
+- Secrets verification: active Functions source contained no active secret bindings; only disabled source under unctions/src/disabled referenced secret names.
+- Functions deletion check: production had 106 Functions, local release exported 120 Functions, and the diff contained 14 additions with zero removals.
+- New Functions created by this release: dvanceTriviaGameSession, createTriviaGameSession, endTriviaGameSession, getMyAccountStanding, getVenueSportSquadDetail, onAccountStandingChanged, esetTriviaGameSession, esumeTriviaGameSession, setRealtimeGamePlayerReady, setTriviaPlayerReady, startTriviaGameSession, submitBombDefusalStep, submitMyModerationAppeal, submitTriviaAnswer.
+- Local Functions export metadata: 120 exports, all us-central1.
+- Functions dry run: completed successfully with no deletion prompt. Non-blocking CLI warning noted that a newer major irebase-functions package is available; the deployed release remained on the tested locked dependency set.
+- Rules dry run: RTDB syntax valid, Storage rules compiled, Firestore rules compiled. Non-fatal Firestore warnings remained at lines 107, 111, and 113.
+
+Verification gates run before deployment:
+
+- Root clean install from lockfile: passed.
+- Functions clean install from lockfile: passed.
+- 
+pm --prefix functions run build: passed.
+- 
+pm run typecheck: passed.
+- 
+pm run lint: passed.
+- All 81 registered test scripts passed: 56 core tests, 12 Firestore rules tests, 1 RTDB rules test, and 12 Functions emulator tests.
+
+Production deployment sequence:
+
+1. Deployed Functions first only with --only functions.
+2. Functions deploy completed successfully. It created the 14 new Functions listed above and updated existing Functions. No deletion was shown.
+3. Functions health gate passed before rules deployment:
+   - 120 deployed Functions.
+   - Runtime counts: 120 
+odejs22.
+   - Platform counts: 120 gcfv1.
+   - Region counts: 120 us-central1.
+   - State counts: 120 ACTIVE.
+   - Local/deployed function names matched exactly.
+   - Recent Functions log scan found no runtime error patterns.
+   - Safe unauthenticated callable smoke check against getMyAccountStanding returned UNAUTHENTICATED / uth_required without writing production data.
+4. Deployed only Firestore Rules, Realtime Database Rules, and Storage Rules with --only "firestore:rules,database,storage".
+5. Rules deployment completed successfully:
+   - RTDB rules released to sideline-squad-default-rtdb.
+   - Storage rules released to irebase.storage.
+   - Firestore rules released to cloud.firestore.
+
+Post-deploy monitoring and safe smoke checks:
+
+- Functions inventory remained healthy after rules deployment: 120 active Functions, all 
+odejs22, all gcfv1, all us-central1.
+- Safe callable unauthenticated check returned HTTP 401 with UNAUTHENTICATED.
+- Safe RTDB unauthenticated read check on /users returned HTTP 401 permission denied.
+- Safe Firestore unauthenticated read check on /users returned HTTP 403 forbidden.
+- Safe Storage unauthenticated object-list check returned HTTP 403 permission denied.
+- Final Functions log scan found no recent runtime error patterns.
+- No authenticated production write smoke test was performed because no designated production test account was provided.
+
+Rollback/reference material:
+
+- Previous source-controlled release commit: e764f92e07c923a8ad8de649af7b119a57676144 (Harden game security and iOS release readiness).
+- Temporary rollback worktree created at: C:\Users\joann\AppData\Local\Temp\sideline-rollback-e764f92-20260730183259.
+- Current pre-deploy RTDB rules snapshot saved at: C:\Users\joann\AppData\Local\Temp\sideline-rtdb-rules-before-20260730183259.json.
+- Firestore and Storage CLI readback commands were not available in Firebase CLI 15.25.0; source-controlled rollback remains available via the previous commit and Firebase Console rules history.
+
+Explicitly not deployed or changed:
+
+- No Firebase Hosting deployment.
+- No Firestore indexes deployment.
+- No Authentication configuration deployment.
+- No moderator custom claims or admin claims changed.
+- No MFA configuration changed.
+- No App Check enforcement changed.
+- No moderation writer deployment.
+- No mobile builds, EAS builds, TestFlight builds, Google Play builds, App Store action, or App Store readiness claim.
