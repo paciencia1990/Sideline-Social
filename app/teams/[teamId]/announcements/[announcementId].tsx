@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Keyboard, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { ArrowLeft, MessageCircle, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -56,6 +56,25 @@ export default function ParentAnnouncementScreen() {
   const replySubmissionInFlight = useRef(false);
   const replyDeletionInFlight = useRef(false);
   const acknowledgedNotificationIds = useRef(new Set<string>());
+  const keyboardTopRef = useRef<number | null>(null);
+  const composerBoundaryRef = useRef<View>(null);
+  const composerKeyboardOverlapRef = useRef(0);
+  const [composerKeyboardOverlap, setComposerKeyboardOverlap] = useState(0);
+
+  const updateComposerKeyboardOverlap = useCallback(() => {
+    if (Platform.OS !== "android") return;
+    const keyboardTop = keyboardTopRef.current;
+    if (keyboardTop == null) return;
+    requestAnimationFrame(() => {
+      composerBoundaryRef.current?.measureInWindow((_x, y, _width, height) => {
+        const unadjustedBottom = y + height + composerKeyboardOverlapRef.current;
+        const nextOverlap = Math.max(0, unadjustedBottom - keyboardTop);
+        if (Math.abs(nextOverlap - composerKeyboardOverlapRef.current) < 0.5) return;
+        composerKeyboardOverlapRef.current = nextOverlap;
+        setComposerKeyboardOverlap(nextOverlap);
+      });
+    });
+  }, []);
 
   const loadAnnouncement = useCallback(async () => {
     setLoading(true);
@@ -95,6 +114,23 @@ export default function ParentAnnouncementScreen() {
   useEffect(() => {
     void loadAnnouncement();
   }, [loadAnnouncement]);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return () => {};
+    const showSubscription = Keyboard.addListener("keyboardDidShow", (event) => {
+      keyboardTopRef.current = event.endCoordinates.screenY;
+      updateComposerKeyboardOverlap();
+    });
+    const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+      keyboardTopRef.current = null;
+      composerKeyboardOverlapRef.current = 0;
+      setComposerKeyboardOverlap(0);
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [updateComposerKeyboardOverlap]);
 
   useEffect(() => {
     if (!teamId || !announcementId) return () => {};
@@ -327,50 +363,59 @@ export default function ParentAnnouncementScreen() {
             </Card>
 
             {announcement.allowReplies ? (
-              <Card style={styles.composerCard}>
-                <Text style={styles.sectionTitle}>{t("myTeams.addReply")}</Text>
-                <View style={styles.quickGrid}>
-                  {QUICK_REPLY_IDS.map((quickReplyId) => {
-                    const selected = sendingQuickReplyId === quickReplyId;
-                    const disabled = sending || Boolean(sendingQuickReplyId);
-                    return (
-                      <TouchableOpacity
-                        key={quickReplyId}
-                        accessibilityRole="button"
-                        accessibilityState={{ busy: selected, disabled }}
-                        activeOpacity={0.86}
-                        disabled={disabled}
-                        onPress={() => void sendQuickReply(quickReplyId)}
-                        style={[styles.quickButton, disabled && styles.disabledButton]}
-                      >
-                        {selected
-                          ? <ActivityIndicator color={Colors.primary} size="small" />
-                          : <Text style={styles.quickButtonText}>{t(QUICK_REPLY_TRANSLATION_KEYS[quickReplyId])}</Text>}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                <TextInput
-                  accessibilityLabel={t("myTeams.replyPlaceholder")}
-                  multiline
-                  onChangeText={setReplyBody}
-                  placeholder={t("myTeams.replyPlaceholder")}
-                  placeholderTextColor={Colors.textPrimary}
-                  style={styles.input}
-                  value={replyBody}
-                />
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityState={{ busy: sending, disabled: sending || Boolean(sendingQuickReplyId) || !replyBody.trim() }}
-                  disabled={sending || Boolean(sendingQuickReplyId) || !replyBody.trim()}
-                  onPress={sendReply}
-                  style={[styles.primaryButton, (sending || Boolean(sendingQuickReplyId) || !replyBody.trim()) && styles.disabledButton]}
-                >
-                  {sending
-                    ? <ActivityIndicator color={Colors.surface} />
-                    : <Text style={styles.primaryButtonText}>{t("myTeams.sendReply")}</Text>}
-                </TouchableOpacity>
-              </Card>
+              <View
+                collapsable={false}
+                onLayout={updateComposerKeyboardOverlap}
+                ref={composerBoundaryRef}
+                style={composerKeyboardOverlap > 0 ? { marginBottom: composerKeyboardOverlap } : undefined}
+              >
+                <Card style={styles.composerCard}>
+                  <Text style={styles.sectionTitle}>{t("myTeams.addReply")}</Text>
+                  <View style={styles.quickGrid}>
+                    {QUICK_REPLY_IDS.map((quickReplyId) => {
+                      const selected = sendingQuickReplyId === quickReplyId;
+                      const disabled = sending || Boolean(sendingQuickReplyId);
+                      return (
+                        <TouchableOpacity
+                          key={quickReplyId}
+                          accessibilityRole="button"
+                          accessibilityState={{ busy: selected, disabled }}
+                          activeOpacity={0.86}
+                          disabled={disabled}
+                          onPress={() => void sendQuickReply(quickReplyId)}
+                          style={[styles.quickButton, disabled && styles.disabledButton]}
+                        >
+                          {selected
+                            ? <ActivityIndicator color={Colors.primary} size="small" />
+                            : <Text style={styles.quickButtonText}>{t(QUICK_REPLY_TRANSLATION_KEYS[quickReplyId])}</Text>}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  <TextInput
+                    accessibilityLabel={t("myTeams.replyPlaceholder")}
+                    multiline
+                    onChangeText={setReplyBody}
+                    onContentSizeChange={updateComposerKeyboardOverlap}
+                    onFocus={updateComposerKeyboardOverlap}
+                    placeholder={t("myTeams.replyPlaceholder")}
+                    placeholderTextColor={Colors.textPrimary}
+                    style={styles.input}
+                    value={replyBody}
+                  />
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    accessibilityState={{ busy: sending, disabled: sending || Boolean(sendingQuickReplyId) || !replyBody.trim() }}
+                    disabled={sending || Boolean(sendingQuickReplyId) || !replyBody.trim()}
+                    onPress={sendReply}
+                    style={[styles.primaryButton, (sending || Boolean(sendingQuickReplyId) || !replyBody.trim()) && styles.disabledButton]}
+                  >
+                    {sending
+                      ? <ActivityIndicator color={Colors.surface} />
+                      : <Text style={styles.primaryButtonText}>{t("myTeams.sendReply")}</Text>}
+                  </TouchableOpacity>
+                </Card>
+              </View>
             ) : (
               <Card style={styles.repliesOffCard}>
                 <Text style={styles.cardText}>{t("myTeams.repliesOff")}</Text>
