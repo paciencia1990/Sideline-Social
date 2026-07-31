@@ -63,6 +63,8 @@ async function run() {
     db.collection("users").doc(parent.uid).collection("teamChildLinks").doc("team-1").set({ teamId: "team-1", childIds: ["child-parent"], status: "active" }),
     db.collection("users").doc(joannStaff.uid).collection("teamChildLinks").doc("team-1").set({ teamId: "team-1", childIds: ["child-joann"], status: "active" }),
     db.collection("users").doc(otherParent.uid).collection("teamChildLinks").doc("team-1").set({ teamId: "team-1", childIds: ["child-other"], status: "active" }),
+    db.collection("users").doc(coach.uid).set({ coachTeamIds: ["team-1"] }, { merge: true }),
+    db.collection("users").doc(parent.uid).set({ parentTeamIds: ["team-1"] }, { merge: true }),
   ]);
   await db.collection("teams").doc("team-2").set({ name: "Unrelated Team", createdBy: secondCoach.uid, status: "active" });
   await Promise.all([
@@ -133,10 +135,10 @@ async function run() {
   });
   assert.equal(duplicateReport.alreadyReported, true, "one reporter cannot flood duplicate reports for the same content");
   await Promise.all([
-    db.collection("users").doc(coach.uid).set({ displayName: "Coach C." }),
-    db.collection("users").doc(parent.uid).set({ displayName: "Parent P." }),
-    db.collection("users").doc(joannStaff.uid).set({ displayName: "Staff J." }),
-    db.collection("users").doc(otherParent.uid).set({ displayName: "Parent O." }),
+    db.collection("users").doc(coach.uid).set({ displayName: "Coach C." }, { merge: true }),
+    db.collection("users").doc(parent.uid).set({ displayName: "Parent P." }, { merge: true }),
+    db.collection("users").doc(joannStaff.uid).set({ displayName: "Staff J." }, { merge: true }),
+    db.collection("users").doc(otherParent.uid).set({ displayName: "Parent O." }, { merge: true }),
   ]);
   const parentReply = await parent.call("createTeamAnnouncementReply", {
     teamId: "team-1",
@@ -588,8 +590,9 @@ async function run() {
 
   const coachInbox = await coach.call("getTeamPrivateMessageInbox", { role: "coach" });
   const parentInbox = await parent.call("getTeamPrivateMessageInbox", { role: "parent", teamId: "team-1" });
-  assert.equal(coachInbox.conversations.length, 2);
-  assert.equal(coachInbox.conversations.some((conversation) => conversation.conversationId === blockedConversation.conversationId), true);
+  assert.equal(coachInbox.conversations.length, 1);
+  assert.equal(coachInbox.conversations.some((conversation) => conversation.conversationId === first.conversationId), true);
+  assert.equal(coachInbox.conversations.some((conversation) => conversation.conversationId === blockedConversation.conversationId), false, "read-only blocked conversations stay out of the active coach inbox");
   assert.equal(parentInbox.conversations.length, 2);
   assert.equal(parentInbox.conversations.some((conversation) => conversation.conversationId === first.conversationId), true);
   await parent.call("markPrivateTeamConversationRead", { conversationId: first.conversationId });

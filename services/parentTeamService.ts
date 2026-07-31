@@ -24,7 +24,10 @@ import {
 } from "@/services/childService";
 import { type TeamAnnouncement } from "@/services/teamMessageService";
 import {
+  getArchivedParentTeamCount,
+  getArchivedParentTeamMembershipsPage,
   getParentTeams,
+  removeArchivedParentTeamFromAccount,
   type Team,
   type TeamMembership,
 } from "@/services/teamService";
@@ -65,6 +68,23 @@ export type ParentTeamsOverview = {
   latestTeam: ParentTeamSummary | null;
   latestAnnouncement: ParentTeamAnnouncement | null;
   privateUnreadCount: number;
+};
+
+export type ArchivedParentTeamSummary = {
+  teamId: string;
+  name: string;
+  sport: string;
+  season: string;
+  division: string;
+  ageRange: string;
+  archivedAtDate: Date | null;
+};
+
+export type ArchivedParentTeamsPage = {
+  teams: ArchivedParentTeamSummary[];
+  totalCount: number;
+  hasMore: boolean;
+  nextOffset: number;
 };
 
 export type ChildTeamGroup = {
@@ -113,6 +133,26 @@ export async function getParentTeamSummary(teamId: string): Promise<ParentTeamSu
     throw error;
   }
   return summary;
+}
+
+export async function getParentPastTeamCount(): Promise<number> {
+  return getArchivedParentTeamCount();
+}
+
+export async function getParentPastTeamsPage(offset = 0, pageSize = 8): Promise<ArchivedParentTeamsPage> {
+  const page = await getArchivedParentTeamMembershipsPage(offset, pageSize, { throwOnError: true });
+  return {
+    teams: page.memberships
+      .filter((membership) => membership.team)
+      .map((membership) => toArchivedParentSummary(membership.team!)),
+    totalCount: page.totalCount,
+    hasMore: page.hasMore,
+    nextOffset: page.nextOffset,
+  };
+}
+
+export async function removeParentPastTeam(teamId: string) {
+  return removeArchivedParentTeamFromAccount(teamId);
 }
 
 export function groupParentTeamsByChild(teams: ParentTeamSummary[]): ChildTeamGroup[] {
@@ -310,6 +350,18 @@ function compareTeamSummaries(first: ParentTeamSummary, second: ParentTeamSummar
   const secondChild = second.children[0]?.displayName ?? second.legacyChildName ?? "";
   const childComparison = firstChild.localeCompare(secondChild);
   return childComparison || first.team.name.localeCompare(second.team.name);
+}
+
+function toArchivedParentSummary(team: Team): ArchivedParentTeamSummary {
+  return {
+    teamId: team.id,
+    name: team.name,
+    sport: team.sport,
+    season: team.season,
+    division: team.division,
+    ageRange: team.ageRange,
+    archivedAtDate: readDate(team.archivedAt),
+  };
 }
 
 function readDate(value: unknown): Date | null {

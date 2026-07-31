@@ -84,10 +84,13 @@ import {
   mergeChildIds,
   mergeParentRole,
   normalizeChildIds,
+  parentRemovedArchivedTeam,
   removeParentRole,
   removeChildReference,
   resolveReplyAuthorName,
   setStaffRole,
+  shouldIndexCoachMembership,
+  shouldRestoreArchivedParentMembership,
 } from './teamMembershipCore';
 import {
   TEAM_VOICE_MAX_SIZE_BYTES,
@@ -217,6 +220,8 @@ admin.initializeApp();
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const TEAM_INVITE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const TEAM_ARCHIVE_FANOUT_BATCH_SIZE = 400;
+const TEAM_ARCHIVE_RECONCILE_PAGE_SIZE = 250;
 const DEFAULT_SQUAD_RADIUS_MILES = 2;
 const MAX_SQUAD_RADIUS_MILES = 10;
 const SQUAD_MILES_TO_METERS = 1609.34;
@@ -3073,6 +3078,15 @@ export const getTeamPrivateMessageInbox = teamMessagingFunctions.https.onCall(as
     if (!Number.isInteger(offset) || offset < 0 || offset > 500) throw new Error('invalid_inbox_offset');
     if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) throw new Error('invalid_inbox_page_size');
     const firestore = admin.firestore();
+    const userSnapshot = await firestore.collection('users').doc(uid).get();
+    const activeTeamIds = new Set(readStringArray(
+      requestedRole === 'coach'
+        ? userSnapshot.data()?.coachTeamIds
+        : userSnapshot.data()?.parentTeamIds,
+    ));
+    if (teamId && !activeTeamIds.has(teamId)) {
+      return { conversations: [], hasMore: false, nextOffset: offset };
+    }
     const snapshot = await firestore.collection('teamPrivateConversations')
       .where('participantUserIds', 'array-contains', uid)
       .orderBy('lastMessageAt', 'desc')
@@ -3085,6 +3099,8 @@ export const getTeamPrivateMessageInbox = teamMessagingFunctions.https.onCall(as
       if (!isExplicitConversationParticipant(value, uid)) return false;
       if (requestedRole === 'coach' && value.coachUserId !== uid) return false;
       if (requestedRole === 'parent' && value.parentUserId !== uid) return false;
+      if (value.status === 'readOnly') return false;
+      if (!activeTeamIds.has(String(value.teamId ?? ''))) return false;
       return !teamId || value.teamId === teamId;
     });
     const memberSnapshots = conversations.length > 0
@@ -4919,7 +4935,7 @@ export const setTeamArchived = communicationFunctions.https.onCall(async (data, 
   const requesterRef = teamRef.collection('members').doc(uid);
   const replacementInviteCode = archived ? null : await generateAvailableTeamInviteCode(firestore, teamId);
 
-  return firestore.runTransaction(async (transaction) => {
+  const lifecycle = await firestore.runTransaction(async (transaction) => {
     const [teamSnapshot, requesterSnapshot] = await transaction.getAll(teamRef, requesterRef);
     if (!teamSnapshot.exists) {
       throw new functions.https.HttpsError('not-found', 'Team not found.');
@@ -4934,29 +4950,22 @@ export const setTeamArchived = communicationFunctions.https.onCall(async (data, 
     }
 
     const currentlyActive = isTeamActive(team);
-    if (archived && !currentlyActive) {
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        'Team is already archived.',
-        { reason: 'team-already-archived' },
-      );
-    }
-    if (!archived && currentlyActive) {
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        'Team is already active.',
-        { reason: 'team-already-active' },
-      );
-    }
+    const alreadyDesired = archived ? !currentlyActive : currentlyActive;
 
-    if (archived) {
+    if (!alreadyDesired && archived) {
       transaction.update(teamRef, {
+        inviteCode: null,
         status: 'archived',
         archivedAt: FieldValue.serverTimestamp(),
         archivedBy: uid,
         updatedAt: FieldValue.serverTimestamp(),
       });
-    } else {
+    } else if (archived && typeof team.inviteCode === 'string' && team.inviteCode.trim()) {
+      transaction.update(teamRef, {
+        inviteCode: null,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } else if (!alreadyDesired) {
       transaction.update(teamRef, {
         status: 'active',
         inviteCode: replacementInviteCode,
@@ -4964,14 +4973,319 @@ export const setTeamArchived = communicationFunctions.https.onCall(async (data, 
         restoredBy: uid,
         updatedAt: FieldValue.serverTimestamp(),
       });
+    } else if (!archived && (typeof team.inviteCode !== 'string' || !team.inviteCode.trim())) {
+      transaction.update(teamRef, {
+        inviteCode: replacementInviteCode,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
     }
 
     return {
+      alreadyDesired,
       status: archived ? 'archived' : 'active',
-      inviteCode: archived ? null : replacementInviteCode,
+      inviteCode: archived
+        ? null
+        : alreadyDesired
+          ? typeof team.inviteCode === 'string' ? team.inviteCode : replacementInviteCode
+          : replacementInviteCode,
+    };
+  });
+
+  const fanout = await reconcileTeamLifecycleIndexes(firestore, teamId, archived ? 'archive' : 'restore');
+  const conversations = archived
+    ? await markTeamPrivateConversationsReadOnly(firestore, teamId)
+    : { conversationsReadOnly: 0 };
+  functions.logger.info('team_lifecycle_reconciled', {
+    teamId,
+    requestedBy: uid,
+    targetStatus: lifecycle.status,
+    alreadyDesired: lifecycle.alreadyDesired,
+    ...fanout,
+    ...conversations,
+  });
+
+  return {
+    status: lifecycle.status,
+    inviteCode: lifecycle.inviteCode,
+    reconciliation: {
+      ...fanout,
+      ...conversations,
+    },
+  };
+});
+
+export const removeArchivedParentTeamFromAccount = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to remove a past team.');
+  const teamId = typeof data?.teamId === 'string' ? data.teamId.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(teamId)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid past team is required.', { reason: 'invalid-team' });
+  }
+
+  const firestore = admin.firestore();
+  const teamRef = firestore.collection('teams').doc(teamId);
+  const memberRef = teamRef.collection('members').doc(uid);
+  const userRef = firestore.collection('users').doc(uid);
+  const linkRef = userRef.collection('teamChildLinks').doc(teamId);
+
+  return firestore.runTransaction(async (transaction) => {
+    const [teamSnapshot, memberSnapshot, userSnapshot, linkSnapshot] = await transaction.getAll(
+      teamRef,
+      memberRef,
+      userRef,
+      linkRef,
+    );
+    if (!teamSnapshot.exists) {
+      throw new functions.https.HttpsError('not-found', 'Past team unavailable.', { reason: 'team-unavailable' });
+    }
+    if (isTeamActive(teamSnapshot.data())) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Use Leave Team for active teams.',
+        { reason: 'active-team' },
+      );
+    }
+
+    const member = memberSnapshot.exists ? memberSnapshot.data() : undefined;
+    if (!member) {
+      throw new functions.https.HttpsError('permission-denied', 'Past team unavailable.', { reason: 'membership-unavailable' });
+    }
+
+    const alreadyRemoved = parentRemovedArchivedTeam(member) && !hasParentRole(member);
+    if (!alreadyRemoved && (member.status !== 'active' || !hasParentRole(member))) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Past team unavailable.',
+        { reason: 'parent-membership-inactive' },
+      );
+    }
+
+    const nextMembership = removeParentRole(member.roles, member.role);
+    if (!alreadyRemoved) {
+      transaction.update(memberRef, {
+        roles: nextMembership.roles,
+        role: nextMembership.role,
+        status: nextMembership.status,
+        childId: FieldValue.delete(),
+        childName: FieldValue.delete(),
+        archivedParentRemovedAt: FieldValue.serverTimestamp(),
+        archivedParentRemovedBy: uid,
+        parentArchivedRemovalState: 'removed',
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      transaction.update(teamRef, {
+        parentIds: FieldValue.arrayRemove(uid),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    transaction.set(linkRef, {
+      teamId,
+      childIds: [],
+      status: 'archivedRemoved',
+      archivedParentRemovedAt: FieldValue.serverTimestamp(),
+      createdAt: linkSnapshot.exists
+        ? linkSnapshot.data()?.createdAt ?? FieldValue.serverTimestamp()
+        : FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    const userUpdate: Record<string, unknown> = {
+      archivedParentTeamIds: FieldValue.arrayRemove(teamId),
+      parentTeamIds: FieldValue.arrayRemove(teamId),
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    if (nextMembership.status === 'active') {
+      userUpdate.coachTeamIds = FieldValue.arrayRemove(teamId);
+      userUpdate.archivedCoachTeamIds = FieldValue.arrayUnion(teamId);
+    }
+    if (userSnapshot.data()?.activeTeamId === teamId) {
+      userUpdate.activeTeamId = FieldValue.delete();
+    }
+    transaction.set(userRef, userUpdate, { merge: true });
+
+    return {
+      removed: true,
+      roles: {
+        parent: false,
+        coach: nextMembership.roles.coach === true,
+        staff: nextMembership.roles.staff === true,
+      },
+      status: nextMembership.status,
+      teamId,
     };
   });
 });
+
+type TeamLifecycleMode = 'archive' | 'restore';
+
+async function reconcileTeamLifecycleIndexes(
+  firestore: FirebaseFirestore.Firestore,
+  teamId: string,
+  mode: TeamLifecycleMode,
+) {
+  const teamRef = firestore.collection('teams').doc(teamId);
+  let lastDocument: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+  let parentIndexesUpdated = 0;
+  let coachIndexesUpdated = 0;
+  let skippedRemovedParents = 0;
+  let missingUsers = 0;
+  let scannedMembers = 0;
+
+  for (;;) {
+    let membersQuery = teamRef
+      .collection('members')
+      .orderBy(admin.firestore.FieldPath.documentId())
+      .limit(TEAM_ARCHIVE_RECONCILE_PAGE_SIZE);
+    if (lastDocument) membersQuery = membersQuery.startAfter(lastDocument);
+
+    const membersSnapshot = await membersQuery.get();
+    if (membersSnapshot.empty) break;
+
+    const userSnapshots = await firestore.getAll(...membersSnapshot.docs.map((memberDocument) =>
+      firestore.collection('users').doc(memberDocument.id),
+    ));
+    for (let index = 0; index < membersSnapshot.docs.length; index += TEAM_ARCHIVE_FANOUT_BATCH_SIZE) {
+      const batch = firestore.batch();
+      let hasWrites = false;
+      const memberChunk = membersSnapshot.docs.slice(index, index + TEAM_ARCHIVE_FANOUT_BATCH_SIZE);
+      memberChunk.forEach((memberDocument, chunkIndex) => {
+        const userSnapshot = userSnapshots[index + chunkIndex];
+        scannedMembers += 1;
+        if (!userSnapshot?.exists) {
+          missingUsers += 1;
+          return;
+        }
+        const member = memberDocument.data();
+        const userUpdate = buildTeamLifecycleUserIndexUpdate(
+          teamId,
+          member,
+          userSnapshot.data() ?? {},
+          mode,
+        );
+        if (!userUpdate) return;
+        if (userUpdate.countsParent) parentIndexesUpdated += 1;
+        if (userUpdate.countsCoach) coachIndexesUpdated += 1;
+        if (userUpdate.skippedRemovedParent) skippedRemovedParents += 1;
+        const { countsCoach, countsParent, skippedRemovedParent, ...update } = userUpdate;
+        batch.set(userSnapshot.ref, update, { merge: true });
+        hasWrites = true;
+      });
+      if (hasWrites) await batch.commit();
+    }
+
+    lastDocument = membersSnapshot.docs[membersSnapshot.docs.length - 1] ?? null;
+    if (membersSnapshot.size < TEAM_ARCHIVE_RECONCILE_PAGE_SIZE) break;
+  }
+
+  return {
+    coachIndexesUpdated,
+    missingUsers,
+    parentIndexesUpdated,
+    scannedMembers,
+    skippedRemovedParents,
+  };
+}
+
+function buildTeamLifecycleUserIndexUpdate(
+  teamId: string,
+  member: Record<string, unknown>,
+  user: Record<string, unknown>,
+  mode: TeamLifecycleMode,
+): (Record<string, unknown> & {
+  countsCoach?: boolean;
+  countsParent?: boolean;
+  skippedRemovedParent?: boolean;
+}) | null {
+  if (member.status !== 'active') return null;
+  const update: Record<string, unknown> & {
+    countsCoach?: boolean;
+    countsParent?: boolean;
+    skippedRemovedParent?: boolean;
+  } = {
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  if (member.status !== 'active') {
+    if (mode === 'restore' && parentRemovedArchivedTeam(member)) {
+      update.archivedParentTeamIds = FieldValue.arrayRemove(teamId);
+      update.parentTeamIds = FieldValue.arrayRemove(teamId);
+      update.skippedRemovedParent = true;
+      return update;
+    }
+    return null;
+  }
+  const isCoachIndexed = shouldIndexCoachMembership(member);
+  const isParentRestorable = shouldRestoreArchivedParentMembership(member);
+
+  if (mode === 'archive') {
+    if (hasParentRole(member)) {
+      update.parentTeamIds = FieldValue.arrayRemove(teamId);
+      update.archivedParentTeamIds = FieldValue.arrayUnion(teamId);
+      update.countsParent = true;
+    }
+    if (isCoachIndexed) {
+      update.coachTeamIds = FieldValue.arrayRemove(teamId);
+      update.archivedCoachTeamIds = FieldValue.arrayUnion(teamId);
+      update.countsCoach = true;
+    }
+    if (user.activeTeamId === teamId) update.activeTeamId = FieldValue.delete();
+  } else {
+    update.archivedParentTeamIds = FieldValue.arrayRemove(teamId);
+    update.archivedCoachTeamIds = FieldValue.arrayRemove(teamId);
+    if (isParentRestorable) {
+      update.parentTeamIds = FieldValue.arrayUnion(teamId);
+      update.countsParent = true;
+    } else if (parentRemovedArchivedTeam(member)) {
+      update.parentTeamIds = FieldValue.arrayRemove(teamId);
+      update.skippedRemovedParent = true;
+    }
+    if (isCoachIndexed) {
+      update.coachTeamIds = FieldValue.arrayUnion(teamId);
+      update.countsCoach = true;
+    }
+  }
+
+  return Object.keys(update).length > 1 ? update : null;
+}
+
+async function markTeamPrivateConversationsReadOnly(
+  firestore: FirebaseFirestore.Firestore,
+  teamId: string,
+) {
+  let lastDocument: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+  let conversationsReadOnly = 0;
+
+  for (;;) {
+    let conversationsQuery = firestore.collection('teamPrivateConversations')
+      .where('teamId', '==', teamId)
+      .orderBy(admin.firestore.FieldPath.documentId())
+      .limit(TEAM_ARCHIVE_RECONCILE_PAGE_SIZE);
+    if (lastDocument) conversationsQuery = conversationsQuery.startAfter(lastDocument);
+
+    const snapshot = await conversationsQuery.get();
+    if (snapshot.empty) break;
+    for (let index = 0; index < snapshot.docs.length; index += TEAM_ARCHIVE_FANOUT_BATCH_SIZE) {
+      const batch = firestore.batch();
+      let hasWrites = false;
+      snapshot.docs.slice(index, index + TEAM_ARCHIVE_FANOUT_BATCH_SIZE).forEach((document) => {
+        if (document.data().status === 'readOnly') return;
+        conversationsReadOnly += 1;
+        batch.update(document.ref, {
+          status: 'readOnly',
+          archivedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        hasWrites = true;
+      });
+      if (hasWrites) await batch.commit();
+    }
+
+    lastDocument = snapshot.docs[snapshot.docs.length - 1] ?? null;
+    if (snapshot.size < TEAM_ARCHIVE_RECONCILE_PAGE_SIZE) break;
+  }
+
+  return { conversationsReadOnly };
+}
 
 export const deleteChildProfile = functions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;

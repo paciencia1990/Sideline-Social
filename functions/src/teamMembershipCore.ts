@@ -27,6 +27,25 @@ export function hasParentRole(data: Record<string, unknown> | undefined): boolea
   return Boolean(data && resolveTeamRoleFlags(data.roles, data.role).parent);
 }
 
+export function parentRemovedArchivedTeam(data: Record<string, unknown> | undefined): boolean {
+  return Boolean(data && (
+    data.archivedParentRemovedAt ||
+    data.archivedParentRemovedBy ||
+    data.parentArchivedRemovalState === 'removed'
+  ));
+}
+
+export function shouldRestoreArchivedParentMembership(data: Record<string, unknown> | undefined): boolean {
+  return Boolean(data &&
+    data.status === 'active' &&
+    hasParentRole(data) &&
+    !parentRemovedArchivedTeam(data));
+}
+
+export function shouldIndexCoachMembership(data: Record<string, unknown> | undefined): boolean {
+  return Boolean(data && data.status === 'active' && hasCoachAccess(data));
+}
+
 export function hasActiveTeamChildRelationship(
   member: Record<string, unknown> | undefined,
   link: Record<string, unknown> | undefined,

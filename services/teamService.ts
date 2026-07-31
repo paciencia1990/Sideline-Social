@@ -29,6 +29,13 @@ export type TeamLookupOptions = {
   throwOnError?: boolean;
 };
 
+export type TeamMembershipPage = {
+  memberships: TeamMembership[];
+  totalCount: number;
+  hasMore: boolean;
+  nextOffset: number;
+};
+
 export type TeamChildInput = {
   childIds?: string[];
 };
@@ -200,6 +207,56 @@ function readIndexedTeamIds(data: Record<string, unknown>) {
   ]);
 }
 
+async function getIndexedTeamCount(field: "archivedCoachTeamIds" | "archivedParentTeamIds") {
+  const user = auth.currentUser;
+  if (!user) return 0;
+  const userSnapshot = await getDoc(doc(db, "users", user.uid));
+  if (!userSnapshot.exists()) return 0;
+  return uniqueStrings(readStringArray(userSnapshot.data()[field])).length;
+}
+
+async function getIndexedTeamMembershipsPage(
+  field: "archivedCoachTeamIds" | "archivedParentTeamIds",
+  offset: number,
+  pageSize: number,
+  options: TeamLookupOptions,
+): Promise<TeamMembershipPage> {
+  const user = auth.currentUser;
+  if (!user) return { memberships: [], totalCount: 0, hasMore: false, nextOffset: 0 };
+
+  const safeOffset = Number.isInteger(offset) && offset > 0 ? offset : 0;
+  const safePageSize = Number.isInteger(pageSize) ? Math.min(Math.max(pageSize, 1), 25) : 10;
+
+  try {
+    const userSnapshot = await getDoc(doc(db, "users", user.uid));
+    if (!userSnapshot.exists()) return { memberships: [], totalCount: 0, hasMore: false, nextOffset: 0 };
+
+    const teamIds = uniqueStrings(readStringArray(userSnapshot.data()[field]));
+    const pageIds = teamIds.slice(safeOffset, safeOffset + safePageSize);
+    const results = await Promise.allSettled(
+      pageIds.map((teamId) => getIndexedMembership(teamId, user.uid, options)),
+    );
+    const memberships = results
+      .filter((result): result is PromiseFulfilledResult<TeamMembership | null> => result.status === "fulfilled")
+      .map((result) => result.value)
+      .filter((membership): membership is TeamMembership => Boolean(membership));
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (options.throwOnError && memberships.length === 0 && failed) throw failed.reason;
+
+    const nextOffset = safeOffset + pageIds.length;
+    return {
+      memberships,
+      totalCount: teamIds.length,
+      hasMore: nextOffset < teamIds.length,
+      nextOffset,
+    };
+  } catch (error) {
+    logMembershipLookupIssue(error, field);
+    if (options.throwOnError) throw error;
+    return { memberships: [], totalCount: 0, hasMore: false, nextOffset: safeOffset };
+  }
+}
+
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.filter((value) => value.trim())));
 }
@@ -223,6 +280,36 @@ export async function getCoachTeams(): Promise<TeamMembership[]> {
 export async function getParentTeams(options: TeamLookupOptions = {}): Promise<TeamMembership[]> {
   const memberships = await getCurrentUserTeamMemberships(options);
   return memberships.filter((membership) => hasTeamRole(membership, "parent") && isTeamActive(membership.team));
+}
+
+export async function getArchivedParentTeamCount(): Promise<number> {
+  return getIndexedTeamCount("archivedParentTeamIds");
+}
+
+export async function getArchivedCoachTeamCount(): Promise<number> {
+  return getIndexedTeamCount("archivedCoachTeamIds");
+}
+
+export async function getArchivedParentTeamMembershipsPage(
+  offset = 0,
+  pageSize = 10,
+  options: TeamLookupOptions = {},
+): Promise<TeamMembershipPage> {
+  const page = await getIndexedTeamMembershipsPage("archivedParentTeamIds", offset, pageSize, options);
+  const memberships = page.memberships.filter((membership) =>
+    hasTeamRole(membership, "parent") && membership.team?.status === "archived");
+  return { ...page, memberships };
+}
+
+export async function getArchivedCoachTeamMembershipsPage(
+  offset = 0,
+  pageSize = 10,
+  options: TeamLookupOptions = {},
+): Promise<TeamMembershipPage> {
+  const page = await getIndexedTeamMembershipsPage("archivedCoachTeamIds", offset, pageSize, options);
+  const memberships = page.memberships.filter((membership) =>
+    hasCoachAccess(membership) && membership.team?.status === "archived");
+  return { ...page, memberships };
 }
 
 export async function createTeam(input: TeamInput): Promise<Team> {
@@ -340,6 +427,20 @@ export async function leaveParentTeam(teamId: string) {
   return {
     roles: resolveTeamRoles(response.data.roles, null),
     status: readMemberStatus(response.data.status),
+  };
+}
+
+export async function removeArchivedParentTeamFromAccount(teamId: string) {
+  const callable = httpsCallable<
+    { teamId: string },
+    { removed: boolean; roles: TeamRoleFlags; status: TeamMemberStatus; teamId: string }
+  >(functions, "removeArchivedParentTeamFromAccount");
+  const response = await callable({ teamId: teamId.trim() });
+  return {
+    removed: response.data.removed === true,
+    roles: resolveTeamRoles(response.data.roles, null),
+    status: readMemberStatus(response.data.status),
+    teamId: readString(response.data.teamId),
   };
 }
 

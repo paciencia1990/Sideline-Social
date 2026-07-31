@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
-import { Archive, MessageCircle, MessagesSquare, RotateCcw, Shield, Users, type LucideIcon } from "lucide-react-native";
+import { Archive, ChevronDown, ChevronUp, MessageCircle, MessagesSquare, RotateCcw, Shield, Users, type LucideIcon } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -11,6 +11,8 @@ import { Colors, Radius, Shadow, Spacing, TeamCodeTypography, Typography } from 
 import { useApp } from "@/context/AppContext";
 import {
   canManageTeamRoles,
+  getArchivedCoachTeamCount,
+  getArchivedCoachTeamMembershipsPage,
   getCurrentUserTeamMemberships,
   hasCoachAccess,
   hasTeamRole,
@@ -31,6 +33,13 @@ export default function CoachHomeScreen() {
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [restoringTeamId, setRestoringTeamId] = useState<string | null>(null);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  const [archivedExpanded, setArchivedExpanded] = useState(false);
+  const [archivedTeams, setArchivedTeams] = useState<TeamMembership[]>([]);
+  const [archivedCount, setArchivedCount] = useState(0);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedError, setArchivedError] = useState<string | null>(null);
+  const [archivedHasMore, setArchivedHasMore] = useState(false);
+  const [archivedNextOffset, setArchivedNextOffset] = useState(0);
   const [privateInbox, setPrivateInbox] = useState<{
     conversationCount: number;
     loadState: PrivateInboxLoadState;
@@ -42,7 +51,12 @@ export default function CoachHomeScreen() {
     setError(null);
     setLifecycleError(null);
     try {
-      setMemberships(await getCurrentUserTeamMemberships());
+      const [nextMemberships, nextArchivedCount] = await Promise.all([
+        getCurrentUserTeamMemberships(),
+        getArchivedCoachTeamCount(),
+      ]);
+      setMemberships(nextMemberships);
+      setArchivedCount(nextArchivedCount);
     } catch (nextError) {
       console.warn("[CoachHome] load error:", nextError);
       setError(t("coach.home.error"));
@@ -59,11 +73,37 @@ export default function CoachHomeScreen() {
   );
 
   const coachTeams = memberships.filter((membership) => hasCoachAccess(membership) && isTeamActive(membership.team));
-  const archivedTeams = memberships.filter((membership) =>
-    hasCoachAccess(membership) &&
-    membership.team?.status === "archived" &&
+  const visibleArchivedTeams = archivedTeams.filter((membership) =>
     canManageTeamRoles(membership, membership.team),
   );
+
+  const loadArchivedTeams = useCallback(async (reset = false) => {
+    if (archivedLoading) return;
+    setArchivedLoading(true);
+    setArchivedError(null);
+    try {
+      const page = await getArchivedCoachTeamMembershipsPage(reset ? 0 : archivedNextOffset, 8, { throwOnError: true });
+      setArchivedTeams((current) => reset ? page.memberships : [...current, ...page.memberships]);
+      setArchivedCount(page.totalCount);
+      setArchivedHasMore(page.hasMore);
+      setArchivedNextOffset(page.nextOffset);
+    } catch (nextError) {
+      console.warn("[CoachHome] archived teams load error:", getErrorCode(nextError));
+      setArchivedError(t("coach.team.archivedTeamsLoadError"));
+    } finally {
+      setArchivedLoading(false);
+    }
+  }, [archivedLoading, archivedNextOffset, t]);
+
+  const toggleArchivedTeams = useCallback(() => {
+    setArchivedExpanded((current) => {
+      const next = !current;
+      if (next && archivedTeams.length === 0 && archivedCount > 0) {
+        void loadArchivedTeams(true);
+      }
+      return next;
+    });
+  }, [archivedCount, archivedTeams.length, loadArchivedTeams]);
 
   useFocusEffect(
     useCallback(() => {
@@ -142,6 +182,12 @@ export default function CoachHomeScreen() {
     try {
       await setTeamArchived(membership.teamId, false);
       await loadTeams();
+      setArchivedTeams([]);
+      setArchivedNextOffset(0);
+      setArchivedHasMore(false);
+      if (archivedExpanded) {
+        await loadArchivedTeams(true);
+      }
       Alert.alert(t("coach.team.restoreSuccessTitle"), t("coach.team.restoreSuccessBody"));
     } catch (nextError) {
       console.warn("[CoachHome] restore error:", getErrorCode(nextError));
@@ -149,7 +195,7 @@ export default function CoachHomeScreen() {
     } finally {
       setRestoringTeamId(null);
     }
-  }, [loadTeams, restoringTeamId, t]);
+  }, [archivedExpanded, loadArchivedTeams, loadTeams, restoringTeamId, t]);
 
   const confirmRestore = useCallback((membership: TeamMembership) => {
     if (!membership.team || restoringTeamId) return;
@@ -225,34 +271,71 @@ export default function CoachHomeScreen() {
               </Card>
             ) : null}
 
-            {archivedTeams.length > 0 ? (
+            {archivedCount > 0 ? (
               <Card style={styles.cardGap}>
-                <View style={styles.archivedHeader}>
-                  <Archive color={Colors.primary} size={20} />
-                  <Text style={styles.cardTitle}>{t("coach.team.archivedTeams")}</Text>
-                </View>
-                {archivedTeams.map((membership) => (
-                  <View key={membership.teamId} style={styles.archivedRow}>
-                    <View style={styles.archivedCopy}>
-                      <Text style={styles.archivedName}>{membership.team?.name}</Text>
-                      <Text style={styles.cardText}>{membership.team?.sport}</Text>
-                      <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>
+                <TouchableOpacity
+                  accessibilityLabel={t(archivedExpanded ? "coach.team.archivedTeamsCollapse" : "coach.team.archivedTeamsExpand", { count: archivedCount })}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: archivedExpanded }}
+                  activeOpacity={0.82}
+                  onPress={toggleArchivedTeams}
+                  style={styles.archivedHeader}
+                >
+                  <View style={styles.archivedTitleRow}>
+                    <Archive color={Colors.primary} size={20} />
+                    <View style={styles.archivedTitleCopy}>
+                      <Text style={styles.cardTitle}>{t("coach.team.archivedTeams")}</Text>
+                      <Text style={styles.cardText}>{t("coach.team.archivedTeamsCount", { count: archivedCount })}</Text>
                     </View>
-                    <TouchableOpacity
-                      accessibilityRole="button"
-                      disabled={Boolean(restoringTeamId)}
-                      onPress={() => confirmRestore(membership)}
-                      style={[styles.restoreButton, Boolean(restoringTeamId) && styles.disabledButton]}
-                    >
-                      {restoringTeamId === membership.teamId
-                        ? <ActivityIndicator color={Colors.surface} size="small" />
-                        : <RotateCcw color={Colors.surface} size={17} />}
-                      <Text style={styles.primaryButtonText}>
-                        {restoringTeamId === membership.teamId ? t("coach.team.restoring") : t("coach.team.restoreTeam")}
-                      </Text>
-                    </TouchableOpacity>
                   </View>
-                ))}
+                  {archivedExpanded ? <ChevronUp color={Colors.textHeading} size={22} /> : <ChevronDown color={Colors.textHeading} size={22} />}
+                </TouchableOpacity>
+                {archivedExpanded ? (
+                  <View style={styles.archivedBody}>
+                    {visibleArchivedTeams.map((membership) => (
+                      <View key={membership.teamId} style={styles.archivedRow}>
+                        <View style={styles.archivedCopy}>
+                          <Text style={styles.archivedName}>{membership.team?.name}</Text>
+                          <Text style={styles.cardText}>{membership.team?.sport}</Text>
+                          <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>
+                        </View>
+                        <TouchableOpacity
+                          accessibilityRole="button"
+                          accessibilityState={{ busy: restoringTeamId === membership.teamId, disabled: Boolean(restoringTeamId) }}
+                          disabled={Boolean(restoringTeamId)}
+                          onPress={() => confirmRestore(membership)}
+                          style={[styles.restoreButton, Boolean(restoringTeamId) && styles.disabledButton]}
+                        >
+                          {restoringTeamId === membership.teamId
+                            ? <ActivityIndicator color={Colors.surface} size="small" />
+                            : <RotateCcw color={Colors.surface} size={17} />}
+                          <Text style={styles.primaryButtonText}>
+                            {restoringTeamId === membership.teamId ? t("coach.team.restoring") : t("coach.team.restoreTeam")}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                    {archivedLoading ? (
+                      <View accessibilityLiveRegion="polite" style={styles.centerInline}>
+                        <ActivityIndicator color={Colors.primary} />
+                        <Text style={styles.cardText}>{t("coach.team.archivedTeamsLoading")}</Text>
+                      </View>
+                    ) : null}
+                    {!archivedLoading && archivedError ? (
+                      <View accessibilityLiveRegion="polite" style={styles.centerInline}>
+                        <Text style={styles.errorText}>{archivedError}</Text>
+                        <TouchableOpacity accessibilityRole="button" onPress={() => { void loadArchivedTeams(visibleArchivedTeams.length === 0); }} style={styles.outlineButton}>
+                          <Text style={styles.outlineButtonText}>{t("common.retry")}</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+                    {!archivedLoading && !archivedError && archivedHasMore ? (
+                      <TouchableOpacity accessibilityRole="button" onPress={() => { void loadArchivedTeams(false); }} style={styles.outlineButton}>
+                        <Text style={styles.outlineButtonText}>{t("coach.team.archivedTeamsLoadMore")}</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                ) : null}
                 {lifecycleError ? <Text accessibilityLiveRegion="polite" style={styles.errorText}>{lifecycleError}</Text> : null}
               </Card>
             ) : null}
@@ -304,13 +387,17 @@ const styles = StyleSheet.create({
   title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 31, textAlign: "center" },
   subtitle: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21, textAlign: "center" },
   cardGap: { gap: Spacing.md },
-  archivedHeader: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, justifyContent: "center" },
+  archivedHeader: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, justifyContent: "space-between" },
+  archivedTitleRow: { alignItems: "center", flex: 1, flexDirection: "row", gap: Spacing.sm },
+  archivedTitleCopy: { flex: 1, gap: 2 },
+  archivedBody: { gap: Spacing.sm },
   archivedRow: { alignItems: "center", borderTopColor: Colors.secondary, borderTopWidth: 1, flexDirection: "row", gap: Spacing.sm, paddingTop: Spacing.md },
   archivedCopy: { flex: 1, gap: 2 },
   archivedName: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 16 },
   archivedStatus: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 11, textTransform: "uppercase" },
   modeCard: { gap: Spacing.md, borderLeftColor: Colors.accentGreen, borderLeftWidth: 4 },
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
+  centerInline: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.sm },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21, textAlign: "center" },
   inviteBlock: { alignItems: "center", gap: 3 },
