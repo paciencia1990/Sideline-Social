@@ -2,7 +2,8 @@
   "ios": {
     "CFBundleDisplayName": "Sideline Social",
     "NSLocationWhenInUseUsageDescription": "Sideline Social usa tu ubicación cuando eliges Buscar cerca para descubrir comunidades deportivas próximas a tu sede actual. Tu ubicación precisa no se muestra a otros usuarios.",
-    "NSMicrophoneUsageDescription": "Sideline Social usa tu micrófono únicamente cuando eliges grabar un mensaje de voz en un chat o una conversación del equipo."
+    "NSMicrophoneUsageDescription": "Sideline Social usa tu micrófono únicamente cuando eliges grabar un mensaje de voz en un chat o una conversación del equipo.",
+    "NSMotionUsageDescription": "Sideline Social puede usar la actividad de movimiento para admitir las funciones de ubicación cuando eliges Buscar cerca. Los datos de movimiento no se muestran a otros usuarios."
   },
   "android": {
     "app_name": "Sideline Social"

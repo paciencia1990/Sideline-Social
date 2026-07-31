@@ -9,6 +9,9 @@ const IS_DEVELOPMENT = APP_VARIANT === "development";
 const ANDROID_PACKAGE = IS_DEVELOPMENT ? "com.sidelinesquad.app.dev" : "com.sidelinesquad.app";
 const APP_NAME = IS_DEVELOPMENT ? "Sideline Social Dev" : "Sideline Social";
 const APP_SCHEME = IS_DEVELOPMENT ? "sidelinesquad-dev" : "sidelinesquad";
+const IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION = "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.";
+const IOS_MICROPHONE_USAGE_DESCRIPTION = "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.";
+const IOS_MOTION_USAGE_DESCRIPTION = "Sideline Social may use motion activity to support location features when you choose Find Nearby. Motion data is not displayed to other users.";
 
 if (!IS_DEVELOPMENT && process.env.REQUIRE_PRODUCTION_LEGAL_CONFIG === "true") {
   assertProductionLegalConfig({
@@ -41,7 +44,6 @@ module.exports = ({ config }) => ({
   ios: {
     supportsTablet: false,
     bundleIdentifier: IOS_BUNDLE_IDENTIFIER,
-    buildNumber: "1",
     icon: "./assets/images/icon-ios.png",
     ...(process.env.GOOGLE_SERVICES_INFO_PLIST
       ? { googleServicesFile: process.env.GOOGLE_SERVICES_INFO_PLIST }
@@ -58,8 +60,9 @@ module.exports = ({ config }) => ({
             },
           }
         : {}),
-      NSLocationWhenInUseUsageDescription: "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.",
-      NSMicrophoneUsageDescription: "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.",
+      NSLocationWhenInUseUsageDescription: IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION,
+      NSMicrophoneUsageDescription: IOS_MICROPHONE_USAGE_DESCRIPTION,
+      NSMotionUsageDescription: IOS_MOTION_USAGE_DESCRIPTION,
     },
   },
 
@@ -115,8 +118,8 @@ module.exports = ({ config }) => ({
       {
         locationAlwaysAndWhenInUsePermission: false,
         locationAlwaysPermission: false,
-        locationWhenInUsePermission: "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.",
-        motionUsagePermission: false,
+        locationWhenInUsePermission: IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION,
+        motionUsagePermission: IOS_MOTION_USAGE_DESCRIPTION,
       },
     ],
     [
