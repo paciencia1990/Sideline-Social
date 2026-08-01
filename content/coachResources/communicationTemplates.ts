@@ -11,7 +11,9 @@ const template = (
   placeholders: string[],
 ): CoachCommunicationTemplate => ({
   id, category, title: text(...title), description: text(...description), body: text(...body), placeholders,
-  canSendAsAnnouncement: category !== "message_parent", sortOrder: order, isActive: true, contentVersion: 1,
+  canSendAsAnnouncement: category !== "message_parent",
+  ...(category !== "message_parent" ? { defaultAnnouncementAudience: "all" as const } : {}),
+  sortOrder: order, isActive: true, contentVersion: 1,
 });
 
 export const COACH_COMMUNICATION_TEMPLATES: CoachCommunicationTemplate[] = [

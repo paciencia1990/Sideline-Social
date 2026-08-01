@@ -9,6 +9,8 @@ export const Colors = {
   textHeading: '#2F4156',    // Warm Navy — headers, nav labels
   accentGold: '#E8A84C',     // Soft Gold — achievements, stars, tiers
   accentGreen: '#7A9E82',    // Muted Sage — live status, success states
+  communicationLink: '#4F7357', // Dark Sage — accessible communication links on cream
+  communicationLinkPressed: '#3F6048', // Deep Sage — pressed communication link state
 };
 
 export const Typography = {

@@ -67,7 +67,9 @@ assert.equal(membershipCore.hasActiveTeamChildRelationship(
 const composer = read("app", "coach", "messages.tsx");
 assert.match(composer, /const AUDIENCES = \["all", "staff"\] as const/);
 assert.doesNotMatch(composer, /const AUDIENCES[^\n]*parents/);
-assert.match(composer, /useState<AnnouncementAudience>\("all"\)/);
+assert.match(composer, /const draftAudience = normalizeAudienceParam\(params\.draftAudience\)/);
+assert.match(composer, /useState<AnnouncementAudience>\(draftAudience\)/);
+assert.match(composer, /function normalizeAudienceParam[\s\S]*includes\(normalized\)[\s\S]*: "all"/);
 assert.match(composer, /getTeamAnnouncementRecipientCounts/);
 assert.match(composer, /selectedRecipientCount === 0/);
 
@@ -78,6 +80,7 @@ for (const id of ["parent-concern", "private-conversation", "difficult-follow-up
 }
 assert.match(templates, /Following Up After a Private Conversation/);
 assert.match(templates, /canSendAsAnnouncement: category !== "message_parent"/);
+assert.match(templates, /defaultAnnouncementAudience: "all"/);
 
 const library = read("app", "coach", "resources", "communication", "index.tsx");
 assert.match(library, /\["schedule", "parents", "message_parent", "culture"\]/);
@@ -93,6 +96,7 @@ assert.doesNotMatch(privatePicker, /createTeamAnnouncement|\/coach\/messages/);
 
 const communicationDetail = read("app", "coach", "resources", "communication", "[templateId].tsx");
 assert.match(communicationDetail, /template\.category === "message_parent"[\s\S]*<Redirect/);
+assert.match(communicationDetail, /draftAudience:\s*template\?\.defaultAnnouncementAudience \?\? "all"/);
 const privateThread = read("components", "PrivateTeamMessageThread.tsx");
 assert.match(privateThread, /initialText\.slice\(0, 2000\)/);
 assert.match(privateThread, /sendPrivateTeamTextMessage/);

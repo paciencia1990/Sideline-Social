@@ -87,6 +87,7 @@ export default function CoachCommunicationTemplateScreen() {
         teamId: selectedMembership.teamId,
         draftTitle: template ? localizeCoachText(template.title, locale) : "",
         draftBody: message,
+        draftAudience: template?.defaultAnnouncementAudience ?? "all",
       },
     } as never);
   }, [locale, message, selectedMembership, t, template, validate]);

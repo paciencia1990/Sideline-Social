@@ -33,10 +33,12 @@ export default function CoachMessagesScreen() {
     teamId?: string | string[];
     draftBody?: string | string[];
     draftTitle?: string | string[];
+    draftAudience?: string | string[];
   }>();
   const requestedTeamId = normalizeParam(params.teamId);
   const draftBody = normalizeParam(params.draftBody);
   const draftTitle = normalizeParam(params.draftTitle);
+  const draftAudience = normalizeAudienceParam(params.draftAudience);
   const hasDraft = Boolean(draftBody || draftTitle);
   const [memberships, setMemberships] = useState<TeamMembership[]>([]);
   const [announcements, setAnnouncements] = useState<TeamAnnouncement[]>([]);
@@ -49,7 +51,7 @@ export default function CoachMessagesScreen() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [sendPhase, setSendPhase] = useState<"uploading" | "finalizing" | null>(null);
   const [cancelUpload, setCancelUpload] = useState<(() => boolean) | null>(null);
-  const [audience, setAudience] = useState<AnnouncementAudience>("all");
+  const [audience, setAudience] = useState<AnnouncementAudience>(draftAudience);
   const [recipientCounts, setRecipientCounts] = useState<TeamAnnouncementRecipientCounts | null>(null);
   const [recipientCountsLoading, setRecipientCountsLoading] = useState(false);
   const [recipientCountsError, setRecipientCountsError] = useState(false);
@@ -352,6 +354,11 @@ export default function CoachMessagesScreen() {
 
 function normalizeParam(value?: string | string[]) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function normalizeAudienceParam(value?: string | string[]): AnnouncementAudience {
+  const normalized = normalizeParam(value);
+  return (AUDIENCES as readonly string[]).includes(normalized) ? normalized as AnnouncementAudience : "all";
 }
 
 function getSafeErrorCode(error: unknown) {

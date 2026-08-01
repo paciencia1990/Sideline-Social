@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { useLocalSearchParams } from "expo-router";
-import { Check } from "lucide-react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import { Check, MessageCircle } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -13,6 +13,7 @@ import {
   getChecklistItemIds,
   getCoachChecklist,
   getCoachChecklistProgress,
+  getCoachCommunicationTemplate,
   localizeCoachText,
   resetCoachChecklistProgress,
   resolveCoachResourceLocale,
@@ -63,6 +64,10 @@ export default function CoachChecklistDetailScreen() {
     });
   }, [hydrated, persist]);
 
+  const openCommunicationTemplate = useCallback((templateId: string) => {
+    router.push(`/coach/resources/communication/${templateId}` as never);
+  }, []);
+
   const confirmReset = useCallback(() => {
     if (!checklist || !user?.uid) return;
     Alert.alert(t("coach.resources.resetTitle"), t("coach.resources.resetBody"), [
@@ -111,21 +116,41 @@ export default function CoachChecklistDetailScreen() {
             <Text accessibilityRole="header" style={styles.sectionTitle}>{localizeCoachText(section.title, locale)}</Text>
             {section.items.map((entry) => {
               const checked = completedIds.includes(entry.id);
+              const template = entry.communicationTemplateId ? getCoachCommunicationTemplate(entry.communicationTemplateId) : null;
+              const templateTitle = template ? localizeCoachText(template.title, locale) : "";
+              const templateActionLabel = template ? t("coach.resources.openCommunicationTemplate", { title: templateTitle }) : "";
               return (
-                <TouchableOpacity
-                  accessibilityLabel={localizeCoachText(entry.label, locale)}
-                  accessibilityRole="checkbox"
-                  accessibilityState={{ checked }}
-                  activeOpacity={0.82}
-                  key={entry.id}
-                  onPress={() => toggleItem(entry.id)}
-                  style={[styles.itemRow, checked && styles.itemRowChecked]}
-                >
-                  <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
-                    {checked ? <Check color={Colors.surface} size={18} strokeWidth={3} /> : null}
-                  </View>
-                  <Text style={[styles.itemText, checked && styles.itemTextChecked]}>{localizeCoachText(entry.label, locale)}</Text>
-                </TouchableOpacity>
+                <View key={entry.id} style={styles.itemBlock}>
+                  <TouchableOpacity
+                    accessibilityLabel={localizeCoachText(entry.label, locale)}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked }}
+                    activeOpacity={0.82}
+                    onPress={() => toggleItem(entry.id)}
+                    style={[styles.itemRow, checked && styles.itemRowChecked]}
+                  >
+                    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+                      {checked ? <Check color={Colors.surface} size={18} strokeWidth={3} /> : null}
+                    </View>
+                    <Text style={[styles.itemText, checked && styles.itemTextChecked]}>{localizeCoachText(entry.label, locale)}</Text>
+                  </TouchableOpacity>
+                  {template ? (
+                    <Pressable
+                      accessibilityHint={t("coach.resources.openCommunicationTemplateHint")}
+                      accessibilityLabel={templateActionLabel}
+                      accessibilityRole="button"
+                      onPress={() => openCommunicationTemplate(template.id)}
+                      style={({ pressed }) => [styles.templateLink, pressed && styles.templateLinkPressed]}
+                    >
+                      {({ pressed }) => (
+                        <>
+                          <MessageCircle color={pressed ? Colors.communicationLinkPressed : Colors.communicationLink} size={16} />
+                          <Text style={[styles.templateLinkText, pressed && styles.templateLinkTextPressed]}>{templateActionLabel}</Text>
+                        </>
+                      )}
+                    </Pressable>
+                  ) : null}
+                </View>
               );
             })}
           </View>
@@ -152,12 +177,17 @@ const styles = StyleSheet.create({
   safetyText: { color: Colors.textPrimary, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 20 },
   section: { gap: Spacing.sm },
   sectionTitle: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 12, letterSpacing: 0.8, lineHeight: 18, textTransform: "uppercase" },
+  itemBlock: { gap: Spacing.xs },
   itemRow: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.md, minHeight: 60, padding: Spacing.md },
   itemRowChecked: { borderColor: Colors.accentGreen },
   checkbox: { alignItems: "center", borderColor: Colors.primary, borderRadius: 6, borderWidth: 2, flexShrink: 0, height: 28, justifyContent: "center", width: 28 },
   checkboxChecked: { backgroundColor: Colors.accentGreen, borderColor: Colors.accentGreen },
   itemText: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodyMedium, fontSize: 14, lineHeight: 21 },
   itemTextChecked: { color: Colors.textPrimary },
+  templateLink: { alignItems: "center", alignSelf: "flex-start", borderRadius: Radius.sm, flexDirection: "row", gap: Spacing.xs, marginLeft: 44, minHeight: 36, paddingHorizontal: Spacing.xs },
+  templateLinkPressed: { backgroundColor: `${Colors.communicationLinkPressed}14` },
+  templateLinkText: { color: Colors.communicationLink, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 18 },
+  templateLinkTextPressed: { color: Colors.communicationLinkPressed },
   resetButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
   resetText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14, textAlign: "center" },
 });

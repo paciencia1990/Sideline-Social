@@ -1,7 +1,12 @@
 import type { CoachChecklist } from "@/types/coachResources";
 
 const text = (en: string, es: string) => ({ en, es });
-const item = (id: string, en: string, es: string) => ({ id, label: text(en, es) });
+const item = (
+  id: string,
+  en: string,
+  es: string,
+  options: { communicationTemplateId?: string } = {},
+): CoachChecklist["sections"][number]["items"][number] => ({ id, label: text(en, es), ...options });
 
 export const COACH_CHECKLISTS: CoachChecklist[] = [
   {
@@ -33,7 +38,7 @@ export const COACH_CHECKLISTS: CoachChecklist[] = [
       item("medical-process", "Confirm medical and emergency information is handled through approved league processes", "Confirma que la información médica y de emergencia se maneje mediante procesos aprobados por la liga"),
       item("expectations", "Prepare clear team expectations", "Prepara expectativas claras para el equipo"),
       item("practice-plans", "Plan the first two practices", "Planifica las primeras dos prácticas"),
-      item("welcome", "Send a welcome communication", "Envía un mensaje de bienvenida"),
+      item("welcome", "Send a welcome communication", "Envía un mensaje de bienvenida", { communicationTemplateId: "welcome-team" }),
       item("volunteer-needs", "Identify volunteer needs", "Identifica las necesidades de voluntarios"),
       item("inclusion", "Review inclusion and accessibility needs without recording private child information", "Revisa necesidades de inclusión y accesibilidad sin registrar información privada de menores"),
     ] }],
@@ -44,6 +49,7 @@ export const COACH_CHECKLISTS: CoachChecklist[] = [
     contentVersion: 1, isActive: true, sortOrder: 30, recurringType: "manual_reset",
     sections: [
       { id: "before-arrival", title: text("Before Players Arrive", "Antes de que Lleguen los Jugadores"), items: [
+        item("confirm", "Confirm time, venue, and weather", "Confirma la hora, el lugar y el clima", { communicationTemplateId: "practice-reminder" }),
         item("goal", "Review today's practice goal", "Revisa la meta de la práctica de hoy"), item("space", "Inspect the playing space", "Inspecciona el área de juego"),
         item("first-aid", "Confirm first-aid supplies are available", "Confirma que haya suministros de primeros auxilios"), item("setup", "Set up equipment", "Prepara el equipo deportivo"),
         item("backup", "Prepare a backup activity", "Prepara una actividad alternativa"),
@@ -64,7 +70,7 @@ export const COACH_CHECKLISTS: CoachChecklist[] = [
     contentVersion: 1, isActive: true, sortOrder: 40, recurringType: "manual_reset",
     sections: [
       { id: "before-leaving", title: text("Before Leaving", "Antes de Salir"), items: [
-        item("confirm", "Confirm time, venue, and weather", "Confirma la hora, el lugar y el clima"), item("bring", "Bring required equipment", "Lleva el equipo deportivo requerido"),
+        item("confirm", "Confirm time, venue, and weather", "Confirma la hora, el lugar y el clima", { communicationTemplateId: "game-day-reminder" }), item("bring", "Bring required equipment", "Lleva el equipo deportivo requerido"),
         item("participation", "Review substitutions or the participation plan", "Revisa las sustituciones o el plan de participación"),
       ] },
       { id: "before-game", title: text("Before the Game", "Antes del Juego"), items: [
@@ -98,7 +104,7 @@ export const COACH_CHECKLISTS: CoachChecklist[] = [
     contentVersion: 1, isActive: true, sortOrder: 60, recurringType: "one_time",
     sections: [{ id: "wrap-up", title: text("Wrap Up Well", "Cierra Bien la Temporada"), items: [
       item("final-schedule", "Confirm the final schedule and remaining obligations", "Confirma el calendario final y las obligaciones pendientes"), item("return", "Return league or shared equipment", "Devuelve el equipo de la liga o compartido"),
-      item("thank", "Thank volunteers", "Agradece a los voluntarios"), item("growth", "Recognize player growth and effort", "Reconoce el crecimiento y esfuerzo de los jugadores"),
+      item("thank", "Thank volunteers", "Agradece a los voluntarios", { communicationTemplateId: "season-thanks" }), item("growth", "Recognize player growth and effort", "Reconoce el crecimiento y esfuerzo de los jugadores"),
       item("family-message", "Send an end-of-season family message", "Envía un mensaje de fin de temporada a las familias"), item("feedback", "Collect non-sensitive feedback", "Recopila comentarios no sensibles"),
       item("lessons", "Record lessons for next season", "Registra aprendizajes para la próxima temporada"), item("archive", "Close or archive recurring team tasks", "Cierra o archiva tareas recurrentes del equipo"),
       item("celebration", "Confirm awards or celebration details", "Confirma detalles de premios o celebración"), item("contact-point", "Leave families with the next approved contact point", "Deja a las familias el próximo contacto aprobado"),

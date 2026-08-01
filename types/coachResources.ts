@@ -1,10 +1,14 @@
 export type CoachResourceLocale = "en" | "es";
 export type LocalizedText = { en: string; es: string };
 export type CoachChecklistCategory = "prepare" | "coaching_days" | "safety_wrap_up";
+export type CoachAnnouncementAudience = "all" | "staff";
 export type CoachChecklist = {
   id: string; category: CoachChecklistCategory; title: LocalizedText; description: LocalizedText;
   contentVersion: number; isActive: boolean; sortOrder: number; recurringType: "manual_reset" | "one_time";
-  sections: { id: string; title: LocalizedText; items: { id: string; label: LocalizedText; detail?: LocalizedText }[] }[];
+  sections: {
+    id: string; title: LocalizedText;
+    items: { id: string; label: LocalizedText; detail?: LocalizedText; communicationTemplateId?: string }[];
+  }[];
   safetyNote?: LocalizedText;
 };
 export type CoachChecklistProgress = {
@@ -13,7 +17,8 @@ export type CoachChecklistProgress = {
 export type CoachCommunicationCategory = "schedule" | "parents" | "message_parent" | "culture";
 export type CoachCommunicationTemplate = {
   id: string; category: CoachCommunicationCategory; title: LocalizedText; description: LocalizedText; body: LocalizedText;
-  placeholders: string[]; canSendAsAnnouncement: boolean; sortOrder: number; isActive: boolean; contentVersion: number;
+  placeholders: string[]; canSendAsAnnouncement: boolean; defaultAnnouncementAudience?: CoachAnnouncementAudience;
+  sortOrder: number; isActive: boolean; contentVersion: number;
 };
 export type CoachProTipCategory = "first_time" | "practice" | "confidence" | "communication" | "parents" | "sportsmanship" | "inclusion" | "game_day" | "mistakes" | "fun" | "safety" | "instruction";
 export type CoachProTip = {
