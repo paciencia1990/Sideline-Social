@@ -131,7 +131,23 @@ assert.ok(screen.includes("searchParentsByName(normalizedSearchText)"));
 assert.ok(screen.includes("setSearchResults([])"));
 assert.ok(screen.includes("searchRequestSequence.current !== requestSequence"));
 assert.ok(screen.includes("setSuggestedUsers(await searchUsers(searchText))") === false);
-assert.ok(screen.indexOf('t("friends.findParents")') < screen.indexOf('t("friends.suggested")'));
+const renderedSectionOrder = [
+  't("friends.requests")',
+  't("friends.outgoing")',
+  't("friends.findParents")',
+  't("friends.searchResults")',
+  't("friends.myFriends")',
+  't("friends.suggested")',
+].map((marker) => {
+  const index = screen.indexOf(marker);
+  assert.notEqual(index, -1, `${marker} must render on the Friends screen`);
+  return index;
+});
+assert.equal(
+  [...renderedSectionOrder].sort((left, right) => left - right).join(","),
+  renderedSectionOrder.join(","),
+  "Friends must render requests, sent requests, Find Parents/search, Friends, then suggested connections.",
+);
 assert.ok(service.includes('functions, "searchPublicUserProfiles"'));
 assert.ok(rules.includes("allow list: if false;"));
 assert.ok(audit.includes("isSearchablePublicProfileProjection"));

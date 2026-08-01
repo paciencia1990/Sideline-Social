@@ -55,6 +55,13 @@ assert.ok(choice.includes("await refreshProfile()"), "Local profile state must r
 assert.ok(choice.includes("router.replace"), "Completed onboarding must replace the choice route for Android Back safety.");
 assert.equal(choice.includes("roles.coach"), false, "Selecting Coach must not grant a role.");
 assert.equal(choice.includes("useEffect"), false, "The choice screen must not navigate from an Effect.");
+const modeChoiceCard = choice.slice(choice.indexOf("function ModeChoiceCard"), choice.indexOf("function getErrorCode"));
+assert.equal(count(modeChoiceCard, /<TouchableOpacity/g), 1, "Each start-mode card must keep a single press target.");
+assert.ok(modeChoiceCard.includes('accessibilityState={{ busy: loading, disabled }}'), "Start-mode choices must expose busy and disabled state.");
+assert.ok(modeChoiceCard.indexOf("styles.choiceBody") < modeChoiceCard.indexOf("styles.continueButton"), "Continue must render below the role description.");
+assert.ok(modeChoiceCard.includes('t("startMode.continue")'), "Start-mode cards must render the localized Continue label.");
+assert.equal(modeChoiceCard.includes("styles.choiceCopy"), false, "The old squeezed copy column must not return.");
+assert.equal(modeChoiceCard.includes("styles.continueRow"), false, "The old side-aligned Continue row must not return.");
 
 const tabs = read("app", "(tabs)", "_layout.tsx");
 const coachLayout = read("app", "coach", "_layout.tsx");
@@ -96,5 +103,7 @@ const translations = read("i18n", "index.ts");
 for (const key of ["eyebrow", "parentTitle", "parentBody", "coachTitle", "coachBody", "switchNote", "coachWelcome", "coachWelcomeBody", "saveError"]) {
   assert.equal(count(translations, new RegExp(`\\b${key}:`, "g")), 2, `${key} needs English and Spanish copy.`);
 }
+assert.match(translations, /continue:\s*'Continue'/, "English start-mode Continue copy must resolve.");
+assert.match(translations, /continue:\s*'Continuar'/, "Spanish start-mode Continue copy must resolve.");
 
 console.log("Start-mode onboarding, compatibility migration, mode switching, team authorization, and translation checks passed.");

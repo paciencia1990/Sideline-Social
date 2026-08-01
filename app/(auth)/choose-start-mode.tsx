@@ -112,21 +112,23 @@ function ModeChoiceCard({
 
   return (
     <TouchableOpacity
+      accessibilityLabel={`${title}. ${body}. ${t("startMode.continue")}`}
       accessibilityRole="button"
+      accessibilityState={{ busy: loading, disabled }}
       activeOpacity={0.86}
       disabled={disabled}
       onPress={onPress}
       style={disabled ? styles.disabled : undefined}
     >
       <Card style={styles.choiceCard}>
-        <View style={styles.iconCircle}>
-          <Icon color={Colors.primary} size={27} />
-        </View>
-        <View style={styles.choiceCopy}>
+        <View style={styles.choiceHeader}>
+          <View style={styles.iconCircle}>
+            <Icon color={Colors.primary} size={27} />
+          </View>
           <Text style={styles.choiceTitle}>{title}</Text>
-          <Text style={styles.choiceBody}>{body}</Text>
         </View>
-        <View style={styles.continueRow}>
+        <Text style={styles.choiceBody}>{body}</Text>
+        <View style={styles.continueButton}>
           {loading ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.continueText}>{t("startMode.continue")}</Text>}
         </View>
       </Card>
@@ -144,13 +146,13 @@ const styles = StyleSheet.create({
   header: { alignItems: "center", gap: Spacing.xs, marginBottom: Spacing.sm },
   kicker: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 12, letterSpacing: 0.8, textTransform: "uppercase" },
   title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 32, lineHeight: 39, textAlign: "center" },
-  choiceCard: { alignItems: "center", borderColor: Colors.secondary, borderWidth: 1, flexDirection: "row", gap: Spacing.md, minHeight: 138, ...Shadow.card },
+  choiceCard: { borderColor: Colors.secondary, borderWidth: 1, gap: Spacing.md, minHeight: 172, ...Shadow.card },
+  choiceHeader: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
   iconCircle: { alignItems: "center", backgroundColor: Colors.background, borderRadius: 26, height: 52, justifyContent: "center", width: 52 },
-  choiceCopy: { flex: 1, gap: Spacing.xs },
-  choiceTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 18 },
+  choiceTitle: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodyBold, fontSize: 19, lineHeight: 25, minWidth: 0 },
   choiceBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21 },
-  continueRow: { alignItems: "center", justifyContent: "center", minWidth: 62 },
-  continueText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
+  continueButton: { alignItems: "center", alignSelf: "flex-start", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1.5, justifyContent: "center", minHeight: 42, minWidth: 120, paddingHorizontal: Spacing.md },
+  continueText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   note: { color: Colors.textPrimary, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 20, paddingHorizontal: Spacing.sm, textAlign: "center" },
   error: { backgroundColor: Colors.surface, borderColor: Colors.primary, borderRadius: Radius.sm, borderWidth: 1, color: Colors.primary, fontFamily: Typography.bodySemiBold, lineHeight: 20, padding: Spacing.sm, textAlign: "center" },
   disabled: { opacity: 0.6 },

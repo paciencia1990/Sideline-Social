@@ -14,6 +14,8 @@ const detail = read("app/(social)/squad-detail.tsx");
 const administration = read("components/SquadAdministrationCard.tsx");
 const adminFunctions = read("functions/src/squadAdmin.ts");
 const adminCore = read("functions/src/squadAdminCore.ts");
+const squadCard = read("components/SquadCard.tsx");
+const sports = read("constants/sports.ts");
 const nearbyCallable = functions.slice(functions.indexOf("export const findNearbyVenueSportSquads"), functions.indexOf("export const searchVenueSportSquads"));
 const detailCallable = functions.slice(functions.indexOf("export const getVenueSportSquadDetail"), functions.indexOf("// ---------------------------------------------------------------------------", functions.indexOf("export const getVenueSportSquadDetail")));
 const detailService = service.slice(service.indexOf("export async function fetchSquadDetail"), service.indexOf("function selectedSquadStorageKey"));
@@ -23,6 +25,16 @@ assert.match(identity, /venueName[\s\S]*sportName/, "venue and sport must be ren
 assert.match(selector, /SquadIdentity/, "selector must use the shared two-line identity");
 assert.match(home, /SquadIdentity/, "Home cards must use the shared two-line identity");
 assert.match(games, /selectedSquadId/, "Games must use the explicit selected Squad");
+assert.match(squadCard, /getSquadSportOption\(squad\.sportId\)\.emoji/, "Squad list cards must render the original sport emoji indicator");
+assert.match(squadCard, /accessibilityRole="image"[\s\S]*styles\.emojiWrap/, "Squad list sport indicators must preserve accessible image semantics");
+assert.match(squadCard, /emojiWrap:\s*\{[^}]*backgroundColor:\s*Colors\.background[^}]*height:\s*44[^}]*width:\s*44[^}]*\}/, "Squad list sport emoji container must keep the original size and background");
+assert.match(squadCard, /emoji:\s*\{\s*fontSize:\s*22\s*\}/, "Squad list sport emoji must keep the original size");
+assert.doesNotMatch(squadCard, /SquadSportIcon|squadSportIconResolver|SPORT_ICON_BY_ID/, "Squad list cards must not use the removed outline sport icon redesign");
+assert.match(sports, /normalizeSquadSportId/, "sport emoji selection must keep existing alias and capitalization normalization");
+assert.match(sports, /return "other"/, "unknown sport values must keep the existing other-sport fallback");
+for (const sportId of ["baseball", "softball", "basketball", "soccer", "football", "volleyball", "swimming", "lacrosse", "hockey", "tennis", "track-field", "cheer", "gymnastics", "dance", "other"]) {
+  assert.match(sports, new RegExp(`"${sportId}"`), `${sportId} must remain a supported Squad sport`);
+}
 assert.doesNotMatch(`${home}\n${games}`, /mySquadIds\s*\[\s*0\s*\]/, "active flows must not depend on array order");
 assert.match(squadScreen, /Alert\.alert\([\s\S]*locationDisclosure[\s\S]*requestLocationPermission/, "the explanation must precede the system request");
 assert.match(squadScreen, /searchByVenue/, "manual venue search must remain available");

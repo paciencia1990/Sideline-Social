@@ -807,35 +807,6 @@ export default function FriendsScreen() {
           </>
         ) : null}
 
-        <SectionTitle title={t("friends.myFriends")} count={friends.length} />
-        {friends.length > 0 ? (
-          friends.map((friend) => {
-            const visibleFriend = {
-              ...friend,
-              displayName: friend.displayName || t(friend.profileState === "deleted"
-                ? "common.formerMember"
-                : "common.sidelineSocialMember"),
-            };
-            return (
-              <FriendRow
-              key={visibleFriend.id}
-              profile={visibleFriend}
-              actionLabel={t("friends.remove")}
-              actionIcon={<UserMinus size={18} color={Colors.surface} />}
-              danger
-              busy={busyAction === `remove:${visibleFriend.id}`}
-              onAction={() => confirmRemove(visibleFriend)}
-              secondaryActionLabel={t("chat.startConversation")}
-              secondaryActionIcon={<MessageCircle size={18} color={Colors.surface} />}
-              secondaryBusy={busyAction === `chat:${visibleFriend.id}`}
-              onSecondaryAction={() => void openDirectChat(visibleFriend)}
-            />
-            );
-          })
-        ) : (
-          <EmptyState title={t("friends.emptyTitle")} body={t("friends.emptyBody")} />
-        )}
-
         <SectionTitle title={t("friends.findParents")} />
         <View style={styles.searchBox}>
           <Search size={18} color={Colors.textPrimary} />
@@ -919,6 +890,35 @@ export default function FriendsScreen() {
             </TouchableOpacity>
           </Card>
         ) : null}
+
+        <SectionTitle title={t("friends.myFriends")} count={friends.length} />
+        {friends.length > 0 ? (
+          friends.map((friend) => {
+            const visibleFriend = {
+              ...friend,
+              displayName: friend.displayName || t(friend.profileState === "deleted"
+                ? "common.formerMember"
+                : "common.sidelineSocialMember"),
+            };
+            return (
+              <FriendRow
+                key={visibleFriend.id}
+                profile={visibleFriend}
+                actionLabel={t("friends.remove")}
+                actionIcon={<UserMinus size={18} color={Colors.surface} />}
+                danger
+                busy={busyAction === `remove:${visibleFriend.id}`}
+                onAction={() => confirmRemove(visibleFriend)}
+                secondaryActionLabel={t("chat.startConversation")}
+                secondaryActionIcon={<MessageCircle size={18} color={Colors.surface} />}
+                secondaryBusy={busyAction === `chat:${visibleFriend.id}`}
+                onSecondaryAction={() => void openDirectChat(visibleFriend)}
+              />
+            );
+          })
+        ) : (
+          <EmptyState title={t("friends.emptyTitle")} body={t("friends.emptyBody")} />
+        )}
 
         <SectionTitle title={t("friends.suggested")} />
         {suggestedUsers.length > 0 ? (

@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { ArrowLeft, Check, Shield, UserPlus, Users } from "lucide-react-native";
+import { Check, Shield, UserPlus, Users } from "lucide-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
+import { NestedBackButton } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -98,7 +99,7 @@ export default function FriendChatManageScreen() {
   const directFriendId = isGroup ? null : access.conversation.activeParticipantIds.find((id) => id !== user?.uid) ?? null;
   return (
     <ScreenWrapper>
-      <View style={styles.header}><TouchableOpacity accessibilityLabel={t("chat.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.iconButton}><ArrowLeft color={Colors.textHeading} size={22} /></TouchableOpacity><Text numberOfLines={1} style={styles.headerTitle}>{t("chat.conversationSettings")}</Text></View>
+      <View style={styles.header}><NestedBackButton accessibilityLabel={t("chat.back")} fallbackRoute="/(social)/chat" style={styles.iconButton} /><Text numberOfLines={1} style={styles.headerTitle}>{t("chat.conversationSettings")}</Text></View>
       <KeyboardAwareScrollView contentContainerStyle={styles.content}>
         <View><Text style={styles.title}>{title}</Text><Text style={styles.body}>{isGroup ? t("chat.groupConversation") : t("chat.directConversation")}</Text></View>
         {errorKey ? <Card style={styles.errorCard}><Text accessibilityRole="alert" style={styles.error}>{t(errorKey)}</Text></Card> : null}

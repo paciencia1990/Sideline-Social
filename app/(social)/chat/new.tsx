@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { ArrowLeft, Check, MessageCircle, Users } from "lucide-react-native";
+import { Check, MessageCircle, Users } from "lucide-react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
+import { NestedBackButton } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -77,9 +78,7 @@ export default function NewFriendChatScreen() {
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <TouchableOpacity accessibilityLabel={t("common.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
-            <ArrowLeft color={Colors.textHeading} size={22} />
-          </TouchableOpacity>
+          <NestedBackButton fallbackRoute="/(social)/chat" style={styles.back} />
           <View style={styles.headerCopy}><Text accessibilityRole="header" style={styles.title}>{t("chat.newChat")}</Text><Text style={styles.selected}>{selectedLabel}</Text></View>
         </View>
 

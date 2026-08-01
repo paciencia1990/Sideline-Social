@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { ArrowLeft, Users } from "lucide-react-native";
+import { Users } from "lucide-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { NestedBackButton } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -97,7 +98,7 @@ export default function FriendChatInvitationScreen() {
   return (
     <ScreenWrapper>
       <View style={styles.header}>
-        <TouchableOpacity accessibilityLabel={t("chat.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.iconButton}><ArrowLeft color={Colors.textHeading} size={22} /></TouchableOpacity>
+        <NestedBackButton accessibilityLabel={t("chat.back")} fallbackRoute="/(social)/chat" style={styles.iconButton} />
         <Text accessibilityRole="header" numberOfLines={1} style={styles.headerTitle}>{t("chat.groupInvitation")}</Text>
       </View>
       <View style={styles.content}>

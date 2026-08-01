@@ -5,6 +5,7 @@ import { router, useFocusEffect } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { NestedBackButton } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -83,6 +84,7 @@ export default function ChatListScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={Colors.primary} />}
       >
         <View style={styles.header}>
+          <NestedBackButton fallbackRoute="/(tabs)/friends" style={styles.headerBack} />
           <View style={styles.headerCopy}>
             <Text accessibilityRole="header" style={styles.title}>{t("chat.title")}</Text>
             <Text style={styles.body}>{t("chat.friendChatSubtitle")}</Text>
@@ -195,6 +197,7 @@ const styles = StyleSheet.create({
   content: { gap: Spacing.lg, padding: Spacing.lg, paddingBottom: Spacing.xxl },
   center: { alignItems: "center", flex: 1, gap: Spacing.sm, justifyContent: "center", padding: Spacing.xl },
   header: { alignItems: "center", flexDirection: "row", gap: Spacing.md },
+  headerBack: { backgroundColor: Colors.surface, borderRadius: 22 },
   headerCopy: { flex: 1, gap: 3 },
   title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 30 },
   body: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21 },

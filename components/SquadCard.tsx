@@ -37,7 +37,11 @@ export function SquadCard({ squad, isMember, isHighlighted, onJoin, onPress, joi
 
   return (
     <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={[styles.card, isHighlighted && styles.highlighted]}>
-      <View style={styles.emojiWrap}>
+      <View
+        accessibilityLabel={`${squad.sportDisplayName}. ${t("squad.sport")}.`}
+        accessibilityRole="image"
+        style={styles.emojiWrap}
+      >
         <Text style={styles.emoji}>{getSquadSportOption(squad.sportId).emoji}</Text>
       </View>
       <View style={styles.info}>

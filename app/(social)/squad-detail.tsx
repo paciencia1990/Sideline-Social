@@ -12,12 +12,13 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
-import { useLocalSearchParams, router, Stack } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { MoreVertical, Settings, Users } from 'lucide-react-native';
 
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
+import { NestedBackButton, navigateBackOrReplace } from '@/components/NestedBackButton';
 import { OutlineButton } from '@/components/OutlineButton';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Card } from '@/components/Card';
@@ -158,7 +159,7 @@ export default function SquadDetailScreen() {
             setLeaving(true);
             try {
               await leaveSquad(squadId);
-              router.back();
+              navigateBackOrReplace('/(tabs)/squad');
             } catch (error) {
               if (getSquadAdminErrorReason(error) === 'last_active_admin') showLastAdminExplanation();
               else Alert.alert('', t('squad.errorLeaving'));
@@ -186,6 +187,7 @@ export default function SquadDetailScreen() {
   if (loading) {
     return (
       <ScreenWrapper>
+        <SquadDetailHeader title={t('tabs.squad')} />
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={Colors.primary} />
         </View>
@@ -196,12 +198,13 @@ export default function SquadDetailScreen() {
   if (loadError) {
     return (
       <ScreenWrapper>
+        <SquadDetailHeader title={t('tabs.squad')} />
         <View style={styles.centered}>
           <Text style={styles.errorTitle}>{t('squad.detailUnavailableTitle')}</Text>
           <Text style={styles.errorText}>{t('squad.detailUnavailableBody')}</Text>
           <View style={styles.errorActions}>
             <PrimaryButton title={t('common.retry')} onPress={() => void loadSquadDetail()} />
-            <OutlineButton title={t('common.back')} onPress={() => router.back()} />
+            <OutlineButton title={t('common.back')} onPress={() => navigateBackOrReplace('/(tabs)/squad')} />
           </View>
         </View>
       </ScreenWrapper>
@@ -211,11 +214,12 @@ export default function SquadDetailScreen() {
   if (!squadDetail) {
     return (
       <ScreenWrapper>
+        <SquadDetailHeader title={t('tabs.squad')} />
         <View style={styles.centered}>
           <Text style={styles.errorTitle}>{t('squad.detailNotFoundTitle')}</Text>
           <Text style={styles.errorText}>{t('squad.detailNotFoundBody')}</Text>
           <View style={styles.errorActions}>
-            <OutlineButton title={t('common.back')} onPress={() => router.back()} />
+            <OutlineButton title={t('common.back')} onPress={() => navigateBackOrReplace('/(tabs)/squad')} />
           </View>
         </View>
       </ScreenWrapper>
@@ -240,27 +244,11 @@ export default function SquadDetailScreen() {
 
   return (
     <ScreenWrapper>
-      <Stack.Screen
-        options={{
-          title: squadDetail.venueName,
-          headerRight: isMember
-            ? () => (
-                <TouchableOpacity
-                  accessibilityLabel={t('squad.detailLeave')}
-                  accessibilityRole="button"
-                  onPress={handleLeave}
-                  style={{ marginRight: Spacing.sm }}
-                  disabled={leaving}
-                >
-                  {leaving ? (
-                    <ActivityIndicator size="small" color={Colors.primary} />
-                  ) : (
-                    <MoreVertical size={22} color={Colors.textHeading} />
-                  )}
-                </TouchableOpacity>
-              )
-            : undefined,
-        }}
+      <SquadDetailHeader
+        leaving={leaving}
+        onLeave={handleLeave}
+        showLeave={isMember}
+        title={squadDetail.venueName}
       />
 
       <ScrollView
@@ -396,7 +384,79 @@ export default function SquadDetailScreen() {
   );
 }
 
+function SquadDetailHeader({
+  leaving = false,
+  onLeave,
+  showLeave = false,
+  title,
+}: {
+  leaving?: boolean;
+  onLeave?: () => void;
+  showLeave?: boolean;
+  title: string;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <View style={styles.detailHeader}>
+      <NestedBackButton
+        accessibilityLabel={t('common.back')}
+        fallbackRoute="/(tabs)/squad"
+        style={styles.detailBackButton}
+      />
+      <Text accessibilityRole="header" numberOfLines={1} style={styles.detailHeaderTitle}>{title}</Text>
+      {showLeave && onLeave ? (
+        <TouchableOpacity
+          accessibilityLabel={t('squad.detailLeave')}
+          accessibilityRole="button"
+          accessibilityState={{ busy: leaving, disabled: leaving }}
+          activeOpacity={0.82}
+          disabled={leaving}
+          onPress={onLeave}
+          style={styles.detailHeaderAction}
+        >
+          {leaving ? (
+            <ActivityIndicator size="small" color={Colors.primary} />
+          ) : (
+            <MoreVertical size={22} color={Colors.textHeading} />
+          )}
+        </TouchableOpacity>
+      ) : (
+        <View style={styles.detailHeaderSpacer} />
+      )}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  detailHeader: {
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderBottomColor: Colors.secondary,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    minHeight: 56,
+    paddingHorizontal: Spacing.sm,
+  },
+  detailBackButton: {
+    marginRight: Spacing.xs,
+  },
+  detailHeaderTitle: {
+    color: Colors.textHeading,
+    flex: 1,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 17,
+    minWidth: 0,
+  },
+  detailHeaderAction: {
+    alignItems: 'center',
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  detailHeaderSpacer: {
+    width: 44,
+  },
   centered: {
     flex: 1,
     alignItems: 'center',

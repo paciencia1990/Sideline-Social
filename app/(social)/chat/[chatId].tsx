@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, type FlatList as FlatListType } from "react-native";
-import { ArrowLeft, MoreHorizontal, Send } from "lucide-react-native";
+import { MoreHorizontal, Send } from "lucide-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { MessageActionsModal, type MessageModalAction } from "@/components/MessageActionsModal";
+import { NestedBackButton } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -149,7 +150,7 @@ export default function FriendConversationScreen() {
     <ScreenWrapper>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
         <View style={styles.header}>
-          <TouchableOpacity accessibilityLabel={t("chat.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.iconButton}><ArrowLeft color={Colors.textHeading} size={22} /></TouchableOpacity>
+          <NestedBackButton accessibilityLabel={t("chat.back")} fallbackRoute="/(social)/chat" style={styles.iconButton} />
           <View style={styles.headerCopy}><Text numberOfLines={1} style={styles.headerTitle}>{title}</Text><Text style={styles.headerMeta}>{access.conversation.conversationType === "group" ? t("chat.participants", { count: access.conversation.activeParticipantCount }) : t("chat.directConversation")}</Text></View>
           <TouchableOpacity accessibilityLabel={t("chat.conversationSettings")} accessibilityRole="button" onPress={() => router.push({ pathname: "/(social)/chat/manage", params: { conversationId: chatId } })} style={styles.iconButton}><MoreHorizontal color={Colors.textHeading} size={24} /></TouchableOpacity>
         </View>
