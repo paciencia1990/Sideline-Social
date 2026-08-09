@@ -209,6 +209,8 @@ async function run() {
   });
   assert.deepEqual(spotDirectory.lobbies.map((lobby) => lobby.lobbyNumber), [1, 2, 3]);
   assert.equal(spotDirectory.lobbies[0].isMain, true);
+  assert.equal(spotDirectory.canCreateLobby, false);
+  assert.equal(spotDirectory.creationBlockReason, 'lobby_limit');
   await assert.rejects(
     () => spotCreators[3].call('createGameLobby', {
       gameType: 'spotTheDifferences', squadId: squadA, idempotencyKey: 'spot-fourth-lobby-blocked',
@@ -278,6 +280,8 @@ async function run() {
   assert.equal(crossGameRecovery.activeLobby.gameType, 'bombDefusal');
   assert.equal(crossGameRecovery.activeLobby.activePlayerCount, 1);
   assert.equal(crossGameRecovery.activeLobby.callerIsHost, true);
+  assert.equal(crossGameRecovery.canCreateLobby, false);
+  assert.equal(crossGameRecovery.creationBlockReason, 'active_lobby');
   let soleLeaveResult;
   try {
     soleLeaveResult = await soleHost.call('leaveGameLobby', { lobbyId: soleLobby.lobbyId });
@@ -299,6 +303,8 @@ async function run() {
   assert.equal((await database.ref(`gameSessions/${soleLobby.sessionId}/gameState/rewardEligible`).get()).val(), false);
   const soleAfterLeave = await soleHost.call('listGameLobbies', { gameType: 'bombDefusal', squadId: squadA });
   assert.equal(soleAfterLeave.activeLobby, null);
+  assert.equal(soleAfterLeave.canCreateLobby, true);
+  assert.equal(soleAfterLeave.creationBlockReason, null);
   assert.equal(soleAfterLeave.lobbies.some((lobby) => lobby.lobbyId === soleLobby.lobbyId), false);
   const immediateCrossGame = await soleHost.call('createGameLobby', {
     gameType: 'spotTheDifferences', squadId: squadA, idempotencyKey: 'cross-game-after-leave',
@@ -321,6 +327,32 @@ async function run() {
   assert.equal((await firestore.collection('activeGameLobbyMemberships').doc(soleHost.uid).get()).exists, false);
 
   const transferHost = clients[21];
+  const abandonedBomb = await transferHost.call('createGameLobby', {
+    gameType: 'bombDefusal', squadId: squadA, idempotencyKey: 'partial-bomb-departure',
+  });
+  await soleHost.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: abandonedBomb.lobbyId,
+  });
+  await firestore.collection('activeGameLobbyMemberships').doc(soleHost.uid).set({
+    state: 'leaving',
+    departureState: 'active',
+    updatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - 60_000),
+  }, { merge: true });
+  await database.ref(`gameSessions/${abandonedBomb.sessionId}/players/${soleHost.uid}`).remove();
+  const repairedDeparture = await soleHost.call('listGameLobbies', {
+    gameType: 'spotTheDifferences', squadId: squadA,
+  });
+  assert.equal(repairedDeparture.activeLobby, null, 'a partially completed Bomb departure is reconciled from canonical state');
+  assert.equal(repairedDeparture.canCreateLobby, true);
+  assert.equal(repairedDeparture.creationBlockReason, null);
+  assert.equal((await firestore.collection('activeGameLobbyMemberships').doc(soleHost.uid).get()).exists, false);
+  const spotAfterStaleBomb = await soleHost.call('createGameLobby', {
+    gameType: 'spotTheDifferences', squadId: squadA, idempotencyKey: 'spot-after-stale-bomb-repair',
+  });
+  assert.equal(spotAfterStaleBomb.gameType, 'spotTheDifferences');
+  await soleHost.call('closeGameLobby', { lobbyId: spotAfterStaleBomb.lobbyId });
+  await transferHost.call('closeGameLobby', { lobbyId: abandonedBomb.lobbyId });
+
   const transferFirst = clients[22];
   const transferSecond = clients[23];
   const transferThird = clients[24];

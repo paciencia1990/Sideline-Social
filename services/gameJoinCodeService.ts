@@ -2,6 +2,7 @@ import { collection, doc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 
 import { db, functions } from '@/config/firebase';
+import { normalizeGameLobbyDirectoryResult } from '@/utils/gameLobbyDirectoryState';
 
 export type GameJoinCodeType = 'bombDefusal' | 'triviaBlitz' | 'spotTheDifferences';
 export type GameJoinCodeStatus = 'lobby' | 'started' | 'ended' | 'canceled' | 'expired';
@@ -47,6 +48,12 @@ export type GameLobbyJoinAction =
   | 'full'
   | 'unavailable';
 
+export type GameLobbyCreationBlockReason =
+  | 'active_lobby'
+  | 'lobby_limit'
+  | 'eligibility_unavailable'
+  | null;
+
 export type GameLobbySummary = {
   lobbyId: string;
   sessionId: string;
@@ -76,6 +83,7 @@ export type GameLobbyDirectoryResult = {
     activePlayerCount: number | null;
     callerIsHost: boolean;
   } | null;
+  creationBlockReason: GameLobbyCreationBlockReason;
   maxLobbiesPerGame: number;
   serverNowMs: number;
 };
@@ -108,8 +116,8 @@ export async function listGameLobbies(input: {
   squadId: string;
   gameType?: GameJoinCodeType;
 }) {
-  const callable = httpsCallable<typeof input, GameLobbyDirectoryResult>(functions, 'listGameLobbies');
-  return (await callable(input)).data;
+  const callable = httpsCallable<typeof input, unknown>(functions, 'listGameLobbies');
+  return normalizeGameLobbyDirectoryResult((await callable(input)).data);
 }
 
 export async function createGameLobby(input: {

@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import type { TFunction } from "i18next";
 import { Plus, Users } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
@@ -17,6 +18,9 @@ import { Card } from "@/components/Card";
 import { NestedBackButton } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useAccountStanding } from "@/context/AccountStandingContext";
+import { useAuth } from "@/context/AuthContext";
+import { useSquad } from "@/context/SquadContext";
 import {
   createGameJoinIdempotencyKey,
   createGameLobby,
@@ -30,6 +34,11 @@ import {
   type GameLobbyDirectoryResult,
   type GameLobbySummary,
 } from "@/services/gameJoinCodeService";
+import {
+  createEmptyGameLobbyDirectoryResult,
+  resolveGameLobbyDirectoryEligibility,
+  type GameLobbyDirectoryEligibilityKind,
+} from "@/utils/gameLobbyDirectoryState";
 
 type ActiveLobby = NonNullable<GameLobbyDirectoryResult["activeLobby"]>;
 
@@ -50,6 +59,15 @@ const GAME_CONFIG: Record<GameJoinCodeType, { titleKey: string; lobbyRoute: stri
 
 export default function GameLobbyDirectoryScreen() {
   const { t } = useTranslation();
+  const { firebaseUser, loading: authLoading } = useAuth();
+  const accountStanding = useAccountStanding();
+  const {
+    membershipError,
+    membershipLoading,
+    mySquadIds,
+    reloadMemberships,
+    selectedSquadId,
+  } = useSquad();
   const params = useLocalSearchParams<{
     gameType?: string | string[];
     squadId?: string | string[];
@@ -58,44 +76,143 @@ export default function GameLobbyDirectoryScreen() {
   const gameType = readGameType(normalizeParam(params.gameType));
   const squadId = normalizeParam(params.squadId);
   const notice = normalizeParam(params.notice);
-  const [lobbies, setLobbies] = useState<GameLobbySummary[]>([]);
-  const [activeLobby, setActiveLobby] = useState<ActiveLobby | null>(null);
-  const [canCreateLobby, setCanCreateLobby] = useState(false);
-  const [maxLobbies, setMaxLobbies] = useState(3);
+  const [directory, setDirectory] = useState(createEmptyGameLobbyDirectoryResult);
+  const [directoryResolved, setDirectoryResolved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [joiningLobbyId, setJoiningLobbyId] = useState<string | null>(null);
   const [leavingActiveLobby, setLeavingActiveLobby] = useState(false);
-  const [error, setError] = useState<GameJoinCodeFailureReason | null>(null);
+  const [directoryError, setDirectoryError] = useState<GameJoinCodeFailureReason | null>(null);
+  const [actionError, setActionError] = useState<GameJoinCodeFailureReason | null>(null);
+  const [creationError, setCreationError] = useState<GameJoinCodeFailureReason | null>(null);
   const createRequestKeyRef = useRef(createGameJoinIdempotencyKey());
+  const createInFlightRef = useRef(false);
+  const leaveInFlightRef = useRef(false);
+  const directoryRequestVersionRef = useRef(0);
+  const diagnosticKeyRef = useRef("");
+  const hasActiveMembership = Boolean(squadId && mySquadIds.includes(squadId));
+  const canLoadDirectory = Boolean(
+    gameType &&
+    squadId &&
+    firebaseUser &&
+    accountStanding.standing?.status === "active" &&
+    !accountStanding.loading &&
+    !accountStanding.error &&
+    !membershipLoading &&
+    !membershipError &&
+    selectedSquadId === squadId &&
+    hasActiveMembership,
+  );
 
   const load = useCallback(async (refresh = false) => {
-    if (!gameType || !squadId) {
-      setError("not_authorized");
+    const requestVersion = ++directoryRequestVersionRef.current;
+    if (!canLoadDirectory || !gameType || !squadId) {
+      setDirectory(createEmptyGameLobbyDirectoryResult());
+      setDirectoryResolved(false);
+      setDirectoryError(null);
       setLoading(false);
+      setRefreshing(false);
       return;
     }
     if (refresh) setRefreshing(true);
     else setLoading(true);
-    setError(null);
+    setDirectoryError(null);
     try {
       const result = await listGameLobbies({ gameType, squadId });
-      setLobbies(result.lobbies);
-      setActiveLobby(result.activeLobby);
-      setCanCreateLobby(result.canCreateLobby);
-      setMaxLobbies(result.maxLobbiesPerGame);
+      if (requestVersion !== directoryRequestVersionRef.current) return;
+      setDirectory(result);
+      setDirectoryResolved(true);
     } catch (nextError) {
-      setError(readGameJoinCodeFailureReason(nextError));
+      if (requestVersion !== directoryRequestVersionRef.current) return;
+      setDirectoryError(readGameJoinCodeFailureReason(nextError));
+      setDirectoryResolved(true);
     } finally {
+      if (requestVersion !== directoryRequestVersionRef.current) return;
       setLoading(false);
       setRefreshing(false);
     }
-  }, [gameType, squadId]);
+  }, [canLoadDirectory, gameType, squadId]);
 
   useFocusEffect(useCallback(() => {
     void load();
+    return () => {
+      directoryRequestVersionRef.current += 1;
+    };
   }, [load]));
+
+  const eligibility = resolveGameLobbyDirectoryEligibility({
+    authLoading,
+    authenticated: Boolean(firebaseUser),
+    accountLoading: accountStanding.loading,
+    accountError: accountStanding.error,
+    accountStatus: accountStanding.standing?.status ?? null,
+    membershipLoading,
+    membershipError: Boolean(membershipError),
+    squadId,
+    selectedSquadId,
+    hasActiveMembership,
+    directoryLoading: loading,
+    directoryResolved,
+    directoryError,
+    directory,
+    creating,
+  });
+  const { activeLobby, lobbies, maxLobbiesPerGame: maxLobbies } = directory;
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    const diagnostic = {
+      gameType,
+      authenticated: Boolean(firebaseUser),
+      authLoading,
+      accountStatus: accountStanding.standing?.status ?? "unresolved",
+      accountLoading: accountStanding.loading,
+      accountError: accountStanding.error,
+      hasSquadId: Boolean(squadId),
+      selectedSquadMatches: Boolean(squadId && selectedSquadId === squadId),
+      membershipLoading,
+      membershipUnavailable: Boolean(membershipError),
+      activeMembership: hasActiveMembership,
+      directoryLoading: loading,
+      directoryResolved,
+      creating,
+      lobbyCount: lobbies.length,
+      maxLobbies,
+      hasActiveLobby: Boolean(activeLobby),
+      activeLobbyGameType: activeLobby?.gameType ?? null,
+      canCreateLobby: directory.canCreateLobby,
+      creationBlockReason: directory.creationBlockReason,
+      directoryError,
+      eligibility: eligibility.kind,
+    };
+    const key = JSON.stringify(diagnostic);
+    if (diagnosticKeyRef.current === key) return;
+    diagnosticKeyRef.current = key;
+    console.info("[GameLobbyDirectory] eligibility", diagnostic);
+  }, [
+    accountStanding.error,
+    accountStanding.loading,
+    accountStanding.standing?.status,
+    activeLobby,
+    authLoading,
+    creating,
+    directory.canCreateLobby,
+    directory.creationBlockReason,
+    directoryError,
+    directoryResolved,
+    eligibility.kind,
+    firebaseUser,
+    gameType,
+    hasActiveMembership,
+    lobbies.length,
+    loading,
+    maxLobbies,
+    membershipError,
+    membershipLoading,
+    selectedSquadId,
+    squadId,
+  ]);
 
   const openLobby = useCallback((sessionId: string, lobbyId: string) => {
     if (!gameType) return;
@@ -114,19 +231,22 @@ export default function GameLobbyDirectoryScreen() {
   }, [activeLobby]);
 
   const handleLeaveActiveLobby = useCallback(async () => {
-    if (!activeLobby || leavingActiveLobby) return;
+    if (!activeLobby || leaveInFlightRef.current) return;
+    leaveInFlightRef.current = true;
     setLeavingActiveLobby(true);
-    setError(null);
+    setActionError(null);
     try {
       await leaveGameLobby({ lobbyId: activeLobby.lobbyId });
-      setActiveLobby(null);
-      await load(true);
+      setDirectory(createEmptyGameLobbyDirectoryResult());
+      setDirectoryResolved(false);
+      await load();
     } catch (nextError) {
-      setError(readGameJoinCodeFailureReason(nextError));
+      setActionError(readGameJoinCodeFailureReason(nextError));
     } finally {
+      leaveInFlightRef.current = false;
       setLeavingActiveLobby(false);
     }
-  }, [activeLobby, leavingActiveLobby, load]);
+  }, [activeLobby, load]);
 
   const confirmLeaveActiveLobby = useCallback(() => {
     if (!activeLobby || leavingActiveLobby) return;
@@ -152,9 +272,11 @@ export default function GameLobbyDirectoryScreen() {
   }, [activeLobby, handleLeaveActiveLobby, leavingActiveLobby, t]);
 
   const handleCreate = useCallback(async () => {
-    if (!gameType || !squadId || creating || activeLobby || !canCreateLobby) return;
+    if (!gameType || !squadId || eligibility.kind !== "eligible" || createInFlightRef.current) return;
+    createInFlightRef.current = true;
     setCreating(true);
-    setError(null);
+    setCreationError(null);
+    setActionError(null);
     try {
       const result = await createGameLobby({
         gameType,
@@ -164,12 +286,13 @@ export default function GameLobbyDirectoryScreen() {
       createRequestKeyRef.current = createGameJoinIdempotencyKey();
       openLobby(result.sessionId, result.lobbyId);
     } catch (nextError) {
-      setError(readGameJoinCodeFailureReason(nextError));
+      setCreationError(readGameJoinCodeFailureReason(nextError));
       await load(true);
     } finally {
+      createInFlightRef.current = false;
       setCreating(false);
     }
-  }, [activeLobby, canCreateLobby, creating, gameType, load, openLobby, squadId]);
+  }, [eligibility.kind, gameType, load, openLobby, squadId]);
 
   const confirmAnotherLobby = useCallback(() => {
     Alert.alert(
@@ -186,7 +309,7 @@ export default function GameLobbyDirectoryScreen() {
     if (!gameType || !squadId || joiningLobbyId) return;
     if (activeLobby && activeLobby.lobbyId !== lobby.lobbyId) return;
     setJoiningLobbyId(lobby.lobbyId);
-    setError(null);
+    setActionError(null);
     try {
       if (lobby.joinAction === "joinNextRound") {
         await joinGameLobbyNextRound({ gameType, squadId, lobbyId: lobby.lobbyId });
@@ -203,7 +326,7 @@ export default function GameLobbyDirectoryScreen() {
       const result = await joinGameLobbyById({ gameType, squadId, lobbyId: lobby.lobbyId });
       openLobby(result.sessionId, result.lobbyId);
     } catch (nextError) {
-      setError(readGameJoinCodeFailureReason(nextError));
+      setActionError(readGameJoinCodeFailureReason(nextError));
       await load(true);
     } finally {
       setJoiningLobbyId(null);
@@ -211,8 +334,16 @@ export default function GameLobbyDirectoryScreen() {
   }, [activeLobby, gameType, joiningLobbyId, load, openLobby, squadId, t]);
 
   const title = gameType ? t(GAME_CONFIG[gameType].titleKey) : t("games.title");
-  const canOfferCreate = Boolean(gameType && squadId && lobbies.length < maxLobbies);
-  const createBlocked = !canCreateLobby || activeLobby !== null;
+  const canOfferCreate = eligibility.kind === "eligible" || eligibility.kind === "creating";
+  const guidance = resolveEligibilityGuidance({
+    kind: eligibility.kind,
+    accountStatus: accountStanding.standing?.status ?? null,
+    t,
+    onAccountRetry: () => void accountStanding.refresh(),
+    onBackToGames: () => router.replace("/(tabs)/games" as never),
+    onDirectoryRetry: () => void load(true),
+    onMembershipRetry: () => void reloadMemberships(),
+  });
 
   return (
     <ScreenWrapper>
@@ -240,7 +371,7 @@ export default function GameLobbyDirectoryScreen() {
           </Card>
         ) : null}
 
-        {activeLobby ? (
+        {eligibility.kind === "activeLobby" && activeLobby ? (
           <ActiveLobbyRecoveryCard
             activeLobby={activeLobby}
             busy={leavingActiveLobby}
@@ -249,25 +380,23 @@ export default function GameLobbyDirectoryScreen() {
           />
         ) : null}
 
-        {loading ? (
+        {eligibility.kind === "checking" ? (
           <View style={styles.centered}>
             <ActivityIndicator color={Colors.primary} size="large" />
-            <Text style={styles.bodyText}>{t("games.lobbyDirectory.loading")}</Text>
+            <Text style={styles.bodyText}>{t("games.lobbyDirectory.checkingAvailability")}</Text>
           </View>
-        ) : lobbies.length === 0 ? (
-          <Card style={styles.emptyCard}>
-            <Text style={styles.cardTitle}>{t("games.lobbyDirectory.noLobbyTitle")}</Text>
-            <Text style={styles.bodyText}>{t("games.lobbyDirectory.noLobbyBody")}</Text>
-            {gameType && squadId ? (
-              <PrimaryAction
-                busy={creating}
-                disabled={!canOfferCreate || createBlocked}
-                label={t("games.lobbyDirectory.startLobby")}
-                onPress={() => void handleCreate()}
-              />
-            ) : null}
-          </Card>
-        ) : (
+        ) : null}
+
+        {guidance ? (
+          <GuidanceCard
+            actionLabel={guidance.actionLabel}
+            body={guidance.body}
+            onAction={guidance.onAction}
+            title={guidance.title}
+          />
+        ) : null}
+
+        {eligibility.kind !== "checking" && lobbies.length > 0 ? (
           <View style={styles.lobbyList}>
             {lobbies.map((lobby) => (
               <LobbyCard
@@ -279,12 +408,36 @@ export default function GameLobbyDirectoryScreen() {
               />
             ))}
           </View>
-        )}
+        ) : null}
 
-        {error ? (
+        {canOfferCreate && lobbies.length === 0 ? (
+          <Card style={styles.emptyCard}>
+            <Text style={styles.cardTitle}>{t("games.lobbyDirectory.noLobbyTitle")}</Text>
+            <Text style={styles.bodyText}>{t("games.lobbyDirectory.noLobbyBody")}</Text>
+            <PrimaryAction
+              busy={creating}
+              label={t("games.lobbyDirectory.startLobby")}
+              onPress={() => void handleCreate()}
+            />
+          </Card>
+        ) : null}
+
+        {creationError && canOfferCreate ? (
+          <Card style={styles.errorCard}>
+            <Text style={styles.cardTitle}>{t("games.lobbyDirectory.creationFailedTitle")}</Text>
+            <Text accessibilityRole="alert" style={styles.errorText}>
+              {t(`games.joinCode.errors.${creationError}`)}
+            </Text>
+            <Pressable accessibilityRole="button" onPress={() => void handleCreate()} style={styles.retryButton}>
+              <Text style={styles.retryText}>{t("common.retry")}</Text>
+            </Pressable>
+          </Card>
+        ) : null}
+
+        {actionError ? (
           <Card style={styles.errorCard}>
             <Text accessibilityRole="alert" style={styles.errorText}>
-              {t(`games.joinCode.errors.${error}`)}
+              {t(`games.joinCode.errors.${actionError}`)}
             </Text>
             <Pressable accessibilityRole="button" onPress={() => void load(true)} style={styles.retryButton}>
               <Text style={styles.retryText}>{t("common.retry")}</Text>
@@ -292,16 +445,16 @@ export default function GameLobbyDirectoryScreen() {
           </Card>
         ) : null}
 
-        {!loading && lobbies.length > 0 && canOfferCreate ? (
+        {lobbies.length > 0 && lobbies.length < maxLobbies && canOfferCreate ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityState={{ disabled: creating || createBlocked }}
-            disabled={creating || createBlocked}
+            accessibilityState={{ disabled: creating }}
+            disabled={creating}
             onPress={confirmAnotherLobby}
             style={({ pressed }) => [
               styles.secondaryAction,
-              (creating || createBlocked) && styles.disabledAction,
-              pressed && !createBlocked && styles.secondaryActionPressed,
+              creating && styles.disabledAction,
+              pressed && !creating && styles.secondaryActionPressed,
             ]}
           >
             {creating ? <ActivityIndicator color={Colors.primary} /> : <Plus color={Colors.primary} size={19} />}
@@ -311,6 +464,113 @@ export default function GameLobbyDirectoryScreen() {
       </ScrollView>
     </ScreenWrapper>
   );
+}
+
+function GuidanceCard({
+  actionLabel,
+  body,
+  onAction,
+  title,
+}: {
+  actionLabel?: string;
+  body: string;
+  onAction?: () => void;
+  title: string;
+}) {
+  return (
+    <Card style={styles.guidanceCard}>
+      <Text accessibilityRole="header" style={styles.cardTitle}>{title}</Text>
+      <Text style={styles.bodyText}>{body}</Text>
+      {actionLabel && onAction ? (
+        <Pressable accessibilityRole="button" onPress={onAction} style={styles.retryButton}>
+          <Text style={styles.retryText}>{actionLabel}</Text>
+        </Pressable>
+      ) : null}
+    </Card>
+  );
+}
+
+function resolveEligibilityGuidance({
+  accountStatus,
+  kind,
+  onAccountRetry,
+  onBackToGames,
+  onDirectoryRetry,
+  onMembershipRetry,
+  t,
+}: {
+  accountStatus: "active" | "messagingRestricted" | "suspended" | "banned" | null;
+  kind: GameLobbyDirectoryEligibilityKind;
+  onAccountRetry: () => void;
+  onBackToGames: () => void;
+  onDirectoryRetry: () => void;
+  onMembershipRetry: () => void;
+  t: TFunction;
+}): { title: string; body: string; actionLabel?: string; onAction?: () => void } | null {
+  if (kind === "authRequired") {
+    return {
+      title: t("games.lobbyDirectory.authRequiredTitle"),
+      body: t("games.lobbyDirectory.authRequiredBody"),
+      actionLabel: t("games.lobbyDirectory.backToGames"),
+      onAction: onBackToGames,
+    };
+  }
+  if (kind === "accountUnavailable") {
+    return {
+      title: t("accountStanding.refresh.title"),
+      body: t("accountStanding.refresh.body"),
+      actionLabel: t("common.retry"),
+      onAction: onAccountRetry,
+    };
+  }
+  if (kind === "accountRestricted") {
+    const standingKey = accountStatus === "active" || accountStatus === null ? "refresh" : accountStatus;
+    return {
+      title: t(`accountStanding.${standingKey}.title`),
+      body: t(`accountStanding.${standingKey}.body`),
+      actionLabel: t("common.retry"),
+      onAction: onAccountRetry,
+    };
+  }
+  if (kind === "missingSquad") {
+    return {
+      title: t("games.lobbyDirectory.missingSquadTitle"),
+      body: t("games.lobbyDirectory.missingSquadBody"),
+      actionLabel: t("games.lobbyDirectory.backToGames"),
+      onAction: onBackToGames,
+    };
+  }
+  if (kind === "membershipUnavailable") {
+    return {
+      title: t("games.lobbyDirectory.membershipUnavailableTitle"),
+      body: t("games.lobbyDirectory.membershipUnavailableBody"),
+      actionLabel: t("common.retry"),
+      onAction: onMembershipRetry,
+    };
+  }
+  if (kind === "inactiveMembership") {
+    return {
+      title: t("games.lobbyDirectory.inactiveMembershipTitle"),
+      body: t("games.lobbyDirectory.inactiveMembershipBody"),
+      actionLabel: t("games.lobbyDirectory.backToGames"),
+      onAction: onBackToGames,
+    };
+  }
+  if (kind === "lobbyLimit") {
+    return {
+      title: t("games.lobbyDirectory.lobbyLimitTitle"),
+      body: t("games.lobbyDirectory.lobbyLimitBody"),
+    };
+  }
+  if (kind === "directoryUnavailable") {
+    return {
+      title: t("games.lobbyDirectory.directoryUnavailableTitle"),
+      body: t("games.lobbyDirectory.directoryUnavailableBody"),
+      actionLabel: t("common.retry"),
+      onAction: onDirectoryRetry,
+    };
+  }
+  return null;
 }
 
 function LobbyCard({
@@ -482,6 +742,7 @@ const styles = StyleSheet.create({
   scroll: { gap: Spacing.md, padding: Spacing.md, paddingBottom: Spacing.xxl },
   centered: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.xxl },
   emptyCard: { gap: Spacing.md },
+  guidanceCard: { gap: Spacing.sm },
   lobbyList: { gap: Spacing.md },
   lobbyCard: { gap: Spacing.md },
   cardHeader: { alignItems: "flex-start", flexDirection: "row", gap: Spacing.sm, justifyContent: "space-between" },

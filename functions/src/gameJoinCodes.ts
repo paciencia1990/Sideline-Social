@@ -84,6 +84,7 @@ const LOBBY_CREATE_WINDOW_MS = 10 * 60 * 1000;
 const LOBBY_CREATE_LIMIT = 4;
 const LOBBY_CREATE_BLOCK_MS = 10 * 60 * 1000;
 const PROVISIONING_TIMEOUT_MS = 60 * 1000;
+const LOBBY_DEPARTURE_STALE_MS = 30 * 1000;
 const FIRESTORE_CONTENTION_RETRY_LIMIT = 4;
 
 function isRetryableFirestoreContention(error: unknown) {
@@ -198,9 +199,14 @@ export const listGameLobbies = functions.https.onCall(async (data, context) => {
       (lobby) => lobby.lobbyId === membership.lobbyId,
     ) ?? null;
   }
+  const creationBlockReason = membership
+    ? 'active_lobby'
+    : requestedGameType && listedLobbies.length >= MAX_DISCOVERABLE_GAME_LOBBIES
+      ? 'lobby_limit'
+      : null;
   return {
     lobbies: listedLobbies,
-    canCreateLobby: membership == null,
+    canCreateLobby: creationBlockReason == null,
     activeLobbyId: membership?.lobbyId ?? null,
     activeLobby: membership ? {
       lobbyId: membership.lobbyId,
@@ -211,6 +217,7 @@ export const listGameLobbies = functions.https.onCall(async (data, context) => {
       activePlayerCount: activeLobbySummary?.activePlayerCount ?? null,
       callerIsHost: activeLobbySummary?.callerIsHost ?? false,
     } : null,
+    creationBlockReason,
     maxLobbiesPerGame: MAX_DISCOVERABLE_GAME_LOBBIES,
     serverNowMs: Date.now(),
   };
@@ -1280,6 +1287,7 @@ type StoredLobbyMembership = {
   state: 'joining' | 'active' | 'queued' | 'leaving';
   departureState: 'joining' | 'active' | 'queued' | null;
   expiresAtMs: number;
+  updatedAtMs: number;
 };
 
 type LobbyAllocation = LobbyCreateResult & {
@@ -1975,7 +1983,8 @@ async function reconcileActiveLobbyMembership(uid: string): Promise<StoredLobbyM
   const reference = activeGameLobbyMemberships().doc(uid);
   const snapshot = await reference.get();
   const membership = readStoredLobbyMembership(snapshot.data());
-  if (!snapshot.exists || !membership || membership.expiresAtMs <= Date.now()) {
+  const nowMs = Date.now();
+  if (!snapshot.exists || !membership || membership.expiresAtMs <= nowMs) {
     if (snapshot.exists) await reference.delete();
     return null;
   }
@@ -1984,33 +1993,41 @@ async function reconcileActiveLobbyMembership(uid: string): Promise<StoredLobbyM
     directorySnapshot.data(),
     membership.squadId,
     membership.gameType,
-    Date.now(),
+    nowMs,
   );
   const entry = directory.lobbies[membership.lobbyId];
   if (!entry) {
     await reference.delete();
     return null;
   }
-  if (membership.state === 'leaving') return membership;
   const hydrated = await hydrateLobbyEntry(entry, uid);
   if (!hydrated || hydrated.summary.callerState === 'none') {
     await reference.delete();
     return null;
   }
+  if (
+    membership.state === 'leaving' &&
+    membership.updatedAtMs > 0 &&
+    nowMs - membership.updatedAtMs < LOBBY_DEPARTURE_STALE_MS
+  ) return membership;
   const next: StoredLobbyMembership = {
     ...membership,
     sessionId: hydrated.entry.sessionId,
     state: hydrated.summary.callerState,
+    departureState: null,
     expiresAtMs: hydrated.entry.expiresAtMs,
+    updatedAtMs: nowMs,
   };
   if (
     next.sessionId !== membership.sessionId ||
     next.state !== membership.state ||
+    next.departureState !== membership.departureState ||
     next.expiresAtMs !== membership.expiresAtMs
   ) {
     await reference.update({
       sessionId: next.sessionId,
       state: next.state,
+      departureState: FieldValue.delete(),
       expiresAt: Timestamp.fromMillis(next.expiresAtMs),
       updatedAt: Timestamp.now(),
     });
@@ -2159,12 +2176,13 @@ async function beginLobbyDeparture(uid: string, lobbyId: string) {
     }
     if (membership.state === 'leaving') return membership;
     const departureState = membership.state;
+    const updatedAt = Timestamp.now();
     transaction.update(reference, {
       state: 'leaving',
       departureState,
-      updatedAt: Timestamp.now(),
+      updatedAt,
     });
-    return { ...membership, state: 'leaving', departureState };
+    return { ...membership, state: 'leaving', departureState, updatedAtMs: updatedAt.toMillis() };
   });
 }
 
@@ -3863,8 +3881,9 @@ function readStoredLobbyMembership(value: unknown): StoredLobbyMembership | null
     ? record.departureState
     : null;
   const expiresAtMs = readTimestampMillis(record.expiresAt);
+  const updatedAtMs = readTimestampMillis(record.updatedAt);
   if (!lobbyId || !sessionId || !squadId || !gameType || !state || !expiresAtMs) return null;
-  return { lobbyId, sessionId, squadId, gameType, state, departureState, expiresAtMs };
+  return { lobbyId, sessionId, squadId, gameType, state, departureState, expiresAtMs, updatedAtMs };
 }
 
 function readLobbyAllocation(
