@@ -1,0 +1,363 @@
+import React, { useCallback, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { Plus, Users } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
+
+import { Card } from "@/components/Card";
+import { NestedBackButton } from "@/components/NestedBackButton";
+import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import {
+  createGameJoinIdempotencyKey,
+  createGameLobby,
+  joinGameLobbyById,
+  joinGameLobbyNextRound,
+  listGameLobbies,
+  readGameJoinCodeFailureReason,
+  type GameJoinCodeFailureReason,
+  type GameJoinCodeType,
+  type GameLobbySummary,
+} from "@/services/gameJoinCodeService";
+
+const GAME_CONFIG: Record<GameJoinCodeType, { titleKey: string; lobbyRoute: string }> = {
+  bombDefusal: {
+    titleKey: "games.bombDefusal.title",
+    lobbyRoute: "/(games)/bomb-defusal/Lobby",
+  },
+  spotTheDifferences: {
+    titleKey: "games.spotDifference.title",
+    lobbyRoute: "/(games)/spot-the-difference/Lobby",
+  },
+  triviaBlitz: {
+    titleKey: "games.triviaBlitz.title",
+    lobbyRoute: "/(games)/trivia-blitz/Lobby",
+  },
+};
+
+export default function GameLobbyDirectoryScreen() {
+  const { t } = useTranslation();
+  const params = useLocalSearchParams<{ gameType?: string | string[]; squadId?: string | string[] }>();
+  const gameType = readGameType(normalizeParam(params.gameType));
+  const squadId = normalizeParam(params.squadId);
+  const [lobbies, setLobbies] = useState<GameLobbySummary[]>([]);
+  const [canCreateLobby, setCanCreateLobby] = useState(false);
+  const [maxLobbies, setMaxLobbies] = useState(3);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [joiningLobbyId, setJoiningLobbyId] = useState<string | null>(null);
+  const [error, setError] = useState<GameJoinCodeFailureReason | null>(null);
+  const createRequestKeyRef = useRef(createGameJoinIdempotencyKey());
+
+  const load = useCallback(async (refresh = false) => {
+    if (!gameType || !squadId) {
+      setError("not_authorized");
+      setLoading(false);
+      return;
+    }
+    if (refresh) setRefreshing(true);
+    else setLoading(true);
+    setError(null);
+    try {
+      const result = await listGameLobbies({ gameType, squadId });
+      setLobbies(result.lobbies);
+      setCanCreateLobby(result.canCreateLobby);
+      setMaxLobbies(result.maxLobbiesPerGame);
+    } catch (nextError) {
+      setError(readGameJoinCodeFailureReason(nextError));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [gameType, squadId]);
+
+  useFocusEffect(useCallback(() => {
+    void load();
+  }, [load]));
+
+  const openLobby = useCallback((sessionId: string, lobbyId: string) => {
+    if (!gameType) return;
+    router.push({
+      pathname: GAME_CONFIG[gameType].lobbyRoute as never,
+      params: { sessionId, lobbyId },
+    });
+  }, [gameType]);
+
+  const handleCreate = useCallback(async () => {
+    if (!gameType || !squadId || creating) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const result = await createGameLobby({
+        gameType,
+        squadId,
+        idempotencyKey: createRequestKeyRef.current,
+      });
+      createRequestKeyRef.current = createGameJoinIdempotencyKey();
+      openLobby(result.sessionId, result.lobbyId);
+    } catch (nextError) {
+      setError(readGameJoinCodeFailureReason(nextError));
+      await load(true);
+    } finally {
+      setCreating(false);
+    }
+  }, [creating, gameType, load, openLobby, squadId]);
+
+  const confirmAnotherLobby = useCallback(() => {
+    Alert.alert(
+      t("games.lobbyDirectory.startAnotherTitle"),
+      t("games.lobbyDirectory.startAnotherBody"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        { text: t("games.lobbyDirectory.startNewLobby"), onPress: () => void handleCreate() },
+      ],
+    );
+  }, [handleCreate, t]);
+
+  const handleJoin = useCallback(async (lobby: GameLobbySummary) => {
+    if (!gameType || !squadId || joiningLobbyId) return;
+    setJoiningLobbyId(lobby.lobbyId);
+    setError(null);
+    try {
+      if (lobby.joinAction === "joinNextRound") {
+        await joinGameLobbyNextRound({ gameType, squadId, lobbyId: lobby.lobbyId });
+        Alert.alert(
+          t("games.lobbyDirectory.queuedTitle"),
+          t("games.lobbyDirectory.queuedBody"),
+        );
+        await load(true);
+        return;
+      }
+      if (lobby.joinAction === "queued" || lobby.joinAction === "full" || lobby.joinAction === "unavailable") {
+        return;
+      }
+      const result = await joinGameLobbyById({ gameType, squadId, lobbyId: lobby.lobbyId });
+      openLobby(result.sessionId, result.lobbyId);
+    } catch (nextError) {
+      setError(readGameJoinCodeFailureReason(nextError));
+      await load(true);
+    } finally {
+      setJoiningLobbyId(null);
+    }
+  }, [gameType, joiningLobbyId, load, openLobby, squadId, t]);
+
+  const title = gameType ? t(GAME_CONFIG[gameType].titleKey) : t("games.title");
+  const showCreate = Boolean(gameType && squadId && canCreateLobby && lobbies.length < maxLobbies);
+
+  return (
+    <ScreenWrapper>
+      <View style={styles.header}>
+        <NestedBackButton accessibilityLabel={t("common.back")} fallbackRoute="/(tabs)/games" />
+        <View style={styles.headerCopy}>
+          <Text accessibilityRole="header" style={styles.title}>
+            {t("games.lobbyDirectory.title", { game: title })}
+          </Text>
+          <Text style={styles.subtitle}>{t("games.lobbyDirectory.subtitle")}</Text>
+        </View>
+        <View style={styles.headerSpacer} />
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={Colors.primary} />}
+        showsVerticalScrollIndicator={false}
+      >
+        {loading ? (
+          <View style={styles.centered}>
+            <ActivityIndicator color={Colors.primary} size="large" />
+            <Text style={styles.bodyText}>{t("games.lobbyDirectory.loading")}</Text>
+          </View>
+        ) : lobbies.length === 0 ? (
+          <Card style={styles.emptyCard}>
+            <Text style={styles.cardTitle}>{t("games.lobbyDirectory.noLobbyTitle")}</Text>
+            <Text style={styles.bodyText}>{t("games.lobbyDirectory.noLobbyBody")}</Text>
+            {showCreate ? (
+              <PrimaryAction
+                busy={creating}
+                label={t("games.lobbyDirectory.startLobby")}
+                onPress={() => void handleCreate()}
+              />
+            ) : null}
+          </Card>
+        ) : (
+          <View style={styles.lobbyList}>
+            {lobbies.map((lobby) => (
+              <LobbyCard
+                busy={joiningLobbyId === lobby.lobbyId}
+                key={lobby.lobbyId}
+                lobby={lobby}
+                onJoin={() => void handleJoin(lobby)}
+              />
+            ))}
+          </View>
+        )}
+
+        {error ? (
+          <Card style={styles.errorCard}>
+            <Text accessibilityRole="alert" style={styles.errorText}>
+              {t(`games.joinCode.errors.${error}`)}
+            </Text>
+            <Pressable accessibilityRole="button" onPress={() => void load(true)} style={styles.retryButton}>
+              <Text style={styles.retryText}>{t("common.retry")}</Text>
+            </Pressable>
+          </Card>
+        ) : null}
+
+        {!loading && lobbies.length > 0 && showCreate ? (
+          <Pressable
+            accessibilityRole="button"
+            disabled={creating}
+            onPress={confirmAnotherLobby}
+            style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
+          >
+            {creating ? <ActivityIndicator color={Colors.primary} /> : <Plus color={Colors.primary} size={19} />}
+            <Text style={styles.secondaryActionText}>{t("games.lobbyDirectory.startAnotherLobby")}</Text>
+          </Pressable>
+        ) : null}
+      </ScrollView>
+    </ScreenWrapper>
+  );
+}
+
+function LobbyCard({
+  busy,
+  lobby,
+  onJoin,
+}: {
+  busy: boolean;
+  lobby: GameLobbySummary;
+  onJoin: () => void;
+}) {
+  const { t } = useTranslation();
+  const lobbyName = lobby.isMain
+    ? t("games.lobbyDirectory.mainLobby")
+    : t("games.lobbyDirectory.numberedLobby", { number: lobby.lobbyNumber });
+  const status = t(`games.lobbyDirectory.status.${lobby.status}`);
+  const playerCount = t("games.lobbyDirectory.playerCount", { count: lobby.activePlayerCount });
+  const queueCount = lobby.queuedPlayerCount > 0
+    ? t("games.lobbyDirectory.waitingCount", { count: lobby.queuedPlayerCount })
+    : null;
+  const full = lobby.joinAction === "full";
+  const unavailable = lobby.joinAction === "unavailable" || lobby.joinAction === "queued";
+  const actionLabel = lobby.joinAction === "joinNextRound"
+    ? t("games.lobbyDirectory.joinNextRound")
+    : lobby.joinAction === "queued"
+      ? t("games.lobbyDirectory.waitingForNextRound")
+      : full
+        ? t("games.lobbyDirectory.lobbyFull")
+        : lobby.joinAction === "reconnect"
+          ? t("games.lobbyDirectory.returnToLobby")
+          : t("games.lobbyDirectory.joinGame");
+  const accessibilityLabel = t("games.lobbyDirectory.cardAccessibility", {
+    lobby: lobbyName,
+    host: lobby.hostDisplayName,
+    status,
+    players: playerCount,
+    queue: queueCount ?? t("games.lobbyDirectory.noWaitingPlayers"),
+    capacity: lobby.capacity,
+    action: actionLabel,
+  });
+
+  return (
+    <Card style={styles.lobbyCard}>
+      <View accessible accessibilityLabel={accessibilityLabel}>
+        <View style={styles.cardHeader}>
+          <View style={styles.cardHeaderCopy}>
+            <Text style={styles.cardTitle}>{lobbyName}</Text>
+            <Text style={styles.hostText}>{t("games.lobbyDirectory.hostedBy", { name: lobby.hostDisplayName })}</Text>
+          </View>
+          <View style={styles.statusBadge}>
+            <Text style={styles.statusText}>{status}</Text>
+          </View>
+        </View>
+        <View style={styles.countRow}>
+          <Users color={Colors.textHeading} size={17} />
+          <Text style={styles.countText}>{playerCount}</Text>
+          <Text style={styles.capacityText}>{t("games.lobbyDirectory.capacity", { count: lobby.capacity })}</Text>
+        </View>
+        {queueCount ? <Text style={styles.queueText}>{queueCount}</Text> : null}
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ disabled: busy || full || unavailable }}
+        disabled={busy || full || unavailable}
+        onPress={onJoin}
+        style={[styles.joinAction, (full || unavailable) && styles.disabledAction]}
+      >
+        {busy ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.joinActionText}>{actionLabel}</Text>}
+      </Pressable>
+    </Card>
+  );
+}
+
+function PrimaryAction({ busy, label, onPress }: { busy: boolean; label: string; onPress: () => void }) {
+  return (
+    <Pressable accessibilityRole="button" disabled={busy} onPress={onPress} style={styles.joinAction}>
+      {busy ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.joinActionText}>{label}</Text>}
+    </Pressable>
+  );
+}
+
+function readGameType(value: string): GameJoinCodeType | null {
+  return value === "bombDefusal" || value === "spotTheDifferences" || value === "triviaBlitz"
+    ? value
+    : null;
+}
+
+function normalizeParam(value?: string | string[]) {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+const styles = StyleSheet.create({
+  header: {
+    alignItems: "flex-start",
+    backgroundColor: Colors.surface,
+    borderBottomColor: Colors.secondary,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: Spacing.sm,
+    minHeight: 72,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.sm,
+  },
+  headerCopy: { flex: 1, gap: 2, minWidth: 0 },
+  headerSpacer: { width: 44 },
+  title: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 19, lineHeight: 25 },
+  subtitle: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 18 },
+  scroll: { gap: Spacing.md, padding: Spacing.md, paddingBottom: Spacing.xxl },
+  centered: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.xxl },
+  emptyCard: { gap: Spacing.md },
+  lobbyList: { gap: Spacing.md },
+  lobbyCard: { gap: Spacing.md },
+  cardHeader: { alignItems: "flex-start", flexDirection: "row", gap: Spacing.sm, justifyContent: "space-between" },
+  cardHeaderCopy: { flex: 1, gap: 3, minWidth: 0 },
+  cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 17 },
+  hostText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13 },
+  statusBadge: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: 6, borderWidth: 1, paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs },
+  statusText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 11 },
+  countRow: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: Spacing.xs },
+  countText: { color: Colors.textHeading, fontFamily: Typography.bodyMedium, fontSize: 13 },
+  capacityText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12 },
+  queueText: { color: Colors.textPrimary, fontFamily: Typography.bodyMedium, fontSize: 12 },
+  bodyText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20 },
+  joinAction: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
+  joinActionText: { color: Colors.surface, fontFamily: Typography.bodyBold, fontSize: 15, textAlign: "center" },
+  disabledAction: { opacity: 0.55 },
+  secondaryAction: { alignItems: "center", alignSelf: "stretch", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1.5, flexDirection: "row", gap: Spacing.sm, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
+  secondaryActionPressed: { backgroundColor: Colors.background },
+  secondaryActionText: { color: Colors.primary, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 14, textAlign: "center" },
+  errorCard: { gap: Spacing.sm },
+  errorText: { color: Colors.primary, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 19 },
+  retryButton: { alignItems: "center", alignSelf: "flex-start", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.md },
+  retryText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
+});

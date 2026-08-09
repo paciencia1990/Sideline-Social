@@ -18,7 +18,55 @@ export type GameJoinCodeFailureReason =
   | 'rate_limited'
   | 'network_unavailable'
   | 'code_reservation_failed'
-  | 'session_creation_failed';
+  | 'session_creation_failed'
+  | 'lobby_closed_or_expired'
+  | 'already_participating_elsewhere'
+  | 'lobby_limit_reached'
+  | 'round_in_progress'
+  | 'round_not_in_progress'
+  | 'round_not_finished'
+  | 'finish_active_round_first'
+  | 'host_must_transfer'
+  | 'client_update_required';
+
+export type GameLobbyStatus =
+  | 'waiting'
+  | 'starting'
+  | 'inProgress'
+  | 'results'
+  | 'waitingForRematch';
+
+export type GameLobbyJoinAction =
+  | 'join'
+  | 'reconnect'
+  | 'joinNextRound'
+  | 'queued'
+  | 'full'
+  | 'unavailable';
+
+export type GameLobbySummary = {
+  lobbyId: string;
+  sessionId: string;
+  gameType: GameJoinCodeType;
+  lobbyNumber: number;
+  isMain: boolean;
+  hostDisplayName: string;
+  status: GameLobbyStatus;
+  activePlayerCount: number;
+  queuedPlayerCount: number;
+  capacity: number;
+  callerState: 'none' | 'active' | 'queued';
+  callerIsHost: boolean;
+  joinAction: GameLobbyJoinAction;
+};
+
+export type GameLobbyDirectoryResult = {
+  lobbies: GameLobbySummary[];
+  canCreateLobby: boolean;
+  activeLobbyId: string | null;
+  maxLobbiesPerGame: number;
+  serverNowMs: number;
+};
 
 export type CreateGameJoinCodeResult = {
   gameType: GameJoinCodeType;
@@ -30,11 +78,76 @@ export type CreateGameJoinCodeResult = {
 export type ResolveGameJoinCodeResult = {
   gameType: GameJoinCodeType;
   sessionId: string;
+  lobbyId: string;
+  lobbyNumber: number;
   participantState: 'joined' | 'reconnected';
+};
+
+export type CreateGameLobbyResult = ResolveGameJoinCodeResult & {
+  joinCode: string;
+  expiresAt: number;
 };
 
 export function createGameJoinIdempotencyKey() {
   return doc(collection(db, 'gameJoinRequestIds')).id;
+}
+
+export async function listGameLobbies(input: {
+  squadId: string;
+  gameType?: GameJoinCodeType;
+}) {
+  const callable = httpsCallable<typeof input, GameLobbyDirectoryResult>(functions, 'listGameLobbies');
+  return (await callable(input)).data;
+}
+
+export async function createGameLobby(input: {
+  squadId: string;
+  gameType: GameJoinCodeType;
+  idempotencyKey: string;
+}) {
+  const callable = httpsCallable<typeof input, CreateGameLobbyResult>(functions, 'createGameLobby');
+  return (await callable(input)).data;
+}
+
+export async function joinGameLobbyById(input: {
+  squadId: string;
+  gameType: GameJoinCodeType;
+  lobbyId: string;
+}) {
+  const callable = httpsCallable<typeof input, ResolveGameJoinCodeResult>(functions, 'joinGameLobbyById');
+  return (await callable(input)).data;
+}
+
+export async function joinGameLobbyNextRound(input: {
+  squadId: string;
+  gameType: GameJoinCodeType;
+  lobbyId: string;
+}) {
+  const callable = httpsCallable<typeof input, ResolveGameJoinCodeResult>(functions, 'joinGameLobbyNextRound');
+  return (await callable(input)).data;
+}
+
+export async function reconnectGameLobby() {
+  const callable = httpsCallable<Record<string, never>, ResolveGameJoinCodeResult | null>(functions, 'reconnectGameLobby');
+  return (await callable({})).data;
+}
+
+export async function leaveGameLobby(input: { lobbyId: string }) {
+  const callable = httpsCallable<typeof input, { status: 'left' | 'closed'; hostChanged: boolean }>(
+    functions,
+    'leaveGameLobby',
+  );
+  return (await callable(input)).data;
+}
+
+export async function closeGameLobby(input: { lobbyId: string }) {
+  const callable = httpsCallable<typeof input, { status: 'closed' }>(functions, 'closeGameLobby');
+  return (await callable(input)).data;
+}
+
+export async function startGameLobbyRematch(input: { lobbyId: string }) {
+  const callable = httpsCallable<typeof input, CreateGameLobbyResult>(functions, 'startGameLobbyRematch');
+  return (await callable(input)).data;
 }
 
 export async function createGameJoinCode(input: {
@@ -58,7 +171,7 @@ export async function getGameJoinCodeForSession(input: {
 }) {
   const callable = httpsCallable<
     typeof input,
-    { joinCode: string; status: GameJoinCodeStatus; expiresAt: number }
+    { joinCode: string; lobbyId: string; lobbyNumber: number; status: GameJoinCodeStatus; expiresAt: number }
   >(functions, 'getGameJoinCodeForSession');
   return (await callable(input)).data;
 }
@@ -82,9 +195,32 @@ export async function releaseGameJoinCode(input: {
 
 export async function recordSpotDifferenceFound(input: {
   sessionId: string;
-  differenceId: string;
+  x: number;
+  y: number;
 }) {
-  const callable = httpsCallable<typeof input, { foundCount: number }>(functions, 'recordSpotDifferenceFound');
+  const callable = httpsCallable<
+    typeof input,
+    {
+      found: boolean;
+      alreadyFound: boolean;
+      foundCount: number;
+      totalDifferences: number;
+      teamId: 'A' | 'B';
+      differenceId: string | null;
+      foundByName: string | null;
+    }
+  >(functions, 'recordSpotDifferenceFound');
+  return (await callable(input)).data;
+}
+
+export async function leaveRealtimeGameSession(input: {
+  gameType: Exclude<GameJoinCodeType, 'triviaBlitz'>;
+  sessionId: string;
+}) {
+  const callable = httpsCallable<typeof input, { status: 'left' | 'unchanged' }>(
+    functions,
+    'leaveRealtimeGameSession',
+  );
   return (await callable(input)).data;
 }
 
@@ -142,6 +278,15 @@ function isGameJoinCodeFailureReason(value: unknown): value is GameJoinCodeFailu
     'network_unavailable',
     'code_reservation_failed',
     'session_creation_failed',
+    'lobby_closed_or_expired',
+    'already_participating_elsewhere',
+    'lobby_limit_reached',
+    'round_in_progress',
+    'round_not_in_progress',
+    'round_not_finished',
+    'finish_active_round_first',
+    'host_must_transfer',
+    'client_update_required',
   ].includes(String(value));
 }
 

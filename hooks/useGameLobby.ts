@@ -8,17 +8,15 @@ import { rtdb } from '@/config/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { useSquad } from '@/context/SquadContext';
 import {
-  createGameJoinCode,
-  createGameJoinIdempotencyKey,
   getGameJoinCodeForSession,
+  leaveGameLobby,
   readGameJoinCodeFailureReason,
-  releaseGameJoinCode,
   setRealtimeGamePlayerReady,
   updateGameJoinCodeStatus,
   type GameJoinCodeFailureReason,
   type GameJoinCodeType,
 } from '@/services/gameJoinCodeService';
-import { createGameSession as createTriviaSession, startGameSession as startTriviaSession, togglePlayerReady } from '@/src/game/triviaBlitz/gameState';
+import { startGameSession as startTriviaSession, togglePlayerReady } from '@/src/game/triviaBlitz/gameState';
 import { getTriviaParentSessionRef, getTriviaPlayersRef } from '@/src/game/triviaBlitz/firebaseUtils';
 
 type LobbyGameId = 'bomb-defusal' | 'trivia-blitz' | 'spot-the-difference';
@@ -27,6 +25,11 @@ type LobbyPlayer = {
   id: string;
   name: string;
   ready: boolean;
+  joinOrder?: number;
+  teamId?: 'A' | 'B';
+  previousTeamId?: 'A' | 'B';
+  teamReassignedAt?: number;
+  teamAssignmentNoticeId?: string;
 };
 
 type LobbyPlayers = {
@@ -40,13 +43,14 @@ type GameCodeState = 'loading' | 'ready' | 'error' | 'local';
 
 type GameLobbyState = {
   sessionId: string;
+  lobbyId: string;
   minPlayers: number;
   players: LobbyPlayers;
   codeState: GameCodeState;
   codeError: GameJoinCodeFailureReason | null;
   isLocal: boolean;
   retryCode: () => void;
-  cancelGame: () => void;
+  leaveGame: () => void;
   toggleReady: () => void;
   startGame: () => void;
   showCountdown: boolean;
@@ -61,6 +65,11 @@ type RealtimeLobbyRecord = {
     name?: string;
     isReady?: boolean;
     ready?: boolean;
+    joinOrder?: number;
+    teamId?: string;
+    previousTeamId?: string;
+    teamReassignedAt?: number;
+    teamAssignmentNoticeId?: string;
   }>;
 };
 
@@ -72,13 +81,12 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const { selectedSquadId } = useSquad();
   const params = useLocalSearchParams<{
     sessionId?: string | string[];
+    lobbyId?: string | string[];
     local?: string | string[];
-    host?: string | string[];
   }>();
   const routeSessionId = normalizeParam(params.sessionId);
+  const routeLobbyId = normalizeParam(params.lobbyId);
   const isLocal = __DEV__ && normalizeParam(params.local) === '1';
-  const isHostRoute = normalizeParam(params.host) === '1';
-  const shouldHostSession = isHostRoute || !routeSessionId;
   const gameType = joinCodeGameType(gameId);
   const minPlayers = minimumPlayersForGame(gameId);
   const currentUserId = user?.uid ?? '';
@@ -86,6 +94,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const currentUserName = getUserName(user?.displayName, user?.email, fallbackPlayerName);
 
   const [sessionId, setSessionId] = useState(routeSessionId);
+  const [lobbyId, setLobbyId] = useState(routeLobbyId);
   const [joinCode, setJoinCode] = useState('');
   const [codeState, setCodeState] = useState<GameCodeState>(isLocal ? 'local' : 'loading');
   const [codeError, setCodeError] = useState<GameJoinCodeFailureReason | null>(null);
@@ -94,17 +103,18 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const [showCountdown, setShowCountdown] = useState(false);
   const [setupAttempt, setSetupAttempt] = useState(0);
   const [localPlayers, setLocalPlayers] = useState<LobbyPlayer[]>(() =>
-    createLocalPlayers(currentUserId || 'local-player', currentUserName),
+    createLocalPlayers(currentUserId || 'local-player', currentUserName, gameId),
   );
-  const creationInFlightRef = useRef(false);
-  const pendingSessionIdRef = useRef(routeSessionId);
-  const idempotencyKeyRef = useRef(createGameJoinIdempotencyKey());
+  const setupInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!routeSessionId || routeSessionId === sessionId) return;
-    pendingSessionIdRef.current = routeSessionId;
     setSessionId(routeSessionId);
   }, [routeSessionId, sessionId]);
+
+  useEffect(() => {
+    if (routeLobbyId && routeLobbyId !== lobbyId) setLobbyId(routeLobbyId);
+  }, [lobbyId, routeLobbyId]);
 
   useEffect(() => {
     if (!isLocal) return;
@@ -113,60 +123,51 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
       const nextId = currentUserId || 'local-player';
       const [self, ...rest] = players;
       if (self?.id === nextId && self.name === currentUserName) return players;
-      return [{ id: nextId, name: currentUserName, ready: self?.ready ?? false }, ...rest];
+      return [{
+        id: nextId,
+        name: currentUserName,
+        ready: self?.ready ?? false,
+        teamId: gameId === 'spot-the-difference' ? 'A' : undefined,
+      }, ...rest];
     });
-  }, [currentUserId, currentUserName, isLocal]);
+  }, [currentUserId, currentUserName, gameId, isLocal]);
 
   useEffect(() => {
-    if (isLocal || authLoading || !currentUserId || creationInFlightRef.current || codeState === 'ready') return;
+    if (isLocal || authLoading || !currentUserId || setupInFlightRef.current || codeState === 'ready') return;
+    if (!sessionId) {
+      setCodeError('game_not_found');
+      setCodeState('error');
+      return;
+    }
     let active = true;
-    creationInFlightRef.current = true;
+    setupInFlightRef.current = true;
     setCodeState('loading');
     setCodeError(null);
 
     async function prepareLobby() {
       try {
-        let canonicalSessionId = pendingSessionIdRef.current || sessionId;
-        if (!canonicalSessionId && gameType === 'triviaBlitz') {
-          const created = await createTriviaSession(currentUserName);
-          canonicalSessionId = created.sessionId;
-          pendingSessionIdRef.current = canonicalSessionId;
-          if (active) setSessionId(canonicalSessionId);
-        }
-
-        const result = canonicalSessionId && !shouldHostSession
-          ? await getGameJoinCodeForSession({ gameType, sessionId: canonicalSessionId })
-          : await createGameJoinCode({
-              gameType,
-              sessionId: canonicalSessionId || null,
-              idempotencyKey: idempotencyKeyRef.current,
-              squadId: selectedSquadId,
-            });
+        const result = await getGameJoinCodeForSession({ gameType, sessionId });
 
         if (!active) return;
-        const resolvedSessionId = 'sessionId' in result ? result.sessionId : canonicalSessionId;
-        if (!resolvedSessionId) throw new Error('Missing canonical game session.');
-        pendingSessionIdRef.current = resolvedSessionId;
-        setSessionId(resolvedSessionId);
         setJoinCode(result.joinCode);
+        setLobbyId(result.lobbyId);
         setCodeState('ready');
         setCodeError(null);
-        if (!routeSessionId) router.setParams({ sessionId: resolvedSessionId, host: '1' });
       } catch (error) {
         if (!active) return;
         setCodeError(readGameJoinCodeFailureReason(error));
         setCodeState('error');
       } finally {
-        creationInFlightRef.current = false;
+        setupInFlightRef.current = false;
       }
     }
 
     void prepareLobby();
     return () => {
       active = false;
-      creationInFlightRef.current = false;
+      setupInFlightRef.current = false;
     };
-  }, [authLoading, codeState, currentUserId, currentUserName, gameType, isLocal, routeSessionId, selectedSquadId, sessionId, setupAttempt, shouldHostSession]);
+  }, [authLoading, codeState, currentUserId, gameType, isLocal, sessionId, setupAttempt]);
 
   useEffect(() => {
     if (isLocal || !sessionId) return;
@@ -249,28 +250,35 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     })().catch(() => setShowCountdown(false));
   }, [gameType, isLocal, players.isHost, sessionId]);
 
-  const cancelGame = useCallback(() => {
-    if (!players.isHost) return;
+  const leaveGame = useCallback(() => {
     void (async () => {
-      if (!isLocal && sessionId) {
-        await releaseGameJoinCode({ gameType, sessionId });
+      if (!isLocal && lobbyId) {
+        await leaveGameLobby({ lobbyId });
       }
-      router.replace('/(tabs)/games');
+      if (selectedSquadId) {
+        router.replace({
+          pathname: '/(games)/lobbies',
+          params: { gameType, squadId: selectedSquadId },
+        } as never);
+      } else {
+        router.replace('/(tabs)/games');
+      }
     })().catch((error) => {
       setCodeError(readGameJoinCodeFailureReason(error));
       setCodeState('error');
     });
-  }, [gameType, isLocal, players.isHost, sessionId]);
+  }, [gameType, isLocal, lobbyId, selectedSquadId]);
 
   return {
     sessionId,
+    lobbyId,
     minPlayers,
     players,
     codeState,
     codeError,
     isLocal,
     retryCode,
-    cancelGame,
+    leaveGame,
     toggleReady,
     startGame,
     showCountdown,
@@ -295,8 +303,13 @@ function minimumPlayersForGame(gameId: LobbyGameId) {
   return 2;
 }
 
-function createLocalPlayers(currentUserId: string, currentUserName: string): LobbyPlayer[] {
-  return [{ id: currentUserId, name: currentUserName, ready: false }];
+function createLocalPlayers(currentUserId: string, currentUserName: string, gameId: LobbyGameId): LobbyPlayer[] {
+  return [{
+    id: currentUserId,
+    name: currentUserName,
+    ready: false,
+    teamId: gameId === 'spot-the-difference' ? 'A' : undefined,
+  }];
 }
 
 function normalizeRealtimePlayers(
@@ -304,11 +317,35 @@ function normalizeRealtimePlayers(
   fallbackPlayerName: string,
 ): LobbyPlayer[] {
   if (!players) return [];
-  return Object.entries(players).map(([id, player]) => ({
-    id,
-    name: player.displayName ?? player.name ?? fallbackPlayerName,
-    ready: Boolean(player.isReady ?? player.ready),
-  }));
+  return Object.entries(players).map(([id, player]) => {
+    const teamId = readLobbyTeamId(player.teamId);
+    const previousTeamId = readLobbyTeamId(player.previousTeamId);
+    return {
+      id,
+      name: player.displayName ?? player.name ?? fallbackPlayerName,
+      ready: Boolean(player.isReady ?? player.ready),
+      joinOrder: typeof player.joinOrder === 'number' && Number.isFinite(player.joinOrder)
+        ? player.joinOrder
+        : undefined,
+      teamId,
+      previousTeamId,
+      teamReassignedAt: typeof player.teamReassignedAt === 'number' && Number.isFinite(player.teamReassignedAt)
+        ? player.teamReassignedAt
+        : undefined,
+      teamAssignmentNoticeId: typeof player.teamAssignmentNoticeId === 'string'
+        ? player.teamAssignmentNoticeId
+        : undefined,
+    };
+  }).sort((left, right) => {
+    const leftOrder = left.joinOrder ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = right.joinOrder ?? Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function readLobbyTeamId(value: unknown): 'A' | 'B' | undefined {
+  return value === 'A' || value === 'B' ? value : undefined;
 }
 
 function getUserName(

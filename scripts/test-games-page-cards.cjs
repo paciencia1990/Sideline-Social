@@ -8,7 +8,7 @@ const read = (...segments) => fs.readFileSync(path.join(root, ...segments), "utf
 const gamesSource = read("app", "(tabs)", "games.tsx");
 const translations = read("i18n", "index.ts");
 
-const gameCardsMatch = gamesSource.match(/const GAME_CARDS:[\s\S]*?const ROUTE_BY_GAME/);
+const gameCardsMatch = gamesSource.match(/const GAME_CARDS:[\s\S]*?const ROUTE_BY_JOIN_CODE_GAME/);
 assert.ok(gameCardsMatch, "Games page must keep a game card configuration.");
 const gameCardsConfig = gameCardsMatch[0];
 
@@ -34,13 +34,15 @@ for (const route of [
   assert.match(gamesSource, routePattern, `${route} must remain a Games page lobby destination.`);
 }
 
-assert.match(gamesSource, /ROUTE_BY_GAME[\s\S]*bomb_defusal[\s\S]*spot_difference[\s\S]*trivia_blitz/, "Active Now routing must keep every game destination.");
-assert.match(gamesSource, /onPress=\{\(\) => openGameLobby\(ROUTE_BY_GAME\[activeSession\.gameType\], activeSession\.sessionId\)\}/, "Active Now must still open the active game lobby.");
+assert.match(gamesSource, /ROUTE_BY_JOIN_CODE_GAME[\s\S]*bombDefusal[\s\S]*spotTheDifferences[\s\S]*triviaBlitz/, "Lobby routing must keep every released multiplayer game destination.");
+assert.match(gamesSource, /activeLobbyGroups\.map/, "Active Now must summarize every discoverable lobby group.");
+assert.match(gamesSource, /joinGameLobbyById/, "A specific Active Now lobby must join by stable lobby ID.");
+assert.match(gamesSource, /joinGameLobbyNextRound/, "In-progress Active Now lobbies must support the next-round queue.");
 assert.match(gamesSource, /resolveAndJoinGameByCode\(joinCode\)/, "Join-code resolution must remain wired.");
 assert.match(gamesSource, /ROUTE_BY_JOIN_CODE_GAME\[session\.gameType\]/, "Join-code navigation must still use the resolved game route.");
 assert.match(gamesSource, /normalizeGameJoinCodeInput/, "Join-code input normalization must remain wired.");
 assert.match(gamesSource, /disabled=\{joining \|\| !isCompleteGameJoinCode\(joinCode\)\}/, "Join-code button must keep its completion guard.");
 assert.match(gamesSource, /GAME_CARDS\.map/, "All game cards must still render from the configuration.");
-assert.match(gamesSource, /onOpen=\{\(\) => openGameLobby\(game\.route\)\}/, "Game card presses must still open the configured lobby.");
+assert.match(gamesSource, /onOpen=\{\(\) => openGameDirectory\(toJoinCodeGameType\(game\.gameType\)\)\}/, "Game card presses must open the shared lobby directory without creating a session.");
 
 console.log("Games page card player ranges, duration removal, lobby routing, Active Now, and join-code tests passed.");

@@ -123,7 +123,7 @@ import {
 import {
   WEEKLY_CHALLENGE_STARS,
   calculateBombDefusalReward,
-  calculateSpotDifferencesReward,
+  calculateSpotTeamReward,
   calculateTriviaReward,
   gameRewardId,
   normalizeStars,
@@ -132,6 +132,7 @@ import {
   type SupportedRewardGame,
 } from './sidelineStarsCore';
 import { readSeasonEligibleSquadIds } from './squadSeason';
+import { finalizeSpotDifferenceRoundForRewards } from './gameJoinCodes';
 
 const functions = permanentAccountFunctions(firebaseFunctions);
 const communicationFunctions = permanentAccountFunctions(
@@ -174,14 +175,23 @@ export {
 } from './accountStanding';
 export {
   cleanupExpiredGameJoinCodes,
+  closeGameLobby,
+  createGameLobby,
   createGameJoinCode,
   getActiveSquadGameSession,
   getGameJoinCodeForSession,
+  joinGameLobbyById,
+  joinGameLobbyNextRound,
+  leaveGameLobby,
+  leaveRealtimeGameSession,
+  listGameLobbies,
   recordSpotDifferenceFound,
+  reconnectGameLobby,
   releaseGameJoinCode,
   resolveAndJoinGameByCode,
   setRealtimeGamePlayerReady,
   submitBombDefusalStep,
+  startGameLobbyRematch,
   updateGameJoinCodeStatus,
 } from './gameJoinCodes';
 export {
@@ -406,10 +416,32 @@ function readGameSessionId(value: unknown) {
   return sessionId;
 }
 
-function readPositiveGameNumber(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? value
-    : null;
+function readSpotRewardTeamId(value: unknown): 'A' | 'B' | null {
+  return value === 'A' || value === 'B' ? value : null;
+}
+
+function readSpotRewardTeamByPlayerId(value: unknown): Record<string, 'A' | 'B'> {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return Object.fromEntries(
+    Object.entries(record).flatMap(([playerId, teamValue]) => {
+      const teamId = readSpotRewardTeamId(teamValue);
+      return teamId ? [[playerId, teamId]] : [];
+    }),
+  );
+}
+
+function readSpotRewardAssignmentIds(value: unknown): string[] {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return Object.entries(record).flatMap(([playerId, assignmentValue]) => {
+    const assignment = assignmentValue && typeof assignmentValue === 'object' && !Array.isArray(assignmentValue)
+      ? assignmentValue as Record<string, unknown>
+      : {};
+    return readSpotRewardTeamId(assignment.teamId) ? [playerId] : [];
+  });
 }
 
 function readRewardGameType(value: unknown): SupportedRewardGame {
@@ -430,7 +462,11 @@ async function hasDurableSquadMembership(uid: string, squadId: string) {
   return snapshot.exists && snapshot.data()?.membershipStatus === 'active';
 }
 
-type RewardEligibility = { breakdown: GameRewardBreakdown; sourceSquadId: string | null };
+type RewardEligibility = {
+  breakdown: GameRewardBreakdown;
+  sourceSquadId: string | null;
+  rewardReasons?: string[];
+};
 
 async function readTriviaRewardEligibility(
   transaction: FirebaseFirestore.Transaction,
@@ -487,20 +523,39 @@ async function readLocalGameRewardEligibility(
   ) return null;
   const result = session.finalizedResult as Record<string, unknown> | undefined;
   if (!result) return null;
-  const breakdown = gameType === 'spotDifferences'
-    ? calculateSpotDifferencesReward({
-      terminal: result.outcome === 'completed' || result.outcome === 'timeExpired',
-      foundCount: result.foundCount as number,
-      totalDifferences: result.totalDifferences as number,
-    })
-    : calculateBombDefusalReward({
+  let breakdown: GameRewardBreakdown | null;
+  let rewardReasons: string[] | undefined;
+  if (gameType === 'spotDifferences') {
+    const teamByPlayerId = readSpotRewardTeamByPlayerId(result.teamByPlayerId);
+    const playerTeamId = teamByPlayerId[uid];
+    if (!playerTeamId) return null;
+    const winnerTeamId = readSpotRewardTeamId(result.winnerTeamId);
+    const perfectCompletion = readStringArray(result.perfectTeamIds).includes(playerTeamId);
+    breakdown = calculateSpotTeamReward({
+      outcome: result.outcome as 'teamWin' | 'tie',
+      playerTeamId,
+      winnerTeamId,
+      perfectCompletion,
+    });
+    const baseReason = result.outcome === 'tie'
+      ? 'spot_tie'
+      : winnerTeamId === playerTeamId
+        ? 'spot_team_victory'
+        : 'spot_participation';
+    rewardReasons = perfectCompletion
+      ? [baseReason, 'spot_perfect_completion_bonus']
+      : [baseReason];
+  } else {
+    breakdown = calculateBombDefusalReward({
       outcome: result.outcome as 'defused' | 'exploded',
       firstAttemptCorrectStepCount: result.firstAttemptCorrectStepCount as number,
       totalSteps: result.totalSteps as number,
     });
+  }
   return breakdown ? {
     breakdown,
     sourceSquadId: typeof session.sourceSquadId === 'string' ? session.sourceSquadId : null,
+    rewardReasons,
   } : null;
 }
 
@@ -1846,6 +1901,10 @@ export const createGameRewardSession = communicationFunctions.https.onCall(async
   if (sourceSquadId && !await hasDurableSquadMembership(uid, sourceSquadId)) sourceSquadId = null;
 
   const sessionId = requestedSessionId;
+  const initialParticipantIds = gameType === 'spotDifferences'
+    ? readSpotRewardAssignmentIds((realtimeSession.gameState as Record<string, unknown> | undefined)?.teamAssignments)
+    : [uid];
+  const participantIdsForCreate = initialParticipantIds.includes(uid) ? initialParticipantIds : [uid];
   const sessionRef = admin.firestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
   const result = await admin.firestore().runTransaction(async (transaction) => {
     const existing = await transaction.get(sessionRef);
@@ -1869,7 +1928,7 @@ export const createGameRewardSession = communicationFunctions.https.onCall(async
     transaction.create(sessionRef, {
       sessionId,
       gameType,
-      participantIds: [uid],
+      participantIds: participantIdsForCreate,
       sourceSquadId: sourceSquadId ?? null,
       mode: 'multiplayer',
       status: 'active',
@@ -1915,39 +1974,10 @@ export const recordGameSessionResult = communicationFunctions.https.onCall(async
     if (!realtimeSession || realtimeSession.gameType !== expectedLegacyType || !participants?.[uid]) {
       throw new functions.https.HttpsError('permission-denied', 'You are not a participant in this game session.');
     }
-    const gameState = realtimeSession.gameState as Record<string, unknown> | undefined;
     if (gameType === 'spotDifferences') {
-      const foundIds = Array.isArray(gameState?.foundDifferenceIds)
-        ? Array.from(new Set(gameState.foundDifferenceIds.filter(
-          (value): value is string =>
-            typeof value === 'string' && /^difference_(?:0[1-9]|10)$/.test(value),
-        )))
-        : [];
-      const foundCount = foundIds.length;
-      const requestedOutcome = data?.outcome;
-      const settings = realtimeSession.settings && typeof realtimeSession.settings === 'object'
-        ? realtimeSession.settings as Record<string, unknown>
-        : {};
-      const durationSeconds = readPositiveGameNumber(settings.roundDuration);
-      const startedAt = readPositiveGameNumber(realtimeSession.startedAt);
-      const timeExpired = Boolean(
-        durationSeconds &&
-        startedAt &&
-        Date.now() >= startedAt + durationSeconds * 1000,
-      );
-      if (
-        (requestedOutcome === 'completed' && foundCount !== 10) ||
-        (requestedOutcome === 'timeExpired' && !timeExpired && realtimeSession.status !== 'completed') ||
-        (requestedOutcome !== 'completed' && requestedOutcome !== 'timeExpired')
-      ) {
-        throw new functions.https.HttpsError('failed-precondition', 'The multiplayer game result is not final.');
-      }
-      canonicalMultiplayerResult = {
-        outcome: requestedOutcome,
-        foundCount,
-        totalDifferences: 10,
-      };
+      canonicalMultiplayerResult = await finalizeSpotDifferenceRoundForRewards(sessionId, uid);
     } else {
+      const gameState = realtimeSession.gameState as Record<string, unknown> | undefined;
       const outcome = gameState?.outcome;
       const currentStepIndex = typeof gameState?.currentStepIndex === 'number'
         ? gameState.currentStepIndex
@@ -1975,16 +2005,27 @@ export const recordGameSessionResult = communicationFunctions.https.onCall(async
     const expectedTotal = sessionSnapshot.data()?.expectedTotal;
     let finalizedResult: Record<string, unknown>;
     if (gameType === 'spotDifferences') {
-      const outcome = canonicalMultiplayerResult?.outcome ?? data?.outcome;
-      const foundCount = canonicalMultiplayerResult?.foundCount ?? data?.foundCount;
-      const totalDifferences = canonicalMultiplayerResult?.totalDifferences ?? data?.totalDifferences;
-      const breakdown = calculateSpotDifferencesReward({ terminal: true, foundCount, totalDifferences });
+      const teamByPlayerId = readSpotRewardTeamByPlayerId(canonicalMultiplayerResult?.teamByPlayerId);
+      const participantIds = Object.keys(teamByPlayerId);
+      const totalDifferences = canonicalMultiplayerResult?.totalDifferences;
       if (
-        !breakdown || totalDifferences !== expectedTotal ||
-        !['completed', 'timeExpired'].includes(outcome) ||
-        (outcome === 'completed' && foundCount !== totalDifferences)
+        participantIds.length === 0 ||
+        totalDifferences !== expectedTotal ||
+        (canonicalMultiplayerResult?.outcome !== 'teamWin' && canonicalMultiplayerResult?.outcome !== 'tie')
       ) throw new functions.https.HttpsError('invalid-argument', 'The Spot the Differences result is invalid.');
-      finalizedResult = { outcome, foundCount, totalDifferences };
+      finalizedResult = {
+        outcome: canonicalMultiplayerResult.outcome,
+        winnerTeamId: canonicalMultiplayerResult.winnerTeamId ?? null,
+        completedByTeamId: canonicalMultiplayerResult.completedByTeamId ?? null,
+        teamTotals: canonicalMultiplayerResult.teamTotals,
+        perfectTeamIds: readStringArray(canonicalMultiplayerResult.perfectTeamIds),
+        totalDifferences,
+        resolvedAt: canonicalMultiplayerResult.resolvedAt,
+        teamByPlayerId,
+      };
+      transaction.update(sessionRef, {
+        participantIds,
+      });
     } else {
       const outcome = canonicalMultiplayerResult?.outcome ?? data?.outcome;
       const firstAttemptCorrectStepCount =
@@ -2060,6 +2101,8 @@ export const finalizeGameReward = communicationFunctions.https.onCall(async (dat
       awardedAt,
       seasonEligibleSquadIds,
       breakdown: eligibility.breakdown,
+      rewardReasons: eligibility.rewardReasons ?? [gameType],
+      rewardReason: (eligibility.rewardReasons ?? [gameType])[0],
     });
     return {
       status: 'awarded' as const,

@@ -57,9 +57,16 @@ assertPluralPair(englishKeys, "spot.secondsRemaining");
 assertPluralPair(spanishKeys, "spot.secondsRemaining");
 assertPluralPair(englishKeys, "trivia.secondsRemaining");
 assertPluralPair(spanishKeys, "trivia.secondsRemaining");
+assertPluralPair(englishKeys, "games.lobbyDirectory.playerCount");
+assertPluralPair(spanishKeys, "games.lobbyDirectory.playerCount");
+assertPluralPair(englishKeys, "games.lobbyDirectory.waitingCount");
+assertPluralPair(spanishKeys, "games.lobbyDirectory.waitingCount");
+assertPluralPair(englishKeys, "games.lobbyDirectory.activeNowLobbySummary");
+assertPluralPair(spanishKeys, "games.lobbyDirectory.activeNowLobbySummary");
 
 const releasedGameFiles = [
   "app/(tabs)/games.tsx",
+  "app/(games)/lobbies.tsx",
   "app/(games)/results.tsx",
   "app/(games)/trivia-blitz/Lobby.tsx",
   "app/(games)/bomb-defusal/Lobby.tsx",

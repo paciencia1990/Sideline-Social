@@ -89,6 +89,30 @@ export function calculateSpotDifferencesReward(input: {
   });
 }
 
+export function calculateSpotTeamReward(input: {
+  outcome: 'teamWin' | 'tie';
+  playerTeamId: 'A' | 'B';
+  winnerTeamId: 'A' | 'B' | null;
+  perfectCompletion: boolean;
+}): GameRewardBreakdown | null {
+  if (
+    (input.playerTeamId !== 'A' && input.playerTeamId !== 'B') ||
+    (input.winnerTeamId !== null && input.winnerTeamId !== 'A' && input.winnerTeamId !== 'B') ||
+    (input.outcome !== 'teamWin' && input.outcome !== 'tie')
+  ) return null;
+
+  const baseStars = input.outcome === 'tie'
+    ? 6
+    : input.winnerTeamId === input.playerTeamId
+      ? 10
+      : 3;
+  return capBreakdown({
+    completionStars: baseStars,
+    performanceStars: 0,
+    achievementStars: input.perfectCompletion ? 5 : 0,
+  });
+}
+
 export function calculateBombDefusalReward(input: {
   outcome: 'defused' | 'exploded';
   firstAttemptCorrectStepCount: number;

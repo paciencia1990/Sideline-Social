@@ -8,11 +8,17 @@ import { functions, rtdb } from "@/config/firebase";
 
 export type GameType = "bomb_defusal" | "spot_difference" | "trivia_blitz";
 export type SessionStatus = "lobby" | "countdown" | "active" | "completed" | "failed";
+export type SpotTeamId = "A" | "B";
 
 export interface GamePlayer {
   displayName: string;
   avatarUrl: string | null;
   isReady: boolean;
+  joinOrder?: number;
+  teamId?: SpotTeamId;
+  previousTeamId?: SpotTeamId;
+  teamReassignedAt?: number;
+  teamAssignmentNoticeId?: string;
   score: number;
   isConnected: boolean;
 }
@@ -30,6 +36,17 @@ export interface GameSession {
   minPlayers: number;
   maxPlayers: number;
   settings: Record<string, unknown>;
+}
+
+export interface SpotTeamDiscoveryState {
+  teamId: SpotTeamId;
+  foundDifferenceIds: string[];
+  foundCount: number;
+  latestDiscovery?: {
+    differenceId: string;
+    playerName: string;
+    foundAt: number;
+  } | null;
 }
 
 export type ActiveGameSession = Pick<GameSession, "sessionId" | "gameType" | "status"> & {
@@ -135,6 +152,43 @@ export function subscribeToSession(
   }
 }
 
+export function subscribeToSpotTeamState(
+  sessionId: string,
+  teamId: SpotTeamId,
+  callback: (state: SpotTeamDiscoveryState | null) => void,
+): () => void {
+  try {
+    return onValue(
+      ref(rtdb, `gameSessionTeamState/${sessionId}/${teamId}`),
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          callback(null);
+          return;
+        }
+        const value = asRecord(snapshot.val());
+        callback({
+          teamId,
+          foundDifferenceIds: Array.isArray(value.foundDifferenceIds)
+            ? value.foundDifferenceIds.filter((id): id is string => typeof id === "string")
+            : [],
+          foundCount: typeof value.foundCount === "number" && Number.isFinite(value.foundCount)
+            ? Math.max(0, Math.floor(value.foundCount))
+            : 0,
+          latestDiscovery: normalizeLatestSpotDiscovery(value.latestDiscovery),
+        });
+      },
+      (error) => {
+        console.error("[GameService] subscribeToSpotTeamState error:", error);
+        callback(null);
+      },
+    );
+  } catch (error) {
+    console.error("[GameService] subscribeToSpotTeamState setup error:", error);
+    callback(null);
+    return () => {};
+  }
+}
+
 export function getGameLabelKey(gameType: GameType): string {
   switch (gameType) {
     case "bomb_defusal":
@@ -159,5 +213,19 @@ export function getGameEmoji(gameType: GameType): string {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function normalizeLatestSpotDiscovery(value: unknown): SpotTeamDiscoveryState["latestDiscovery"] {
+  const record = asRecord(value);
+  return typeof record.differenceId === "string" &&
+    typeof record.playerName === "string" &&
+    typeof record.foundAt === "number" &&
+    Number.isFinite(record.foundAt)
+    ? {
+      differenceId: record.differenceId,
+      playerName: record.playerName,
+      foundAt: record.foundAt,
+    }
+    : null;
 }
 

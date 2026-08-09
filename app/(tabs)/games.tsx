@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   StyleSheet,
   Text,
   TextInput,
@@ -18,16 +19,16 @@ import { SquadSelector } from "@/components/SquadSelector";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
-import { useActiveSquadGameSession } from "@/hooks/useActiveSquadGameSession";
+import { useSquadGameLobbies } from "@/hooks/useSquadGameLobbies";
+import { type GameType } from "@/services/gameService";
 import {
-  getGameLabelKey,
-  type GameType,
-} from "@/services/gameService";
-import {
+  joinGameLobbyById,
+  joinGameLobbyNextRound,
   readGameJoinCodeFailureReason,
   resolveAndJoinGameByCode,
   type GameJoinCodeFailureReason,
   type GameJoinCodeType,
+  type GameLobbySummary,
 } from "@/services/gameJoinCodeService";
 import { isCompleteGameJoinCode, normalizeGameJoinCodeInput } from "@/utils/gameJoinCode";
 
@@ -68,12 +69,6 @@ const GAME_CARDS: GameCardConfig[] = [
   },
 ];
 
-const ROUTE_BY_GAME: Record<GameType, string> = {
-  bomb_defusal: "/(games)/bomb-defusal/Lobby",
-  spot_difference: "/(games)/spot-the-difference/Lobby",
-  trivia_blitz: "/(games)/trivia-blitz/Lobby",
-};
-
 const ROUTE_BY_JOIN_CODE_GAME: Record<GameJoinCodeType, string> = {
   bombDefusal: "/(games)/bomb-defusal/Lobby",
   spotTheDifferences: "/(games)/spot-the-difference/Lobby",
@@ -82,30 +77,31 @@ const ROUTE_BY_JOIN_CODE_GAME: Record<GameJoinCodeType, string> = {
 
 export default function GamesScreen() {
   const { t } = useTranslation();
-  const { loading: authLoading, user } = useAuth();
+  const { loading: authLoading } = useAuth();
   const { membershipLoading, selectedSquadId } = useSquad();
   const params = useLocalSearchParams<{ join?: string }>();
   const [joinCode, setJoinCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<GameJoinCodeFailureReason | null>(null);
+  const [lobbyActionError, setLobbyActionError] = useState<GameJoinCodeFailureReason | null>(null);
+  const [joiningLobbyId, setJoiningLobbyId] = useState<string | null>(null);
   const [showJoinCode, setShowJoinCode] = useState(params.join === "1");
 
   const {
-    retry: retryActiveSession,
-    session: activeSession,
+    lobbies: activeLobbies,
+    refresh: retryActiveSession,
     state: activeSessionState,
-  } = useActiveSquadGameSession({
-    diagnosticLabel: "GamesScreen",
+  } = useSquadGameLobbies({
     enabled: !authLoading && !membershipLoading,
     squadId: selectedSquadId,
-    userId: user?.uid ?? null,
   });
-  const loadingSession = activeSessionState.status === "loading" && !activeSession;
-  const sessionLoadFailed = activeSessionState.status === "permission-error" || activeSessionState.status === "network-error";
-
-  const activeGameName = useMemo(() => {
-    return activeSession ? t(getGameLabelKey(activeSession.gameType)) : "";
-  }, [activeSession, t]);
+  const loadingSession = activeSessionState === "loading" && activeLobbies.length === 0;
+  const sessionLoadFailed = activeSessionState === "permission-error" || activeSessionState === "network-error";
+  const activeLobbyGroups = useMemo(() => GAME_CARDS.flatMap((game) => {
+    const gameType = toJoinCodeGameType(game.gameType);
+    const lobbies = activeLobbies.filter((lobby) => lobby.gameType === gameType);
+    return lobbies.length > 0 ? [{ game, gameType, lobbies }] : [];
+  }), [activeLobbies]);
 
   useEffect(() => {
     if (params.join === "1") {
@@ -113,14 +109,22 @@ export default function GamesScreen() {
     }
   }, [params.join]);
 
-  const openGameLobby = useCallback((route: string, sessionId?: string, local = false) => {
+  const openGameLobby = useCallback((route: string, sessionId?: string, local = false, lobbyId?: string) => {
     if (sessionId) {
-      router.push({ pathname: route as never, params: { sessionId } });
+      router.push({ pathname: route as never, params: { sessionId, ...(lobbyId ? { lobbyId } : {}) } });
       return;
     }
 
-    router.push({ pathname: route as never, params: local ? { local: "1" } : { host: "1" } });
+    if (local) router.push({ pathname: route as never, params: { local: "1" } });
   }, []);
+
+  const openGameDirectory = useCallback((gameType: GameJoinCodeType) => {
+    if (!selectedSquadId) return;
+    router.push({
+      pathname: "/(games)/lobbies" as never,
+      params: { gameType, squadId: selectedSquadId },
+    });
+  }, [selectedSquadId]);
 
   const handleJoinCode = useCallback(async () => {
     if (!isCompleteGameJoinCode(joinCode) || joining) {
@@ -132,13 +136,46 @@ export default function GamesScreen() {
     setJoinError(null);
     try {
       const session = await resolveAndJoinGameByCode(joinCode);
-      openGameLobby(ROUTE_BY_JOIN_CODE_GAME[session.gameType], session.sessionId);
+      openGameLobby(ROUTE_BY_JOIN_CODE_GAME[session.gameType], session.sessionId, false, session.lobbyId);
     } catch (error) {
       setJoinError(readGameJoinCodeFailureReason(error));
     } finally {
       setJoining(false);
     }
   }, [joinCode, joining, openGameLobby]);
+
+  const handleLobbyPress = useCallback(async (lobby: GameLobbySummary) => {
+    if (!selectedSquadId || joiningLobbyId) return;
+    if (lobby.joinAction === "queued" || lobby.joinAction === "full" || lobby.joinAction === "unavailable") {
+      openGameDirectory(lobby.gameType);
+      return;
+    }
+    setJoiningLobbyId(lobby.lobbyId);
+    setLobbyActionError(null);
+    try {
+      if (lobby.joinAction === "joinNextRound") {
+        await joinGameLobbyNextRound({
+          gameType: lobby.gameType,
+          lobbyId: lobby.lobbyId,
+          squadId: selectedSquadId,
+        });
+        Alert.alert(t("games.lobbyDirectory.queuedTitle"), t("games.lobbyDirectory.queuedBody"));
+        await retryActiveSession(true);
+        return;
+      }
+      const result = await joinGameLobbyById({
+        gameType: lobby.gameType,
+        lobbyId: lobby.lobbyId,
+        squadId: selectedSquadId,
+      });
+      openGameLobby(ROUTE_BY_JOIN_CODE_GAME[result.gameType], result.sessionId, false, result.lobbyId);
+    } catch (error) {
+      setLobbyActionError(readGameJoinCodeFailureReason(error));
+      await retryActiveSession(true);
+    } finally {
+      setJoiningLobbyId(null);
+    }
+  }, [joiningLobbyId, openGameDirectory, openGameLobby, retryActiveSession, selectedSquadId, t]);
 
   return (
     <ScreenWrapper>
@@ -156,18 +193,57 @@ export default function GamesScreen() {
             <ActivityIndicator color={Colors.primary} />
             <Text style={styles.cardText}>{t("common.loading")}</Text>
           </Card>
-        ) : activeSession ? (
-          <TouchableOpacity
-            activeOpacity={0.86}
-            onPress={() => openGameLobby(ROUTE_BY_GAME[activeSession.gameType], activeSession.sessionId)}
-            style={styles.activeBanner}
-          >
-            <Play size={22} color={Colors.surface} fill={Colors.surface} />
-            <View style={styles.bannerCopy}>
-              <Text style={styles.bannerEyebrow}>{t("games.activeNow")}</Text>
-              <Text style={styles.bannerText}>{t("games.squadPlaying", { game: activeGameName })}</Text>
+        ) : activeLobbyGroups.length > 0 ? (
+          <Card style={styles.activeDirectoryCard}>
+            <View style={styles.activeDirectoryHeader}>
+              <View style={styles.activeDirectoryIcon}>
+                <Play size={18} color={Colors.surface} fill={Colors.surface} />
+              </View>
+              <View style={styles.bannerCopy}>
+                <Text style={styles.activeDirectoryEyebrow}>{t("games.activeNow")}</Text>
+                <Text style={styles.activeDirectoryTitle}>{t("games.lobbyDirectory.activeNowTitle")}</Text>
+              </View>
             </View>
-          </TouchableOpacity>
+            {activeLobbyGroups.map(({ game, gameType, lobbies }) => (
+              <View key={gameType} style={styles.activeGameGroup}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  activeOpacity={0.82}
+                  onPress={() => openGameDirectory(gameType)}
+                  style={styles.activeGameHeading}
+                >
+                  <Text style={styles.activeGameTitle}>{t(game.titleKey)}</Text>
+                  <Text style={styles.activeGameBrowse}>{t("games.lobbyDirectory.viewLobbies")}</Text>
+                </TouchableOpacity>
+                {lobbies.map((lobby) => (
+                  <ActiveLobbyRow
+                    busy={joiningLobbyId === lobby.lobbyId}
+                    key={lobby.lobbyId}
+                    lobby={lobby}
+                    onPress={() => void handleLobbyPress(lobby)}
+                  />
+                ))}
+              </View>
+            ))}
+          </Card>
+        ) : null}
+
+        {lobbyActionError ? (
+          <Card style={styles.serviceErrorCard}>
+            <Text accessibilityRole="alert" style={styles.cardText}>
+              {t(`games.joinCode.errors.${lobbyActionError}`)}
+            </Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => {
+                setLobbyActionError(null);
+                void retryActiveSession();
+              }}
+              style={styles.serviceRetryButton}
+            >
+              <Text style={styles.serviceRetryText}>{t("common.retry")}</Text>
+            </TouchableOpacity>
+          </Card>
         ) : null}
 
         {sessionLoadFailed ? (
@@ -176,7 +252,7 @@ export default function GamesScreen() {
             <TouchableOpacity
               accessibilityLabel={t("games.retryServices")}
               accessibilityRole="button"
-              onPress={retryActiveSession}
+              onPress={() => void retryActiveSession()}
               style={styles.serviceRetryButton}
             >
               <Text style={styles.serviceRetryText}>{t("common.retry")}</Text>
@@ -238,7 +314,7 @@ export default function GamesScreen() {
               key={game.gameType}
               config={game}
               onLocalTest={() => openGameLobby(game.route, undefined, true)}
-              onOpen={() => openGameLobby(game.route)}
+              onOpen={() => openGameDirectory(toJoinCodeGameType(game.gameType))}
             />
           ))}
         </View>
@@ -254,6 +330,62 @@ export default function GamesScreen() {
         </TouchableOpacity>
       </KeyboardAwareScrollView>
     </ScreenWrapper>
+  );
+}
+
+function ActiveLobbyRow({
+  busy,
+  lobby,
+  onPress,
+}: {
+  busy: boolean;
+  lobby: GameLobbySummary;
+  onPress: () => void;
+}) {
+  const { t } = useTranslation();
+  const lobbyName = lobby.isMain
+    ? t("games.lobbyDirectory.mainLobby")
+    : t("games.lobbyDirectory.numberedLobby", { number: lobby.lobbyNumber });
+  const status = t(`games.lobbyDirectory.status.${lobby.status}`);
+  const action = lobby.joinAction === "joinNextRound"
+    ? t("games.lobbyDirectory.joinNextRound")
+    : lobby.joinAction === "queued"
+      ? t("games.lobbyDirectory.waitingForNextRound")
+      : lobby.joinAction === "reconnect"
+        ? t("games.lobbyDirectory.returnToLobby")
+        : lobby.joinAction === "full"
+          ? t("games.lobbyDirectory.lobbyFull")
+          : t("games.lobbyDirectory.joinGame");
+  const playerCount = t("games.lobbyDirectory.playerCount", { count: lobby.activePlayerCount });
+  const queueCount = lobby.queuedPlayerCount > 0
+    ? t("games.lobbyDirectory.waitingCount", { count: lobby.queuedPlayerCount })
+    : t("games.lobbyDirectory.noWaitingPlayers");
+  const accessibilityLabel = t("games.lobbyDirectory.activeLobbyAccessibility", {
+    lobby: lobbyName,
+    status,
+    players: playerCount,
+    queue: queueCount,
+    action,
+  });
+
+  return (
+    <TouchableOpacity
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      activeOpacity={0.82}
+      disabled={busy}
+      onPress={onPress}
+      style={styles.activeLobbyRow}
+    >
+      <View style={styles.activeLobbyCopy}>
+        <Text style={styles.activeLobbyName}>{lobbyName}</Text>
+        <Text style={styles.activeLobbyMeta}>
+          {status} · {playerCount}
+          {lobby.queuedPlayerCount > 0 ? ` · ${queueCount}` : ""}
+        </Text>
+      </View>
+      {busy ? <ActivityIndicator color={Colors.primary} size="small" /> : <Text style={styles.activeLobbyAction}>{action}</Text>}
+    </TouchableOpacity>
   );
 }
 
@@ -281,7 +413,7 @@ function GameCard({ config, onLocalTest, onOpen }: { config: GameCardConfig; onL
       </View>
 
       <TouchableOpacity activeOpacity={0.86} onPress={onOpen} style={styles.primaryButton}>
-        <Text style={styles.primaryButtonText}>{t("games.playNow")}</Text>
+        <Text style={styles.primaryButtonText}>{t("games.lobbyDirectory.browseLobbies")}</Text>
       </TouchableOpacity>
       {__DEV__ && config.supportsLocalTest ? (
         <TouchableOpacity activeOpacity={0.86} onPress={onLocalTest} style={styles.localTestButton}>
@@ -290,6 +422,12 @@ function GameCard({ config, onLocalTest, onOpen }: { config: GameCardConfig; onL
       ) : null}
     </Card>
   );
+}
+
+function toJoinCodeGameType(gameType: GameType): GameJoinCodeType {
+  if (gameType === "bomb_defusal") return "bombDefusal";
+  if (gameType === "spot_difference") return "spotTheDifferences";
+  return "triviaBlitz";
 }
 
 const styles = StyleSheet.create({
@@ -345,31 +483,48 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodySemiBold,
     fontSize: 13,
   },
-  activeBanner: {
-    alignItems: "center",
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.card,
-    flexDirection: "row",
-    gap: Spacing.md,
-    padding: Spacing.md,
-    ...Shadow.card,
-  },
   bannerCopy: {
     flex: 1,
     gap: 3,
   },
-  bannerEyebrow: {
-    color: Colors.surface,
+  activeDirectoryCard: { gap: Spacing.md },
+  activeDirectoryHeader: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
+  activeDirectoryIcon: {
+    alignItems: "center",
+    backgroundColor: Colors.primary,
+    borderRadius: 20,
+    height: 40,
+    justifyContent: "center",
+    width: 40,
+  },
+  activeDirectoryEyebrow: {
+    color: Colors.primary,
     fontFamily: Typography.bodyBold,
     fontSize: 11,
     textTransform: "uppercase",
   },
-  bannerText: {
-    color: Colors.surface,
-    fontFamily: Typography.bodySemiBold,
-    fontSize: 14,
-    lineHeight: 20,
+  activeDirectoryTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 16 },
+  activeGameGroup: { borderTopColor: Colors.secondary, borderTopWidth: StyleSheet.hairlineWidth, gap: Spacing.xs, paddingTop: Spacing.sm },
+  activeGameHeading: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, justifyContent: "space-between", minHeight: 44 },
+  activeGameTitle: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodySemiBold, fontSize: 14 },
+  activeGameBrowse: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 12 },
+  activeLobbyRow: {
+    alignItems: "center",
+    backgroundColor: Colors.background,
+    borderColor: Colors.secondary,
+    borderRadius: Radius.button,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: Spacing.sm,
+    justifyContent: "space-between",
+    minHeight: 52,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
   },
+  activeLobbyCopy: { flex: 1, gap: 2, minWidth: 0 },
+  activeLobbyName: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13 },
+  activeLobbyMeta: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 11, lineHeight: 16 },
+  activeLobbyAction: { color: Colors.primary, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "right" },
   joinCard: {
     gap: Spacing.md,
   },

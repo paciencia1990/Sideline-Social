@@ -646,6 +646,24 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Multiplayer lobby discovery, active membership, idempotency, and
+    // creation throttling are projected only through authenticated callables.
+    match /gameLobbyDirectories/{directoryId} {
+      allow read, write: if false;
+    }
+
+    match /gameLobbyCreateRequests/{requestId} {
+      allow read, write: if false;
+    }
+
+    match /activeGameLobbyMemberships/{userId} {
+      allow read, write: if false;
+    }
+
+    match /gameLobbyCreationRateLimits/{rateLimitId} {
+      allow read, write: if false;
+    }
+
     match /triviaGameSecrets/{sessionId} {
       allow read, write: if false;
     }

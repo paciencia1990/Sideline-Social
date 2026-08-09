@@ -155,6 +155,7 @@ async function run() {
   );
 
   const firstSession = "spot-multiplayer-timeout";
+  const tiedPerfectAt = Date.now() - 1_000;
   await seedRealtimeGameSession({
     sessionId: firstSession,
     gameType: "spot_difference",
@@ -163,24 +164,40 @@ async function run() {
     status: "started",
     startedAt: Date.now() - 11 * 60 * 1000,
     settings: { roundDuration: 600 },
+    players: createSpotPlayers(parentA.uid, parentB.uid),
     gameState: {
-      foundDifferenceIds: Array.from({ length: 6 }, (_, index) => `difference_${String(index + 1).padStart(2, "0")}`),
+      sceneId: "scene_001",
+      expectedDifferences: 10,
+      teamAssignmentsFrozen: true,
+      teamAssignments: {
+        [parentA.uid]: "A",
+        [parentB.uid]: "B",
+      },
+    },
+    teamStates: {
+      A: createSpotTeamState("A", 10, tiedPerfectAt),
+      B: createSpotTeamState("B", 10, tiedPerfectAt),
     },
   });
   assert.equal(
     (await createSession({ gameType: "spotDifferences", sessionId: firstSession, sourceSquadId: squadId })).data.sessionId,
     firstSession,
   );
-  await recordResult({ gameType: "spotDifferences", sessionId: firstSession, outcome: "timeExpired", foundCount: 6, totalDifferences: 10 });
+  await recordResult({ gameType: "spotDifferences", sessionId: firstSession });
   const firstReward = (await finalize({ gameType: "spotDifferences", sessionId: firstSession, starsAwarded: 999 })).data;
   assert.equal(firstReward.status, "awarded");
-  assert.equal(firstReward.starsAwarded, 11);
+  assert.equal(firstReward.starsAwarded, 11, "a tied perfect Spot round awards 11 Stars");
   assert.equal(firstReward.totalSidelineStars, 21);
   const duplicate = (await finalize({ gameType: "spotDifferences", sessionId: firstSession })).data;
   assert.equal(duplicate.status, "alreadyAwarded");
   assert.equal(duplicate.totalSidelineStars, 21);
+  assert.deepEqual(
+    await readRewardReasons(parentA.uid, "spotDifferences", firstSession),
+    ["spot_tie", "spot_perfect_completion_bonus"],
+    "Spot tied-perfect reward transactions retain auditable reasons",
+  );
 
-  const nonparticipantFinalize = httpsCallable(parentB.functions, "finalizeGameReward");
+  const nonparticipantFinalize = httpsCallable(outsider.functions, "finalizeGameReward");
   const deniedReward = (await nonparticipantFinalize({ gameType: "spotDifferences", sessionId: firstSession })).data;
   assert.equal(deniedReward.status, "notEligible");
   assert.equal(deniedReward.starsAwarded, 0);
@@ -193,15 +210,31 @@ async function run() {
     status: "completed",
     startedAt: Date.now() - 60_000,
     settings: { roundDuration: 600 },
+    players: createSpotPlayers(parentA.uid, parentB.uid),
     gameState: {
-      foundDifferenceIds: Array.from({ length: 10 }, (_, index) => `difference_${String(index + 1).padStart(2, "0")}`),
+      sceneId: "scene_001",
+      expectedDifferences: 10,
+      teamAssignmentsFrozen: true,
+      teamAssignments: {
+        [parentA.uid]: "A",
+        [parentB.uid]: "B",
+      },
+    },
+    teamStates: {
+      A: createSpotTeamState("A", 10, Date.now() - 500),
+      B: createSpotTeamState("B", 8, null),
     },
   });
   await createSession({ gameType: "spotDifferences", sessionId: secondSession });
-  await recordResult({ gameType: "spotDifferences", sessionId: secondSession, outcome: "completed", foundCount: 10, totalDifferences: 10 });
+  await recordResult({ gameType: "spotDifferences", sessionId: secondSession });
   const secondReward = (await finalize({ gameType: "spotDifferences", sessionId: secondSession })).data;
   assert.equal(secondReward.starsAwarded, 15, "a different session remains independently rewardable");
   assert.equal(secondReward.totalSidelineStars, 36);
+  assert.deepEqual(
+    await readRewardReasons(parentA.uid, "spotDifferences", secondSession),
+    ["spot_team_victory", "spot_perfect_completion_bonus"],
+    "Spot winning-perfect reward transactions retain auditable reasons",
+  );
 
   const explodedBombSession = "bomb-multiplayer-exploded";
   await seedRealtimeGameSession({
@@ -329,25 +362,80 @@ function seedRealtimeGameSession({
   startedAt = Date.now(),
   settings = {},
   gameState,
+  players,
+  teamStates,
 }) {
-  return rtdb.ref(`gameSessions/${sessionId}`).set({
-    sessionId,
-    gameType,
-    squadId,
-    status,
-    startedAt,
-    expiresAt: Date.now() + 60 * 60 * 1000,
-    settings,
-    players: {
-      [participantUid]: {
-        uid: participantUid,
-        displayName: "Reward Test Player",
-        isHost: true,
-        isReady: true,
-      },
+  const sessionPlayers = players ?? {
+    [participantUid]: {
+      uid: participantUid,
+      displayName: "Reward Test Player",
+      isHost: true,
+      isReady: true,
     },
-    gameState,
+  };
+  return rtdb.ref().update({
+    [`gameSessions/${sessionId}`]: {
+      sessionId,
+      gameType,
+      squadId,
+      status,
+      startedAt,
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      settings,
+      players: sessionPlayers,
+      gameState,
+    },
+    ...(teamStates ? { [`gameSessionTeamState/${sessionId}`]: teamStates } : {}),
   });
+}
+
+function createSpotPlayers(teamAUid, teamBUid) {
+  return {
+    [teamAUid]: {
+      uid: teamAUid,
+      displayName: "Reward Test Player",
+      isHost: true,
+      isReady: true,
+      joinOrder: 1,
+      teamId: "A",
+      teamAssignmentVersion: 1,
+    },
+    [teamBUid]: {
+      uid: teamBUid,
+      displayName: "Reward Teammate",
+      isHost: false,
+      isReady: true,
+      joinOrder: 2,
+      teamId: "B",
+      teamAssignmentVersion: 1,
+    },
+  };
+}
+
+function createSpotTeamState(teamId, foundCount, completionAt) {
+  return {
+    teamId,
+    foundDifferenceIds: Array.from(
+      { length: foundCount },
+      (_, index) => `difference_${String(index + 1).padStart(2, "0")}`,
+    ),
+    foundCount,
+    latestDiscovery: null,
+    discoveredBy: {},
+    completionAt,
+    expiresAt: Date.now() + 60 * 60 * 1000,
+    updatedAt: Date.now(),
+  };
+}
+
+async function readRewardReasons(userId, gameType, sessionId) {
+  const snapshot = await db
+    .collection("users")
+    .doc(userId)
+    .collection("rewardTransactions")
+    .doc(`game_${gameType}_${sessionId}_${userId}`)
+    .get();
+  return snapshot.data()?.rewardReasons ?? [];
 }
 
 function calendarDate(date) {

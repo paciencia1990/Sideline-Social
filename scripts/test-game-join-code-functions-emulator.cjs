@@ -8,6 +8,7 @@ const {
   signInAnonymously,
 } = require('firebase/auth');
 const { connectFunctionsEmulator, getFunctions, httpsCallable } = require('firebase/functions');
+const { getCanonicalSpotScene } = require('../functions/lib/spotDifferenceCore.js');
 
 const projectId = process.env.GCLOUD_PROJECT || 'sideline-game-join-code-functions-test';
 if (!admin.apps.length) {
@@ -275,7 +276,14 @@ async function run() {
     () => outsider.call('resolveAndJoinGameByCode', { code: spotB.joinCode }),
     hasReason('game_full'),
   );
+  assert.equal(
+    (await database.ref(`gameSessions/${spotA.sessionId}/players/${hostA.uid}/teamId`).get()).val(),
+    'A',
+    'the Spot host is first join order and starts on Team A',
+  );
   await player.call('resolveAndJoinGameByCode', { code: spotA.joinCode });
+  const duplicateSpotJoin = await player.call('resolveAndJoinGameByCode', { code: spotA.joinCode });
+  assert.equal(duplicateSpotJoin.participantState, 'reconnected');
   await Promise.all([
     hostA.call('setRealtimeGamePlayerReady', { sessionId: spotA.sessionId, ready: true }),
     player.call('setRealtimeGamePlayerReady', { sessionId: spotA.sessionId, ready: true }),
@@ -291,16 +299,53 @@ async function run() {
     spotPlayerTwo.call('resolveAndJoinGameByCode', { code: spotA.joinCode }),
     spotPlayerThree.call('resolveAndJoinGameByCode', { code: spotA.joinCode }),
   ]);
+  const spotLobbyPlayers = (await database.ref(`gameSessions/${spotA.sessionId}/players`).get()).val();
+  const orderedSpotTeams = Object.values(spotLobbyPlayers)
+    .sort((left, right) => left.joinOrder - right.joinOrder)
+    .map((playerState) => playerState.teamId);
+  assert.deepEqual(orderedSpotTeams, ['A', 'B', 'A', 'B']);
   await Promise.all([
     spotPlayerTwo.call('setRealtimeGamePlayerReady', { sessionId: spotA.sessionId, ready: true }),
     spotPlayerThree.call('setRealtimeGamePlayerReady', { sessionId: spotA.sessionId, ready: true }),
   ]);
   await hostA.call('updateGameJoinCodeStatus', { gameType: 'spotTheDifferences', sessionId: spotA.sessionId, status: 'started' });
-  const found = await player.call('recordSpotDifferenceFound', { sessionId: spotA.sessionId, differenceId: 'difference_01' });
+  const spotStartedSession = (await database.ref(`gameSessions/${spotA.sessionId}`).get()).val();
+  const spotScene = getCanonicalSpotScene(spotStartedSession.gameState.sceneId);
+  const firstSpotDifference = spotScene.differences[0];
+  const found = await player.call('recordSpotDifferenceFound', {
+    sessionId: spotA.sessionId,
+    x: firstSpotDifference.x,
+    y: firstSpotDifference.y,
+  });
+  assert.equal(found.found, true);
+  assert.equal(found.differenceId, firstSpotDifference.id);
   assert.equal(found.foundCount, 1);
-  assert.deepEqual((await database.ref(`gameSessions/${spotA.sessionId}/gameState/foundDifferenceIds`).get()).val(), ['difference_01']);
+  const playerTeamId = (await database.ref(`gameSessions/${spotA.sessionId}/players/${player.uid}/teamId`).get()).val();
+  assert.deepEqual(
+    (await database.ref(`gameSessionTeamState/${spotA.sessionId}/${playerTeamId}/foundDifferenceIds`).get()).val(),
+    [firstSpotDifference.id],
+  );
+  assert.equal(
+    (await database.ref(`gameSessions/${spotA.sessionId}/gameState/foundDifferenceIds`).get()).exists(),
+    false,
+    'active Spot discoveries are not stored in the participant-readable session node',
+  );
+  const oppositeTeamUid = Object.entries((await database.ref(`gameSessions/${spotA.sessionId}/players`).get()).val())
+    .find(([, playerState]) => playerState.teamId !== playerTeamId)[0];
+  const oppositeClient = [
+    [hostA.uid, hostA],
+    [player.uid, player],
+    [spotPlayerTwo.uid, spotPlayerTwo],
+    [spotPlayerThree.uid, spotPlayerThree],
+  ].find(([uid]) => uid === oppositeTeamUid)[1];
+  const oppositeFound = await oppositeClient.call('recordSpotDifferenceFound', {
+    sessionId: spotA.sessionId,
+    x: firstSpotDifference.x,
+    y: firstSpotDifference.y,
+  });
+  assert.equal(oppositeFound.found, true, 'the same hotspot remains available to the other team');
   await assert.rejects(
-    () => player.call('recordSpotDifferenceFound', { sessionId: spotA.sessionId, differenceId: 'difference_99' }),
+    () => player.call('recordSpotDifferenceFound', { sessionId: spotA.sessionId, x: -1, y: 0.5 }),
     (error) => String(error?.code).includes('invalid-argument'),
   );
   await hostA.call('updateGameJoinCodeStatus', {
@@ -332,6 +377,8 @@ async function run() {
     sessionId: staleSpot.sessionId,
     status: 'started',
   });
+  const staleSpotSession = (await database.ref(`gameSessions/${staleSpot.sessionId}`).get()).val();
+  const staleSpotDifference = getCanonicalSpotScene(staleSpotSession.gameState.sceneId).differences[1];
   await database.ref(`gameSessions/${staleSpot.sessionId}/startedAt`).set(Date.now() - 91_000);
   const expiredLookup = await hostA.call('getActiveSquadGameSession', { squadId });
   assert.equal(expiredLookup.session, null, 'a Spot session at zero seconds is never advertised as active');
@@ -350,7 +397,11 @@ async function run() {
     hasReason('invalid_or_expired_code'),
   );
   await assert.rejects(
-    () => player.call('recordSpotDifferenceFound', { sessionId: staleSpot.sessionId, differenceId: 'difference_02' }),
+    () => player.call('recordSpotDifferenceFound', {
+      sessionId: staleSpot.sessionId,
+      x: staleSpotDifference.x,
+      y: staleSpotDifference.y,
+    }),
     hasReason('game_already_started'),
   );
 

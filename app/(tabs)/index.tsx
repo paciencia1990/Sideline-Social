@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -24,14 +24,14 @@ import { getLocalPerkPreviewOffer, LOCAL_PERK_AD_PREVIEW_ENABLED } from "@/const
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
-import { useActiveSquadGameSession } from "@/hooks/useActiveSquadGameSession";
+import { useSquadGameLobbies } from "@/hooks/useSquadGameLobbies";
 import {
   retryPendingNotificationAcknowledgements,
   subscribeToUnreadNotificationCount,
 } from "@/services/notificationService";
 import { formatUnreadBadgeCount } from "@/utils/notificationCore";
 import { subscribeToUnreadFriendConversationCount } from "@/services/chatService";
-import { getGameLabelKey } from "@/services/gameService";
+import type { GameJoinCodeType } from "@/services/gameJoinCodeService";
 import {
   getParentTeamsOverview,
   getTeamChildNames,
@@ -47,6 +47,12 @@ import { localizeWeeklyChallenge } from "@/services/weeklyChallengeLocalization"
 import { type Squad } from "@/services/squadService";
 
 const logoSource = require("@/assets/branding/sideline-social-logo.png");
+
+function gameTitleKey(gameType: GameJoinCodeType) {
+  if (gameType === "bombDefusal") return "games.bombDefusal.title";
+  if (gameType === "spotTheDifferences") return "games.spotDifference.title";
+  return "games.triviaBlitz.title";
+}
 
 export default function HomeScreen() {
   const { i18n, t } = useTranslation();
@@ -75,14 +81,19 @@ export default function HomeScreen() {
   const [localPerkPreviewOpen, setLocalPerkPreviewOpen] = useState(false);
   const [squadSelectorOpen, setSquadSelectorOpen] = useState(false);
   const {
-    retry: retryActiveSession,
-    session: activeSession,
-  } = useActiveSquadGameSession({
-    diagnosticLabel: "HomeScreen",
+    lobbies: activeLobbies,
+    refresh: retryActiveSession,
+  } = useSquadGameLobbies({
     enabled: !membershipLoading,
     squadId: selectedSquadId,
-    userId: user?.uid ?? null,
   });
+  const activeLobbyGroups = useMemo(() => {
+    const gameTypes: GameJoinCodeType[] = ["bombDefusal", "spotTheDifferences", "triviaBlitz"];
+    return gameTypes.flatMap((gameType) => {
+      const lobbies = activeLobbies.filter((lobby) => lobby.gameType === gameType);
+      return lobbies.length > 0 ? [{ gameType, lobbies }] : [];
+    });
+  }, [activeLobbies]);
 
   const safeUnreadCount = Number.isFinite(unreadCount) ? Math.max(0, unreadCount) : 0;
   const unreadBadge = formatUnreadBadgeCount(safeUnreadCount);
@@ -275,22 +286,39 @@ export default function HomeScreen() {
         />
         {error ? <StateCard title={t("home.errorTitle")} body={error} /> : null}
 
-        {activeSession ? (
-          <TouchableOpacity
-            activeOpacity={0.86}
-            onPress={() => router.push("/(tabs)/games")}
-            style={styles.activeGameCard}
-          >
+        {activeLobbyGroups.length > 0 ? (
+          <View style={styles.activeGameCard}>
             <View style={styles.activeGameIcon}>
               <Play size={22} color={Colors.surface} fill={Colors.surface} />
             </View>
             <View style={styles.cardCopy}>
               <Text style={styles.cardEyebrow}>{t("home.activeGame")}</Text>
-              <Text style={styles.cardTitle}>
-                {t("games.squadPlaying", { game: t(getGameLabelKey(activeSession.gameType)) })}
-              </Text>
+              <Text style={styles.activeGameCardTitle}>{t("games.lobbyDirectory.activeNowTitle")}</Text>
+              {activeLobbyGroups.map(({ gameType, lobbies }) => (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  activeOpacity={0.82}
+                  key={gameType}
+                  onPress={() => selectedSquadId && router.push({
+                    pathname: "/(games)/lobbies" as never,
+                    params: { gameType, squadId: selectedSquadId },
+                  })}
+                  style={styles.activeGameSummary}
+                >
+                  <Text style={styles.activeGameSummaryTitle}>{t(gameTitleKey(gameType))}</Text>
+                  <Text style={styles.activeGameSummaryBody}>
+                    {lobbies.map((lobby) => t("games.lobbyDirectory.activeNowLobbySummary", {
+                      lobby: lobby.isMain
+                        ? t("games.lobbyDirectory.mainLobby")
+                        : t("games.lobbyDirectory.numberedLobby", { number: lobby.lobbyNumber }),
+                      count: lobby.activePlayerCount,
+                      status: t(`games.lobbyDirectory.status.${lobby.status}`),
+                    })).join("\n")}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
-          </TouchableOpacity>
+          </View>
         ) : null}
 
         <SecondaryActions unreadChatCount={unreadChatCount} />
@@ -861,7 +889,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
   },
   activeGameCard: {
-    alignItems: "center",
+    alignItems: "flex-start",
     backgroundColor: Colors.primary,
     borderRadius: Radius.card,
     flexDirection: "row",
@@ -876,6 +904,29 @@ const styles = StyleSheet.create({
     height: 48,
     justifyContent: "center",
     width: 48,
+  },
+  activeGameSummary: {
+    borderTopColor: "rgba(255,255,255,0.32)",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: 2,
+    minHeight: 44,
+    paddingTop: Spacing.xs,
+  },
+  activeGameCardTitle: {
+    color: Colors.surface,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 16,
+  },
+  activeGameSummaryTitle: {
+    color: Colors.surface,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 13,
+  },
+  activeGameSummaryBody: {
+    color: Colors.surface,
+    fontFamily: Typography.bodyRegular,
+    fontSize: 12,
+    lineHeight: 18,
   },
   yourSquadCard: {
     borderLeftColor: Colors.accentGreen,

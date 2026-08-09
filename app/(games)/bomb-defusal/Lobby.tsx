@@ -9,13 +9,16 @@ import { useGameLobby } from "@/hooks/useGameLobby";
 
 export default function BombDefusalLobby() {
   const { t } = useTranslation();
-  const { sessionId, minPlayers, players, codeState, codeError, isLocal, retryCode, cancelGame, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const { sessionId, lobbyId, minPlayers, players, codeState, codeError, isLocal, retryCode, leaveGame, toggleReady, startGame, showCountdown, setShowCountdown } =
     useGameLobby("bomb-defusal");
 
   const handleComplete = useCallback(() => {
     setShowCountdown(false);
-    router.replace({ pathname: "/games/bomb-defusal/play", params: sessionId ? { sessionId } : {} } as never);
-  }, [sessionId, setShowCountdown]);
+    router.replace({
+      pathname: "/games/bomb-defusal/play",
+      params: sessionId ? { sessionId, ...(lobbyId ? { lobbyId } : {}) } : {},
+    } as never);
+  }, [lobbyId, sessionId, setShowCountdown]);
 
   return (
     <View style={styles.container}>
@@ -27,7 +30,7 @@ export default function BombDefusalLobby() {
         codeError={codeError}
         isLocal={isLocal}
         onRetryCode={retryCode}
-        onCancel={cancelGame}
+        onLeave={leaveGame}
         onReadyToggle={toggleReady}
         onStart={startGame}
       />

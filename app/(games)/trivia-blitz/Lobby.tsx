@@ -9,16 +9,16 @@ import { useGameLobby } from "@/hooks/useGameLobby";
 
 export default function TriviaBlitzLobby() {
   const { t } = useTranslation();
-  const { sessionId, minPlayers, players, codeState, codeError, isLocal, retryCode, cancelGame, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const { sessionId, lobbyId, minPlayers, players, codeState, codeError, isLocal, retryCode, leaveGame, toggleReady, startGame, showCountdown, setShowCountdown } =
     useGameLobby("trivia-blitz");
 
   const handleComplete = useCallback(() => {
     setShowCountdown(false);
     router.replace({
       pathname: "/games/trivia-blitz/play",
-      params: sessionId ? { sessionId } : { start: "1", local: "1" },
+      params: sessionId ? { sessionId, ...(lobbyId ? { lobbyId } : {}) } : { local: "1" },
     } as never);
-  }, [sessionId, setShowCountdown]);
+  }, [lobbyId, sessionId, setShowCountdown]);
 
   return (
     <View style={styles.container}>
@@ -30,7 +30,7 @@ export default function TriviaBlitzLobby() {
         codeError={codeError}
         isLocal={isLocal}
         onRetryCode={retryCode}
-        onCancel={cancelGame}
+        onLeave={leaveGame}
         onReadyToggle={toggleReady}
         onStart={startGame}
       />

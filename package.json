@@ -29,6 +29,7 @@
     "test:post-sdk57-regressions": "node scripts/test-post-sdk57-regressions.cjs",
     "test:spot-difference-assets": "node scripts/test-spot-difference-webp-assets.cjs",
     "test:spot-difference-geometry": "node scripts/test-spot-difference-geometry.cjs",
+    "test:spot-difference-team": "node scripts/test-spot-difference-team-core.cjs",
     "test:trivia-answer-feedback": "node scripts/test-trivia-answer-feedback.cjs",
     "test:trivia-callable-client": "node scripts/test-trivia-callable-client-contract.cjs",
     "test:game-localization": "node scripts/test-game-localization.cjs",
@@ -103,9 +104,10 @@
     "test:firestore:weekly-challenge-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-weekly-challenge-firestore-rules.cjs\"",
     "test:firestore:trivia-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-trivia-firestore-rules.cjs\"",
     "test:game-join-code": "npm --prefix functions run build && node scripts/test-game-join-code-core.cjs",
+    "test:game-lobbies": "npm --prefix functions run build && node scripts/test-game-lobby-core.cjs",
     "test:firestore:game-join-code-rules": "firebase.cmd emulators:exec --project sideline-game-join-code-rules-test --only firestore \"node scripts/test-game-join-code-firestore-rules.cjs\"",
     "test:rtdb:game-join-code-rules": "firebase.cmd emulators:exec --project sideline-game-join-code-rtdb-rules-test --only database \"node scripts/test-game-join-code-rtdb-rules.cjs\"",
-    "test:emulator:game-join-code": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-game-join-code-functions-test --only auth,database,firestore,functions \"node scripts/test-game-join-code-functions-emulator.cjs\"",
+    "test:emulator:game-join-code": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-game-join-code-functions-test --only auth,database,firestore,functions \"node scripts/test-game-lobby-functions-emulator.cjs\"",
     "test:emulator:game-security": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-game-security-functions-test --only auth,database,firestore,functions \"node scripts/test-game-security-functions-emulator.cjs\""
   },
   "engines": {

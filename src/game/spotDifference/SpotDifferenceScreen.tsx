@@ -28,6 +28,7 @@ import { GameRewardSummary } from "@/components/GameRewardSummary";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import {
   createGameRewardSession,
@@ -35,8 +36,12 @@ import {
   recordGameSessionResult,
   type GameRewardResult,
 } from "@/services/sidelineStarsService";
-import { recordSpotDifferenceFound, updateGameJoinCodeStatus } from "@/services/gameJoinCodeService";
-import { subscribeToSession } from "@/services/gameService";
+import { recordSpotDifferenceFound, startGameLobbyRematch } from "@/services/gameJoinCodeService";
+import {
+  subscribeToSession,
+  subscribeToSpotTeamState,
+  type SpotTeamId,
+} from "@/services/gameService";
 import {
   playableSpotDifferenceScenes,
   spotDifferenceScenes,
@@ -60,12 +65,21 @@ type SpotFeedback =
   | { kind: "missed" }
   | { kind: "alreadyFound" }
   | { kind: "actionFailed" }
-  | { kind: "found"; number: number };
+  | { kind: "found"; number: number }
+  | { kind: "foundByName"; name: string };
 
 type SceneLayouts = Record<ImageSide, SceneSize>;
 
 type TapPoint = { x: number; y: number };
 type NativeScrollGesture = ReturnType<typeof Gesture.Native>;
+type SpotRoundResultState = {
+  outcome: "teamWin" | "tie";
+  winnerTeamId: SpotTeamId | null;
+  completedByTeamId: SpotTeamId | null;
+  teamTotals: Record<SpotTeamId, number>;
+  perfectTeamIds: SpotTeamId[];
+  totalDifferences: number;
+};
 
 type ZoomControls = {
   animatedStyle: ReturnType<typeof useAnimatedStyle>;
@@ -101,9 +115,11 @@ const MAX_FOUND_MARKER_RADIUS = 16;
 
 export default function SpotDifferenceScreen() {
   const { t } = useTranslation();
-  const { currentSquad } = useSquad();
-  const params = useLocalSearchParams<{ sessionId?: string | string[] }>();
+  const { user } = useAuth();
+  const { currentSquad, selectedSquadId } = useSquad();
+  const params = useLocalSearchParams<{ sessionId?: string | string[]; lobbyId?: string | string[] }>();
   const requestedSessionId = normalizeRouteParam(params.sessionId);
+  const lobbyId = normalizeRouteParam(params.lobbyId);
   const [usedSceneIds, setUsedSceneIds] = useState<string[]>([]);
   const [currentScene, setCurrentScene] = useState<SpotDifferenceScene | null>(() => selectNextScene([]));
   const [foundIds, setFoundIds] = useState<string[]>([]);
@@ -115,9 +131,13 @@ export default function SpotDifferenceScreen() {
   const [rewardResult, setRewardResult] = useState<GameRewardResult | null>(null);
   const [rewardLoading, setRewardLoading] = useState(false);
   const [rewardError, setRewardError] = useState<string | null>(null);
+  const [selfTeamId, setSelfTeamId] = useState<SpotTeamId | null>(null);
+  const [hostUserId, setHostUserId] = useState("");
+  const [spotResult, setSpotResult] = useState<SpotRoundResultState | null>(null);
   const finalizedRewardKeyRef = useRef("");
-  const lifecycleEndedRef = useRef("");
   const submittingDifferenceIdsRef = useRef(new Set<string>());
+  const latestDiscoveryRef = useRef("");
+  const rematchInFlightRef = useRef(false);
   const [sceneLayouts, setSceneLayouts] = useState<SceneLayouts>({
     A: { width: 0, height: 0 },
     B: { width: 0, height: 0 },
@@ -134,12 +154,16 @@ export default function SpotDifferenceScreen() {
         return t("spot.actionFailed");
       case "found":
         return t("spot.foundNumber", { number: feedback.number });
+      case "foundByName":
+        return t("spot.foundByName", { name: feedback.name });
       default:
         return t("spot.instructions");
     }
   }, [feedback, t]);
   const differences = currentScene?.differences ?? [];
   const isComplete = currentScene ? foundIds.length === differences.length : false;
+  const isMultiplayer = Boolean(requestedSessionId);
+  const roundHasServerResult = isMultiplayer && spotResult !== null;
   const elapsedSeconds = ROUND_SECONDS - secondsLeft;
   const imageRects = useMemo(() => ({
     A: currentScene ? calculateContainedImageLayout(sceneLayouts.A, {
@@ -161,19 +185,32 @@ export default function SpotDifferenceScreen() {
     if (!requestedSessionId) return;
     return subscribeToSession(requestedSessionId, (session) => {
       if (!session) return;
+      setHostUserId(session.hostUserId);
       const sceneId = typeof session.gameState?.sceneId === "string" ? session.gameState.sceneId : "";
       const sharedScene = spotDifferenceScenes.find((scene) => scene.id === sceneId) ?? null;
       if (sharedScene) setCurrentScene((current) => current?.id === sharedScene.id ? current : sharedScene);
-      const sharedFoundIds = Array.isArray(session.gameState?.foundDifferenceIds)
-        ? session.gameState.foundDifferenceIds.filter((value): value is string => typeof value === "string")
-        : [];
-      setFoundIds(sharedFoundIds);
+      const player = user?.uid ? session.players?.[user.uid] : null;
+      setSelfTeamId(player?.teamId === "A" || player?.teamId === "B" ? player.teamId : null);
+      setSpotResult(normalizeSpotRoundResult(session.gameState?.result));
       if (typeof session.startedAt === "number") {
         const remaining = Math.max(0, ROUND_SECONDS - Math.floor((Date.now() - session.startedAt) / 1000));
         setSecondsLeft((current) => Math.min(current, remaining));
       }
     });
-  }, [requestedSessionId]);
+  }, [requestedSessionId, user?.uid]);
+
+  useEffect(() => {
+    if (!requestedSessionId || !selfTeamId) return;
+    return subscribeToSpotTeamState(requestedSessionId, selfTeamId, (teamState) => {
+      setFoundIds(teamState?.foundDifferenceIds ?? []);
+      const latest = teamState?.latestDiscovery;
+      if (!latest) return;
+      const latestKey = `${latest.differenceId}:${latest.foundAt}`;
+      if (latestDiscoveryRef.current === latestKey) return;
+      latestDiscoveryRef.current = latestKey;
+      setFeedback({ kind: "foundByName", name: latest.playerName });
+    });
+  }, [requestedSessionId, selfTeamId]);
 
   useFocusEffect(useCallback(() => () => {
     resetZoomView(false);
@@ -208,13 +245,13 @@ export default function SpotDifferenceScreen() {
   }, [currentSquad?.squadId, requestedSessionId, rewardSetupAttempt, roundInstance, t]);
 
   useEffect(() => {
-    if (isComplete || secondsLeft <= 0 || !currentScene) {
+    if (roundHasServerResult || isComplete || secondsLeft <= 0 || !currentScene) {
       return;
     }
 
     const timer = setTimeout(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
     return () => clearTimeout(timer);
-  }, [currentScene, isComplete, secondsLeft]);
+  }, [currentScene, isComplete, roundHasServerResult, secondsLeft]);
 
   const resetGame = useCallback(() => {
     const nextUsedIds = currentScene ? [...usedSceneIds, currentScene.id] : usedSceneIds;
@@ -225,24 +262,20 @@ export default function SpotDifferenceScreen() {
     setSecondsLeft(ROUND_SECONDS);
     setFeedback({ kind: "instructions" });
     setCurrentScene(nextScene);
+    setSpotResult(null);
+    setSelfTeamId(null);
     setUsedSceneIds(nextScene && nextUsedIds.length < playableSpotDifferenceScenes.length ? nextUsedIds : []);
   }, [currentScene, usedSceneIds]);
 
   const awardCurrentResult = useCallback(async () => {
-    if (!rewardSessionId || (!isComplete && secondsLeft > 0)) return;
-    const rewardKey = `${rewardSessionId}:${isComplete ? "completed" : "timeExpired"}`;
+    if (!rewardSessionId || (!isComplete && secondsLeft > 0 && !spotResult)) return;
+    const rewardKey = `${rewardSessionId}:${spotResult ? "serverResult" : isComplete ? "completed" : "timeExpired"}`;
     if (finalizedRewardKeyRef.current === rewardKey && rewardResult) return;
     finalizedRewardKeyRef.current = rewardKey;
     setRewardLoading(true);
     setRewardError(null);
     try {
-      await recordGameSessionResult({
-        gameType: "spotDifferences",
-        sessionId: rewardSessionId,
-        outcome: isComplete ? "completed" : "timeExpired",
-        foundCount: foundIds.length,
-        totalDifferences: differences.length,
-      });
+      await recordGameSessionResult({ gameType: "spotDifferences", sessionId: rewardSessionId });
       setRewardResult(await finalizeGameReward("spotDifferences", rewardSessionId));
     } catch {
       finalizedRewardKeyRef.current = "";
@@ -250,29 +283,45 @@ export default function SpotDifferenceScreen() {
     } finally {
       setRewardLoading(false);
     }
-  }, [differences.length, foundIds.length, isComplete, rewardResult, rewardSessionId, secondsLeft, t]);
+  }, [isComplete, rewardResult, rewardSessionId, secondsLeft, spotResult, t]);
 
   useEffect(() => {
-    if (rewardSessionId && (isComplete || secondsLeft <= 0)) void awardCurrentResult();
-  }, [awardCurrentResult, isComplete, rewardSessionId, secondsLeft]);
+    if (rewardSessionId && (isComplete || secondsLeft <= 0 || spotResult)) void awardCurrentResult();
+  }, [awardCurrentResult, isComplete, rewardSessionId, secondsLeft, spotResult]);
 
-  useEffect(() => {
-    if (!requestedSessionId || (!isComplete && secondsLeft > 0) || lifecycleEndedRef.current === requestedSessionId) return;
-    lifecycleEndedRef.current = requestedSessionId;
-    void updateGameJoinCodeStatus({
-      gameType: "spotTheDifferences",
-      sessionId: requestedSessionId,
-      status: "ended",
-    }).catch(() => undefined);
-  }, [isComplete, requestedSessionId, secondsLeft]);
+  const openLobbyDirectory = useCallback(() => {
+    if (selectedSquadId) {
+      router.replace({
+        pathname: "/(games)/lobbies",
+        params: { gameType: "spotTheDifferences", squadId: selectedSquadId },
+      } as never);
+      return;
+    }
+    router.replace("/(tabs)/games" as never);
+  }, [selectedSquadId]);
 
-  const handlePlayAgain = useCallback(() => {
+  const handlePlayAgain = useCallback(async () => {
     if (requestedSessionId) {
-      router.replace({ pathname: "/(games)/spot-the-difference/Lobby", params: { host: "1" } } as never);
+      if (!lobbyId || hostUserId !== user?.uid || rematchInFlightRef.current) {
+        openLobbyDirectory();
+        return;
+      }
+      rematchInFlightRef.current = true;
+      try {
+        const rematch = await startGameLobbyRematch({ lobbyId });
+        router.replace({
+          pathname: "/(games)/spot-the-difference/Lobby",
+          params: { lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
+        } as never);
+      } catch {
+        openLobbyDirectory();
+      } finally {
+        rematchInFlightRef.current = false;
+      }
       return;
     }
     resetGame();
-  }, [requestedSessionId, resetGame]);
+  }, [hostUserId, lobbyId, openLobbyDirectory, requestedSessionId, resetGame, user?.uid]);
 
   const handleSceneLayout = useCallback((side: ImageSide, size: SceneSize) => {
     setSceneLayouts((current) => {
@@ -286,7 +335,7 @@ export default function SpotDifferenceScreen() {
   }, []);
 
   const handleImageTap = useCallback((imageSide: ImageSide, point: TapPoint, transform: TransformSnapshot) => {
-    if (isComplete || !currentScene) {
+    if (roundHasServerResult || isComplete || !currentScene) {
       return;
     }
 
@@ -310,6 +359,36 @@ export default function SpotDifferenceScreen() {
       return;
     }
 
+    if (requestedSessionId) {
+      const submissionKey = `${tap.x.toFixed(4)}:${tap.y.toFixed(4)}`;
+      if (submittingDifferenceIdsRef.current.has(submissionKey)) return;
+      submittingDifferenceIdsRef.current.add(submissionKey);
+      void recordSpotDifferenceFound({
+        sessionId: requestedSessionId,
+        x: tap.x,
+        y: tap.y,
+      }).then((result) => {
+        if (result.alreadyFound) {
+          setFeedback({ kind: "alreadyFound" });
+          return;
+        }
+        if (!result.found || !result.differenceId) {
+          setFeedback({ kind: "missed" });
+          return;
+        }
+        const differenceNumber = currentScene.differences.findIndex((difference) => difference.id === result.differenceId) + 1;
+        setFoundIds((current) => current.includes(result.differenceId!) ? current : [...current, result.differenceId!]);
+        setFeedback(result.foundByName
+          ? { kind: "foundByName", name: result.foundByName }
+          : { kind: "found", number: Math.max(differenceNumber, 1) });
+      }).catch(() => {
+        setFeedback({ kind: "actionFailed" });
+      }).finally(() => {
+        submittingDifferenceIdsRef.current.delete(submissionKey);
+      });
+      return;
+    }
+
     const match = findDifferenceAtPoint(currentScene.differences, tap);
     if (!match) {
       setFeedback({ kind: "missed" });
@@ -322,25 +401,9 @@ export default function SpotDifferenceScreen() {
     }
 
     const differenceNumber = currentScene.differences.findIndex((difference) => difference.id === match.id) + 1;
-    if (requestedSessionId) {
-      if (submittingDifferenceIdsRef.current.has(match.id)) return;
-      submittingDifferenceIdsRef.current.add(match.id);
-      void recordSpotDifferenceFound({
-        sessionId: requestedSessionId,
-        differenceId: match.id,
-      }).then(() => {
-        setFoundIds((current) => current.includes(match.id) ? current : [...current, match.id]);
-        setFeedback({ kind: "found", number: Math.max(differenceNumber, 1) });
-      }).catch(() => {
-        setFeedback({ kind: "actionFailed" });
-      }).finally(() => {
-        submittingDifferenceIdsRef.current.delete(match.id);
-      });
-      return;
-    }
     setFoundIds((current) => [...current, match.id]);
     setFeedback({ kind: "found", number: Math.max(differenceNumber, 1) });
-  }, [currentScene, foundSet, imageRects, isComplete, requestedSessionId, sceneLayouts]);
+  }, [currentScene, foundSet, imageRects, isComplete, requestedSessionId, roundHasServerResult, sceneLayouts]);
 
   if (!currentScene) {
     return (
@@ -354,6 +417,51 @@ export default function SpotDifferenceScreen() {
     );
   }
   const sceneTitle = t("spot.sceneTitle", { number: getSpotSceneNumber(currentScene.id) });
+  const resultTeamId = selfTeamId ?? "A";
+  const resultTeamLabel = t(`spot.teams.${resultTeamId}`);
+  const winnerTeamLabel = spotResult?.winnerTeamId ? t(`spot.teams.${spotResult.winnerTeamId}`) : "";
+  const ownTeamFound = spotResult ? spotResult.teamTotals[resultTeamId] : foundIds.length;
+  const spotResultTitle = spotResult
+    ? spotResult.outcome === "tie"
+      ? t("spot.results.tieTitle")
+      : spotResult.winnerTeamId === resultTeamId
+        ? t("spot.results.winTitle")
+        : t("spot.results.effortTitle")
+    : "";
+  const spotResultBody = spotResult
+    ? spotResult.outcome === "tie"
+      ? t("spot.results.tieBody", { found: ownTeamFound })
+      : spotResult.winnerTeamId === resultTeamId
+        ? t("spot.results.winBody", {
+          team: resultTeamLabel,
+          total: spotResult.totalDifferences,
+        })
+        : t("spot.results.effortBody", {
+          team: winnerTeamLabel,
+          found: ownTeamFound,
+          total: spotResult.totalDifferences,
+        })
+    : "";
+  const spotRewardBase = spotResult
+    ? spotResult.outcome === "tie"
+      ? 6
+      : spotResult.winnerTeamId === resultTeamId ? 10 : 3
+    : 0;
+  const spotRewardBonus = spotResult?.perfectTeamIds.includes(resultTeamId) ? 5 : 0;
+  const spotRewardDetailLines = spotResult
+    ? [
+      spotResult.outcome === "tie"
+        ? t("rewards.spotTie", { count: spotRewardBase })
+        : spotResult.winnerTeamId === resultTeamId
+          ? t("rewards.spotTeamVictory", { count: spotRewardBase })
+          : t("rewards.spotRoundCompleted", { count: spotRewardBase }),
+      ...(spotRewardBonus > 0 ? [t("rewards.spotPerfectBonus", { count: spotRewardBonus })] : []),
+      t("rewards.spotTotal", { count: spotRewardBase + spotRewardBonus }),
+    ]
+    : [
+      t("rewards.differencesFound", { found: foundIds.length, total: differences.length }),
+      t("rewards.completionStars", { count: 5 }),
+    ];
 
   return (
     <ScreenWrapper>
@@ -371,7 +479,15 @@ export default function SpotDifferenceScreen() {
 
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
-            <Text style={styles.statValue}>{t("spot.progress", { found: foundIds.length, total: differences.length })}</Text>
+            <Text style={styles.statValue}>
+              {selfTeamId
+                ? t("spot.teamProgress", {
+                  team: t(`spot.teams.${selfTeamId}`),
+                  found: foundIds.length,
+                  total: differences.length,
+                })
+                : t("spot.progress", { found: foundIds.length, total: differences.length })}
+            </Text>
             <Text style={styles.statLabel}>{t("spot.progressLabel")}</Text>
           </View>
           <View style={styles.statCard}>
@@ -441,31 +557,38 @@ export default function SpotDifferenceScreen() {
           </View>
         ) : null}
 
-        {isComplete ? (
+        {spotResult ? (
           <View style={styles.resultPanel}>
-            <Text style={styles.resultTitle}>{t("spot.completeTitle")}</Text>
-            <Text style={styles.resultText}>{t("spot.completeBody", { count: elapsedSeconds })}</Text>
+            <Text style={styles.resultTitle}>{spotResultTitle}</Text>
+            <Text style={styles.resultText}>{spotResultBody}</Text>
             <GameRewardSummary
-              detailLines={[
-                t("rewards.differencesFound", { found: foundIds.length, total: differences.length }),
-                t("rewards.completionStars", { count: 5 }),
-              ]}
+              detailLines={spotRewardDetailLines}
               error={rewardError}
               loading={rewardLoading}
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/spot-the-difference/Lobby" />
+            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/spot-the-difference/Lobby" />
+          </View>
+        ) : isComplete ? (
+          <View style={styles.resultPanel}>
+            <Text style={styles.resultTitle}>{t("spot.completeTitle")}</Text>
+            <Text style={styles.resultText}>{t("spot.completeBody", { count: elapsedSeconds })}</Text>
+            <GameRewardSummary
+              detailLines={spotRewardDetailLines}
+              error={rewardError}
+              loading={rewardLoading}
+              onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
+              result={rewardResult}
+            />
+            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/spot-the-difference/Lobby" />
           </View>
         ) : secondsLeft <= 0 ? (
           <View style={styles.resultPanel}>
             <Text style={styles.resultTitle}>{t("spot.timeUpTitle")}</Text>
             <Text style={styles.resultText}>{t("spot.timeUpBody", { found: foundIds.length, total: differences.length })}</Text>
             <GameRewardSummary
-              detailLines={[
-                t("rewards.differencesFound", { found: foundIds.length, total: differences.length }),
-                t("rewards.completionStars", { count: 5 }),
-              ]}
+              detailLines={spotRewardDetailLines}
               error={rewardError}
               loading={rewardLoading}
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
@@ -905,6 +1028,44 @@ function FoundMarker({ imageRect, zone }: { imageRect: ImageRect; zone: SpotDiff
       ]}
     />
   );
+}
+
+function normalizeSpotRoundResult(value: unknown): SpotRoundResultState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  const outcome = result.outcome === "teamWin" || result.outcome === "tie" ? result.outcome : null;
+  const winnerTeamId = normalizeSpotTeamId(result.winnerTeamId);
+  const completedByTeamId = normalizeSpotTeamId(result.completedByTeamId);
+  const teamTotals = result.teamTotals && typeof result.teamTotals === "object" && !Array.isArray(result.teamTotals)
+    ? result.teamTotals as Record<string, unknown>
+    : {};
+  const totalDifferences = typeof result.totalDifferences === "number" && Number.isFinite(result.totalDifferences)
+    ? Math.max(1, Math.floor(result.totalDifferences))
+    : 10;
+  if (!outcome || (outcome === "teamWin" && !winnerTeamId)) return null;
+  return {
+    outcome,
+    winnerTeamId: outcome === "tie" ? null : winnerTeamId,
+    completedByTeamId,
+    teamTotals: {
+      A: normalizeCount(teamTotals.A, totalDifferences),
+      B: normalizeCount(teamTotals.B, totalDifferences),
+    },
+    perfectTeamIds: Array.isArray(result.perfectTeamIds)
+      ? result.perfectTeamIds.filter((teamId): teamId is SpotTeamId => teamId === "A" || teamId === "B")
+      : [],
+    totalDifferences,
+  };
+}
+
+function normalizeSpotTeamId(value: unknown): SpotTeamId | null {
+  return value === "A" || value === "B" ? value : null;
+}
+
+function normalizeCount(value: unknown, maximum: number) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(maximum, Math.max(0, Math.floor(value)))
+    : 0;
 }
 
 function getSpotSceneNumber(sceneId: string) {

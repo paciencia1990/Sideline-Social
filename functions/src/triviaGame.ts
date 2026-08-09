@@ -4,6 +4,7 @@ import * as admin from 'firebase-admin';
 import { Timestamp } from 'firebase-admin/firestore';
 import * as firebaseFunctions from 'firebase-functions';
 
+import { setGameLobbyLifecycleForSession } from './gameLobbyStore';
 import { permanentAccountFunctions, requirePermanentUid } from './permanentAuth';
 import { resolveCanonicalPublicName } from './publicUserProfileCore';
 import rawTriviaQuestions from './triviaQuestions.json';
@@ -67,98 +68,159 @@ const secretRef = (sessionId: string) => firestore().collection('triviaGameSecre
 const submissions = () => firestore().collection('triviaGameSubmissions');
 const rateLimits = () => firestore().collection('triviaGameRateLimits');
 
-export const createTriviaGameSession = onTriviaCall(
-  'createTriviaGameSession',
-  async (data, context): Promise<TriviaIdentityResult> => {
-    const uid = requirePermanentUid(context);
-    const requestedSessionId = readOptionalSessionId(data.requestedSessionId);
-    const sessionId = requestedSessionId ?? `trivia_${randomBytes(18).toString('base64url')}`;
-    await consumeCreateAttempt(uid);
-    const displayName = await resolvePlayerDisplayName(uid, context.auth?.token);
-    const selectedQuestions = selectQuestions(DEFAULT_QUESTION_COUNT);
-    const roundId = randomBytes(18).toString('base64url');
+export type TriviaLobbyParticipant = {
+  uid: string;
+  displayName: string;
+  joinOrder: number;
+};
 
-    return firestore().runTransaction(async (transaction) => {
-      const parent = parentRef(sessionId);
-      const game = gameRef(sessionId);
-      const player = playerRef(sessionId, uid);
-      const secret = secretRef(sessionId);
-      const [parentSnapshot, gameSnapshot, playerSnapshot, secretSnapshot] = await Promise.all([
-        transaction.get(parent),
-        transaction.get(game),
-        transaction.get(player),
-        transaction.get(secret),
-      ]);
+export type ProvisionTriviaLobbyInput = {
+  sessionId: string;
+  lobbyId: string;
+  lobbyNumber: number;
+  squadId: string;
+  hostUserId: string;
+  participants: TriviaLobbyParticipant[];
+  expiresAtMs: number;
+};
 
-      if (parentSnapshot.exists || gameSnapshot.exists || playerSnapshot.exists || secretSnapshot.exists) {
-        if (
-          parentSnapshot.exists &&
-          gameSnapshot.exists &&
-          playerSnapshot.exists &&
-          secretSnapshot.exists &&
-          parentSnapshot.data()?.hostPlayerId === uid &&
-          gameSnapshot.data()?.hostPlayerId === uid &&
-          parentSnapshot.data()?.status === 'lobby' &&
-          gameSnapshot.data()?.status === 'lobby'
-        ) {
-          assertSessionNotExpired(parentSnapshot.data());
-          return { sessionId, playerId: uid, isHost: true };
-        }
-        throw safeError('already-exists', 'session_unavailable');
+export async function provisionTriviaLobbySession(
+  input: ProvisionTriviaLobbyInput,
+): Promise<TriviaIdentityResult> {
+  const participants = [...input.participants]
+    .filter((participant) => participant.uid && participant.displayName)
+    .sort((left, right) => left.joinOrder - right.joinOrder || left.uid.localeCompare(right.uid));
+  if (!participants.some((participant) => participant.uid === input.hostUserId)) {
+    throw safeError('failed-precondition', 'session_creation_failed');
+  }
+  const selectedQuestions = selectQuestions(DEFAULT_QUESTION_COUNT);
+  const roundId = randomBytes(18).toString('base64url');
+
+  return firestore().runTransaction(async (transaction) => {
+    const parent = parentRef(input.sessionId);
+    const game = gameRef(input.sessionId);
+    const secret = secretRef(input.sessionId);
+    const [parentSnapshot, gameSnapshot, secretSnapshot] = await Promise.all([
+      transaction.get(parent),
+      transaction.get(game),
+      transaction.get(secret),
+    ]);
+
+    if (parentSnapshot.exists || gameSnapshot.exists || secretSnapshot.exists) {
+      if (
+        parentSnapshot.exists &&
+        gameSnapshot.exists &&
+        secretSnapshot.exists &&
+        parentSnapshot.data()?.hostPlayerId === input.hostUserId &&
+        parentSnapshot.data()?.lobbyId === input.lobbyId &&
+        parentSnapshot.data()?.squadId === input.squadId &&
+        parentSnapshot.data()?.status === 'lobby' &&
+        gameSnapshot.data()?.status === 'lobby'
+      ) {
+        assertSessionNotExpired(parentSnapshot.data());
+        return { sessionId: input.sessionId, playerId: input.hostUserId, isHost: true };
       }
+      throw safeError('already-exists', 'session_unavailable');
+    }
 
-      const now = Timestamp.now();
-      const expiresAt = Timestamp.fromMillis(now.toMillis() + SESSION_TTL_MS);
-      transaction.create(parent, {
-        sessionId,
-        gameId: 'triviaBlitz',
-        gameType: 'triviaBlitz',
-        hostPlayerId: uid,
-        playerIds: [uid],
-        status: 'lobby',
-        completedAt: null,
-        expiresAt,
-        createdAt: now,
-        updatedAt: now,
-      });
-      transaction.create(game, {
-        status: 'lobby',
-        turnIndex: 0,
-        questionIndex: 0,
-        questionCount: selectedQuestions.length,
-        teamStreak: 0,
-        totalPoints: 0,
-        correctAnswers: 0,
-        answeredQuestions: 0,
-        totalPlayers: 1,
-        allReady: false,
-        currentQuestion: null,
-        currentSelection: null,
-        answerResult: null,
-        hostPlayerId: uid,
-        questionStartedAt: null,
-        questionEndsAt: null,
-        createdAt: now,
-        updatedAt: now,
-      });
-      transaction.create(player, {
-        name: displayName,
-        playerIndex: 0,
+    const now = Timestamp.now();
+    const expiresAt = Timestamp.fromMillis(input.expiresAtMs);
+    const participantIds = participants.map((participant) => participant.uid);
+    transaction.create(parent, {
+      sessionId: input.sessionId,
+      lobbyId: input.lobbyId,
+      lobbyNumber: input.lobbyNumber,
+      squadId: input.squadId,
+      gameId: 'triviaBlitz',
+      gameType: 'triviaBlitz',
+      hostPlayerId: input.hostUserId,
+      playerIds: participantIds,
+      queuedPlayerIds: [],
+      status: 'lobby',
+      completedAt: null,
+      expiresAt,
+      createdAt: now,
+      updatedAt: now,
+    });
+    transaction.create(game, {
+      status: 'lobby',
+      turnIndex: 0,
+      questionIndex: 0,
+      questionCount: selectedQuestions.length,
+      teamStreak: 0,
+      totalPoints: 0,
+      correctAnswers: 0,
+      answeredQuestions: 0,
+      totalPlayers: participants.length,
+      queuedPlayerCount: 0,
+      allReady: false,
+      currentQuestion: null,
+      currentSelection: null,
+      answerResult: null,
+      hostPlayerId: input.hostUserId,
+      questionStartedAt: null,
+      questionEndsAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    participants.forEach((participant, playerIndex) => {
+      transaction.create(playerRef(input.sessionId, participant.uid), {
+        name: participant.displayName,
+        playerIndex,
+        joinOrder: participant.joinOrder,
         score: 0,
         ready: false,
         createdAt: now,
         updatedAt: now,
       });
-      transaction.create(secret, {
-        sessionId,
-        hostPlayerId: uid,
-        roundId,
-        selectedQuestions,
-        questionCount: selectedQuestions.length,
-        createdAt: now,
-        updatedAt: now,
-      });
-      return { sessionId, playerId: uid, isHost: true };
+    });
+    transaction.create(secret, {
+      sessionId: input.sessionId,
+      lobbyId: input.lobbyId,
+      hostPlayerId: input.hostUserId,
+      roundId,
+      selectedQuestions,
+      questionCount: selectedQuestions.length,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return { sessionId: input.sessionId, playerId: input.hostUserId, isHost: true };
+  });
+}
+
+export const createTriviaGameSession = onTriviaCall(
+  'createTriviaGameSession',
+  async (data, context): Promise<TriviaIdentityResult> => {
+    const uid = requirePermanentUid(context);
+    const requestedSessionId = readOptionalSessionId(data.requestedSessionId);
+    if (!requestedSessionId) throw safeError('failed-precondition', 'client_update_required');
+    await consumeCreateAttempt(uid);
+    const link = await firestore().collection('gameJoinSessionLinks')
+      .doc(hashIdentifier(`triviaBlitz:${requestedSessionId}`))
+      .get();
+    const linkData = link.data();
+    const linkExpiresAt = readTimestamp(linkData?.expiresAt);
+    if (
+      !link.exists ||
+      linkData?.sessionId !== requestedSessionId ||
+      linkData?.gameType !== 'triviaBlitz' ||
+      linkData?.hostUserId !== uid ||
+      typeof linkData?.lobbyId !== 'string' ||
+      typeof linkData?.squadId !== 'string' ||
+      !Number.isInteger(linkData?.lobbyNumber) ||
+      !linkExpiresAt || linkExpiresAt.toMillis() <= Date.now()
+    ) {
+      throw safeError('failed-precondition', 'client_update_required');
+    }
+    const displayName = await resolvePlayerDisplayName(uid, context.auth?.token);
+    return provisionTriviaLobbySession({
+      sessionId: requestedSessionId,
+      lobbyId: linkData.lobbyId,
+      lobbyNumber: linkData.lobbyNumber,
+      squadId: linkData.squadId,
+      hostUserId: uid,
+      participants: [{ uid, displayName, joinOrder: 1 }],
+      expiresAtMs: linkExpiresAt.toMillis(),
     });
   },
 );
@@ -191,7 +253,7 @@ export const setTriviaPlayerReady = onTriviaCall(
     const sessionId = readSessionId(data.sessionId);
     const ready = readBoolean(data.ready, 'ready');
 
-    return firestore().runTransaction(async (transaction) => {
+    const result = await firestore().runTransaction(async (transaction) => {
       const parent = await transaction.get(parentRef(sessionId));
       const game = await transaction.get(gameRef(sessionId));
       const player = await transaction.get(playerRef(sessionId, uid));
@@ -228,7 +290,7 @@ export const startTriviaGameSession = onTriviaCall(
       .collection('gameJoinSessionLinks')
       .doc(hashIdentifier(`triviaBlitz:${sessionId}`));
 
-    return firestore().runTransaction(async (transaction) => {
+    const result = await firestore().runTransaction(async (transaction) => {
       const parent = await transaction.get(parentRef(sessionId));
       const game = await transaction.get(gameRef(sessionId));
       const secret = await transaction.get(secretRef(sessionId));
@@ -297,6 +359,8 @@ export const startTriviaGameSession = onTriviaCall(
       });
       return { status: 'playing' as const };
     });
+    await setGameLobbyLifecycleForSession('triviaBlitz', sessionId, 'inProgress');
+    return result;
   },
 );
 
@@ -441,7 +505,7 @@ export const advanceTriviaGameSession = onTriviaCall(
       100,
     );
 
-    return firestore().runTransaction(async (transaction) => {
+    const result = await firestore().runTransaction(async (transaction) => {
       const parent = await transaction.get(parentRef(sessionId));
       const game = await transaction.get(gameRef(sessionId));
       const secret = await transaction.get(secretRef(sessionId));
@@ -519,6 +583,10 @@ export const advanceTriviaGameSession = onTriviaCall(
       });
       return { status: 'playing' as const, questionIndex: nextQuestionIndex };
     });
+    if (result.status === 'results') {
+      await setGameLobbyLifecycleForSession('triviaBlitz', sessionId, 'waitingForRematch');
+    }
+    return result;
   },
 );
 
@@ -533,7 +601,7 @@ export const resetTriviaGameSession = onTriviaCall(
       .collection('gameJoinSessionLinks')
       .doc(hashIdentifier(`triviaBlitz:${sessionId}`));
 
-    return firestore().runTransaction(async (transaction) => {
+    const result = await firestore().runTransaction(async (transaction) => {
       const parent = await transaction.get(parentRef(sessionId));
       const game = await transaction.get(gameRef(sessionId));
       const playerSnapshots = await transaction.get(playersRef(sessionId));
@@ -545,6 +613,9 @@ export const resetTriviaGameSession = onTriviaCall(
       const mappingRef = firestore().collection('gameJoinCodes').doc(joinCode);
       const mapping = await transaction.get(mappingRef);
       assertHost(parent, game, uid);
+      if (typeof parent.data()?.lobbyId === 'string') {
+        throw safeError('failed-precondition', 'client_update_required');
+      }
       assertSessionNotExpired(parent.data());
       assertSessionReadableLifecycle(parent.data(), game.data());
       assertTriviaJoinCodeResettable({
@@ -599,6 +670,8 @@ export const resetTriviaGameSession = onTriviaCall(
       });
       return { status: 'lobby' as const };
     });
+    await setGameLobbyLifecycleForSession('triviaBlitz', sessionId, 'waiting');
+    return result;
   },
 );
 
@@ -608,7 +681,7 @@ export const endTriviaGameSession = onTriviaCall(
     const uid = requirePermanentUid(context);
     const sessionId = readSessionId(data.sessionId);
 
-    return firestore().runTransaction(async (transaction) => {
+    const result = await firestore().runTransaction(async (transaction) => {
       const parent = await transaction.get(parentRef(sessionId));
       const game = await transaction.get(gameRef(sessionId));
       assertHost(parent, game, uid);
@@ -635,6 +708,8 @@ export const endTriviaGameSession = onTriviaCall(
       });
       return { status: 'results' as const };
     });
+    await setGameLobbyLifecycleForSession('triviaBlitz', sessionId, 'waitingForRematch');
+    return result;
   },
 );
 

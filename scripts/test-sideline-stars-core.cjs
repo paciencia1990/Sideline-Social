@@ -48,6 +48,11 @@ assert.equal(core.calculateTriviaReward({ completedAllQuestions: false, correctA
 assert.equal(amount(core.calculateSpotDifferencesReward({ terminal: true, foundCount: 10, totalDifferences: 10 })), 15);
 assert.equal(amount(core.calculateSpotDifferencesReward({ terminal: true, foundCount: 6, totalDifferences: 10 })), 11);
 assert.equal(core.calculateSpotDifferencesReward({ terminal: false, foundCount: 6, totalDifferences: 10 }), null);
+assert.equal(amount(core.calculateSpotTeamReward({ outcome: "teamWin", playerTeamId: "A", winnerTeamId: "A", perfectCompletion: false })), 10);
+assert.equal(amount(core.calculateSpotTeamReward({ outcome: "teamWin", playerTeamId: "B", winnerTeamId: "A", perfectCompletion: false })), 3);
+assert.equal(amount(core.calculateSpotTeamReward({ outcome: "tie", playerTeamId: "A", winnerTeamId: null, perfectCompletion: false })), 6);
+assert.equal(amount(core.calculateSpotTeamReward({ outcome: "teamWin", playerTeamId: "A", winnerTeamId: "A", perfectCompletion: true })), 15);
+assert.equal(amount(core.calculateSpotTeamReward({ outcome: "tie", playerTeamId: "B", winnerTeamId: null, perfectCompletion: true })), 11);
 assert.equal(amount(core.calculateBombDefusalReward({ outcome: "exploded", firstAttemptCorrectStepCount: 3, totalSteps: 4 })), 8);
 assert.equal(amount(core.calculateBombDefusalReward({ outcome: "defused", firstAttemptCorrectStepCount: 4, totalSteps: 4 })), 14);
 assert.equal(amount(core.calculateBombDefusalReward({ outcome: "defused", firstAttemptCorrectStepCount: 5, totalSteps: 5 })), 15);
@@ -94,8 +99,13 @@ assert.doesNotMatch(triviaSource, /Team Points|pointsAwarded\} points|Trivia Sco
 lobbySources.forEach((lobbySource) => {
   assert.match(
     lobbySource,
-    /params:\s*sessionId\s*\?\s*\{\s*sessionId\s*\}/,
+    /params:\s*sessionId\s*\?\s*\{\s*sessionId/,
     "each canonical lobby session reaches its game route",
+  );
+  assert.match(
+    lobbySource,
+    /\.\.\.\(lobbyId\s*\?\s*\{\s*lobbyId\s*\}\s*:\s*\{\s*\}\)/,
+    "each canonical game route preserves stable lobby identity",
   );
 });
 assert.doesNotMatch(functionsSource, /dailyGame|dailyStars|subscription|entitlement|advertisement/i, "no reward cap or monetization gate was introduced");

@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { GameEndActions } from "@/components/GameEndActions";
 import { GameRewardSummary } from "@/components/GameRewardSummary";
+import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import {
   createGameRewardSession,
@@ -24,6 +25,7 @@ import {
 } from "@/services/sidelineStarsService";
 import {
   createGameJoinIdempotencyKey,
+  startGameLobbyRematch,
   submitBombDefusalStep,
   updateGameJoinCodeStatus,
 } from "@/services/gameJoinCodeService";
@@ -51,9 +53,11 @@ const explosionAnimation = require("../../assets/animations/explosion.json");
 
 export default function BombDefusalScreen() {
   const { t } = useTranslation();
-  const { currentSquad } = useSquad();
-  const params = useLocalSearchParams<{ sessionId?: string | string[] }>();
+  const { user } = useAuth();
+  const { currentSquad, selectedSquadId } = useSquad();
+  const params = useLocalSearchParams<{ sessionId?: string | string[]; lobbyId?: string | string[] }>();
   const requestedSessionId = normalizeRouteParam(params.sessionId);
+  const lobbyId = normalizeRouteParam(params.lobbyId);
   const [attemptNumber, setAttemptNumber] = useState(0);
   const [steps, setSteps] = useState<BombStep[]>(() => generateBombPattern());
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
@@ -63,6 +67,7 @@ export default function BombDefusalScreen() {
   const [status, setStatus] = useState<"playing" | "defused" | "exploded">("playing");
   const [messageKey, setMessageKey] = useState<BombMessageKey>("bomb.followSequence");
   const [actionSubmitting, setActionSubmitting] = useState(false);
+  const [hostUserId, setHostUserId] = useState("");
   const [showWireCut, setShowWireCut] = useState(false);
   const [rewardSessionId, setRewardSessionId] = useState("");
   const [rewardSetupAttempt, setRewardSetupAttempt] = useState(0);
@@ -71,6 +76,7 @@ export default function BombDefusalScreen() {
   const [rewardError, setRewardError] = useState<string | null>(null);
   const finalizedRewardKeyRef = useRef("");
   const lifecycleEndedRef = useRef("");
+  const rematchInFlightRef = useRef(false);
   const submissionIdsRef = useRef(new Map<string, string>());
   const dialRotation = useRef(new Animated.Value(0)).current;
   const currentStep = steps[currentStepIndex];
@@ -79,6 +85,7 @@ export default function BombDefusalScreen() {
     if (!requestedSessionId) return;
     return subscribeToSession(requestedSessionId, (session) => {
       if (!session) return;
+      setHostUserId(session.hostUserId);
       const sharedStepIndex = session.gameState?.currentStepIndex;
       const sharedStep = session.gameState?.currentStep;
       if (
@@ -215,13 +222,39 @@ export default function BombDefusalScreen() {
     }).catch(() => undefined);
   }, [requestedSessionId, status]);
 
-  const handlePlayAgain = useCallback(() => {
+  const openLobbyDirectory = useCallback(() => {
+    if (selectedSquadId) {
+      router.replace({
+        pathname: "/(games)/lobbies",
+        params: { gameType: "bombDefusal", squadId: selectedSquadId },
+      } as never);
+      return;
+    }
+    router.replace("/(tabs)/games" as never);
+  }, [selectedSquadId]);
+
+  const handlePlayAgain = useCallback(async () => {
     if (requestedSessionId) {
-      router.replace({ pathname: "/(games)/bomb-defusal/Lobby", params: { host: "1" } } as never);
+      if (!lobbyId || hostUserId !== user?.uid || rematchInFlightRef.current) {
+        openLobbyDirectory();
+        return;
+      }
+      rematchInFlightRef.current = true;
+      try {
+        const rematch = await startGameLobbyRematch({ lobbyId });
+        router.replace({
+          pathname: "/(games)/bomb-defusal/Lobby",
+          params: { lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
+        } as never);
+      } catch {
+        openLobbyDirectory();
+      } finally {
+        rematchInFlightRef.current = false;
+      }
       return;
     }
     resetGame();
-  }, [requestedSessionId]);
+  }, [hostUserId, lobbyId, openLobbyDirectory, requestedSessionId, user?.uid]);
 
   const submitStep = async (input: Record<string, string | number>) => {
     if (!currentStep || status !== "playing") {
@@ -487,7 +520,7 @@ export default function BombDefusalScreen() {
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/bomb-defusal/Lobby" />
+            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/bomb-defusal/Lobby" />
           </View>
         ) : status === "exploded" ? (
           <View style={styles.resultPanel}>
@@ -503,7 +536,7 @@ export default function BombDefusalScreen() {
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/bomb-defusal/Lobby" />
+            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/bomb-defusal/Lobby" />
           </View>
         ) : (
           renderControls()

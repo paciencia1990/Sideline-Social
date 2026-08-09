@@ -13,6 +13,10 @@ type LobbyPlayer = {
   id: string;
   name: string;
   ready: boolean;
+  teamId?: "A" | "B";
+  previousTeamId?: "A" | "B";
+  teamReassignedAt?: number;
+  teamAssignmentNoticeId?: string;
 };
 
 type LobbyPlayers = {
@@ -26,11 +30,20 @@ type LobbyBaseProps = {
   gameName: string;
   minPlayers: number;
   players: LobbyPlayers;
+  teamSections?: {
+    selfTeamMessage: string;
+    reassignmentMessage?: string | null;
+    teams: {
+      id: "A" | "B";
+      label: string;
+      players: LobbyPlayer[];
+    }[];
+  };
   codeState: GameCodeState;
   codeError: GameJoinCodeFailureReason | null;
   isLocal: boolean;
   onRetryCode: () => void;
-  onCancel: () => void;
+  onLeave: () => void;
   onReadyToggle: () => void;
   onStart: () => void;
 };
@@ -39,11 +52,12 @@ export default function LobbyBase({
   gameName,
   minPlayers,
   players,
+  teamSections,
   codeState,
   codeError,
   isLocal,
   onRetryCode,
-  onCancel,
+  onLeave,
   onReadyToggle,
   onStart,
 }: LobbyBaseProps) {
@@ -59,13 +73,15 @@ export default function LobbyBase({
     await Share.share({ message: t("games.joinCode.shareText", { code: players.joinCode }) });
   };
 
-  const handleCancel = () => {
+  const handleLeave = () => {
     Alert.alert(
-      t("games.joinCode.cancelLobbyTitle"),
-      t("games.joinCode.cancelLobbyBody"),
+      t("games.joinCode.leaveLobbyTitle"),
+      players.isHost
+        ? t("games.joinCode.leaveLobbyHostBody")
+        : t("games.joinCode.leaveLobbyBody"),
       [
-        { text: t("games.joinCode.keepLobby"), style: "cancel" },
-        { text: t("games.joinCode.cancelLobby"), style: "destructive", onPress: onCancel },
+        { text: t("common.cancel"), style: "cancel" },
+        { text: t("games.joinCode.leaveLobby"), style: "destructive", onPress: onLeave },
       ],
     );
   };
@@ -126,7 +142,47 @@ export default function LobbyBase({
         contentContainerStyle={styles.playerList}
         showsVerticalScrollIndicator={false}
       >
-        {players.list.map((player) => {
+        {teamSections ? (
+          <View style={styles.teamBoard}>
+            <Text accessibilityLiveRegion="polite" style={styles.selfTeamMessage}>
+              {teamSections.selfTeamMessage}
+            </Text>
+            {teamSections.reassignmentMessage ? (
+              <Text accessibilityLiveRegion="polite" style={styles.reassignmentMessage}>
+                {teamSections.reassignmentMessage}
+              </Text>
+            ) : null}
+            <View style={styles.teamColumns}>
+              {teamSections.teams.map((team) => (
+                <View
+                  accessibilityLabel={team.label}
+                  key={team.id}
+                  style={styles.teamColumn}
+                >
+                  <Text style={styles.teamTitle}>{team.label}</Text>
+                  <View style={styles.teamRoster}>
+                    {team.players.length > 0 ? team.players.map((player) => {
+                      const isSelf = player.id === players.self.id;
+                      return (
+                        <View key={player.id} style={styles.teamPlayerRow}>
+                          <Text numberOfLines={1} style={styles.teamPlayerName}>
+                            {player.name}
+                            {isSelf ? ` ${t("games.joinCode.youSuffix")}` : ""}
+                          </Text>
+                          <Text style={styles.teamReadyText}>
+                            {player.ready ? t("games.joinCode.ready") : t("games.joinCode.notReady")}
+                          </Text>
+                        </View>
+                      );
+                    }) : (
+                      <Text style={styles.teamEmpty}>{t("games.joinCode.teamWaiting")}</Text>
+                    )}
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : players.list.map((player) => {
           const isSelf = player.id === players.self.id;
 
           return (
@@ -196,11 +252,11 @@ export default function LobbyBase({
             </Pressable>
           )}
         </View>
-        {players.isHost && !isLocal && (
-          <Pressable accessibilityRole="button" onPress={handleCancel} style={styles.cancelLobbyButton}>
-            <Text style={styles.cancelLobbyButtonText}>{t("games.joinCode.cancelLobby")}</Text>
+        {!isLocal ? (
+          <Pressable accessibilityRole="button" onPress={handleLeave} style={styles.cancelLobbyButton}>
+            <Text style={styles.cancelLobbyButtonText}>{t("games.joinCode.leaveLobby")}</Text>
           </Pressable>
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -322,6 +378,83 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 20,
     paddingVertical: 24,
+  },
+  teamBoard: {
+    alignItems: "center",
+    gap: 14,
+    maxWidth: 520,
+    width: "100%",
+  },
+  selfTeamMessage: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodyBold,
+    fontSize: 18,
+    textAlign: "center",
+  },
+  reassignmentMessage: {
+    backgroundColor: `${Colors.accentGold}22`,
+    borderColor: Colors.accentGold,
+    borderRadius: 8,
+    borderWidth: 1,
+    color: Colors.textHeading,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 13,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    textAlign: "center",
+  },
+  teamColumns: {
+    alignItems: "stretch",
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  teamColumn: {
+    backgroundColor: Colors.surface,
+    borderColor: Colors.secondary,
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    minWidth: 0,
+    padding: 12,
+  },
+  teamTitle: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodyBold,
+    fontSize: 16,
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  teamRoster: {
+    gap: 8,
+  },
+  teamPlayerRow: {
+    backgroundColor: `${Colors.accentGreen}18`,
+    borderColor: `${Colors.accentGreen}55`,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 4,
+    minHeight: 52,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  teamPlayerName: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 14,
+  },
+  teamReadyText: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.bodyMedium,
+    fontSize: 11,
+  },
+  teamEmpty: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.bodyMedium,
+    fontSize: 13,
+    minHeight: 42,
+    textAlign: "center",
+    textAlignVertical: "center",
   },
   playerRow: {
     alignItems: "center",

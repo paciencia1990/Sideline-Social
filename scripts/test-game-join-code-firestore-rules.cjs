@@ -12,7 +12,16 @@ async function run() {
     await testEnv.clearFirestore();
     const authDb = testEnv.authenticatedContext('user-a').firestore();
     const anonDb = testEnv.unauthenticatedContext().firestore();
-    for (const collectionName of ['gameJoinCodes', 'gameJoinSessionLinks', 'gameJoinRequests', 'gameJoinRateLimits']) {
+    for (const collectionName of [
+      'gameJoinCodes',
+      'gameJoinSessionLinks',
+      'gameJoinRequests',
+      'gameJoinRateLimits',
+      'gameLobbyDirectories',
+      'gameLobbyCreateRequests',
+      'activeGameLobbyMemberships',
+      'gameLobbyCreationRateLimits',
+    ]) {
       await assertFails(getDoc(doc(authDb, collectionName, collectionName === 'gameJoinCodes' ? '7KPM' : `private-${collectionName === 'gameJoinSessionLinks' ? 'link' : collectionName === 'gameJoinRequests' ? 'request' : 'rate'}`)));
       await assertFails(getDocs(collection(authDb, collectionName)));
       await assertFails(setDoc(doc(authDb, collectionName, 'client-write'), { code: 'R4GX' }));

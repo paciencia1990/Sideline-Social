@@ -18,10 +18,10 @@ import { GameEndActions } from "@/components/GameEndActions";
 import { GameRewardSummary } from "@/components/GameRewardSummary";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useAuth } from "@/context/AuthContext";
+import { useSquad } from "@/context/SquadContext";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 import {
   advanceTriviaGameSession,
-  createGameSession,
   forceEndGameSession,
   joinGameSession,
   startGameSession,
@@ -38,7 +38,7 @@ import {
   logTriviaFirebaseError,
 } from "./firebaseUtils";
 import { finalizeGameReward, type GameRewardResult } from "@/services/sidelineStarsService";
-import { updateGameJoinCodeStatus } from "@/services/gameJoinCodeService";
+import { startGameLobbyRematch, updateGameJoinCodeStatus } from "@/services/gameJoinCodeService";
 import { resolveClientGameAuthority } from "@/utils/authIdentity";
 import {
   createTriviaQuestionKey,
@@ -75,17 +75,18 @@ type QuestionScoreResult = ScoreResult & {
 export default function TriviaBlitzScreen() {
   const { i18n, t } = useTranslation();
   const { user, firebaseUser, loading: authLoading } = useAuth();
+  const { selectedSquadId } = useSquad();
   const params = useLocalSearchParams<{
     sessionId?: string | string[];
     joinCode?: string | string[];
     code?: string | string[];
-    start?: string | string[];
+    lobbyId?: string | string[];
   }>();
   const requestedSessionId = useMemo(
     () => normalizeParam(params.sessionId) || normalizeParam(params.joinCode) || normalizeParam(params.code),
     [params.code, params.joinCode, params.sessionId],
   );
-  const shouldAutoStart = normalizeParam(params.start) === "1";
+  const lobbyId = normalizeParam(params.lobbyId);
   const [sessionId, setSessionId] = useState(requestedSessionId);
   const [playerId, setPlayerId] = useState("");
   const [session, setSession] = useState<TriviaSession | null>(null);
@@ -105,6 +106,7 @@ export default function TriviaBlitzScreen() {
   const announcedFeedbackRef = useRef<string | null>(null);
   const rewardRequestKeyRef = useRef("");
   const lifecycleEndedRef = useRef("");
+  const rematchInFlightRef = useRef(false);
   const fallbackPlayerName = t("games.playerFallback");
 
   const resolvedPlayerName = useMemo(
@@ -150,39 +152,24 @@ export default function TriviaBlitzScreen() {
 
     setupInFlightRef.current = true;
     setSettingUp(true);
+    if (!targetSessionId) {
+      setupInFlightRef.current = false;
+      setSettingUp(false);
+      setSetupError("trivia.errors.sessionUnavailable");
+      return;
+    }
 
     async function setupTriviaSession() {
       try {
-        let result;
-        if (targetSessionId) {
-          try {
-            result = await joinGameSession(targetSessionId, resolvedPlayerName);
-          } catch (joinError) {
-            if (!shouldAutoStart) throw joinError;
-            try {
-              result = await createGameSession(resolvedPlayerName, targetSessionId);
-            } catch {
-              result = await joinGameSession(targetSessionId, resolvedPlayerName);
-            }
-          }
-        } else {
-          result = await createGameSession(resolvedPlayerName);
-        }
+        const result = await joinGameSession(targetSessionId, resolvedPlayerName);
 
         if (!isMounted) {
           return;
         }
 
-        if (shouldAutoStart && result.isHost) {
-          await startGameSession(result.sessionId);
-        }
-
         setSessionId(result.sessionId);
         setPlayerId(result.playerId);
         setSetupError(null);
-        if (!requestedSessionId) {
-          router.replace({ pathname: "/games/trivia-blitz/play", params: { sessionId: result.sessionId } } as never);
-        }
       } catch (error) {
         if (isMounted) {
           setSetupError(getTriviaErrorTranslationKey(error));
@@ -200,7 +187,7 @@ export default function TriviaBlitzScreen() {
     return () => {
       isMounted = false;
     };
-  }, [authLoading, firebaseUser, playerId, requestedSessionId, resolvedPlayerName, sessionId, setupAttempt, setupError, shouldAutoStart]);
+  }, [authLoading, firebaseUser, playerId, requestedSessionId, resolvedPlayerName, sessionId, setupAttempt, setupError]);
 
   const self = useMemo(
     () => players.find((player) => player.id === playerId) ?? null,
@@ -270,9 +257,7 @@ export default function TriviaBlitzScreen() {
   });
   const isHost = Boolean(self && gameAuthority.isHost);
   const isActiveTurn = Boolean(self && activePlayer?.id === self.id);
-  // "Play Now" intentionally creates a legitimate authenticated solo session.
-  // Joined lobbies retain the existing multiplayer minimum.
-  const canStartGame = players.length >= TRIVIA_MIN_PLAYERS || (shouldAutoStart && players.length === 1);
+  const canStartGame = players.length >= TRIVIA_MIN_PLAYERS;
 
   useEffect(() => {
     if (!sessionId) {
@@ -529,24 +514,39 @@ export default function TriviaBlitzScreen() {
       t,
     ],
   );
-  const handleReset = useCallback(() => {
-    if (requestedSessionId) {
-      router.replace({ pathname: "/(games)/trivia-blitz/Lobby", params: { host: "1" } } as never);
+  const openLobbyDirectory = useCallback(() => {
+    if (selectedSquadId) {
+      router.replace({
+        pathname: "/(games)/lobbies",
+        params: { gameType: "triviaBlitz", squadId: selectedSquadId },
+      } as never);
       return;
     }
-    setPlayerId("");
-    setSessionId("");
-    setSession(null);
-    setPlayers([]);
-    setLastResult(null);
-    setSetupError(null);
-    setRewardResult(null);
-    setRewardError(null);
-    rewardRequestKeyRef.current = "";
-    setupInFlightRef.current = false;
-    setSetupAttempt((value) => value + 1);
-    router.replace({ pathname: "/games/trivia-blitz/play", params: { start: "1", replay: String(Date.now()) } } as never);
-  }, [requestedSessionId]);
+    router.replace("/(tabs)/games" as never);
+  }, [selectedSquadId]);
+
+  const handleReset = useCallback(async () => {
+    if (requestedSessionId) {
+      if (!lobbyId || !gameAuthority.isHost || rematchInFlightRef.current) {
+        openLobbyDirectory();
+        return;
+      }
+      rematchInFlightRef.current = true;
+      try {
+        const rematch = await startGameLobbyRematch({ lobbyId });
+        router.replace({
+          pathname: "/(games)/trivia-blitz/Lobby",
+          params: { lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
+        } as never);
+      } catch {
+        openLobbyDirectory();
+      } finally {
+        rematchInFlightRef.current = false;
+      }
+      return;
+    }
+    router.replace("/(tabs)/games" as never);
+  }, [gameAuthority.isHost, lobbyId, openLobbyDirectory, requestedSessionId]);
 
   const handleEnd = useCallback(() => {
     if (!sessionId) {
@@ -782,7 +782,7 @@ export default function TriviaBlitzScreen() {
               onRetry={() => void awardTriviaResult()}
               result={rewardResult}
             />
-            <GameEndActions onPlayAgain={handleReset} lobbyRoute="/(games)/trivia-blitz/Lobby" />
+            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handleReset} lobbyRoute="/(games)/trivia-blitz/Lobby" />
           </View>
         ) : null}
       </ScrollView>

@@ -130,7 +130,7 @@ async function run() {
     anonymousB,
     signedOut,
   });
-  await seedSocialFixtures({ host, participant, parent, coach, staff, anonymousA, anonymousB });
+  await seedSocialFixtures({ host, participant, unrelated, parent, coach, staff, anonymousA, anonymousB });
 
   for (const anonymous of [anonymousA, anonymousB]) {
     for (const [label, operation] of [
@@ -259,10 +259,9 @@ async function run() {
     ].sort(),
   );
 
-  const soloTrivia = await unrelated.call("createTriviaGameSession");
-  await unrelated.call("createGameJoinCode", {
+  const soloTrivia = await unrelated.call("createGameLobby", {
     gameType: "triviaBlitz",
-    sessionId: soloTrivia.sessionId,
+    squadId: "game-security-squad",
     idempotencyKey: "game-security-solo-trivia-code-1",
   });
   await unrelated.call("setTriviaPlayerReady", {
@@ -277,9 +276,13 @@ async function run() {
     "Trivia Blitz cannot start with only its host",
   );
 
-  const created = await host.call("createTriviaGameSession");
-  assert.equal(created.playerId, host.uid);
-  assert.equal(created.isHost, true);
+  const created = await host.call("createGameLobby", {
+    gameType: "triviaBlitz",
+    squadId: "game-security-squad",
+    idempotencyKey: "game-security-trivia-lobby-1",
+  });
+  assert.equal(created.gameType, "triviaBlitz");
+  assert.equal(created.participantState, "joined");
   const sessionId = created.sessionId;
   const parentPath = adminFirestore.collection("sessions").doc(sessionId);
   const gamePath = parentPath.collection("games").doc("triviaBlitz");
@@ -295,11 +298,7 @@ async function run() {
     () => unrelated.call("resumeTriviaGameSession", { sessionId }),
     rejectsCode("permission-denied", "not_participant"),
   );
-  const code = await host.call("createGameJoinCode", {
-    gameType: "triviaBlitz",
-    sessionId,
-    idempotencyKey: "game-security-trivia-code-1",
-  });
+  const code = created;
   await participant.call("resolveAndJoinGameByCode", { code: code.joinCode });
   const resumed = await participant.call("resumeTriviaGameSession", { sessionId });
   assert.deepEqual(resumed, { sessionId, playerId: participant.uid, isHost: false });
@@ -403,70 +402,68 @@ async function run() {
   assert.equal(playerScores.size, 2);
   assert.equal(playerScores.docs.every((snapshot) => snapshot.data().score === publicGame.totalPoints), true);
 
-  await host.call("resetTriviaGameSession", { sessionId });
-  const resetGame = (await gamePath.get()).data();
-  assert.equal(resetGame.status, "lobby");
-  assert.equal(resetGame.totalPoints, 0);
-  assert.equal(resetGame.answerResult, null);
-  assert.equal((await gamePath.collection("players").get()).docs.every((snapshot) => snapshot.data().score === 0), true);
-  assert.equal(
-    (await adminFirestore.collection("gameJoinCodes").doc(code.joinCode).get()).data().status,
-    "lobby",
-    "a server-authorized rematch reopens its routing state atomically",
-  );
-
-  await participant.call("setTriviaPlayerReady", { sessionId, ready: true });
-  await host.call("setTriviaPlayerReady", { sessionId, ready: true });
-  await host.call("startTriviaGameSession", { sessionId });
   await assert.rejects(
-    () => host.call("submitTriviaAnswer", {
-      sessionId,
-      questionIndex: 0,
-      answerIndex: privateQuestions[0].answer,
-      submissionId: "host-answer-idempotency-0001",
-    }),
-    rejectsCode("already-exists", "submission_id_reused"),
-    "submission IDs cannot replay a result from an earlier rematch round",
+    () => host.call("resetTriviaGameSession", { sessionId }),
+    rejectsCode("failed-precondition", "client_update_required"),
+    "stable lobbies cannot reuse a reward-bearing session for a rematch",
   );
-  await gamePath.update({
+  const rematch = await host.call("startGameLobbyRematch", { lobbyId: created.lobbyId });
+  assert.equal(rematch.lobbyId, created.lobbyId);
+  assert.equal(rematch.joinCode, code.joinCode);
+  assert.notEqual(rematch.sessionId, sessionId);
+  assert.equal((await gamePath.get()).data().status, "results", "the completed round remains immutable");
+
+  const rematchSessionId = rematch.sessionId;
+  const rematchParentPath = adminFirestore.collection("sessions").doc(rematchSessionId);
+  const rematchGamePath = rematchParentPath.collection("games").doc("triviaBlitz");
+  const rematchSecretPath = adminFirestore.collection("triviaGameSecrets").doc(rematchSessionId);
+  const rematchQuestions = (await rematchSecretPath.get()).data().selectedQuestions;
+  await participant.call("setTriviaPlayerReady", { sessionId: rematchSessionId, ready: true });
+  await host.call("setTriviaPlayerReady", { sessionId: rematchSessionId, ready: true });
+  await host.call("startTriviaGameSession", { sessionId: rematchSessionId });
+  const rematchAnswer = await host.call("submitTriviaAnswer", {
+    sessionId: rematchSessionId,
+    questionIndex: 0,
+    answerIndex: rematchQuestions[0].answer,
+    submissionId: "host-answer-idempotency-0001",
+  });
+  assert.equal(rematchAnswer.correct, true, "fresh sessions isolate rematch idempotency receipts");
+  await host.call("advanceTriviaGameSession", { sessionId: rematchSessionId, questionIndex: 0 });
+  await rematchGamePath.update({
     questionEndsAt: admin.firestore.Timestamp.fromMillis(Date.now() - 1000),
   });
   await assert.rejects(
-    () => host.call("submitTriviaAnswer", {
-      sessionId,
-      questionIndex: 0,
+    () => participant.call("submitTriviaAnswer", {
+      sessionId: rematchSessionId,
+      questionIndex: 1,
       answerIndex: 0,
       submissionId: "expired-answer-window-0001",
     }),
     rejectsCode("deadline-exceeded", "answer_window_closed"),
   );
-  await host.call("advanceTriviaGameSession", { sessionId, questionIndex: 0 });
-  assert.equal((await gamePath.get()).data().answeredQuestions, 1);
-  await host.call("endTriviaGameSession", { sessionId });
+  await host.call("advanceTriviaGameSession", { sessionId: rematchSessionId, questionIndex: 1 });
+  assert.equal((await rematchGamePath.get()).data().answeredQuestions, 2);
+  await host.call("endTriviaGameSession", { sessionId: rematchSessionId });
 
-  await parentPath.update({
+  await rematchParentPath.update({
     expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() - 1000),
   });
   await assert.rejects(
-    () => participant.call("resumeTriviaGameSession", { sessionId }),
+    () => participant.call("resumeTriviaGameSession", { sessionId: rematchSessionId }),
     rejectsCode("failed-precondition", "session_expired"),
   );
   for (const [label, operation] of [
     [
       "ready",
-      () => host.call("setTriviaPlayerReady", { sessionId, ready: true }),
+      () => host.call("setTriviaPlayerReady", { sessionId: rematchSessionId, ready: true }),
     ],
     [
       "start",
-      () => host.call("startTriviaGameSession", { sessionId }),
-    ],
-    [
-      "reset",
-      () => host.call("resetTriviaGameSession", { sessionId }),
+      () => host.call("startTriviaGameSession", { sessionId: rematchSessionId }),
     ],
     [
       "end",
-      () => host.call("endTriviaGameSession", { sessionId }),
+      () => host.call("endTriviaGameSession", { sessionId: rematchSessionId }),
     ],
   ]) {
     await assert.rejects(
@@ -476,17 +473,11 @@ async function run() {
     );
   }
   await assert.rejects(
-    () => host.call("createGameJoinCode", {
-      gameType: "triviaBlitz",
-      sessionId,
-      idempotencyKey: "game-security-expired-trivia-code-2",
-    }),
-    rejectsCode("failed-precondition", "invalid_or_expired_code"),
-    "an expired canonical Trivia session cannot receive another JOIN code",
-  );
-  await assert.rejects(
     () => participant.call("resolveAndJoinGameByCode", { code: code.joinCode }),
-    rejectsCode("not-found", "invalid_or_expired_code"),
+    (error) => /not-found|failed-precondition/.test(String(error?.code)) &&
+      /invalid_or_expired_code|lobby_closed_or_expired/.test(
+        `${String(error?.details?.reason)} ${String(error?.message)}`,
+      ),
     "an expired participant cannot reconnect through a stale JOIN code",
   );
 
@@ -596,6 +587,7 @@ async function assertRealtimeDatabaseIsolation({
 async function seedSocialFixtures({
   host,
   participant,
+  unrelated,
   parent,
   coach,
   staff,
@@ -606,6 +598,7 @@ async function seedSocialFixtures({
   for (const [client, role] of [
     [host, "host"],
     [participant, "participant"],
+    [unrelated, "unrelated"],
     [parent, "parent"],
     [coach, "coach"],
     [staff, "staff"],
@@ -645,6 +638,29 @@ async function seedSocialFixtures({
       squadRole: "member",
     },
   );
+  batch.set(adminFirestore.collection("squads").doc("game-security-squad"), {
+    venueName: "Game Security Field",
+    normalizedVenueName: "game security field",
+    sportId: "baseball",
+    sportDisplayName: "Baseball",
+    memberIds: [host.uid, participant.uid, unrelated.uid],
+    memberCount: 3,
+    activeMemberCount: 3,
+    createdBy: host.uid,
+    creatorId: host.uid,
+    isActive: true,
+  });
+  for (const client of [host, participant, unrelated]) {
+    batch.set(
+      adminFirestore.collection("squadMemberships").doc(`game-security-squad__${client.uid}`),
+      {
+        squadId: "game-security-squad",
+        userId: client.uid,
+        membershipStatus: "active",
+        squadRole: "member",
+      },
+    );
+  }
   batch.set(
     adminFirestore.collection("users").doc(parent.uid).collection("children").doc("child-a"),
     { displayName: "Child Fixture" },

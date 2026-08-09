@@ -58,6 +58,43 @@ async function run() {
         completedAt: now - 301_000,
         expiresAt: now + 600_000,
       }),
+      admin.database().ref('gameSessions/spot-team-session').set({
+        sessionId: 'spot-team-session', gameType: 'spot_difference', squadId: 'squad-a', hostUserId: 'host',
+        players: {
+          host: { displayName: 'Host', isReady: true, teamId: 'A' },
+          player: { displayName: 'Player', isReady: true, teamId: 'B' },
+        },
+        status: 'active',
+        expiresAt: now + 600_000,
+      }),
+      admin.database().ref('gameSessionTeamState/spot-team-session/A').set({
+        teamId: 'A',
+        foundDifferenceIds: ['difference_01'],
+        foundCount: 1,
+        expiresAt: now + 600_000,
+      }),
+      admin.database().ref('gameSessionTeamState/spot-team-session/B').set({
+        teamId: 'B',
+        foundDifferenceIds: ['difference_02'],
+        foundCount: 1,
+        expiresAt: now + 600_000,
+      }),
+      admin.database().ref('gameSessions/spot-results-session').set({
+        sessionId: 'spot-results-session', gameType: 'spot_difference', squadId: 'squad-a', hostUserId: 'host',
+        players: {
+          host: { displayName: 'Host', isReady: true, teamId: 'A' },
+          player: { displayName: 'Player', isReady: true, teamId: 'B' },
+        },
+        status: 'completed',
+        completedAt: now - 1000,
+        expiresAt: now + 600_000,
+      }),
+      admin.database().ref('gameSessionTeamState/spot-results-session/B').set({
+        teamId: 'B',
+        foundDifferenceIds: ['difference_02'],
+        foundCount: 1,
+        expiresAt: now + 600_000,
+      }),
       admin.database().ref('sessions/legacy').set({ joinCode: 'LOCAL' }),
       admin.database().ref('accountStanding/suspended').set({
         status: 'suspended',
@@ -95,6 +132,13 @@ async function run() {
     await assertSucceeds(get(ref(playerDb, 'gameSessions/session-results-grace')));
     await assertFails(get(ref(hostDb, 'gameSessions/session-results-stale')));
     await assertFails(get(ref(playerDb, 'gameSessions/session-results-stale')));
+    await assertSucceeds(get(ref(hostDb, 'gameSessionTeamState/spot-team-session/A')));
+    await assertFails(get(ref(hostDb, 'gameSessionTeamState/spot-team-session/B')));
+    await assertSucceeds(get(ref(playerDb, 'gameSessionTeamState/spot-team-session/B')));
+    await assertFails(get(ref(playerDb, 'gameSessionTeamState/spot-team-session/A')));
+    await assertFails(get(ref(outsiderDb, 'gameSessionTeamState/spot-team-session/A')));
+    await assertSucceeds(get(ref(hostDb, 'gameSessionTeamState/spot-results-session/B')));
+    await assertFails(get(ref(signedOutDb, 'gameSessionTeamState/spot-results-session/B')));
     await assertFails(get(ref(hostDb, 'gameSessionSecrets/session-a')));
     await assertFails(get(ref(playerDb, 'gameSessionSecrets/session-a')));
     await assertFails(get(query(ref(hostDb, 'gameSessions'), orderByChild('squadId'), equalTo('squad-a'))));

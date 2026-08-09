@@ -31,9 +31,6 @@ export async function recordGameSessionResult(input:
   | {
       gameType: "spotDifferences";
       sessionId: string;
-      outcome: "completed" | "timeExpired";
-      foundCount: number;
-      totalDifferences: number;
     }
   | {
       gameType: "bombDefusal";

@@ -6,19 +6,30 @@ import { useTranslation } from "react-i18next";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 
 type GameEndActionsProps = {
-  onPlayAgain: () => void;
+  onPlayAgain: () => void | Promise<void>;
   lobbyRoute: string;
+  lobbyParams?: Record<string, string>;
+  onBackToLobby?: () => void;
 };
 
-export function GameEndActions({ lobbyRoute, onPlayAgain }: GameEndActionsProps) {
+export function GameEndActions({ lobbyParams, lobbyRoute, onBackToLobby, onPlayAgain }: GameEndActionsProps) {
   const { t } = useTranslation();
+  const handleBackToLobby = () => {
+    if (onBackToLobby) {
+      onBackToLobby();
+      return;
+    }
+    router.replace(lobbyParams
+      ? { pathname: lobbyRoute as never, params: lobbyParams }
+      : lobbyRoute as never);
+  };
 
   return (
     <View style={styles.actions}>
-      <Pressable style={styles.primaryButton} onPress={onPlayAgain}>
+      <Pressable style={styles.primaryButton} onPress={() => void onPlayAgain()}>
         <Text style={styles.primaryText}>{t("game.playAgain")}</Text>
       </Pressable>
-      <Pressable style={styles.secondaryButton} onPress={() => router.replace(lobbyRoute as never)}>
+      <Pressable style={styles.secondaryButton} onPress={handleBackToLobby}>
         <Text style={styles.secondaryText}>{t("game.backToLobby")}</Text>
       </Pressable>
       <View style={styles.navRow}>

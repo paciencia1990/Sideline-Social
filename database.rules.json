@@ -19,6 +19,14 @@
       ".read": false,
       ".write": false
     },
+    "gameSessionTeamState": {
+      "$sessionId": {
+        "$teamId": {
+          ".read": "($teamId == 'A' || $teamId == 'B') && auth != null && auth.provider != 'anonymous' && auth.token.firebase.sign_in_provider != 'anonymous' && (!root.child('accountStanding').child(auth.uid).exists() || root.child('accountStanding').child(auth.uid).child('status').val() == 'active' || (root.child('accountStanding').child(auth.uid).child('expiresAt').isNumber() && root.child('accountStanding').child(auth.uid).child('expiresAt').val() <= now)) && root.child('gameSessions').child($sessionId).child('gameType').val() == 'spot_difference' && root.child('gameSessions').child($sessionId).child('expiresAt').isNumber() && root.child('gameSessions').child($sessionId).child('expiresAt').val() > now && root.child('gameSessions').child($sessionId).child('players').child(auth.uid).exists() && (root.child('gameSessions').child($sessionId).child('players').child(auth.uid).child('teamId').val() == $teamId || ((root.child('gameSessions').child($sessionId).child('status').val() == 'completed' || root.child('gameSessions').child($sessionId).child('status').val() == 'failed' || root.child('gameSessions').child($sessionId).child('status').val() == 'ended' || root.child('gameSessions').child($sessionId).child('status').val() == 'canceled') && root.child('gameSessions').child($sessionId).child('completedAt').isNumber() && root.child('gameSessions').child($sessionId).child('completedAt').val() + 300000 > now))",
+          ".write": false
+        }
+      }
+    },
     "accountStanding": {
       ".read": false,
       ".write": false
