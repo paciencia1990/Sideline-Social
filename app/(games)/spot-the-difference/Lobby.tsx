@@ -11,7 +11,25 @@ const TEAM_IDS = ["A", "B"] as const;
 
 export default function SpotTheDifferenceLobby() {
   const { t } = useTranslation();
-  const { sessionId, lobbyId, minPlayers, players, codeState, codeError, isLocal, retryCode, leaveGame, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const {
+    sessionId,
+    lobbyId,
+    minPlayers,
+    players,
+    codeState,
+    codeError,
+    isLocal,
+    retryCode,
+    leaveGame,
+    closeLobby,
+    retryLifecycleAction,
+    lifecycleAction,
+    lifecycleError,
+    toggleReady,
+    startGame,
+    showCountdown,
+    setShowCountdown,
+  } =
     useGameLobby("spot-the-difference");
   const selfTeamId = players.self.teamId ?? "A";
   const teamSections = {
@@ -46,6 +64,10 @@ export default function SpotTheDifferenceLobby() {
         teamSections={teamSections}
         onRetryCode={retryCode}
         onLeave={leaveGame}
+        onCloseLobby={closeLobby}
+        onRetryLifecycle={retryLifecycleAction}
+        lifecycleAction={lifecycleAction}
+        lifecycleError={lifecycleError}
         onReadyToggle={toggleReady}
         onStart={startGame}
       />

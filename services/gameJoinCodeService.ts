@@ -27,6 +27,9 @@ export type GameJoinCodeFailureReason =
   | 'round_not_finished'
   | 'finish_active_round_first'
   | 'host_must_transfer'
+  | 'lobby_leave_in_progress'
+  | 'bomb_not_defuser'
+  | 'bomb_command_stale'
   | 'client_update_required';
 
 export type GameLobbyStatus =
@@ -64,6 +67,15 @@ export type GameLobbyDirectoryResult = {
   lobbies: GameLobbySummary[];
   canCreateLobby: boolean;
   activeLobbyId: string | null;
+  activeLobby: {
+    lobbyId: string;
+    sessionId: string;
+    squadId: string;
+    gameType: GameJoinCodeType;
+    state: 'joining' | 'active' | 'queued' | 'leaving';
+    activePlayerCount: number | null;
+    callerIsHost: boolean;
+  } | null;
   maxLobbiesPerGame: number;
   serverNowMs: number;
 };
@@ -141,7 +153,7 @@ export async function leaveGameLobby(input: { lobbyId: string }) {
 }
 
 export async function closeGameLobby(input: { lobbyId: string }) {
-  const callable = httpsCallable<typeof input, { status: 'closed' }>(functions, 'closeGameLobby');
+  const callable = httpsCallable<typeof input, { status: 'closed'; clearedParticipantCount: number }>(functions, 'closeGameLobby');
   return (await callable(input)).data;
 }
 
@@ -235,9 +247,63 @@ export async function setRealtimeGamePlayerReady(input: {
   return (await callable(input)).data;
 }
 
+export type BombPlayerRole = 'defuser' | 'expert' | 'support';
+
+export type BombPrivateInstruction =
+  | { type: 'cut_wire'; color: 'red' | 'blue' | 'yellow' | 'green' }
+  | { type: 'press_button'; label: 'A' | 'B' | 'C' | 'D' }
+  | { type: 'rotate_dial'; target: number }
+  | { type: 'enter_code'; code: number };
+
+export type BombPublicOption = {
+  id: string;
+  value: string | number;
+  number: number;
+  marker: string;
+};
+
+export type BombPublicCommand = {
+  commandId: string;
+  commandIndex: number;
+  type: BombPrivateInstruction['type'];
+  options: BombPublicOption[];
+};
+
+export type BombDefusalPlayerView = {
+  schemaVersion: number;
+  sessionId: string;
+  role: BombPlayerRole;
+  commandId: string;
+  commandIndex: number;
+  totalCommands: number;
+  publicCommand: BombPublicCommand;
+  instruction: BombPrivateInstruction | null;
+  defuserUserId: string;
+  defuserDisplayName: string;
+  expertUserId: string;
+  expertDisplayName: string;
+  strikeCount: number;
+  maxStrikes: number;
+  correctCommandCount: number;
+  outcome: 'playing' | 'defused' | 'exploded' | 'abandoned';
+  lastResult: {
+    commandId: string;
+    correct: boolean;
+    reason: string;
+    resolvedAt: number;
+  } | null;
+  endsAtMs: number;
+  serverNowMs: number;
+};
+
+export async function getBombDefusalPlayerView(input: { sessionId: string }) {
+  const callable = httpsCallable<typeof input, BombDefusalPlayerView>(functions, 'getBombDefusalPlayerView');
+  return (await callable(input)).data;
+}
+
 export async function submitBombDefusalStep(input: {
   sessionId: string;
-  stepIndex: number;
+  commandId: string;
   action: Record<string, string | number>;
   submissionId: string;
 }) {
@@ -245,9 +311,10 @@ export async function submitBombDefusalStep(input: {
     typeof input,
     {
       correct: boolean;
-      nextStepIndex: number;
+      commandId: string;
+      nextCommandIndex: number;
+      strikeCount: number;
       outcome: 'playing' | 'defused' | 'exploded';
-      nextStep: Record<string, string | number> | null;
     }
   >(functions, 'submitBombDefusalStep');
   return (await callable(input)).data;
@@ -286,6 +353,9 @@ function isGameJoinCodeFailureReason(value: unknown): value is GameJoinCodeFailu
     'round_not_finished',
     'finish_active_round_first',
     'host_must_transfer',
+    'lobby_leave_in_progress',
+    'bomb_not_defuser',
+    'bomb_command_stale',
     'client_update_required',
   ].includes(String(value));
 }

@@ -173,13 +173,18 @@ for (let index = 1; index <= 80; index += 1) {
 const bombSource = fs.readFileSync(path.join(root, "src", "game", "BombDefusalScreen.tsx"), "utf8");
 assert.match(
   bombSource,
-  /useState<BombMessageKey>\("bomb\.followSequence"\)/,
-  "Bomb Defusal status must remain semantic so language changes cannot leave stale copy",
+  /playerView\.role === "expert"/,
+  "Bomb Defusal must render its role-specific expert view from semantic server state",
 );
 assert.doesNotMatch(
   bombSource,
   /useState\(\s*t\("bomb\./,
   "Bomb Defusal must not store translated copy in state",
+);
+assert.doesNotMatch(
+  bombSource,
+  /generateBombPattern|validateStep/,
+  "The released Bomb UI must not reconstruct trusted commands or validate answers on the client",
 );
 
 const spotSource = fs.readFileSync(

@@ -22,12 +22,16 @@ import {
   createGameLobby,
   joinGameLobbyById,
   joinGameLobbyNextRound,
+  leaveGameLobby,
   listGameLobbies,
   readGameJoinCodeFailureReason,
   type GameJoinCodeFailureReason,
   type GameJoinCodeType,
+  type GameLobbyDirectoryResult,
   type GameLobbySummary,
 } from "@/services/gameJoinCodeService";
+
+type ActiveLobby = NonNullable<GameLobbyDirectoryResult["activeLobby"]>;
 
 const GAME_CONFIG: Record<GameJoinCodeType, { titleKey: string; lobbyRoute: string }> = {
   bombDefusal: {
@@ -46,16 +50,23 @@ const GAME_CONFIG: Record<GameJoinCodeType, { titleKey: string; lobbyRoute: stri
 
 export default function GameLobbyDirectoryScreen() {
   const { t } = useTranslation();
-  const params = useLocalSearchParams<{ gameType?: string | string[]; squadId?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    gameType?: string | string[];
+    squadId?: string | string[];
+    notice?: string | string[];
+  }>();
   const gameType = readGameType(normalizeParam(params.gameType));
   const squadId = normalizeParam(params.squadId);
+  const notice = normalizeParam(params.notice);
   const [lobbies, setLobbies] = useState<GameLobbySummary[]>([]);
+  const [activeLobby, setActiveLobby] = useState<ActiveLobby | null>(null);
   const [canCreateLobby, setCanCreateLobby] = useState(false);
   const [maxLobbies, setMaxLobbies] = useState(3);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [joiningLobbyId, setJoiningLobbyId] = useState<string | null>(null);
+  const [leavingActiveLobby, setLeavingActiveLobby] = useState(false);
   const [error, setError] = useState<GameJoinCodeFailureReason | null>(null);
   const createRequestKeyRef = useRef(createGameJoinIdempotencyKey());
 
@@ -71,6 +82,7 @@ export default function GameLobbyDirectoryScreen() {
     try {
       const result = await listGameLobbies({ gameType, squadId });
       setLobbies(result.lobbies);
+      setActiveLobby(result.activeLobby);
       setCanCreateLobby(result.canCreateLobby);
       setMaxLobbies(result.maxLobbiesPerGame);
     } catch (nextError) {
@@ -93,8 +105,54 @@ export default function GameLobbyDirectoryScreen() {
     });
   }, [gameType]);
 
+  const openActiveLobby = useCallback(() => {
+    if (!activeLobby) return;
+    router.push({
+      pathname: GAME_CONFIG[activeLobby.gameType].lobbyRoute as never,
+      params: { sessionId: activeLobby.sessionId, lobbyId: activeLobby.lobbyId },
+    });
+  }, [activeLobby]);
+
+  const handleLeaveActiveLobby = useCallback(async () => {
+    if (!activeLobby || leavingActiveLobby) return;
+    setLeavingActiveLobby(true);
+    setError(null);
+    try {
+      await leaveGameLobby({ lobbyId: activeLobby.lobbyId });
+      setActiveLobby(null);
+      await load(true);
+    } catch (nextError) {
+      setError(readGameJoinCodeFailureReason(nextError));
+    } finally {
+      setLeavingActiveLobby(false);
+    }
+  }, [activeLobby, leavingActiveLobby, load]);
+
+  const confirmLeaveActiveLobby = useCallback(() => {
+    if (!activeLobby || leavingActiveLobby) return;
+    const closesEmptyLobby = activeLobby.activePlayerCount === 1;
+    Alert.alert(
+      closesEmptyLobby
+        ? t("games.joinCode.leaveAndCloseTitle")
+        : t("games.joinCode.leaveLobbyTitle"),
+      closesEmptyLobby
+        ? t("games.joinCode.leaveAndCloseBody")
+        : activeLobby.callerIsHost
+          ? t("games.joinCode.leaveLobbyHostBody")
+          : t("games.joinCode.leaveLobbyBody"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("games.joinCode.leaveLobby"),
+          style: "destructive",
+          onPress: () => void handleLeaveActiveLobby(),
+        },
+      ],
+    );
+  }, [activeLobby, handleLeaveActiveLobby, leavingActiveLobby, t]);
+
   const handleCreate = useCallback(async () => {
-    if (!gameType || !squadId || creating) return;
+    if (!gameType || !squadId || creating || activeLobby || !canCreateLobby) return;
     setCreating(true);
     setError(null);
     try {
@@ -111,7 +169,7 @@ export default function GameLobbyDirectoryScreen() {
     } finally {
       setCreating(false);
     }
-  }, [creating, gameType, load, openLobby, squadId]);
+  }, [activeLobby, canCreateLobby, creating, gameType, load, openLobby, squadId]);
 
   const confirmAnotherLobby = useCallback(() => {
     Alert.alert(
@@ -126,6 +184,7 @@ export default function GameLobbyDirectoryScreen() {
 
   const handleJoin = useCallback(async (lobby: GameLobbySummary) => {
     if (!gameType || !squadId || joiningLobbyId) return;
+    if (activeLobby && activeLobby.lobbyId !== lobby.lobbyId) return;
     setJoiningLobbyId(lobby.lobbyId);
     setError(null);
     try {
@@ -149,10 +208,11 @@ export default function GameLobbyDirectoryScreen() {
     } finally {
       setJoiningLobbyId(null);
     }
-  }, [gameType, joiningLobbyId, load, openLobby, squadId, t]);
+  }, [activeLobby, gameType, joiningLobbyId, load, openLobby, squadId, t]);
 
   const title = gameType ? t(GAME_CONFIG[gameType].titleKey) : t("games.title");
-  const showCreate = Boolean(gameType && squadId && canCreateLobby && lobbies.length < maxLobbies);
+  const canOfferCreate = Boolean(gameType && squadId && lobbies.length < maxLobbies);
+  const createBlocked = !canCreateLobby || activeLobby !== null;
 
   return (
     <ScreenWrapper>
@@ -172,6 +232,23 @@ export default function GameLobbyDirectoryScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={Colors.primary} />}
         showsVerticalScrollIndicator={false}
       >
+        {notice === "lobbyClosed" ? (
+          <Card style={styles.noticeCard}>
+            <Text accessibilityRole="alert" style={styles.noticeText}>
+              {t("games.lobbyDirectory.lobbyClosed")}
+            </Text>
+          </Card>
+        ) : null}
+
+        {activeLobby ? (
+          <ActiveLobbyRecoveryCard
+            activeLobby={activeLobby}
+            busy={leavingActiveLobby}
+            onLeave={confirmLeaveActiveLobby}
+            onReturn={openActiveLobby}
+          />
+        ) : null}
+
         {loading ? (
           <View style={styles.centered}>
             <ActivityIndicator color={Colors.primary} size="large" />
@@ -181,9 +258,10 @@ export default function GameLobbyDirectoryScreen() {
           <Card style={styles.emptyCard}>
             <Text style={styles.cardTitle}>{t("games.lobbyDirectory.noLobbyTitle")}</Text>
             <Text style={styles.bodyText}>{t("games.lobbyDirectory.noLobbyBody")}</Text>
-            {showCreate ? (
+            {gameType && squadId ? (
               <PrimaryAction
                 busy={creating}
+                disabled={!canOfferCreate || createBlocked}
                 label={t("games.lobbyDirectory.startLobby")}
                 onPress={() => void handleCreate()}
               />
@@ -193,6 +271,7 @@ export default function GameLobbyDirectoryScreen() {
           <View style={styles.lobbyList}>
             {lobbies.map((lobby) => (
               <LobbyCard
+                blocked={Boolean(activeLobby && activeLobby.lobbyId !== lobby.lobbyId)}
                 busy={joiningLobbyId === lobby.lobbyId}
                 key={lobby.lobbyId}
                 lobby={lobby}
@@ -213,12 +292,17 @@ export default function GameLobbyDirectoryScreen() {
           </Card>
         ) : null}
 
-        {!loading && lobbies.length > 0 && showCreate ? (
+        {!loading && lobbies.length > 0 && canOfferCreate ? (
           <Pressable
             accessibilityRole="button"
-            disabled={creating}
+            accessibilityState={{ disabled: creating || createBlocked }}
+            disabled={creating || createBlocked}
             onPress={confirmAnotherLobby}
-            style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
+            style={({ pressed }) => [
+              styles.secondaryAction,
+              (creating || createBlocked) && styles.disabledAction,
+              pressed && !createBlocked && styles.secondaryActionPressed,
+            ]}
           >
             {creating ? <ActivityIndicator color={Colors.primary} /> : <Plus color={Colors.primary} size={19} />}
             <Text style={styles.secondaryActionText}>{t("games.lobbyDirectory.startAnotherLobby")}</Text>
@@ -230,10 +314,12 @@ export default function GameLobbyDirectoryScreen() {
 }
 
 function LobbyCard({
+  blocked,
   busy,
   lobby,
   onJoin,
 }: {
+  blocked: boolean;
   busy: boolean;
   lobby: GameLobbySummary;
   onJoin: () => void;
@@ -248,7 +334,7 @@ function LobbyCard({
     ? t("games.lobbyDirectory.waitingCount", { count: lobby.queuedPlayerCount })
     : null;
   const full = lobby.joinAction === "full";
-  const unavailable = lobby.joinAction === "unavailable" || lobby.joinAction === "queued";
+  const unavailable = blocked || lobby.joinAction === "unavailable" || lobby.joinAction === "queued";
   const actionLabel = lobby.joinAction === "joinNextRound"
     ? t("games.lobbyDirectory.joinNextRound")
     : lobby.joinAction === "queued"
@@ -300,9 +386,68 @@ function LobbyCard({
   );
 }
 
-function PrimaryAction({ busy, label, onPress }: { busy: boolean; label: string; onPress: () => void }) {
+function ActiveLobbyRecoveryCard({
+  activeLobby,
+  busy,
+  onLeave,
+  onReturn,
+}: {
+  activeLobby: ActiveLobby;
+  busy: boolean;
+  onLeave: () => void;
+  onReturn: () => void;
+}) {
+  const { t } = useTranslation();
+  const gameName = t(GAME_CONFIG[activeLobby.gameType].titleKey);
   return (
-    <Pressable accessibilityRole="button" disabled={busy} onPress={onPress} style={styles.joinAction}>
+    <Card style={styles.recoveryCard}>
+      <Text accessibilityRole="header" style={styles.cardTitle}>
+        {t("games.lobbyDirectory.activeElsewhereTitle", { game: gameName })}
+      </Text>
+      <Text style={styles.bodyText}>{t("games.lobbyDirectory.activeElsewhereBody")}</Text>
+      <View style={styles.recoveryActions}>
+        <PrimaryAction
+          busy={false}
+          disabled={busy || activeLobby.state === "leaving"}
+          label={t("games.lobbyDirectory.returnToGameLobby", { game: gameName })}
+          onPress={onReturn}
+        />
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={onLeave}
+          style={[styles.retryButton, busy && styles.disabledAction]}
+        >
+          {busy ? (
+            <ActivityIndicator color={Colors.primary} size="small" />
+          ) : (
+            <Text style={styles.retryText}>{t("games.lobbyDirectory.leaveGameLobby", { game: gameName })}</Text>
+          )}
+        </Pressable>
+      </View>
+    </Card>
+  );
+}
+
+function PrimaryAction({
+  busy,
+  disabled = false,
+  label,
+  onPress,
+}: {
+  busy: boolean;
+  disabled?: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: busy || disabled }}
+      disabled={busy || disabled}
+      onPress={onPress}
+      style={[styles.joinAction, (busy || disabled) && styles.disabledAction]}
+    >
       {busy ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.joinActionText}>{label}</Text>}
     </Pressable>
   );
@@ -357,6 +502,10 @@ const styles = StyleSheet.create({
   secondaryActionPressed: { backgroundColor: Colors.background },
   secondaryActionText: { color: Colors.primary, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 14, textAlign: "center" },
   errorCard: { gap: Spacing.sm },
+  noticeCard: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderWidth: 1 },
+  noticeText: { color: Colors.textHeading, fontFamily: Typography.bodyMedium, fontSize: 14, lineHeight: 20 },
+  recoveryCard: { borderColor: Colors.secondary, borderWidth: 1, gap: Spacing.sm },
+  recoveryActions: { gap: Spacing.sm },
   errorText: { color: Colors.primary, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 19 },
   retryButton: { alignItems: "center", alignSelf: "flex-start", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.md },
   retryText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },

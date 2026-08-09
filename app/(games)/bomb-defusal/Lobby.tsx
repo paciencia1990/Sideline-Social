@@ -9,7 +9,25 @@ import { useGameLobby } from "@/hooks/useGameLobby";
 
 export default function BombDefusalLobby() {
   const { t } = useTranslation();
-  const { sessionId, lobbyId, minPlayers, players, codeState, codeError, isLocal, retryCode, leaveGame, toggleReady, startGame, showCountdown, setShowCountdown } =
+  const {
+    sessionId,
+    lobbyId,
+    minPlayers,
+    players,
+    codeState,
+    codeError,
+    isLocal,
+    retryCode,
+    leaveGame,
+    closeLobby,
+    retryLifecycleAction,
+    lifecycleAction,
+    lifecycleError,
+    toggleReady,
+    startGame,
+    showCountdown,
+    setShowCountdown,
+  } =
     useGameLobby("bomb-defusal");
 
   const handleComplete = useCallback(() => {
@@ -31,6 +49,10 @@ export default function BombDefusalLobby() {
         isLocal={isLocal}
         onRetryCode={retryCode}
         onLeave={leaveGame}
+        onCloseLobby={closeLobby}
+        onRetryLifecycle={retryLifecycleAction}
+        lifecycleAction={lifecycleAction}
+        lifecycleError={lifecycleError}
         onReadyToggle={toggleReady}
         onStart={startGame}
       />

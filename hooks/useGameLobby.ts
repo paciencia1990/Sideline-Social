@@ -8,6 +8,7 @@ import { rtdb } from '@/config/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { useSquad } from '@/context/SquadContext';
 import {
+  closeGameLobby,
   getGameJoinCodeForSession,
   leaveGameLobby,
   readGameJoinCodeFailureReason,
@@ -50,7 +51,11 @@ type GameLobbyState = {
   codeError: GameJoinCodeFailureReason | null;
   isLocal: boolean;
   retryCode: () => void;
-  leaveGame: () => void;
+  leaveGame: () => Promise<void>;
+  closeLobby: () => Promise<void>;
+  retryLifecycleAction: () => void;
+  lifecycleAction: 'leaving' | 'closing' | null;
+  lifecycleError: GameJoinCodeFailureReason | null;
   toggleReady: () => void;
   startGame: () => void;
   showCountdown: boolean;
@@ -101,18 +106,56 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const [playerList, setPlayerList] = useState<LobbyPlayer[]>([]);
   const [hostUserId, setHostUserId] = useState('');
   const [showCountdown, setShowCountdown] = useState(false);
+  const [lifecycleAction, setLifecycleAction] = useState<'leaving' | 'closing' | null>(null);
+  const [lifecycleError, setLifecycleError] = useState<GameJoinCodeFailureReason | null>(null);
   const [setupAttempt, setSetupAttempt] = useState(0);
   const [localPlayers, setLocalPlayers] = useState<LobbyPlayer[]>(() =>
     createLocalPlayers(currentUserId || 'local-player', currentUserName, gameId),
   );
   const setupInFlightRef = useRef(false);
+  const suppressLobbyEventsRef = useRef(false);
+  const departureCompletedRef = useRef(false);
+  const remoteClosureHandledRef = useRef(false);
+  const lastLifecycleActionRef = useRef<'leaving' | 'closing'>('leaving');
+  const lifecycleInFlightRef = useRef(false);
+
+  const clearLocalLobbyState = useCallback(() => {
+    setSessionId('');
+    setLobbyId('');
+    setJoinCode('');
+    setPlayerList([]);
+    setHostUserId('');
+    setShowCountdown(false);
+  }, []);
+
+  const openLobbyDirectory = useCallback((notice?: 'lobbyClosed') => {
+    if (selectedSquadId) {
+      router.replace({
+        pathname: '/(games)/lobbies',
+        params: { gameType, squadId: selectedSquadId, ...(notice ? { notice } : {}) },
+      } as never);
+    } else {
+      router.replace('/(tabs)/games');
+    }
+  }, [gameType, selectedSquadId]);
+
+  const handleRemoteClosure = useCallback(() => {
+    if (suppressLobbyEventsRef.current || remoteClosureHandledRef.current) return;
+    remoteClosureHandledRef.current = true;
+    departureCompletedRef.current = true;
+    suppressLobbyEventsRef.current = true;
+    clearLocalLobbyState();
+    openLobbyDirectory('lobbyClosed');
+  }, [clearLocalLobbyState, openLobbyDirectory]);
 
   useEffect(() => {
+    if (suppressLobbyEventsRef.current || departureCompletedRef.current) return;
     if (!routeSessionId || routeSessionId === sessionId) return;
     setSessionId(routeSessionId);
   }, [routeSessionId, sessionId]);
 
   useEffect(() => {
+    if (suppressLobbyEventsRef.current || departureCompletedRef.current) return;
     if (routeLobbyId && routeLobbyId !== lobbyId) setLobbyId(routeLobbyId);
   }, [lobbyId, routeLobbyId]);
 
@@ -133,7 +176,15 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   }, [currentUserId, currentUserName, gameId, isLocal]);
 
   useEffect(() => {
-    if (isLocal || authLoading || !currentUserId || setupInFlightRef.current || codeState === 'ready') return;
+    if (
+      suppressLobbyEventsRef.current ||
+      departureCompletedRef.current ||
+      isLocal ||
+      authLoading ||
+      !currentUserId ||
+      setupInFlightRef.current ||
+      codeState === 'ready'
+    ) return;
     if (!sessionId) {
       setCodeError('game_not_found');
       setCodeState('error');
@@ -148,13 +199,13 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
       try {
         const result = await getGameJoinCodeForSession({ gameType, sessionId });
 
-        if (!active) return;
+        if (!active || suppressLobbyEventsRef.current || departureCompletedRef.current) return;
         setJoinCode(result.joinCode);
         setLobbyId(result.lobbyId);
         setCodeState('ready');
         setCodeError(null);
       } catch (error) {
-        if (!active) return;
+        if (!active || suppressLobbyEventsRef.current || departureCompletedRef.current) return;
         setCodeError(readGameJoinCodeFailureReason(error));
         setCodeState('error');
       } finally {
@@ -173,12 +224,18 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     if (isLocal || !sessionId) return;
     if (gameType === 'triviaBlitz') {
       const unsubscribeParent = onSnapshot(getTriviaParentSessionRef(sessionId), (snapshot) => {
+        if (suppressLobbyEventsRef.current || departureCompletedRef.current) return;
         const data = snapshot.data();
+        if (data?.completionReason === 'closedByHost') {
+          handleRemoteClosure();
+          return;
+        }
         setHostUserId(typeof data?.hostPlayerId === 'string' ? data.hostPlayerId : '');
         if (data?.status === 'playing') setShowCountdown(true);
       });
       const playersQuery = query(getTriviaPlayersRef(sessionId), orderBy('playerIndex', 'asc'));
       const unsubscribePlayers = onSnapshot(playersQuery, (snapshot) => {
+        if (suppressLobbyEventsRef.current || departureCompletedRef.current) return;
         setPlayerList(snapshot.docs.map((document) => ({
           id: document.id,
           name: String(document.data().name ?? fallbackPlayerName),
@@ -192,12 +249,17 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     }
 
     return onValue(ref(rtdb, `/gameSessions/${sessionId}`), (snapshot) => {
+      if (suppressLobbyEventsRef.current || departureCompletedRef.current) return;
       const session = snapshot.val() as RealtimeLobbyRecord | null;
+      if (session?.status === 'canceled' || session?.status === 'expired') {
+        handleRemoteClosure();
+        return;
+      }
       setHostUserId(session?.hostUserId ?? '');
       setPlayerList(normalizeRealtimePlayers(session?.players, fallbackPlayerName));
       if (session?.status === 'active' || session?.status === 'countdown') setShowCountdown(true);
     });
-  }, [fallbackPlayerName, gameType, isLocal, sessionId]);
+  }, [fallbackPlayerName, gameType, handleRemoteClosure, isLocal, sessionId]);
 
   const activePlayerList = isLocal ? localPlayers : playerList;
   const effectiveUserId = currentUserId || 'local-player';
@@ -250,24 +312,40 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     })().catch(() => setShowCountdown(false));
   }, [gameType, isLocal, players.isHost, sessionId]);
 
-  const leaveGame = useCallback(() => {
-    void (async () => {
-      if (!isLocal && lobbyId) {
-        await leaveGameLobby({ lobbyId });
+  const performLifecycleAction = useCallback(async (action: 'leaving' | 'closing') => {
+    if (lifecycleInFlightRef.current) return;
+    if (!isLocal && !lobbyId) {
+      lastLifecycleActionRef.current = action;
+      setLifecycleError('game_not_found');
+      return;
+    }
+    lifecycleInFlightRef.current = true;
+    lastLifecycleActionRef.current = action;
+    suppressLobbyEventsRef.current = true;
+    setLifecycleAction(action);
+    setLifecycleError(null);
+    try {
+      if (!isLocal) {
+        if (action === 'closing') await closeGameLobby({ lobbyId });
+        else await leaveGameLobby({ lobbyId });
       }
-      if (selectedSquadId) {
-        router.replace({
-          pathname: '/(games)/lobbies',
-          params: { gameType, squadId: selectedSquadId },
-        } as never);
-      } else {
-        router.replace('/(tabs)/games');
-      }
-    })().catch((error) => {
-      setCodeError(readGameJoinCodeFailureReason(error));
-      setCodeState('error');
-    });
-  }, [gameType, isLocal, lobbyId, selectedSquadId]);
+      departureCompletedRef.current = true;
+      clearLocalLobbyState();
+      openLobbyDirectory();
+    } catch (error) {
+      suppressLobbyEventsRef.current = false;
+      setLifecycleError(readGameJoinCodeFailureReason(error));
+    } finally {
+      lifecycleInFlightRef.current = false;
+      setLifecycleAction(null);
+    }
+  }, [clearLocalLobbyState, isLocal, lobbyId, openLobbyDirectory]);
+
+  const leaveGame = useCallback(() => performLifecycleAction('leaving'), [performLifecycleAction]);
+  const closeLobby = useCallback(() => performLifecycleAction('closing'), [performLifecycleAction]);
+  const retryLifecycleAction = useCallback(() => {
+    void performLifecycleAction(lastLifecycleActionRef.current);
+  }, [performLifecycleAction]);
 
   return {
     sessionId,
@@ -279,6 +357,10 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     isLocal,
     retryCode,
     leaveGame,
+    closeLobby,
+    retryLifecycleAction,
+    lifecycleAction,
+    lifecycleError,
     toggleReady,
     startGame,
     showCountdown,

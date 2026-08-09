@@ -43,7 +43,11 @@ type LobbyBaseProps = {
   codeError: GameJoinCodeFailureReason | null;
   isLocal: boolean;
   onRetryCode: () => void;
-  onLeave: () => void;
+  onLeave: () => Promise<void>;
+  onCloseLobby: () => Promise<void>;
+  onRetryLifecycle: () => void;
+  lifecycleAction: "leaving" | "closing" | null;
+  lifecycleError: GameJoinCodeFailureReason | null;
   onReadyToggle: () => void;
   onStart: () => void;
 };
@@ -58,6 +62,10 @@ export default function LobbyBase({
   isLocal,
   onRetryCode,
   onLeave,
+  onCloseLobby,
+  onRetryLifecycle,
+  lifecycleAction,
+  lifecycleError,
   onReadyToggle,
   onStart,
 }: LobbyBaseProps) {
@@ -74,14 +82,30 @@ export default function LobbyBase({
   };
 
   const handleLeave = () => {
+    const closesEmptyLobby = players.list.length === 1;
     Alert.alert(
-      t("games.joinCode.leaveLobbyTitle"),
-      players.isHost
+      closesEmptyLobby
+        ? t("games.joinCode.leaveAndCloseTitle")
+        : t("games.joinCode.leaveLobbyTitle"),
+      closesEmptyLobby
+        ? t("games.joinCode.leaveAndCloseBody")
+        : players.isHost
         ? t("games.joinCode.leaveLobbyHostBody")
         : t("games.joinCode.leaveLobbyBody"),
       [
         { text: t("common.cancel"), style: "cancel" },
-        { text: t("games.joinCode.leaveLobby"), style: "destructive", onPress: onLeave },
+        { text: t("games.joinCode.leaveLobby"), style: "destructive", onPress: () => void onLeave() },
+      ],
+    );
+  };
+
+  const handleCloseLobby = () => {
+    Alert.alert(
+      t("games.joinCode.closeLobbyTitle"),
+      t("games.joinCode.closeLobbyBody"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        { text: t("games.joinCode.closeLobbyForEveryone"), style: "destructive", onPress: () => void onCloseLobby() },
       ],
     );
   };
@@ -221,9 +245,20 @@ export default function LobbyBase({
           { paddingBottom: getFixedFooterBottomPadding(insets.bottom) },
         ]}
       >
+        {lifecycleError ? (
+          <View style={styles.lifecycleErrorPanel}>
+            <Text accessibilityRole="alert" style={styles.lifecycleErrorText}>
+              {t(`games.joinCode.errors.${lifecycleError}`)}
+            </Text>
+            <Pressable accessibilityRole="button" onPress={onRetryLifecycle} style={styles.retryLifecycleButton}>
+              <Text style={styles.retryLifecycleText}>{t("common.retry")}</Text>
+            </Pressable>
+          </View>
+        ) : null}
         <View style={styles.actions}>
           <Pressable
             accessibilityRole="button"
+            disabled={lifecycleAction !== null}
             style={[
               styles.button,
               players.self.ready ? styles.secondaryButton : styles.primaryButton,
@@ -244,7 +279,7 @@ export default function LobbyBase({
             <Pressable
               accessibilityState={{ disabled: !canStart }}
               accessibilityRole="button"
-              disabled={!canStart}
+              disabled={!canStart || lifecycleAction !== null}
               style={[styles.button, styles.primaryButton, !canStart && styles.disabledButton]}
               onPress={onStart}
             >
@@ -253,9 +288,34 @@ export default function LobbyBase({
           )}
         </View>
         {!isLocal ? (
-          <Pressable accessibilityRole="button" onPress={handleLeave} style={styles.cancelLobbyButton}>
-            <Text style={styles.cancelLobbyButtonText}>{t("games.joinCode.leaveLobby")}</Text>
-          </Pressable>
+          <View style={styles.lifecycleActions}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={lifecycleAction !== null}
+              onPress={handleLeave}
+              style={styles.cancelLobbyButton}
+            >
+              {lifecycleAction === "leaving" ? (
+                <ActivityIndicator color={Colors.primary} size="small" />
+              ) : (
+                <Text style={styles.cancelLobbyButtonText}>{t("games.joinCode.leaveLobby")}</Text>
+              )}
+            </Pressable>
+            {players.isHost ? (
+              <Pressable
+                accessibilityRole="button"
+                disabled={lifecycleAction !== null}
+                onPress={handleCloseLobby}
+                style={styles.closeLobbyButton}
+              >
+                {lifecycleAction === "closing" ? (
+                  <ActivityIndicator color={Colors.primary} size="small" />
+                ) : (
+                  <Text style={styles.closeLobbyButtonText}>{t("games.joinCode.closeLobbyForEveryone")}</Text>
+                )}
+              </Pressable>
+            ) : null}
+          </View>
         ) : null}
       </View>
     </View>
@@ -514,16 +574,62 @@ const styles = StyleSheet.create({
     gap: 12,
     justifyContent: "center",
   },
+  lifecycleErrorPanel: {
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderColor: Colors.primary,
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 10,
+    padding: 10,
+  },
+  lifecycleErrorText: {
+    color: Colors.textHeading,
+    flex: 1,
+    fontFamily: Typography.bodyMedium,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  retryLifecycleButton: {
+    alignItems: "center",
+    borderColor: Colors.primary,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 14,
+  },
+  retryLifecycleText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyBold,
+    fontSize: 13,
+  },
+  lifecycleActions: {
+    gap: 2,
+    marginTop: 4,
+  },
   cancelLobbyButton: {
     alignItems: "center",
     justifyContent: "center",
     minHeight: 44,
-    marginTop: 4,
   },
   cancelLobbyButtonText: {
     color: Colors.primary,
     fontFamily: Typography.bodySemiBold,
     fontSize: 14,
+  },
+  closeLobbyButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
+  },
+  closeLobbyButtonText: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 13,
+    textDecorationLine: "underline",
   },
   button: {
     alignItems: "center",

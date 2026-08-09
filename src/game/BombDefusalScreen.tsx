@@ -1,121 +1,163 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Animated,
-  Easing,
+  ActivityIndicator,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { Bomb, BookOpen, ShieldCheck, Users } from "lucide-react-native";
 import LottieView from "lottie-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { SafeAreaView } from "react-native-safe-area-context";
+
 import { GameEndActions } from "@/components/GameEndActions";
 import { GameRewardSummary } from "@/components/GameRewardSummary";
+import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
+import {
+  createGameJoinIdempotencyKey,
+  getBombDefusalPlayerView,
+  readGameJoinCodeFailureReason,
+  startGameLobbyRematch,
+  submitBombDefusalStep,
+  type BombDefusalPlayerView,
+  type BombPrivateInstruction,
+  type BombPublicCommand,
+  type BombPublicOption,
+  type GameJoinCodeFailureReason,
+} from "@/services/gameJoinCodeService";
+import { subscribeToSession } from "@/services/gameService";
 import {
   createGameRewardSession,
   finalizeGameReward,
   recordGameSessionResult,
   type GameRewardResult,
 } from "@/services/sidelineStarsService";
-import {
-  createGameJoinIdempotencyKey,
-  startGameLobbyRematch,
-  submitBombDefusalStep,
-  updateGameJoinCodeStatus,
-} from "@/services/gameJoinCodeService";
-import { subscribeToSession } from "@/services/gameService";
-import {
-  generateBombPattern,
-  STEP_TYPES,
-  validateStep,
-  type BombStep,
-} from "./bombLogic";
 
-const WIRE_COLORS = ["red", "blue", "yellow", "green"] as const;
-const BUTTON_LABELS = ["A", "B", "C", "D"] as const;
-const STARTING_TIME = 60;
-type BombMessageKey =
-  | "bomb.followSequence"
-  | "bomb.timeRanOut"
-  | "bomb.wrongMove"
-  | "bomb.defused"
-  | "bomb.correctKeepGoing"
-  | "bomb.actionFailed";
+type BombOutcome = "playing" | "defused" | "exploded" | "abandoned";
 
-const wireCutAnimation = require("../../assets/animations/wireCut.json");
 const explosionAnimation = require("../../assets/animations/explosion.json");
+const wireCutAnimation = require("../../assets/animations/wireCut.json");
 
 export default function BombDefusalScreen() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const { currentSquad, selectedSquadId } = useSquad();
   const params = useLocalSearchParams<{ sessionId?: string | string[]; lobbyId?: string | string[] }>();
-  const requestedSessionId = normalizeRouteParam(params.sessionId);
+  const sessionId = normalizeRouteParam(params.sessionId);
   const lobbyId = normalizeRouteParam(params.lobbyId);
-  const [attemptNumber, setAttemptNumber] = useState(0);
-  const [steps, setSteps] = useState<BombStep[]>(() => generateBombPattern());
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(STARTING_TIME);
-  const [codeInput, setCodeInput] = useState("");
-  const [dialValue, setDialValue] = useState(1);
-  const [status, setStatus] = useState<"playing" | "defused" | "exploded">("playing");
-  const [messageKey, setMessageKey] = useState<BombMessageKey>("bomb.followSequence");
-  const [actionSubmitting, setActionSubmitting] = useState(false);
+  const [playerView, setPlayerView] = useState<BombDefusalPlayerView | null>(null);
+  const [viewLoading, setViewLoading] = useState(Boolean(sessionId));
+  const [viewError, setViewError] = useState<GameJoinCodeFailureReason | null>(null);
+  const [sessionOutcome, setSessionOutcome] = useState<BombOutcome | null>(null);
   const [hostUserId, setHostUserId] = useState("");
-  const [showWireCut, setShowWireCut] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [deadlineLocalMs, setDeadlineLocalMs] = useState(0);
+  const [codeInput, setCodeInput] = useState("");
+  const [actionSubmitting, setActionSubmitting] = useState(false);
+  const [actionError, setActionError] = useState<GameJoinCodeFailureReason | null>(null);
   const [rewardSessionId, setRewardSessionId] = useState("");
   const [rewardSetupAttempt, setRewardSetupAttempt] = useState(0);
   const [rewardResult, setRewardResult] = useState<GameRewardResult | null>(null);
   const [rewardLoading, setRewardLoading] = useState(false);
   const [rewardError, setRewardError] = useState<string | null>(null);
+  const requestSequenceRef = useRef(0);
+  const publicSignatureRef = useRef("");
+  const timeoutRefreshRef = useRef("");
   const finalizedRewardKeyRef = useRef("");
-  const lifecycleEndedRef = useRef("");
   const rematchInFlightRef = useRef(false);
   const submissionIdsRef = useRef(new Map<string, string>());
-  const dialRotation = useRef(new Animated.Value(0)).current;
-  const currentStep = steps[currentStepIndex];
+
+  const refreshPlayerView = useCallback(async (showLoading = false) => {
+    if (!sessionId) {
+      setViewLoading(false);
+      return;
+    }
+    const requestSequence = ++requestSequenceRef.current;
+    if (showLoading) setViewLoading(true);
+    try {
+      const nextView = await getBombDefusalPlayerView({ sessionId });
+      if (requestSequence !== requestSequenceRef.current) return;
+      setPlayerView(nextView);
+      setViewError(null);
+      setSessionOutcome(nextView.outcome === "playing" ? null : nextView.outcome);
+      const localDeadline = Date.now() + Math.max(0, nextView.endsAtMs - nextView.serverNowMs);
+      setDeadlineLocalMs(localDeadline);
+      setTimeLeft(Math.max(0, Math.ceil((localDeadline - Date.now()) / 1000)));
+    } catch (error) {
+      if (requestSequence !== requestSequenceRef.current) return;
+      setViewError(readGameJoinCodeFailureReason(error));
+    } finally {
+      if (requestSequence === requestSequenceRef.current) setViewLoading(false);
+    }
+  }, [sessionId]);
 
   useEffect(() => {
-    if (!requestedSessionId) return;
-    return subscribeToSession(requestedSessionId, (session) => {
-      if (!session) return;
+    requestSequenceRef.current += 1;
+    publicSignatureRef.current = "";
+    timeoutRefreshRef.current = "";
+    submissionIdsRef.current.clear();
+    setPlayerView(null);
+    setSessionOutcome(null);
+    setViewError(null);
+    setViewLoading(Boolean(sessionId));
+    setActionError(null);
+    setCodeInput("");
+    if (sessionId) void refreshPlayerView(true);
+  }, [refreshPlayerView, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    return subscribeToSession(sessionId, (session) => {
+      if (!session) {
+        setViewError("game_not_found");
+        return;
+      }
       setHostUserId(session.hostUserId);
-      const sharedStepIndex = session.gameState?.currentStepIndex;
-      const sharedStep = session.gameState?.currentStep;
-      if (
-        typeof sharedStepIndex === "number" &&
-        Number.isInteger(sharedStepIndex) &&
-        sharedStepIndex >= 0 &&
-        sharedStepIndex <= 5
-      ) {
-        if (sharedStepIndex < 5 && isBombStep(sharedStep)) {
-          setSteps((current) => current.map((step, index) => (
-            index === sharedStepIndex ? sharedStep : step
-          )));
-        }
-        setCurrentStepIndex(sharedStepIndex);
-        setCodeInput("");
+      const publicOutcome = readBombOutcome(session.gameState.outcome);
+      if (session.status === "canceled" || session.status === "expired") {
+        setSessionOutcome("abandoned");
+        return;
       }
-      const sharedOutcome = session.gameState?.outcome;
-      if (sharedOutcome === "defused") {
-        setStatus("defused");
-        setMessageKey("bomb.defused");
-      } else if (sharedOutcome === "exploded") {
-        setStatus("exploded");
-        setMessageKey("bomb.wrongMove");
-      }
-      if (typeof session.startedAt === "number") {
-        const remaining = Math.max(0, STARTING_TIME - Math.floor((Date.now() - session.startedAt) / 1000));
-        setTimeLeft((current) => Math.min(current, remaining));
-      }
+      if (publicOutcome) setSessionOutcome(publicOutcome);
+      const signature = [
+        session.status,
+        String(session.gameState.currentCommandId ?? ""),
+        String(session.gameState.roleRevision ?? ""),
+        publicOutcome ?? "playing",
+        String(session.updatedAt ?? ""),
+      ].join(":");
+      if (signature === publicSignatureRef.current) return;
+      publicSignatureRef.current = signature;
+      void refreshPlayerView(false);
     });
-  }, [requestedSessionId]);
+  }, [refreshPlayerView, sessionId]);
+
+  useEffect(() => {
+    if (!deadlineLocalMs || (sessionOutcome ?? playerView?.outcome ?? "playing") !== "playing") return;
+    const update = () => setTimeLeft(Math.max(0, Math.ceil((deadlineLocalMs - Date.now()) / 1000)));
+    update();
+    const timer = setInterval(update, 500);
+    return () => clearInterval(timer);
+  }, [deadlineLocalMs, playerView?.outcome, sessionOutcome]);
+
+  useEffect(() => {
+    if (!playerView || timeLeft !== 0 || playerView.outcome !== "playing") return;
+    const timeoutKey = `${sessionId}:${playerView.commandId}`;
+    if (timeoutRefreshRef.current === timeoutKey) return;
+    timeoutRefreshRef.current = timeoutKey;
+    void refreshPlayerView(false);
+  }, [playerView, refreshPlayerView, sessionId, timeLeft]);
+
+  useEffect(() => {
+    setCodeInput("");
+    setActionError(null);
+  }, [playerView?.commandId]);
 
   useEffect(() => {
     let active = true;
@@ -123,12 +165,10 @@ export default function BombDefusalScreen() {
     setRewardResult(null);
     setRewardError(null);
     finalizedRewardKeyRef.current = "";
-    if (!requestedSessionId) {
-      return () => { active = false; };
-    }
+    if (!sessionId) return () => { active = false; };
     void createGameRewardSession({
       gameType: "bombDefusal",
-      sessionId: requestedSessionId,
+      sessionId,
       sourceSquadId: currentSquad?.squadId ?? null,
     }).then((created) => {
       if (active) setRewardSessionId(created.sessionId);
@@ -136,57 +176,13 @@ export default function BombDefusalScreen() {
       if (active) setRewardError(t("rewards.awardError"));
     });
     return () => { active = false; };
-  }, [attemptNumber, currentSquad?.squadId, requestedSessionId, rewardSetupAttempt, t]);
+  }, [currentSquad?.squadId, rewardSetupAttempt, sessionId, t]);
 
-
-  const finishGame = useCallback(
-    (nextStatus: "defused" | "exploded", nextMessageKey: BombMessageKey) => {
-      setStatus(nextStatus);
-      setMessageKey(nextMessageKey);
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (status !== "playing") {
-      return;
-    }
-
-    if (timeLeft <= 0) {
-      finishGame("exploded", "bomb.timeRanOut");
-      return;
-    }
-
-    const timer = setTimeout(() => setTimeLeft((value) => value - 1), 1000);
-    return () => clearTimeout(timer);
-  }, [finishGame, status, timeLeft]);
-
-  useEffect(() => {
-    Animated.timing(dialRotation, {
-      toValue: dialValue,
-      duration: 180,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
-  }, [dialRotation, dialValue]);
-
-  const resetGame = () => {
-    setAttemptNumber((value) => value + 1);
-    setSteps(generateBombPattern());
-    setCurrentStepIndex(0);
-    setTimeLeft(STARTING_TIME);
-    setCodeInput("");
-    setDialValue(1);
-    setStatus("playing");
-    setMessageKey("bomb.followSequence");
-    setShowWireCut(false);
-    setActionSubmitting(false);
-    submissionIdsRef.current.clear();
-  };
+  const outcome = sessionOutcome ?? playerView?.outcome ?? "playing";
 
   const awardCurrentResult = useCallback(async () => {
-    if (!rewardSessionId || status === "playing") return;
-    const rewardKey = `${rewardSessionId}:${status}`;
+    if (!playerView || !rewardSessionId || (outcome !== "defused" && outcome !== "exploded")) return;
+    const rewardKey = `${rewardSessionId}:${outcome}`;
     if (finalizedRewardKeyRef.current === rewardKey && rewardResult) return;
     finalizedRewardKeyRef.current = rewardKey;
     setRewardLoading(true);
@@ -195,9 +191,9 @@ export default function BombDefusalScreen() {
       await recordGameSessionResult({
         gameType: "bombDefusal",
         sessionId: rewardSessionId,
-        outcome: status,
-        firstAttemptCorrectStepCount: status === "defused" ? steps.length : currentStepIndex,
-        totalSteps: steps.length,
+        outcome,
+        firstAttemptCorrectStepCount: playerView.correctCommandCount,
+        totalSteps: playerView.totalCommands,
       });
       setRewardResult(await finalizeGameReward("bombDefusal", rewardSessionId));
     } catch {
@@ -206,21 +202,38 @@ export default function BombDefusalScreen() {
     } finally {
       setRewardLoading(false);
     }
-  }, [currentStepIndex, rewardResult, rewardSessionId, status, steps.length, t]);
+  }, [outcome, playerView, rewardResult, rewardSessionId, t]);
 
   useEffect(() => {
-    if (rewardSessionId && status !== "playing") void awardCurrentResult();
-  }, [awardCurrentResult, rewardSessionId, status]);
+    if (rewardSessionId && (outcome === "defused" || outcome === "exploded")) {
+      void awardCurrentResult();
+    }
+  }, [awardCurrentResult, outcome, rewardSessionId]);
 
-  useEffect(() => {
-    if (!requestedSessionId || status === "playing" || lifecycleEndedRef.current === requestedSessionId) return;
-    lifecycleEndedRef.current = requestedSessionId;
-    void updateGameJoinCodeStatus({
-      gameType: "bombDefusal",
-      sessionId: requestedSessionId,
-      status: "ended",
-    }).catch(() => undefined);
-  }, [requestedSessionId, status]);
+  const submitAction = useCallback(async (action: Record<string, string | number>) => {
+    if (!playerView || playerView.role !== "defuser" || outcome !== "playing" || actionSubmitting) return;
+    const submissionKey = `${playerView.commandId}:${JSON.stringify(action)}`;
+    const submissionId = submissionIdsRef.current.get(submissionKey) ?? createGameJoinIdempotencyKey();
+    submissionIdsRef.current.set(submissionKey, submissionId);
+    setActionSubmitting(true);
+    setActionError(null);
+    try {
+      await submitBombDefusalStep({
+        sessionId,
+        commandId: playerView.commandId,
+        action,
+        submissionId,
+      });
+      submissionIdsRef.current.delete(submissionKey);
+      await refreshPlayerView(false);
+    } catch (error) {
+      const reason = readGameJoinCodeFailureReason(error);
+      setActionError(reason);
+      if (reason === "bomb_command_stale") void refreshPlayerView(false);
+    } finally {
+      setActionSubmitting(false);
+    }
+  }, [actionSubmitting, outcome, playerView, refreshPlayerView, sessionId]);
 
   const openLobbyDirectory = useCallback(() => {
     if (selectedSquadId) {
@@ -234,247 +247,60 @@ export default function BombDefusalScreen() {
   }, [selectedSquadId]);
 
   const handlePlayAgain = useCallback(async () => {
-    if (requestedSessionId) {
-      if (!lobbyId || hostUserId !== user?.uid || rematchInFlightRef.current) {
-        openLobbyDirectory();
-        return;
-      }
-      rematchInFlightRef.current = true;
-      try {
-        const rematch = await startGameLobbyRematch({ lobbyId });
-        router.replace({
-          pathname: "/(games)/bomb-defusal/Lobby",
-          params: { lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
-        } as never);
-      } catch {
-        openLobbyDirectory();
-      } finally {
-        rematchInFlightRef.current = false;
-      }
+    if (!sessionId || !lobbyId || hostUserId !== user?.uid || rematchInFlightRef.current) {
+      openLobbyDirectory();
       return;
     }
-    resetGame();
-  }, [hostUserId, lobbyId, openLobbyDirectory, requestedSessionId, user?.uid]);
-
-  const submitStep = async (input: Record<string, string | number>) => {
-    if (!currentStep || status !== "playing") {
-      return;
+    rematchInFlightRef.current = true;
+    try {
+      const rematch = await startGameLobbyRematch({ lobbyId });
+      router.replace({
+        pathname: "/(games)/bomb-defusal/Lobby",
+        params: { lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
+      } as never);
+    } catch {
+      openLobbyDirectory();
+    } finally {
+      rematchInFlightRef.current = false;
     }
+  }, [hostUserId, lobbyId, openLobbyDirectory, sessionId, user?.uid]);
 
-    if (actionSubmitting) return;
-    let correct: boolean;
-    let nextIndex = currentStepIndex + 1;
-    let serverOutcome: "playing" | "defused" | "exploded" | null = null;
+  const feedback = useMemo(() => {
+    if (actionError === "bomb_not_defuser") return t("bomb.feedback.notDefuser");
+    if (actionError === "bomb_command_stale") return t("bomb.feedback.stale");
+    if (actionError) return t("bomb.feedback.actionFailed");
+    if (playerView?.lastResult?.correct === true) return t("bomb.feedback.correct");
+    if (playerView?.lastResult?.correct === false) return t("bomb.feedback.incorrect");
+    return t("bomb.feedback.waiting");
+  }, [actionError, playerView?.lastResult?.correct, t]);
 
-    if (requestedSessionId) {
-      const submissionKey = `${currentStepIndex}:${JSON.stringify(input)}`;
-      const existingSubmissionId = submissionIdsRef.current.get(submissionKey);
-      const submissionId = existingSubmissionId ?? createGameJoinIdempotencyKey();
-      submissionIdsRef.current.set(submissionKey, submissionId);
-      setActionSubmitting(true);
-      try {
-        const result = await submitBombDefusalStep({
-          sessionId: requestedSessionId,
-          stepIndex: currentStepIndex,
-          action: input,
-          submissionId,
-        });
-        correct = result.correct;
-        nextIndex = result.nextStepIndex;
-        serverOutcome = result.outcome;
-        if (result.nextStep && isBombStep(result.nextStep) && nextIndex < steps.length) {
-          setSteps((current) => current.map((step, index) => (
-            index === nextIndex ? result.nextStep as BombStep : step
-          )));
-        }
-        submissionIdsRef.current.delete(submissionKey);
-      } catch {
-        setMessageKey("bomb.actionFailed");
-        setActionSubmitting(false);
-        return;
-      }
-      setActionSubmitting(false);
-    } else {
-      correct = validateStep(currentStep, input, rewardSessionId).correct;
-    }
+  if (!sessionId) {
+    return <BombUnavailable onBack={openLobbyDirectory} onRetry={() => undefined} retryable={false} />;
+  }
 
-    if (!correct) {
-      finishGame("exploded", "bomb.wrongMove");
-      return;
-    }
+  if (!playerView && viewLoading && outcome === "playing") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View accessibilityLiveRegion="polite" style={styles.centered}>
+          <ActivityIndicator color={Colors.primary} size="large" />
+          <Text style={styles.bodyText}>{t("bomb.loading")}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
-    if (currentStep.type === STEP_TYPES.CUT_WIRE) {
-      setShowWireCut(true);
-      setTimeout(() => setShowWireCut(false), 1200);
-    }
-
-    if (serverOutcome === "defused" || nextIndex >= steps.length) {
-      finishGame("defused", "bomb.defused");
-      return;
-    }
-
-    setCurrentStepIndex(nextIndex);
-    setCodeInput("");
-    setMessageKey("bomb.correctKeepGoing");
-  };
-
-  const rotateDial = (direction: -1 | 1) => {
-    setDialValue((value) => {
-      const nextValue = value + direction;
-      if (nextValue < 1) {
-        return 10;
-      }
-      if (nextValue > 10) {
-        return 1;
-      }
-      return nextValue;
-    });
-  };
-
-  const submitCodeDigit = (digit: string) => {
-    setCodeInput((value) => (value.length >= 3 ? value : `${value}${digit}`));
-  };
-
-  const renderControls = () => {
-    if (!currentStep || status !== "playing") {
-      return null;
-    }
-
-    switch (currentStep.type) {
-      case STEP_TYPES.CUT_WIRE:
-        return (
-          <View style={styles.controlGrid}>
-            {WIRE_COLORS.map((color) => (
-              <Pressable
-                accessibilityLabel={t("bomb.accessibility.cutWire", {
-                  color: t(`bomb.colors.${color}`),
-                })}
-                accessibilityRole="button"
-                key={color}
-                style={[styles.wireButton, wireStyles[color]]}
-                onPress={() => void submitStep({ color })}
-                disabled={actionSubmitting}
-              >
-                <Text style={styles.wireLabel}>
-                  {t(`bomb.colors.${color}`).toLocaleUpperCase()}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        );
-      case STEP_TYPES.PRESS_BUTTON:
-        return (
-          <View style={styles.controlGrid}>
-            {BUTTON_LABELS.map((label) => (
-              <Pressable
-                accessibilityLabel={t("bomb.accessibility.pressButton", { label })}
-                accessibilityRole="button"
-                key={label}
-                style={styles.letterButton}
-                onPress={() => void submitStep({ label })}
-                disabled={actionSubmitting}
-              >
-                <Text style={styles.letterText}>{label}</Text>
-              </Pressable>
-            ))}
-          </View>
-        );
-      case STEP_TYPES.ROTATE_DIAL:
-        return (
-          <View style={styles.dialPanel}>
-            <Animated.View
-              style={[
-                styles.dial,
-                {
-                  transform: [
-                    {
-                      rotate: dialRotation.interpolate({
-                        inputRange: [1, 10],
-                        outputRange: ["0deg", "324deg"],
-                      }),
-                    },
-                  ],
-                },
-              ]}
-            >
-              <View style={styles.dialPointer} />
-              <Text style={styles.dialValue}>{dialValue}</Text>
-            </Animated.View>
-            <View style={styles.dialActions}>
-              <Pressable
-                accessibilityLabel={t("bomb.accessibility.decreaseDial")}
-                accessibilityRole="button"
-                style={styles.panelButton}
-                onPress={() => rotateDial(-1)}
-              >
-                <Text style={styles.panelButtonText}>-</Text>
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t("bomb.accessibility.setDial", { value: dialValue })}
-                accessibilityRole="button"
-                style={styles.submitButton}
-                onPress={() => void submitStep({ target: dialValue })}
-                disabled={actionSubmitting}
-              >
-                <Text style={styles.submitButtonText}>{t("bomb.controls.set")}</Text>
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t("bomb.accessibility.increaseDial")}
-                accessibilityRole="button"
-                style={styles.panelButton}
-                onPress={() => rotateDial(1)}
-              >
-                <Text style={styles.panelButtonText}>+</Text>
-              </Pressable>
-            </View>
-          </View>
-        );
-      case STEP_TYPES.ENTER_CODE:
-        return (
-          <View style={styles.keypadPanel}>
-            <Text style={styles.codeReadout}>{codeInput.padEnd(3, "_")}</Text>
-            <View style={styles.keypad}>
-              {["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"].map((digit) => (
-                <Pressable
-                  accessibilityLabel={t("bomb.accessibility.digit", { digit })}
-                  accessibilityRole="button"
-                  key={digit}
-                  style={styles.key}
-                  onPress={() => submitCodeDigit(digit)}
-                >
-                  <Text style={styles.keyText}>{digit}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <View style={styles.dialActions}>
-              <Pressable
-                accessibilityLabel={t("bomb.accessibility.clearCode")}
-                accessibilityRole="button"
-                style={styles.panelButton}
-                onPress={() => setCodeInput("")}
-              >
-                <Text style={styles.panelButtonText}>{t("bomb.controls.clear")}</Text>
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t("bomb.accessibility.enterCode")}
-                accessibilityRole="button"
-                style={styles.submitButton}
-                onPress={() => void submitStep({ code: Number(codeInput) })}
-                disabled={codeInput.length !== 3 || actionSubmitting}
-              >
-                <Text style={styles.submitButtonText}>{t("bomb.controls.enter")}</Text>
-              </Pressable>
-            </View>
-          </View>
-        );
-    }
-  };
+  if (!playerView && viewError && outcome === "playing") {
+    return <BombUnavailable onBack={openLobbyDirectory} onRetry={() => void refreshPlayerView(true)} retryable />;
+  }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
+    <SafeAreaView edges={["top", "left", "right"]} style={styles.safeArea}>
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Text style={styles.title}>{t("games.bombDefusal.title")}</Text>
+          <View style={styles.titleRow}>
+            <Bomb color={Colors.primary} size={25} />
+            <Text accessibilityRole="header" style={styles.title}>{t("games.bombDefusal.title")}</Text>
+          </View>
           <Text
             accessibilityLabel={t("bomb.secondsRemaining", { count: timeLeft })}
             accessibilityLiveRegion="polite"
@@ -484,66 +310,382 @@ export default function BombDefusalScreen() {
           </Text>
         </View>
 
-        <View style={styles.bombBody}>
-          <View style={styles.statusLight} />
-          <Text style={styles.stepCounter}>
-            {t("bomb.stepProgress", {
-              current: Math.min(currentStepIndex + 1, steps.length),
-              total: steps.length,
-            })}
-          </Text>
-          <Text style={styles.instruction}>{getInstruction(currentStep, t)}</Text>
-          <Text accessibilityLiveRegion="polite" style={styles.message}>
-            {t(messageKey)}
-          </Text>
-        </View>
+        {playerView ? (
+          <>
+            <RoleCard playerView={playerView} />
+            <View
+              accessible
+              accessibilityLabel={`${t("bomb.accessibility.progressSummary", {
+                current: Math.min(playerView.commandIndex + 1, playerView.totalCommands),
+                total: playerView.totalCommands,
+              })}. ${t("bomb.accessibility.strikeSummary", {
+                count: playerView.strikeCount,
+                max: playerView.maxStrikes,
+              })}`}
+              style={styles.progressCard}
+            >
+              <Text style={styles.progressText}>
+                {t("bomb.commandProgress", {
+                  current: Math.min(playerView.commandIndex + 1, playerView.totalCommands),
+                  total: playerView.totalCommands,
+                })}
+              </Text>
+              <Text style={styles.strikeText}>
+                {t("bomb.strikeProgress", { count: playerView.strikeCount, max: playerView.maxStrikes })}
+              </Text>
+            </View>
+          </>
+        ) : null}
 
-        {showWireCut && (
-          <LottieView source={wireCutAnimation} autoPlay loop={false} style={styles.animation} />
-        )}
-
-        {status === "exploded" && (
-          <LottieView source={explosionAnimation} autoPlay loop={false} style={styles.animation} />
-        )}
-
-        {status === "defused" ? (
-          <View style={styles.resultPanel}>
-            <Text style={styles.resultTitle}>{t("rewards.bombDefused")}</Text>
-            <Text style={styles.resultText}>{t("rewards.bombDefused")}</Text>
-            <GameRewardSummary
-              detailLines={[
-                t("rewards.bombDefused"),
-                t("rewards.accuracyBonus", { count: Math.min(steps.length, 5) }),
-              ]}
-              error={rewardError}
-              loading={rewardLoading}
-              onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
-              result={rewardResult}
-            />
-            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/bomb-defusal/Lobby" />
-          </View>
-        ) : status === "exploded" ? (
-          <View style={styles.resultPanel}>
-            <Text style={styles.resultTitle}>{t("rewards.attemptCompleted")}</Text>
-            <Text style={styles.resultText}>{t("rewards.attemptCompleted")}</Text>
-            <GameRewardSummary
-              detailLines={[
-                t("rewards.attemptCompleted"),
-                t("rewards.accuracyBonus", { count: Math.min(currentStepIndex, 5) }),
-              ]}
-              error={rewardError}
-              loading={rewardLoading}
-              onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
-              result={rewardResult}
-            />
-            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/bomb-defusal/Lobby" />
-          </View>
+        {outcome === "playing" && playerView ? (
+          <>
+            <Text accessibilityLiveRegion="polite" style={styles.feedback}>{feedback}</Text>
+            {playerView.role === "expert" ? (
+              <ExpertInstruction playerView={playerView} />
+            ) : (
+              <BombControls
+                actionSubmitting={actionSubmitting}
+                codeInput={codeInput}
+                interactive={playerView.role === "defuser"}
+                onClearCode={() => setCodeInput("")}
+                onCodeDigit={(digit) => setCodeInput((value) => value.length >= 3 ? value : `${value}${digit}`)}
+                onSubmit={submitAction}
+                onSubmitCode={() => void submitAction({ code: Number(codeInput) })}
+                publicCommand={playerView.publicCommand}
+              />
+            )}
+          </>
         ) : (
-          renderControls()
+          <BombResult
+            correctCommandCount={playerView?.correctCommandCount ?? 0}
+            hostCanRematch={hostUserId === user?.uid}
+            onBack={openLobbyDirectory}
+            onPlayAgain={handlePlayAgain}
+            onRetryReward={() => rewardSessionId
+              ? void awardCurrentResult()
+              : setRewardSetupAttempt((value) => value + 1)}
+            outcome={outcome}
+            rewardError={rewardError}
+            rewardLoading={rewardLoading}
+            rewardResult={rewardResult}
+          />
         )}
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+function RoleCard({ playerView }: { playerView: BombDefusalPlayerView }) {
+  const { t } = useTranslation();
+  const RoleIcon = playerView.role === "defuser" ? ShieldCheck : playerView.role === "expert" ? BookOpen : Users;
+  return (
+    <View
+      accessible
+      accessibilityLabel={t("bomb.accessibility.roleSummary", {
+        role: t(`bomb.roles.${playerView.role}.title`),
+        defuser: playerView.defuserDisplayName,
+        expert: playerView.expertDisplayName,
+      })}
+      style={styles.roleCard}
+    >
+      <View style={styles.roleHeading}>
+        <View style={styles.roleIcon}>
+          <RoleIcon color={Colors.surface} size={20} />
+        </View>
+        <View style={styles.roleCopy}>
+          <Text style={styles.roleEyebrow}>{t("bomb.roleLabel")}</Text>
+          <Text style={styles.roleTitle}>{t(`bomb.roles.${playerView.role}.title`)}</Text>
+        </View>
+      </View>
+      <Text style={styles.roleBody}>{t(`bomb.roles.${playerView.role}.body`)}</Text>
+      <Text style={styles.assignmentText}>
+        {t("bomb.roleAssignments", {
+          defuser: playerView.defuserDisplayName,
+          expert: playerView.expertDisplayName,
+        })}
+      </Text>
+    </View>
+  );
+}
+
+function ExpertInstruction({ playerView }: { playerView: BombDefusalPlayerView }) {
+  const { t } = useTranslation();
+  const instruction = playerView.instruction
+    ? describePrivateInstruction(playerView.instruction, playerView.publicCommand, t)
+    : t("bomb.feedback.actionFailed");
+  return (
+    <View accessible accessibilityLabel={`${t("bomb.privateInstructionTitle")}. ${instruction}`} style={styles.instructionCard}>
+      <Text style={styles.instructionEyebrow}>{t("bomb.privateInstructionTitle")}</Text>
+      <Text style={styles.instructionText}>{instruction}</Text>
+      <Text style={styles.instructionHint}>{t("bomb.privateInstructionHint")}</Text>
+    </View>
+  );
+}
+
+function BombControls({
+  actionSubmitting,
+  codeInput,
+  interactive,
+  onClearCode,
+  onCodeDigit,
+  onSubmit,
+  onSubmitCode,
+  publicCommand,
+}: {
+  actionSubmitting: boolean;
+  codeInput: string;
+  interactive: boolean;
+  onClearCode: () => void;
+  onCodeDigit: (digit: string) => void;
+  onSubmit: (action: Record<string, string | number>) => void | Promise<void>;
+  onSubmitCode: () => void;
+  publicCommand: BombPublicCommand;
+}) {
+  const { t } = useTranslation();
+  const title = interactive ? t("bomb.defuserControlsTitle") : t("bomb.supportControlsTitle");
+  if (publicCommand.type === "enter_code") {
+    return (
+      <View style={styles.controlsCard}>
+        <Text style={styles.controlsTitle}>{title}</Text>
+        {!interactive ? <Text style={styles.readOnlyHint}>{t("bomb.readOnlyHint")}</Text> : null}
+        {interactive ? (
+          <Text accessibilityLabel={t("bomb.accessibility.codeReadout", { code: codeInput || t("bomb.emptyCode") })} style={styles.codeReadout}>
+            {codeInput.padEnd(3, "_")}
+          </Text>
+        ) : null}
+        <View style={styles.optionGrid}>
+          {publicCommand.options.map((option) => (
+            <OptionControl
+              disabled={actionSubmitting || !interactive}
+              interactive={interactive}
+              key={option.id}
+              label={t("bomb.options.digit", { digit: option.value })}
+              marker={t("bomb.markers.keypad")}
+              number={option.number}
+              onPress={() => onCodeDigit(String(option.value))}
+            />
+          ))}
+        </View>
+        {interactive ? (
+          <View style={styles.codeActions}>
+            <Pressable accessibilityRole="button" onPress={onClearCode} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>{t("bomb.controls.clear")}</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: codeInput.length !== 3 || actionSubmitting }}
+              disabled={codeInput.length !== 3 || actionSubmitting}
+              onPress={onSubmitCode}
+              style={[styles.submitButton, (codeInput.length !== 3 || actionSubmitting) && styles.disabledButton]}
+            >
+              {actionSubmitting
+                ? <ActivityIndicator color={Colors.surface} size="small" />
+                : <Text style={styles.submitButtonText}>{t("bomb.controls.enter")}</Text>}
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.controlsCard}>
+      <Text style={styles.controlsTitle}>{title}</Text>
+      {!interactive ? <Text style={styles.readOnlyHint}>{t("bomb.readOnlyHint")}</Text> : null}
+      <View style={styles.optionGrid}>
+        {publicCommand.options.map((option) => (
+          <OptionControl
+            disabled={actionSubmitting || !interactive}
+            interactive={interactive}
+            key={option.id}
+            label={describePublicOption(publicCommand.type, option, t)}
+            marker={t(`bomb.markers.${option.marker}`)}
+            number={option.number}
+            onPress={() => void onSubmit(actionForOption(publicCommand.type, option))}
+            swatch={publicCommand.type === "cut_wire" ? String(option.value) : undefined}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function OptionControl({
+  disabled,
+  interactive,
+  label,
+  marker,
+  number,
+  onPress,
+  swatch,
+}: {
+  disabled: boolean;
+  interactive: boolean;
+  label: string;
+  marker: string;
+  number: number;
+  onPress: () => void;
+  swatch?: string;
+}) {
+  const { t } = useTranslation();
+  const content = (
+    <>
+      <View style={styles.optionHeader}>
+        <View style={styles.optionNumber}><Text style={styles.optionNumberText}>{number}</Text></View>
+        {swatch ? <View style={[styles.wireSwatch, wireSwatchStyle(swatch)]} /> : null}
+      </View>
+      <Text style={styles.optionLabel}>{label}</Text>
+      <Text style={styles.optionMarker}>{marker}</Text>
+    </>
+  );
+  const accessibilityLabel = interactive
+    ? t("bomb.accessibility.selectableOption", { number, label, marker })
+    : t("bomb.accessibility.readOnlyOption", { number, label, marker });
+  if (!interactive) {
+    return <View accessible accessibilityLabel={accessibilityLabel} style={styles.optionControl}>{content}</View>;
+  }
+  return (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [styles.optionControl, pressed && styles.optionPressed, disabled && styles.disabledButton]}
+    >
+      {content}
+    </Pressable>
+  );
+}
+
+function BombResult({
+  correctCommandCount,
+  hostCanRematch,
+  onBack,
+  onPlayAgain,
+  onRetryReward,
+  outcome,
+  rewardError,
+  rewardLoading,
+  rewardResult,
+}: {
+  correctCommandCount: number;
+  hostCanRematch: boolean;
+  onBack: () => void;
+  onPlayAgain: () => void | Promise<void>;
+  onRetryReward: () => void;
+  outcome: BombOutcome;
+  rewardError: string | null;
+  rewardLoading: boolean;
+  rewardResult: GameRewardResult | null;
+}) {
+  const { t } = useTranslation();
+  const resultKey = outcome === "defused" ? "defused" : outcome === "exploded" ? "exploded" : "abandoned";
+  return (
+    <View accessibilityLiveRegion="polite" style={styles.resultCard}>
+      {outcome === "exploded" ? (
+        <LottieView autoPlay loop={false} source={explosionAnimation} style={styles.animation} />
+      ) : outcome === "defused" ? (
+        <LottieView autoPlay loop={false} source={wireCutAnimation} style={styles.animation} />
+      ) : null}
+      <Text accessibilityRole="header" style={styles.resultTitle}>{t(`bomb.results.${resultKey}Title`)}</Text>
+      <Text style={styles.resultBody}>{t(`bomb.results.${resultKey}Body`)}</Text>
+      {outcome !== "abandoned" ? (
+        <GameRewardSummary
+          detailLines={[t("rewards.accuracyBonus", { count: correctCommandCount })]}
+          error={rewardError}
+          loading={rewardLoading}
+          onRetry={onRetryReward}
+          result={rewardResult}
+        />
+      ) : null}
+      <GameEndActions
+        onBackToLobby={onBack}
+        onPlayAgain={onPlayAgain}
+        lobbyRoute="/(games)/bomb-defusal/Lobby"
+      />
+      {!hostCanRematch ? <Text style={styles.rematchHint}>{t("bomb.results.hostStartsRematch")}</Text> : null}
+    </View>
+  );
+}
+
+function BombUnavailable({
+  onBack,
+  onRetry,
+  retryable,
+}: {
+  onBack: () => void;
+  onRetry: () => void;
+  retryable: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.centered}>
+        <Bomb color={Colors.primary} size={34} />
+        <Text accessibilityRole="header" style={styles.resultTitle}>{t("bomb.sessionUnavailableTitle")}</Text>
+        <Text accessibilityRole="alert" style={styles.resultBody}>{t("bomb.sessionUnavailableBody")}</Text>
+        {retryable ? (
+          <Pressable accessibilityRole="button" onPress={onRetry} style={styles.submitButton}>
+            <Text style={styles.submitButtonText}>{t("common.retry")}</Text>
+          </Pressable>
+        ) : null}
+        <Pressable accessibilityRole="button" onPress={onBack} style={styles.secondaryButton}>
+          <Text style={styles.secondaryButtonText}>{t("game.backToLobby")}</Text>
+        </Pressable>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+function describePrivateInstruction(
+  instruction: BombPrivateInstruction,
+  publicCommand: BombPublicCommand,
+  t: TFunction,
+) {
+  if (instruction.type === "cut_wire") {
+    const option = publicCommand.options.find((candidate) => candidate.value === instruction.color);
+    return t("bomb.instructions.cutWireDetailed", {
+      color: t(`bomb.colors.${instruction.color}`),
+      marker: option ? t(`bomb.markers.${option.marker}`) : "",
+      number: option?.number ?? "",
+    });
+  }
+  if (instruction.type === "press_button") {
+    const option = publicCommand.options.find((candidate) => candidate.value === instruction.label);
+    return t("bomb.instructions.pressButtonDetailed", {
+      label: instruction.label,
+      marker: option ? t(`bomb.markers.${option.marker}`) : "",
+      number: option?.number ?? "",
+    });
+  }
+  if (instruction.type === "rotate_dial") {
+    return t("bomb.instructions.rotateDial", { target: instruction.target });
+  }
+  return t("bomb.instructions.enterCode", { code: instruction.code });
+}
+
+function describePublicOption(type: BombPublicCommand["type"], option: BombPublicOption, t: TFunction) {
+  if (type === "cut_wire") {
+    return t("bomb.options.wire", { color: t(`bomb.colors.${String(option.value)}`) });
+  }
+  if (type === "press_button") return t("bomb.options.button", { label: option.value });
+  if (type === "rotate_dial") return t("bomb.options.dial", { value: option.value });
+  return t("bomb.options.digit", { digit: option.value });
+}
+
+function actionForOption(
+  type: BombPublicCommand["type"],
+  option: BombPublicOption,
+): Record<string, string | number> {
+  if (type === "cut_wire") return { color: String(option.value) };
+  if (type === "press_button") return { label: String(option.value) };
+  if (type === "rotate_dial") return { target: Number(option.value) };
+  return { code: Number(option.value) };
+}
+
+function readBombOutcome(value: unknown): Exclude<BombOutcome, "playing"> | null {
+  return value === "defused" || value === "exploded" || value === "abandoned" ? value : null;
 }
 
 function normalizeRouteParam(value?: string | string[]) {
@@ -551,273 +693,65 @@ function normalizeRouteParam(value?: string | string[]) {
   return raw?.trim() ?? "";
 }
 
-function isBombStep(value: unknown): value is BombStep {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const step = value as Record<string, unknown>;
-  if (step.type === STEP_TYPES.CUT_WIRE) {
-    return typeof step.color === "string" &&
-      WIRE_COLORS.includes(step.color as typeof WIRE_COLORS[number]);
-  }
-  if (step.type === STEP_TYPES.PRESS_BUTTON) {
-    return typeof step.label === "string" &&
-      BUTTON_LABELS.includes(step.label as typeof BUTTON_LABELS[number]);
-  }
-  if (step.type === STEP_TYPES.ROTATE_DIAL) {
-    return Number.isInteger(step.target) && Number(step.target) >= 1 && Number(step.target) <= 10;
-  }
-  if (step.type === STEP_TYPES.ENTER_CODE) {
-    return Number.isInteger(step.code) && Number(step.code) >= 100 && Number(step.code) <= 999;
-  }
-  return false;
-}
-
-function getInstruction(step: BombStep | undefined, t: TFunction) {
-  if (!step) {
-    return t("bomb.instructions.complete");
-  }
-
-  switch (step.type) {
-    case STEP_TYPES.CUT_WIRE:
-      return t("bomb.instructions.cutWire", {
-        color: t(`bomb.colors.${step.color}`),
-      });
-    case STEP_TYPES.PRESS_BUTTON:
-      return t("bomb.instructions.pressButton", { label: step.label });
-    case STEP_TYPES.ROTATE_DIAL:
-      return t("bomb.instructions.rotateDial", { target: step.target });
-    case STEP_TYPES.ENTER_CODE:
-      return t("bomb.instructions.enterCode", { code: step.code });
-  }
+function wireSwatchStyle(color: string) {
+  if (color === "red") return styles.redWire;
+  if (color === "blue") return styles.blueWire;
+  if (color === "yellow") return styles.yellowWire;
+  return styles.greenWire;
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#111827",
-  },
-  container: {
-    flexGrow: 1,
-    padding: 20,
-    gap: 18,
-  },
-  header: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  title: {
-    color: "#f8fafc",
-    fontSize: 28,
-    fontWeight: "800",
-  },
-  timer: {
-    color: "#22c55e",
-    fontSize: 26,
-    fontWeight: "900",
-  },
-  dangerTimer: {
-    color: "#ef4444",
-  },
-  bombBody: {
-    backgroundColor: "#1f2937",
-    borderColor: "#374151",
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 20,
-  },
-  statusLight: {
-    alignSelf: "flex-end",
-    backgroundColor: "#facc15",
-    borderRadius: 8,
-    height: 16,
-    width: 16,
-  },
-  stepCounter: {
-    color: "#9ca3af",
-    fontSize: 14,
-    fontWeight: "700",
-    marginBottom: 8,
-    textTransform: "uppercase",
-  },
-  instruction: {
-    color: "#f8fafc",
-    fontSize: 22,
-    fontWeight: "800",
-    marginBottom: 8,
-  },
-  message: {
-    color: "#d1d5db",
-    fontSize: 16,
-  },
-  controlGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-    justifyContent: "center",
-  },
-  wireButton: {
-    alignItems: "center",
-    borderRadius: 8,
-    height: 76,
-    justifyContent: "center",
-    width: "47%",
-  },
-  redWire: {
-    backgroundColor: "#dc2626",
-  },
-  blueWire: {
-    backgroundColor: "#2563eb",
-  },
-  yellowWire: {
-    backgroundColor: "#ca8a04",
-  },
-  greenWire: {
-    backgroundColor: "#16a34a",
-  },
-  wireLabel: {
-    color: "#ffffff",
-    fontSize: 16,
-    fontWeight: "900",
-  },
-  letterButton: {
-    alignItems: "center",
-    backgroundColor: "#334155",
-    borderColor: "#64748b",
-    borderRadius: 8,
-    borderWidth: 1,
-    height: 80,
-    justifyContent: "center",
-    width: "47%",
-  },
-  letterText: {
-    color: "#f8fafc",
-    fontSize: 28,
-    fontWeight: "900",
-  },
-  dialPanel: {
-    alignItems: "center",
-    gap: 18,
-  },
-  dial: {
-    alignItems: "center",
-    backgroundColor: "#0f172a",
-    borderColor: "#94a3b8",
-    borderRadius: 80,
-    borderWidth: 3,
-    height: 160,
-    justifyContent: "center",
-    width: 160,
-  },
-  dialPointer: {
-    backgroundColor: "#ef4444",
-    borderRadius: 3,
-    height: 52,
-    position: "absolute",
-    top: 12,
-    width: 6,
-  },
-  dialValue: {
-    color: "#f8fafc",
-    fontSize: 36,
-    fontWeight: "900",
-  },
-  dialActions: {
-    flexDirection: "row",
-    gap: 12,
-    justifyContent: "center",
-  },
-  panelButton: {
-    alignItems: "center",
-    backgroundColor: "#334155",
-    borderRadius: 8,
-    justifyContent: "center",
-    minHeight: 52,
-    minWidth: 76,
-    paddingHorizontal: 16,
-  },
-  panelButtonText: {
-    color: "#f8fafc",
-    fontSize: 18,
-    fontWeight: "900",
-  },
-  submitButton: {
-    alignItems: "center",
-    backgroundColor: "#22c55e",
-    borderRadius: 8,
-    justifyContent: "center",
-    minHeight: 52,
-    minWidth: 110,
-    paddingHorizontal: 18,
-  },
-  submitButtonText: {
-    color: "#052e16",
-    fontSize: 16,
-    fontWeight: "900",
-  },
-  keypadPanel: {
-    alignItems: "center",
-    gap: 16,
-  },
-  codeReadout: {
-    backgroundColor: "#020617",
-    borderColor: "#475569",
-    borderRadius: 8,
-    borderWidth: 1,
-    color: "#22c55e",
-    fontSize: 34,
-    fontWeight: "900",
-    letterSpacing: 0,
-    minWidth: 160,
-    padding: 12,
-    textAlign: "center",
-  },
-  keypad: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    justifyContent: "center",
-    maxWidth: 260,
-  },
-  key: {
-    alignItems: "center",
-    backgroundColor: "#1e293b",
-    borderRadius: 8,
-    height: 58,
-    justifyContent: "center",
-    width: 74,
-  },
-  keyText: {
-    color: "#f8fafc",
-    fontSize: 22,
-    fontWeight: "900",
-  },
-  animation: {
-    alignSelf: "center",
-    height: 180,
-    width: 180,
-  },
-  resultPanel: {
-    alignItems: "center",
-    backgroundColor: "#1f2937",
-    borderRadius: 8,
-    gap: 12,
-    padding: 20,
-  },
-  resultTitle: {
-    color: "#f8fafc",
-    fontSize: 26,
-    fontWeight: "900",
-  },
-  resultText: {
-    color: "#d1d5db",
-    fontSize: 16,
-    textAlign: "center",
-  },
+  safeArea: { backgroundColor: Colors.background, flex: 1 },
+  container: { flexGrow: 1, gap: Spacing.md, padding: Spacing.md, paddingBottom: Spacing.xxl },
+  centered: { alignItems: "center", flex: 1, gap: Spacing.md, justifyContent: "center", padding: Spacing.lg },
+  header: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, justifyContent: "space-between" },
+  titleRow: { alignItems: "center", flex: 1, flexDirection: "row", gap: Spacing.sm, minWidth: 0 },
+  title: { color: Colors.textHeading, flexShrink: 1, fontFamily: Typography.heading, fontSize: 25 },
+  timer: { color: Colors.communicationLink, fontFamily: Typography.bodyBold, fontSize: 22 },
+  dangerTimer: { color: Colors.primary },
+  roleCard: { backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.card, borderWidth: 1, gap: Spacing.sm, padding: Spacing.md },
+  roleHeading: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
+  roleIcon: { alignItems: "center", backgroundColor: Colors.textHeading, borderRadius: 8, height: 40, justifyContent: "center", width: 40 },
+  roleCopy: { flex: 1, minWidth: 0 },
+  roleEyebrow: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, fontSize: 11, textTransform: "uppercase" },
+  roleTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 20 },
+  roleBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21 },
+  assignmentText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19 },
+  progressCard: { backgroundColor: `${Colors.accentGold}18`, borderColor: Colors.accentGold, borderRadius: Radius.sm, borderWidth: 1, flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, justifyContent: "space-between", padding: Spacing.md },
+  progressText: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 14 },
+  strikeText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 14 },
+  feedback: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 15, lineHeight: 22, textAlign: "center" },
+  instructionCard: { backgroundColor: `${Colors.accentGreen}22`, borderColor: Colors.communicationLink, borderRadius: Radius.card, borderWidth: 2, gap: Spacing.sm, padding: Spacing.lg },
+  instructionEyebrow: { color: Colors.communicationLink, fontFamily: Typography.bodyBold, fontSize: 12, textTransform: "uppercase" },
+  instructionText: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 24, lineHeight: 32 },
+  instructionHint: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 19 },
+  controlsCard: { backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.card, borderWidth: 1, gap: Spacing.md, padding: Spacing.md },
+  controlsTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 18 },
+  readOnlyHint: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 19 },
+  optionGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  optionControl: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.sm, borderWidth: 1, flexBasis: "47%", flexGrow: 1, gap: Spacing.xs, minHeight: 94, padding: Spacing.sm },
+  optionPressed: { backgroundColor: `${Colors.accentGreen}20`, borderColor: Colors.communicationLink },
+  optionHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  optionNumber: { alignItems: "center", backgroundColor: Colors.textHeading, borderRadius: 14, height: 28, justifyContent: "center", width: 28 },
+  optionNumberText: { color: Colors.surface, fontFamily: Typography.bodyBold, fontSize: 13 },
+  wireSwatch: { borderColor: Colors.textHeading, borderRadius: 4, borderWidth: 1, height: 18, width: 42 },
+  redWire: { backgroundColor: Colors.primary },
+  blueWire: { backgroundColor: "#477A9D" },
+  yellowWire: { backgroundColor: Colors.accentGold },
+  greenWire: { backgroundColor: Colors.accentGreen },
+  optionLabel: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 15 },
+  optionMarker: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12 },
+  codeReadout: { alignSelf: "stretch", backgroundColor: Colors.textHeading, borderRadius: Radius.sm, color: Colors.surface, fontFamily: Typography.bodyBold, fontSize: 30, padding: Spacing.md, textAlign: "center" },
+  codeActions: { flexDirection: "row", gap: Spacing.sm },
+  submitButton: { alignItems: "center", alignSelf: "stretch", backgroundColor: Colors.primary, borderRadius: Radius.button, flex: 1, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
+  submitButtonText: { color: Colors.surface, fontFamily: Typography.bodyBold, fontSize: 15, textAlign: "center" },
+  secondaryButton: { alignItems: "center", alignSelf: "stretch", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flex: 1, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
+  secondaryButtonText: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 14, textAlign: "center" },
+  disabledButton: { opacity: 0.5 },
+  resultCard: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.card, borderWidth: 1, gap: Spacing.md, padding: Spacing.lg },
+  resultTitle: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 25, textAlign: "center" },
+  resultBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 22, textAlign: "center" },
+  bodyText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
+  rematchHint: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12, lineHeight: 18, textAlign: "center" },
+  animation: { height: 150, width: 150 },
 });
-
-const wireStyles = {
-  red: styles.redWire,
-  blue: styles.blueWire,
-  yellow: styles.yellowWire,
-  green: styles.greenWire,
-};

@@ -7,7 +7,14 @@ import { httpsCallable } from "firebase/functions";
 import { functions, rtdb } from "@/config/firebase";
 
 export type GameType = "bomb_defusal" | "spot_difference" | "trivia_blitz";
-export type SessionStatus = "lobby" | "countdown" | "active" | "completed" | "failed";
+export type SessionStatus =
+  | "lobby"
+  | "countdown"
+  | "active"
+  | "completed"
+  | "failed"
+  | "canceled"
+  | "expired";
 export type SpotTeamId = "A" | "B";
 
 export interface GamePlayer {
@@ -32,6 +39,7 @@ export interface GameSession {
   status: SessionStatus;
   startedAt: number | null;
   completedAt: number | null;
+  updatedAt?: number;
   gameState: Record<string, unknown>;
   minPlayers: number;
   maxPlayers: number;

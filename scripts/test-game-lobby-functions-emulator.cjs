@@ -57,7 +57,7 @@ async function run() {
   const squadA = 'shared-lobby-squad-a';
   const squadB = 'shared-lobby-squad-b';
   const clients = await Promise.all(
-    Array.from({ length: 20 }, (_, index) => createClient(`player-${String(index + 1).padStart(2, '0')}`)),
+    Array.from({ length: 30 }, (_, index) => createClient(`player-${String(index + 1).padStart(2, '0')}`)),
   );
   const anonymous = await createClient('anonymous', 'anonymous');
   const signedOut = await createClient('signed-out', 'none');
@@ -263,6 +263,331 @@ async function run() {
     hasReason('invalid_or_expired_code'),
   );
 
+  const soleHost = clients[20];
+  const soleLobby = await soleHost.call('createGameLobby', {
+    gameType: 'bombDefusal', squadId: squadA, idempotencyKey: 'sole-host-leave-lobby',
+  });
+  const soleBeforeLeave = await soleHost.call('listGameLobbies', { gameType: 'bombDefusal', squadId: squadA });
+  assert.equal(soleBeforeLeave.activeLobby.lobbyId, soleLobby.lobbyId);
+  assert.equal(soleBeforeLeave.activeLobby.activePlayerCount, 1);
+  assert.equal(soleBeforeLeave.activeLobby.callerIsHost, true);
+  const crossGameRecovery = await soleHost.call('listGameLobbies', {
+    gameType: 'spotTheDifferences', squadId: squadA,
+  });
+  assert.equal(crossGameRecovery.activeLobby.lobbyId, soleLobby.lobbyId);
+  assert.equal(crossGameRecovery.activeLobby.gameType, 'bombDefusal');
+  assert.equal(crossGameRecovery.activeLobby.activePlayerCount, 1);
+  assert.equal(crossGameRecovery.activeLobby.callerIsHost, true);
+  let soleLeaveResult;
+  try {
+    soleLeaveResult = await soleHost.call('leaveGameLobby', { lobbyId: soleLobby.lobbyId });
+  } catch (error) {
+    throw new Error(`Sole-host leave failed: ${JSON.stringify({
+      code: error?.code,
+      details: error?.details,
+      message: error?.message,
+    })}`, { cause: error });
+  }
+  assert.equal(soleLeaveResult.status, 'closed');
+  assert.deepEqual(
+    await soleHost.call('leaveGameLobby', { lobbyId: soleLobby.lobbyId }),
+    { status: 'left', hostChanged: false },
+    'retrying a completed leave is idempotent',
+  );
+  assert.equal((await firestore.collection('activeGameLobbyMemberships').doc(soleHost.uid).get()).exists, false);
+  assert.equal((await firestore.collection('gameJoinCodes').doc(soleLobby.joinCode).get()).data().status, 'canceled');
+  assert.equal((await database.ref(`gameSessions/${soleLobby.sessionId}/gameState/rewardEligible`).get()).val(), false);
+  const soleAfterLeave = await soleHost.call('listGameLobbies', { gameType: 'bombDefusal', squadId: squadA });
+  assert.equal(soleAfterLeave.activeLobby, null);
+  assert.equal(soleAfterLeave.lobbies.some((lobby) => lobby.lobbyId === soleLobby.lobbyId), false);
+  const immediateCrossGame = await soleHost.call('createGameLobby', {
+    gameType: 'spotTheDifferences', squadId: squadA, idempotencyKey: 'cross-game-after-leave',
+  });
+  assert.equal(immediateCrossGame.gameType, 'spotTheDifferences');
+  await soleHost.call('closeGameLobby', { lobbyId: immediateCrossGame.lobbyId });
+  await firestore.collection('activeGameLobbyMemberships').doc(soleHost.uid).set({
+    lobbyId: 'missing-lobby',
+    sessionId: 'missing-session',
+    squadId: squadA,
+    gameType: 'bombDefusal',
+    state: 'active',
+    updatedAt: admin.firestore.Timestamp.now(),
+    expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+  });
+  const repairedDirectory = await soleHost.call('listGameLobbies', {
+    gameType: 'bombDefusal', squadId: squadA,
+  });
+  assert.equal(repairedDirectory.activeLobby, null, 'a missing lobby repairs its stale active pointer');
+  assert.equal((await firestore.collection('activeGameLobbyMemberships').doc(soleHost.uid).get()).exists, false);
+
+  const transferHost = clients[21];
+  const transferFirst = clients[22];
+  const transferSecond = clients[23];
+  const transferThird = clients[24];
+  const transferLobby = await transferHost.call('createGameLobby', {
+    gameType: 'bombDefusal', squadId: squadA, idempotencyKey: 'host-transfer-lobby',
+  });
+  const transferParticipants = [transferFirst, transferSecond, transferThird];
+  await Promise.all(transferParticipants.map((client) =>
+    client.call('joinGameLobbyById', {
+      gameType: 'bombDefusal', squadId: squadA, lobbyId: transferLobby.lobbyId,
+    })));
+  const transferPlayers = (await database.ref(`gameSessions/${transferLobby.sessionId}/players`).get()).val();
+  const orderedRemainingIds = Object.entries(transferPlayers)
+    .filter(([uid]) => uid !== transferHost.uid)
+    .sort(([leftId, left], [rightId, right]) =>
+      Number(left.joinOrder) - Number(right.joinOrder) || leftId.localeCompare(rightId))
+    .map(([uid]) => uid);
+  const promotedHost = transferParticipants.find((client) => client.uid === orderedRemainingIds[0]);
+  const nonHostLeaver = transferParticipants.find((client) => client.uid === orderedRemainingIds.at(-1));
+  assert.ok(promotedHost && nonHostLeaver && promotedHost.uid !== nonHostLeaver.uid);
+  const transferResult = await transferHost.call('leaveGameLobby', { lobbyId: transferLobby.lobbyId });
+  assert.equal(transferResult.hostChanged, true);
+  assert.equal(
+    (await database.ref(`gameSessions/${transferLobby.sessionId}/hostUserId`).get()).val(),
+    promotedHost.uid,
+    'host transfers to the earliest remaining server join order',
+  );
+  assert.equal((await database.ref(`gameSessions/${transferLobby.sessionId}/players/${transferHost.uid}`).get()).exists(), false);
+  await nonHostLeaver.call('leaveGameLobby', { lobbyId: transferLobby.lobbyId });
+  assert.equal((await database.ref(`gameSessions/${transferLobby.sessionId}/players/${nonHostLeaver.uid}`).get()).exists(), false);
+  const closeEveryone = await promotedHost.call('closeGameLobby', { lobbyId: transferLobby.lobbyId });
+  assert.equal(closeEveryone.status, 'closed');
+  assert.equal(closeEveryone.clearedParticipantCount, 2);
+  for (const participant of [transferFirst, transferSecond, transferThird, transferHost]) {
+    assert.equal(
+      (await firestore.collection('activeGameLobbyMemberships').doc(participant.uid).get()).exists,
+      false,
+      'host closure clears every current or already-departed participant pointer',
+    );
+  }
+  assert.equal((await database.ref(`gameSessions/${transferLobby.sessionId}/status`).get()).val(), 'canceled');
+  assert.equal((await database.ref(`gameSessions/${transferLobby.sessionId}/gameState/rewardEligible`).get()).val(), false);
+  assert.equal((await firestore.collection('gameJoinCodes').doc(transferLobby.joinCode).get()).data().status, 'canceled');
+
+  const activeHost = clients[25];
+  const activeLeaver = clients[26];
+  const activeLobby = await activeHost.call('createGameLobby', {
+    gameType: 'bombDefusal', squadId: squadA, idempotencyKey: 'active-leave-abandons-round',
+  });
+  await activeLeaver.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: activeLobby.lobbyId,
+  });
+  await Promise.all([activeHost, activeLeaver].map((client) =>
+    client.call('setRealtimeGamePlayerReady', { sessionId: activeLobby.sessionId, ready: true })));
+  await activeHost.call('updateGameJoinCodeStatus', {
+    gameType: 'bombDefusal', sessionId: activeLobby.sessionId, status: 'started',
+  });
+  await activeLeaver.call('leaveGameLobby', { lobbyId: activeLobby.lobbyId });
+  const abandonedSession = (await database.ref(`gameSessions/${activeLobby.sessionId}`).get()).val();
+  assert.equal(abandonedSession.status, 'completed');
+  assert.equal(abandonedSession.gameState.outcome, 'abandoned');
+  assert.equal(abandonedSession.gameState.rewardEligible, false, 'an incomplete round cannot award rewards');
+  assert.equal(abandonedSession.players[activeLeaver.uid], undefined);
+  await activeHost.call('closeGameLobby', { lobbyId: activeLobby.lobbyId });
+
+  const bombHost = clients[27];
+  const bombSecond = clients[28];
+  const bombThird = clients[29];
+  const bombFourth = activeHost;
+  const roleLobby = await bombHost.call('createGameLobby', {
+    gameType: 'bombDefusal', squadId: squadA, idempotencyKey: 'role-based-bomb-round',
+  });
+  await bombSecond.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: roleLobby.lobbyId,
+  });
+  await bombThird.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: roleLobby.lobbyId,
+  });
+  await bombFourth.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: roleLobby.lobbyId,
+  });
+  const bombSecondJoinOrder = (await database
+    .ref(`gameSessions/${roleLobby.sessionId}/players/${bombSecond.uid}/joinOrder`).get()).val();
+  const bombReconnect = await bombSecond.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: roleLobby.lobbyId,
+  });
+  assert.equal(bombReconnect.participantState, 'reconnected');
+  assert.equal(
+    (await database.ref(`gameSessions/${roleLobby.sessionId}/players/${bombSecond.uid}/joinOrder`).get()).val(),
+    bombSecondJoinOrder,
+    'a Bomb reconnect preserves the frozen server join order',
+  );
+  await Promise.all([bombHost, bombSecond, bombThird, bombFourth].map((client) =>
+    client.call('setRealtimeGamePlayerReady', { sessionId: roleLobby.sessionId, ready: true })));
+  await bombHost.call('updateGameJoinCodeStatus', {
+    gameType: 'bombDefusal', sessionId: roleLobby.sessionId, status: 'started',
+  });
+  const [hostView, secondView, thirdView, fourthView] = await Promise.all([
+    bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombSecond.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombThird.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombFourth.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+  ]);
+  assert.equal(hostView.role, 'defuser');
+  assert.equal(secondView.role, 'expert');
+  assert.equal(thirdView.role, 'support');
+  assert.equal(fourthView.role, 'support');
+  assert.equal(hostView.instruction, null, 'Defuser cannot read the private command');
+  assert.equal(thirdView.instruction, null, 'Support Crew cannot read the private command');
+  assert.equal(fourthView.instruction, null, 'all Support Crew views hide the private command');
+  assert.ok(secondView.instruction, 'only the Command Expert receives the instruction');
+  assert.deepEqual(hostView.publicCommand, secondView.publicCommand);
+  assert.deepEqual(hostView.publicCommand, thirdView.publicCommand);
+  assert.deepEqual(hostView.publicCommand, fourthView.publicCommand);
+  assert.equal('correctAnswer' in hostView.publicCommand, false);
+  const firstAction = actionForBombInstruction(secondView.instruction);
+  await assert.rejects(
+    () => bombSecond.call('submitBombDefusalStep', {
+      sessionId: roleLobby.sessionId,
+      commandId: secondView.commandId,
+      action: firstAction,
+      submissionId: 'expert-cannot-submit-command-1',
+    }),
+    hasReason('bomb_not_defuser'),
+  );
+  await assert.rejects(
+    () => soleHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    hasReason('not_authorized'),
+  );
+  const firstSubmission = await bombHost.call('submitBombDefusalStep', {
+    sessionId: roleLobby.sessionId,
+    commandId: hostView.commandId,
+    action: firstAction,
+    submissionId: 'defuser-command-idempotent-1',
+  });
+  assert.equal(firstSubmission.correct, true);
+  assert.deepEqual(
+    await bombHost.call('submitBombDefusalStep', {
+      sessionId: roleLobby.sessionId,
+      commandId: hostView.commandId,
+      action: firstAction,
+      submissionId: 'defuser-command-idempotent-1',
+    }),
+    firstSubmission,
+  );
+  await assert.rejects(
+    () => bombHost.call('submitBombDefusalStep', {
+      sessionId: roleLobby.sessionId,
+      commandId: hostView.commandId,
+      action: firstAction,
+      submissionId: 'stale-command-replay-0001',
+    }),
+    hasReason('bomb_command_stale'),
+  );
+  const [rotatedHost, rotatedDefuser, rotatedExpert] = await Promise.all([
+    bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombSecond.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombThird.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+  ]);
+  assert.equal(rotatedHost.role, 'support');
+  assert.equal(rotatedDefuser.role, 'defuser');
+  assert.equal(rotatedExpert.role, 'expert');
+  const wrongResult = await bombSecond.call('submitBombDefusalStep', {
+    sessionId: roleLobby.sessionId,
+    commandId: rotatedDefuser.commandId,
+    action: wrongBombAction(rotatedExpert.instruction),
+    submissionId: 'defuser-wrong-command-0002',
+  });
+  assert.equal(wrongResult.correct, false);
+  assert.equal(wrongResult.strikeCount, 1);
+  const simultaneousDefuser = await bombThird.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId });
+  const simultaneousExpert = await bombFourth.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId });
+  assert.equal(simultaneousDefuser.role, 'defuser');
+  assert.equal(simultaneousExpert.role, 'expert');
+  const simultaneousAction = actionForBombInstruction(simultaneousExpert.instruction);
+  const simultaneousResults = await Promise.allSettled([
+    bombThird.call('submitBombDefusalStep', {
+      sessionId: roleLobby.sessionId,
+      commandId: simultaneousDefuser.commandId,
+      action: simultaneousAction,
+      submissionId: 'simultaneous-command-choice-a',
+    }),
+    bombThird.call('submitBombDefusalStep', {
+      sessionId: roleLobby.sessionId,
+      commandId: simultaneousDefuser.commandId,
+      action: simultaneousAction,
+      submissionId: 'simultaneous-command-choice-b',
+    }),
+  ]);
+  assert.equal(simultaneousResults.filter((result) => result.status === 'fulfilled').length, 1, 'only one simultaneous choice is accepted');
+  assert.equal(simultaneousResults.filter((result) => result.status === 'rejected').length, 1);
+
+  const activeFourthView = await bombFourth.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId });
+  assert.equal(activeFourthView.role, 'defuser');
+  await bombFourth.call('leaveGameLobby', { lobbyId: roleLobby.lobbyId });
+  const [afterDefuserLeaveHost, afterDefuserLeaveSecond] = await Promise.all([
+    bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombSecond.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+  ]);
+  assert.equal(afterDefuserLeaveHost.role, 'defuser', 'an active Defuser departure reassigns the role');
+  assert.equal(afterDefuserLeaveSecond.role, 'expert');
+
+  await bombSecond.call('leaveGameLobby', { lobbyId: roleLobby.lobbyId });
+  const [twoPlayerExpert, twoPlayerDefuser] = await Promise.all([
+    bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombThird.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+  ]);
+  assert.equal(twoPlayerExpert.role, 'expert', 'an active Expert departure safely rotates the remaining pair');
+  assert.equal(twoPlayerDefuser.role, 'defuser');
+  const strikeTwo = await bombThird.call('submitBombDefusalStep', {
+    sessionId: roleLobby.sessionId,
+    commandId: twoPlayerDefuser.commandId,
+    action: wrongBombAction(twoPlayerExpert.instruction),
+    submissionId: 'post-departure-wrong-command-0004',
+  });
+  assert.equal(strikeTwo.strikeCount, 2);
+  const [finalDefuser, finalExpert] = await Promise.all([
+    bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombThird.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+  ]);
+  assert.equal(finalDefuser.role, 'defuser');
+  assert.equal(finalExpert.role, 'expert');
+  const terminalBombResult = await bombHost.call('submitBombDefusalStep', {
+    sessionId: roleLobby.sessionId,
+    commandId: finalDefuser.commandId,
+    action: wrongBombAction(finalExpert.instruction),
+    submissionId: 'terminal-wrong-command-0005',
+  });
+  assert.equal(terminalBombResult.outcome, 'exploded');
+  const bombRematch = await bombHost.call('startGameLobbyRematch', { lobbyId: roleLobby.lobbyId });
+  assert.equal(bombRematch.lobbyId, roleLobby.lobbyId);
+  assert.equal(bombRematch.joinCode, roleLobby.joinCode);
+  assert.notEqual(bombRematch.sessionId, roleLobby.sessionId, 'a rematch provisions fresh trusted round state');
+  const bombRematchState = (await database.ref(`gameSessions/${bombRematch.sessionId}/gameState`).get()).val();
+  assert.equal(bombRematchState.roleSchemaVersion, 2);
+  assert.equal(bombRematchState.strikeCount, 0);
+  assert.equal(bombRematchState.currentCommandId ?? null, null);
+  await bombHost.call('closeGameLobby', { lobbyId: roleLobby.lobbyId });
+  for (const participant of [bombHost, bombSecond, bombThird, bombFourth]) {
+    assert.equal((await firestore.collection('activeGameLobbyMemberships').doc(participant.uid).get()).exists, false);
+  }
+
+  const timeoutLobby = await bombHost.call('createGameLobby', {
+    gameType: 'bombDefusal', squadId: squadA, idempotencyKey: 'server-authoritative-bomb-timeout',
+  });
+  await bombThird.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: timeoutLobby.lobbyId,
+  });
+  await Promise.all([bombHost, bombThird].map((client) =>
+    client.call('setRealtimeGamePlayerReady', { sessionId: timeoutLobby.sessionId, ready: true })));
+  await bombHost.call('updateGameJoinCodeStatus', {
+    gameType: 'bombDefusal', sessionId: timeoutLobby.sessionId, status: 'started',
+  });
+  await bombSecond.call('joinGameLobbyNextRound', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: timeoutLobby.lobbyId,
+  });
+  assert.equal((await database.ref(`gameSessions/${timeoutLobby.sessionId}/queuedPlayers/${bombSecond.uid}`).get()).exists(), true);
+  await bombSecond.call('leaveGameLobby', { lobbyId: timeoutLobby.lobbyId });
+  assert.equal((await database.ref(`gameSessions/${timeoutLobby.sessionId}/queuedPlayers/${bombSecond.uid}`).get()).exists(), false);
+  await database.ref(`gameSessions/${timeoutLobby.sessionId}/endsAt`).set(Date.now() - 1);
+  const timedOutBombView = await bombHost.call('getBombDefusalPlayerView', { sessionId: timeoutLobby.sessionId });
+  assert.equal(timedOutBombView.outcome, 'exploded');
+  const timedOutBombState = (await database.ref(`gameSessions/${timeoutLobby.sessionId}/gameState`).get()).val();
+  assert.equal(timedOutBombState.completionReason, 'timeout');
+  assert.equal(timedOutBombState.rewardEligible, true, 'only a completed server timeout remains reward eligible');
+  await bombHost.call('closeGameLobby', { lobbyId: timeoutLobby.lobbyId });
+
   const rateUser = clients[19];
   let rateError = null;
   for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -276,7 +601,7 @@ async function run() {
   }
   assert.equal(hasReason('rate_limited')(rateError), true, 'explicit creation has a conservative per-user rate limit');
 
-  console.log('Shared lobby Functions emulator tests passed: explicit creation, idempotency, simultaneous direct joins, code convergence, queue, rematch, host transfer, limits, authorization, and cleanup.');
+  console.log('Shared lobby Functions emulator tests passed: creation, idempotent leave, cross-game recovery, host transfer, close-for-everyone, abandonment, secure Bomb roles, simultaneous submissions, authorization, and cleanup.');
   await admin.app().delete();
 }
 
@@ -285,3 +610,27 @@ run().catch(async (error) => {
   if (admin.apps.length) await admin.app().delete().catch(() => undefined);
   process.exit(1);
 });
+
+function actionForBombInstruction(instruction) {
+  if (instruction.type === 'cut_wire') return { color: instruction.color };
+  if (instruction.type === 'press_button') return { label: instruction.label };
+  if (instruction.type === 'rotate_dial') return { target: instruction.target };
+  if (instruction.type === 'enter_code') return { code: instruction.code };
+  throw new Error(`Unknown Bomb instruction: ${String(instruction?.type)}`);
+}
+
+function wrongBombAction(instruction) {
+  if (instruction.type === 'cut_wire') {
+    return { color: instruction.color === 'red' ? 'blue' : 'red' };
+  }
+  if (instruction.type === 'press_button') {
+    return { label: instruction.label === 'A' ? 'B' : 'A' };
+  }
+  if (instruction.type === 'rotate_dial') {
+    return { target: instruction.target === 10 ? 9 : instruction.target + 1 };
+  }
+  if (instruction.type === 'enter_code') {
+    return { code: instruction.code === 999 ? 998 : instruction.code + 1 };
+  }
+  throw new Error(`Unknown Bomb instruction: ${String(instruction?.type)}`);
+}

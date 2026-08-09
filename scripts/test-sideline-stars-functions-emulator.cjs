@@ -242,7 +242,13 @@ async function run() {
     gameType: "bomb_defusal",
     participantUid: parentA.uid,
     status: "completed",
-    gameState: { currentStepIndex: 3, outcome: "exploded" },
+    gameState: {
+      roleSchemaVersion: 2,
+      currentCommandIndex: 3,
+      correctCommandCount: 3,
+      outcome: "exploded",
+      rewardEligible: true,
+    },
   });
   await createSession({ gameType: "bombDefusal", sessionId: explodedBombSession });
   await recordResult({ gameType: "bombDefusal", sessionId: explodedBombSession, outcome: "exploded", firstAttemptCorrectStepCount: 3, totalSteps: 5 });
@@ -257,7 +263,13 @@ async function run() {
     gameType: "bomb_defusal",
     participantUid: parentA.uid,
     status: "completed",
-    gameState: { currentStepIndex: 5, outcome: "defused" },
+    gameState: {
+      roleSchemaVersion: 2,
+      currentCommandIndex: 4,
+      correctCommandCount: 5,
+      outcome: "defused",
+      rewardEligible: true,
+    },
   });
   await createSession({ gameType: "bombDefusal", sessionId: defusedBombSession });
   await recordResult({ gameType: "bombDefusal", sessionId: defusedBombSession, outcome: "defused", firstAttemptCorrectStepCount: 5, totalSteps: 5 });

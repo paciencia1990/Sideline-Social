@@ -80,6 +80,12 @@ function run() {
   const games = source('app/(tabs)/games.tsx');
   const directoryScreen = source('app/(games)/lobbies.tsx');
   const lobbyHook = source('hooks/useGameLobby.ts');
+  const lobbyBase = source('components/LobbyBase.tsx');
+  const lobbyRoutes = [
+    source('app/(games)/bomb-defusal/Lobby.tsx'),
+    source('app/(games)/spot-the-difference/Lobby.tsx'),
+    source('app/(games)/trivia-blitz/Lobby.tsx'),
+  ].join('\n');
   const joinCodeService = source('services/gameJoinCodeService.ts');
   const functionsSource = source('functions/src/gameJoinCodes.ts');
   const bomb = source('src/game/BombDefusalScreen.tsx');
@@ -89,8 +95,23 @@ function run() {
   assert.match(directoryScreen, /createGameLobby\(/, 'creation exists only behind an explicit directory action');
   assert.match(directoryScreen, /joinGameLobbyById\(/, 'lobby cards join by stable lobby ID');
   assert.match(directoryScreen, /startAnotherTitle/, 'Start Another Lobby requires confirmation');
+  assert.match(directoryScreen, /ActiveLobbyRecoveryCard/, 'cross-game membership has a visible recovery card');
+  assert.match(directoryScreen, /leaveGameLobby\(\{ lobbyId: activeLobby\.lobbyId \}\)/, 'recovery awaits the canonical leave operation');
+  assert.match(directoryScreen, /activeElsewhereTitle/, 'the recovery card explains the active game conflict');
+  assert.match(directoryScreen, /activeLobby\.activePlayerCount === 1/, 'recovery uses canonical membership count for sole-player closure confirmation');
+  assert.match(directoryScreen, /games\.joinCode\.leaveAndCloseTitle/, 'recovery reuses the localized leave-and-close confirmation');
+  assert.match(directoryScreen, /disabled=\{!canOfferCreate \|\| createBlocked\}/, 'Start Lobby remains rendered while a real membership blocks it');
   assert.match(games, /resolveAndJoinGameByCode\(joinCode\)/, 'manual codes retain a secondary entry path');
   assert.doesNotMatch(lobbyHook, /createGameLobby|createGameJoinCode/, 'mounting a lobby never creates one');
+  assert.match(lobbyHook, /await leaveGameLobby\(\{ lobbyId \}\)/, 'navigation waits for server-authoritative leave');
+  assert.match(lobbyHook, /await closeGameLobby\(\{ lobbyId \}\)/, 'host closure waits for the backend');
+  assert.match(lobbyHook, /if \(!isLocal && !lobbyId\)[\s\S]*setLifecycleError\('game_not_found'\)/, 'a missing canonical lobby ID keeps the user on-screen for retry');
+  assert.match(lobbyHook, /suppressLobbyEventsRef/, 'stale listeners cannot resurrect a deliberately departed lobby');
+  assert.match(lobbyHook, /departureCompletedRef/, 'completed departure permanently suppresses local reconnect effects');
+  assert.match(lobbyBase, /onRetryLifecycle/, 'backend leave failures expose a retry action');
+  assert.match(lobbyBase, /closeLobbyForEveryone/, 'hosts receive a separate close-for-everyone action');
+  assert.equal((lobbyRoutes.match(/onCloseLobby=\{closeLobby\}/g) ?? []).length, 3, 'all released lobby routes wire host closure');
+  assert.equal((lobbyRoutes.match(/lifecycleError=\{lifecycleError\}/g) ?? []).length, 3, 'all released lobby routes surface lifecycle failures');
   assert.doesNotMatch(`${games}\n${lobbyHook}\n${bomb}\n${spot}\n${trivia}`, /host:\s*["']1["']/);
   assert.match(joinCodeService, /joinGameLobbyById/);
   assert.match(joinCodeService, /startGameLobbyRematch/);

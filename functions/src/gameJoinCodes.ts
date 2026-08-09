@@ -5,6 +5,20 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import * as firebaseFunctions from 'firebase-functions';
 
 import {
+  BOMB_COMMAND_COUNT,
+  BOMB_MAX_STRIKES,
+  BOMB_ROLE_SCHEMA_VERSION,
+  assignBombRoles,
+  bombCommandMatches,
+  createBombPublicCommand,
+  isBombPrivateCommand,
+  roleForBombPlayer,
+  sortBombPlayers,
+  type BombOrderedPlayer,
+  type BombPrivateCommand,
+} from './bombDefusalCore';
+
+import {
   GameJoinCodeReservationError,
   generateSecureGameJoinCode,
   legacyRealtimeGameType,
@@ -154,8 +168,6 @@ type ActiveSquadGameSession = {
   endsAtMs: number;
 };
 
-type BombStepRecord = Record<string, string | number>;
-
 export type FinalizedSpotDifferenceRound = SpotRoundResult & {
   resolvedAt: number;
   teamByPlayerId: Record<string, SpotTeamId>;
@@ -172,10 +184,33 @@ export const listGameLobbies = functions.https.onCall(async (data, context) => {
     gameTypes.map((gameType) => listAuthorizedLobbyDirectory(uid, squadId, gameType)),
   );
   const membership = await reconcileActiveLobbyMembership(uid);
+  const listedLobbies = directories.flatMap((directory) => directory.lobbies);
+  let activeLobbySummary = membership
+    ? listedLobbies.find((lobby) => lobby.lobbyId === membership.lobbyId) ?? null
+    : null;
+  if (membership && !activeLobbySummary) {
+    const activeDirectory = await listAuthorizedLobbyDirectory(
+      uid,
+      membership.squadId,
+      membership.gameType,
+    );
+    activeLobbySummary = activeDirectory.lobbies.find(
+      (lobby) => lobby.lobbyId === membership.lobbyId,
+    ) ?? null;
+  }
   return {
-    lobbies: directories.flatMap((directory) => directory.lobbies),
+    lobbies: listedLobbies,
     canCreateLobby: membership == null,
     activeLobbyId: membership?.lobbyId ?? null,
+    activeLobby: membership ? {
+      lobbyId: membership.lobbyId,
+      sessionId: membership.sessionId,
+      squadId: membership.squadId,
+      gameType: membership.gameType,
+      state: membership.state,
+      activePlayerCount: activeLobbySummary?.activePlayerCount ?? null,
+      callerIsHost: activeLobbySummary?.callerIsHost ?? false,
+    } : null,
     maxLobbiesPerGame: MAX_DISCOVERABLE_GAME_LOBBIES,
     serverNowMs: Date.now(),
   };
@@ -235,7 +270,7 @@ export const joinGameLobbyNextRound = functions.https.onCall(async (data, contex
 export const reconnectGameLobby = functions.https.onCall(async (_data, context): Promise<LobbyJoinResult | null> => {
   const uid = requireUid(context);
   const membership = await reconcileActiveLobbyMembership(uid);
-  if (!membership) return null;
+  if (!membership || membership.state === 'leaving') return null;
   const squadId = await requireAuthorizedSquadId(uid, membership.squadId);
   const displayName = await resolvePlayerDisplayName(uid, context.auth?.token);
   return joinExistingGameLobby({
@@ -937,20 +972,133 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
   };
 });
 
+export const getBombDefusalPlayerView = functions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const sessionId = readSessionId(data?.sessionId);
+  const timedOut = await expireBombDefusalRoundIfNeeded(sessionId);
+  if (timedOut) await markGameJoinCodeEndedFromServer('bombDefusal', sessionId);
+
+  const [sessionSnapshot, secretSnapshot] = await Promise.all([
+    admin.database().ref(`/gameSessions/${sessionId}`).once('value'),
+    admin.database().ref(`/gameSessionSecrets/${sessionId}`).once('value'),
+  ]);
+  if (!sessionSnapshot.exists()) throw safeError('not-found', 'game_not_found');
+  const session = readRecord(sessionSnapshot.val());
+  const players = readRecord(session.players);
+  const gameState = readRecord(session.gameState);
+  if (session.gameType !== 'bomb_defusal' || !players[uid]) {
+    throw safeError('permission-denied', 'not_authorized');
+  }
+  if (gameState.roleSchemaVersion !== BOMB_ROLE_SCHEMA_VERSION) {
+    throw safeError('failed-precondition', 'client_update_required');
+  }
+  if (session.status === 'canceled' || session.status === 'expired') {
+    throw safeError('failed-precondition', 'lobby_closed_or_expired');
+  }
+
+  const commandIndex = Number.isInteger(gameState.currentCommandIndex)
+    ? Number(gameState.currentCommandIndex)
+    : -1;
+  const assignment = readBombRoleAssignment(gameState.roleAssignment);
+  const secret = readRecord(secretSnapshot.val());
+  const commands = Array.isArray(secret.bombSteps) ? secret.bombSteps : [];
+  const command = commandIndex >= 0 && commandIndex < commands.length
+    ? commands[commandIndex]
+    : null;
+  if (
+    commandIndex < 0 ||
+    commandIndex >= BOMB_COMMAND_COUNT ||
+    !assignment ||
+    !command ||
+    !isBombPrivateCommand(command)
+  ) {
+    throw safeError('failed-precondition', 'client_update_required');
+  }
+  const role = roleForBombPlayer(uid, assignment);
+  const defuser = readRecord(players[assignment.defuserUserId]);
+  const expert = readRecord(players[assignment.expertUserId]);
+  return {
+    schemaVersion: BOMB_ROLE_SCHEMA_VERSION,
+    sessionId,
+    role,
+    commandId: typeof gameState.currentCommandId === 'string' ? gameState.currentCommandId : '',
+    commandIndex,
+    totalCommands: BOMB_COMMAND_COUNT,
+    publicCommand: readRecord(gameState.publicCommand),
+    instruction: role === 'expert' ? command : null,
+    defuserUserId: assignment.defuserUserId,
+    defuserDisplayName: typeof defuser.displayName === 'string' ? defuser.displayName : 'Player',
+    expertUserId: assignment.expertUserId,
+    expertDisplayName: typeof expert.displayName === 'string' ? expert.displayName : 'Player',
+    strikeCount: readNonNegativeInteger(gameState.strikeCount),
+    maxStrikes: BOMB_MAX_STRIKES,
+    correctCommandCount: readNonNegativeInteger(gameState.correctCommandCount),
+    outcome: readBombOutcome(gameState.outcome),
+    lastResult: readBombPublicResult(gameState.lastResult),
+    endsAtMs: readPositiveNumber(session.endsAt) ?? 0,
+    serverNowMs: Date.now(),
+  };
+});
+
+async function expireBombDefusalRoundIfNeeded(sessionId: string) {
+  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const initialSnapshot = await reference.once('value');
+  if (!initialSnapshot.exists()) return false;
+  const initialSession = initialSnapshot.val();
+  let mayUseInitialCacheFallback = true;
+  const result = await reference.transaction((cachedSession) => {
+    const session = cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
+    mayUseInitialCacheFallback = false;
+    if (
+      !session ||
+      session.gameType !== 'bomb_defusal' ||
+      session.gameState?.roleSchemaVersion !== BOMB_ROLE_SCHEMA_VERSION ||
+      session.status !== 'active' ||
+      typeof session.endsAt !== 'number' ||
+      session.endsAt > Date.now()
+    ) return session;
+    const now = Date.now();
+    return {
+      ...session,
+      status: 'completed',
+      completedAt: now,
+      gameState: {
+        ...session.gameState,
+        outcome: 'exploded',
+        completionReason: 'timeout',
+        rewardEligible: true,
+        strikeCount: BOMB_MAX_STRIKES,
+        lastResult: {
+          commandId: session.gameState.currentCommandId ?? null,
+          correct: false,
+          reason: 'timeout',
+          resolvedAt: now,
+        },
+      },
+      updatedAt: now,
+    };
+  });
+  const finalSession = readRecord(result.snapshot.val());
+  const finalGameState = readRecord(finalSession.gameState);
+  return result.committed &&
+    finalSession.status === 'completed' &&
+    finalGameState.completionReason === 'timeout';
+}
+
 export const submitBombDefusalStep = functions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const sessionId = readSessionId(data?.sessionId);
-  const stepIndex = Number.isInteger(data?.stepIndex) ? data.stepIndex as number : -1;
+  const commandId = typeof data?.commandId === 'string' ? data.commandId.trim() : '';
   const submissionId =
     typeof data?.submissionId === 'string' ? data.submissionId.trim() : '';
-  if (stepIndex < 0 || stepIndex > 4 || !/^[A-Za-z0-9_-]{10,200}$/.test(submissionId)) {
+  if (!/^command-[1-5]$/.test(commandId) || !/^[A-Za-z0-9_-]{10,200}$/.test(submissionId)) {
     throw safeError('invalid-argument', 'not_authorized');
   }
   const action = readBombAction(data?.action);
   const actionHash = hashIdentifier(JSON.stringify(action));
-  const submissionKey = hashIdentifier(`${uid}:${submissionId}`);
-  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
-  const secretReference = admin.database().ref(`/gameSessionSecrets/${sessionId}`);
+  const submissionKey = hashIdentifier(uid + ':' + submissionId);
+  const reference = admin.database().ref('/gameSessions/' + sessionId);
+  const secretReference = admin.database().ref('/gameSessionSecrets/' + sessionId);
   const [initialSnapshot, secretSnapshot] = await Promise.all([
     reference.once('value'),
     secretReference.once('value'),
@@ -961,35 +1109,41 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
   const bombSteps = Array.isArray(secret.bombSteps)
     ? secret.bombSteps
     : [];
-  if (bombSteps.length !== 5 || bombSteps.some((step) => !isSafeBombStep(step))) {
-    throw safeError('failed-precondition', 'game_not_found');
+  if (bombSteps.length !== BOMB_COMMAND_COUNT || bombSteps.some((step) => !isBombPrivateCommand(step))) {
+    throw safeError('failed-precondition', 'client_update_required');
   }
-
-  const linkSnapshot = await sessionLinks()
-    .doc(hashIdentifier(`bombDefusal:${sessionId}`))
-    .get();
-  const joinCodeStatus = linkSnapshot.data()?.status;
-  const initialState = resolveRealtimeJoinState(initialSession, joinCodeStatus, uid, Date.now());
-  if (!initialState.isJoinable || initialSession.status !== 'active') {
-    if (initialState.isExpired) {
-      await expireRealtimeGameSession('bombDefusal', sessionId, Date.now());
-    }
+  const initialGameState = readRecord(initialSession.gameState);
+  const initialPlayers = readRecord(initialSession.players);
+  if (initialSession.gameType !== 'bomb_defusal' || !initialPlayers[uid]) {
+    throw safeError('permission-denied', 'not_authorized');
+  }
+  if (initialGameState.roleSchemaVersion !== BOMB_ROLE_SCHEMA_VERSION) {
+    throw safeError('failed-precondition', 'client_update_required');
+  }
+  if (
+    initialSession.status !== 'active' ||
+    typeof initialSession.endsAt !== 'number' ||
+    initialSession.endsAt <= Date.now()
+  ) {
+    const timedOut = await expireBombDefusalRoundIfNeeded(sessionId);
+    if (timedOut) await markGameJoinCodeEndedFromServer('bombDefusal', sessionId);
     throw safeError('failed-precondition', 'game_already_started');
   }
   const existingResult = readBombSubmissionResult(
     initialSession,
     submissionKey,
     uid,
-    stepIndex,
+    commandId,
     actionHash,
   );
   if (existingResult) return existingResult;
 
   let resultPayload: {
     correct: boolean;
-    nextStepIndex: number;
+    commandId: string;
+    nextCommandIndex: number;
+    strikeCount: number;
     outcome: 'playing' | 'defused' | 'exploded';
-    nextStep: BombStepRecord | null;
   } | null = null;
   let reason: string | null = null;
   let mayUseInitialCacheFallback = true;
@@ -1005,7 +1159,7 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
       session,
       submissionKey,
       uid,
-      stepIndex,
+      commandId,
       actionHash,
     );
     if (repeated) {
@@ -1014,37 +1168,60 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
     }
     if (
       session.status !== 'active' ||
-      typeof session.expiresAt !== 'number' ||
-      session.expiresAt <= Date.now()
+      typeof session.endsAt !== 'number' ||
+      session.endsAt <= Date.now()
     ) {
       expiredDuringSubmission =
-        typeof session.expiresAt !== 'number' || session.expiresAt <= Date.now();
+        typeof session.endsAt !== 'number' || session.endsAt <= Date.now();
       reason = 'game_already_started';
       return;
     }
-    const currentStepIndex = Number.isInteger(session.gameState?.currentStepIndex)
-      ? session.gameState.currentStepIndex
+    const gameState = readRecord(session.gameState);
+    if (gameState.roleSchemaVersion !== BOMB_ROLE_SCHEMA_VERSION) {
+      reason = 'client_update_required';
+      return;
+    }
+    const currentCommandIndex = Number.isInteger(gameState.currentCommandIndex)
+      ? Number(gameState.currentCommandIndex)
       : 0;
-    if (stepIndex !== currentStepIndex || !bombSteps[stepIndex]) {
-      reason = 'not_authorized';
+    if (commandId !== gameState.currentCommandId || !bombSteps[currentCommandIndex]) {
+      reason = 'bomb_command_stale';
+      return;
+    }
+    const assignment = readBombRoleAssignment(gameState.roleAssignment);
+    if (!assignment || assignment.defuserUserId !== uid) {
+      reason = 'bomb_not_defuser';
       return;
     }
 
-    const correct = bombActionMatches(bombSteps[stepIndex], action);
-    const isComplete = correct && stepIndex + 1 >= bombSteps.length;
-    const nextStepIndex = correct ? Math.min(stepIndex + 1, bombSteps.length) : stepIndex;
-    const outcome = correct ? (isComplete ? 'defused' : 'playing') : 'exploded';
-    const nextStep = outcome === 'playing' ? bombSteps[nextStepIndex] as BombStepRecord : null;
-    resultPayload = { correct, nextStepIndex, outcome, nextStep };
+    const command = bombSteps[currentCommandIndex] as BombPrivateCommand;
+    const correct = bombCommandMatches(command, action);
+    const strikeCount = readNonNegativeInteger(gameState.strikeCount) + (correct ? 0 : 1);
+    const correctCommandCount = readNonNegativeInteger(gameState.correctCommandCount) + (correct ? 1 : 0);
+    const nextCommandIndex = currentCommandIndex + 1;
+    const outcome = strikeCount >= BOMB_MAX_STRIKES
+      ? 'exploded' as const
+      : nextCommandIndex >= bombSteps.length
+        ? 'defused' as const
+        : 'playing' as const;
+    const orderedPlayers = bombOrderedPlayersFromRecord(readRecord(session.players));
+    const nextAssignment = outcome === 'playing'
+      ? assignBombRoles(orderedPlayers, nextCommandIndex)
+      : assignment;
+    if (outcome === 'playing' && !nextAssignment) {
+      reason = 'minimum_players_required';
+      return;
+    }
+    const nextCommand = outcome === 'playing'
+      ? createBombPublicCommand(bombSteps[nextCommandIndex] as BombPrivateCommand, nextCommandIndex)
+      : null;
+    resultPayload = { correct, commandId, nextCommandIndex, strikeCount, outcome };
     const now = Date.now();
-    const safeGameState = Object.fromEntries(
-      Object.entries(readRecord(session.gameState)).filter(([key]) => key !== 'bombSteps'),
-    );
     const processedSubmissions = {
-      ...readRecord(safeGameState.processedSubmissions),
+      ...readRecord(gameState.processedSubmissions),
       [submissionKey]: {
         playerId: uid,
-        stepIndex,
+        commandId,
         actionHash,
         result: resultPayload,
         createdAt: now,
@@ -1055,10 +1232,18 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
       status: outcome === 'playing' ? session.status : 'completed',
       completedAt: outcome === 'playing' ? session.completedAt ?? null : now,
       gameState: {
-        ...safeGameState,
-        currentStepIndex: nextStepIndex,
-        currentStep: nextStep,
+        ...gameState,
+        currentCommandIndex: outcome === 'playing' ? nextCommandIndex : currentCommandIndex,
+        currentCommandId: nextCommand?.commandId ?? commandId,
+        publicCommand: nextCommand ?? gameState.publicCommand,
+        roleAssignment: nextAssignment,
+        roleRevision: readNonNegativeInteger(gameState.roleRevision) + 1,
+        strikeCount,
+        correctCommandCount,
         outcome: outcome === 'playing' ? null : outcome,
+        completionReason: outcome === 'playing' ? null : outcome,
+        rewardEligible: outcome !== 'playing',
+        lastResult: { commandId, correct, reason: correct ? 'correct' : 'incorrect', resolvedAt: now },
         processedSubmissions,
       },
       updatedAt: now,
@@ -1066,16 +1251,18 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
   });
   const completedPayload = resultPayload as {
     correct: boolean;
-    nextStepIndex: number;
+    commandId: string;
+    nextCommandIndex: number;
+    strikeCount: number;
     outcome: 'playing' | 'defused' | 'exploded';
-    nextStep: BombStepRecord | null;
   } | null;
   if (!transactionResult.committed || !completedPayload) {
     if (expiredDuringSubmission) {
-      await expireRealtimeGameSession('bombDefusal', sessionId, Date.now());
+      const timedOut = await expireBombDefusalRoundIfNeeded(sessionId);
+      if (timedOut) await markGameJoinCodeEndedFromServer('bombDefusal', sessionId);
     }
     throw safeError(
-      reason === 'game_already_started' ? 'failed-precondition' : 'permission-denied',
+      reason === 'bomb_not_defuser' || reason === 'not_authorized' ? 'permission-denied' : 'failed-precondition',
       reason ?? 'not_authorized',
     );
   }
@@ -1090,7 +1277,8 @@ type StoredLobbyMembership = {
   sessionId: string;
   squadId: string;
   gameType: GameJoinCodeType;
-  state: 'joining' | 'active' | 'queued';
+  state: 'joining' | 'active' | 'queued' | 'leaving';
+  departureState: 'joining' | 'active' | 'queued' | null;
   expiresAtMs: number;
 };
 
@@ -1613,6 +1801,9 @@ async function joinExistingGameLobby(input: {
   mode: 'currentRound' | 'nextRound' | 'auto';
 }): Promise<LobbyJoinResult> {
   const existingMembership = await reconcileActiveLobbyMembership(input.uid);
+  if (existingMembership?.state === 'leaving') {
+    throw safeError('failed-precondition', 'lobby_leave_in_progress');
+  }
   if (existingMembership && existingMembership.lobbyId !== input.lobbyId) {
     throw safeError('failed-precondition', 'already_participating_elsewhere');
   }
@@ -1728,6 +1919,9 @@ async function reserveLobbyMembership(input: {
       transaction.get(directoryRef),
     ]);
     const stored = readStoredLobbyMembership(membership.data());
+    if (stored?.state === 'leaving') {
+      throw safeError('failed-precondition', 'lobby_leave_in_progress');
+    }
     if (stored && stored.expiresAtMs > Date.now() && stored.lobbyId !== input.lobbyId) {
       throw safeError('failed-precondition', 'already_participating_elsewhere');
     }
@@ -1797,6 +1991,7 @@ async function reconcileActiveLobbyMembership(uid: string): Promise<StoredLobbyM
     await reference.delete();
     return null;
   }
+  if (membership.state === 'leaving') return membership;
   const hydrated = await hydrateLobbyEntry(entry, uid);
   if (!hydrated || hydrated.summary.callerState === 'none') {
     await reference.delete();
@@ -1830,7 +2025,13 @@ async function queueRealtimeLobbyParticipant(input: {
 }) {
   let reason = 'round_in_progress';
   const reference = admin.database().ref(`/gameSessions/${input.entry.sessionId}`);
-  const result = await reference.transaction((session) => {
+  const initialSnapshot = await reference.once('value');
+  if (!initialSnapshot.exists()) throw safeError('not-found', 'lobby_closed_or_expired');
+  const initialSession = initialSnapshot.val();
+  let mayUseInitialCacheFallback = true;
+  const result = await reference.transaction((cachedSession) => {
+    const session = cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
+    mayUseInitialCacheFallback = false;
     if (
       !session ||
       session.lobbyId !== input.entry.lobbyId ||
@@ -1943,11 +2144,33 @@ async function clearLobbyMembershipIfMatches(uid: string, lobbyId: string) {
   });
 }
 
+async function beginLobbyDeparture(uid: string, lobbyId: string) {
+  const reference = activeGameLobbyMemberships().doc(uid);
+  return admin.firestore().runTransaction(async (transaction): Promise<StoredLobbyMembership | null> => {
+    const snapshot = await transaction.get(reference);
+    if (!snapshot.exists) return null;
+    const membership = readStoredLobbyMembership(snapshot.data());
+    if (!membership) {
+      transaction.delete(reference);
+      return null;
+    }
+    if (membership.lobbyId !== lobbyId) {
+      throw safeError('permission-denied', 'not_authorized');
+    }
+    if (membership.state === 'leaving') return membership;
+    const departureState = membership.state;
+    transaction.update(reference, {
+      state: 'leaving',
+      departureState,
+      updatedAt: Timestamp.now(),
+    });
+    return { ...membership, state: 'leaving', departureState };
+  });
+}
+
 async function leaveCanonicalGameLobby(uid: string, lobbyId: string) {
-  const membership = await reconcileActiveLobbyMembership(uid);
-  if (!membership || membership.lobbyId !== lobbyId) {
-    throw safeError('permission-denied', 'not_authorized');
-  }
+  const membership = await beginLobbyDeparture(uid, lobbyId);
+  if (!membership) return { status: 'left' as const, hostChanged: false };
   const directorySnapshot = await gameLobbyDirectoryRef(membership.squadId, membership.gameType).get();
   const directory = normalizeGameLobbyDirectory(
     directorySnapshot.data(),
@@ -1961,24 +2184,26 @@ async function leaveCanonicalGameLobby(uid: string, lobbyId: string) {
     return { status: 'left' as const, hostChanged: false };
   }
 
-  if (membership.state === 'queued') {
+  if (membership.departureState === 'queued') {
     if (membership.gameType === 'triviaBlitz') {
       await removeTriviaQueuedParticipant(uid, entry);
     } else {
       await removeRealtimeQueuedParticipant(uid, entry);
     }
-    await clearLobbyMembershipIfMatches(uid, lobbyId);
     await refreshGameLobbyDirectoryEntry(entry, uid);
+    await clearLobbyMembershipIfMatches(uid, lobbyId);
     return { status: 'left' as const, hostChanged: false };
   }
 
   const departure = membership.gameType === 'triviaBlitz'
     ? await leaveTriviaLobbyParticipant(uid, entry)
     : await leaveRealtimeLobbyParticipant(uid, entry);
-  await clearLobbyMembershipIfMatches(uid, lobbyId);
   if (departure.closed) {
     await closeLobbyDirectoryRecords(entry, uid, 'canceled');
     return { status: 'closed' as const, hostChanged: false };
+  }
+  if (departure.roundEnded) {
+    await markGameJoinCodeEndedFromServer(membership.gameType, entry.sessionId);
   }
   if (departure.promotedUserId) {
     await finalizeLobbyMembership({
@@ -1991,6 +2216,7 @@ async function leaveCanonicalGameLobby(uid: string, lobbyId: string) {
     await transferLobbyHostRecords(entry, departure.hostUserId);
   }
   await refreshGameLobbyDirectoryEntry(entry, departure.hostUserId ?? uid);
+  await clearLobbyMembershipIfMatches(uid, lobbyId);
   return {
     status: 'left' as const,
     hostChanged: Boolean(departure.hostUserId && departure.hostUserId !== entry.hostUserId),
@@ -2002,20 +2228,27 @@ async function leaveRealtimeLobbyParticipant(uid: string, entry: GameLobbyDirect
   let nextHostUserId: string | null = null;
   let promotedUserId: string | null = null;
   let closed = false;
+  let roundEnded = false;
   const reference = admin.database().ref(`/gameSessions/${entry.sessionId}`);
-  const result = await reference.transaction((session) => {
+  const initialSnapshot = await reference.once('value');
+  const initialSession = initialSnapshot.val();
+  let mayUseInitialCacheFallback = true;
+  const result = await reference.transaction((cachedSession) => {
+    const session = cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
+    mayUseInitialCacheFallback = false;
     if (
       !session ||
       session.lobbyId !== entry.lobbyId ||
-      session.squadId !== entry.squadId ||
-      !session.players?.[uid]
+      session.squadId !== entry.squadId
     ) return;
-    if (session.status === 'active' || session.status === 'countdown') {
-      reason = 'finish_active_round_first';
-      return;
-    }
     const players = readRecord(session.players);
     const queuedPlayers = readRecord(session.queuedPlayers);
+    if (!players[uid]) {
+      nextHostUserId = typeof session.hostUserId === 'string' ? session.hostUserId : null;
+      closed = Object.keys(players).length === 0 && Object.keys(queuedPlayers).length === 0;
+      roundEnded = session.status === 'completed' && session.gameState?.completionReason === 'insufficientPlayers';
+      return session;
+    }
     delete players[uid];
     if (Object.keys(players).length === 0 && Object.keys(queuedPlayers).length > 0) {
       const [queuedUid, queuedValue] = Object.entries(queuedPlayers)
@@ -2045,31 +2278,73 @@ async function leaveRealtimeLobbyParticipant(uid: string, entry: GameLobbyDirect
     });
     if (ordered.length === 0) {
       closed = true;
+      const now = Date.now();
       return {
         ...session,
         players: {},
         queuedPlayers: {},
-        status: 'failed',
-        completedAt: Date.now(),
-        updatedAt: Date.now(),
+        status: 'canceled',
+        completedAt: now,
+        closeReason: 'empty',
+        gameState: {
+          ...readRecord(session.gameState),
+          outcome: 'abandoned',
+          completionReason: 'emptyLobby',
+          rewardEligible: false,
+        },
+        updatedAt: now,
       };
     }
     nextHostUserId = session.hostUserId === uid ? ordered[0][0] : session.hostUserId;
     const normalizedPlayers = entry.gameType === 'spotTheDifferences'
       ? rebalanceSpotLobbyPlayers(players, Date.now()).players
       : players;
+    const minimumPlayers = readPositiveNumber(session.minPlayers) ??
+      (entry.gameType === 'bombDefusal' ? 2 : 4);
+    const roundWasActive = session.status === 'active' || session.status === 'countdown';
+    const roundMustEnd = roundWasActive && ordered.length < minimumPlayers;
+    roundEnded = roundMustEnd;
+    const gameState = readRecord(session.gameState);
+    let nextGameState = gameState;
+    if (entry.gameType === 'bombDefusal' && !roundMustEnd && session.status === 'active') {
+      const commandIndex = Number.isInteger(gameState.currentCommandIndex)
+        ? Number(gameState.currentCommandIndex)
+        : 0;
+      const assignment = assignBombRoles(bombOrderedPlayersFromRecord(normalizedPlayers), commandIndex);
+      if (!assignment) {
+        reason = 'minimum_players_required';
+        return;
+      }
+      nextGameState = {
+        ...gameState,
+        roleAssignment: assignment,
+        roleRevision: readNonNegativeInteger(gameState.roleRevision) + 1,
+      };
+    }
+    if (roundMustEnd) {
+      nextGameState = {
+        ...gameState,
+        outcome: 'abandoned',
+        completionReason: 'insufficientPlayers',
+        rewardEligible: false,
+      };
+    }
+    const now = Date.now();
     return {
       ...session,
       hostUserId: nextHostUserId,
       players: normalizedPlayers,
       queuedPlayers,
-      updatedAt: Date.now(),
+      status: roundMustEnd ? 'completed' : session.status,
+      completedAt: roundMustEnd ? now : session.completedAt ?? null,
+      gameState: nextGameState,
+      updatedAt: now,
     };
   });
   if (!result.committed) {
     throw safeError('failed-precondition', reason);
   }
-  return { closed, hostUserId: nextHostUserId, promotedUserId };
+  return { closed, hostUserId: nextHostUserId, promotedUserId, roundEnded };
 }
 
 async function leaveTriviaLobbyParticipant(uid: string, entry: GameLobbyDirectoryEntry) {
@@ -2086,11 +2361,16 @@ async function leaveTriviaLobbyParticipant(uid: string, entry: GameLobbyDirector
     if (
       !parent.exists ||
       !game.exists ||
-      parent.data()?.lobbyId !== entry.lobbyId ||
-      !readStringArray(parent.data()?.playerIds).includes(uid)
+      parent.data()?.lobbyId !== entry.lobbyId
     ) throw safeError('permission-denied', 'not_authorized');
-    if (parent.data()?.status === 'playing') {
-      throw safeError('failed-precondition', 'finish_active_round_first');
+    const currentPlayerIds = readStringArray(parent.data()?.playerIds);
+    if (!currentPlayerIds.includes(uid)) {
+      return {
+        closed: currentPlayerIds.length === 0 && readStringArray(parent.data()?.queuedPlayerIds).length === 0,
+        hostUserId: readStoredSessionId(parent.data()?.hostPlayerId),
+        promotedUserId: null,
+        roundEnded: parent.data()?.status === 'results' && parent.data()?.completionReason === 'insufficientPlayers',
+      };
     }
     const remaining = players.docs
       .filter((player) => player.id !== uid)
@@ -2121,6 +2401,7 @@ async function leaveTriviaLobbyParticipant(uid: string, entry: GameLobbyDirector
       .map((player) => player.id)
       .filter((playerId) => playerId !== promotedUserId);
     const closed = remainingIds.length === 0;
+    const roundMustEnd = parent.data()?.status === 'playing' && remainingIds.length < TRIVIA_MIN_PLAYERS;
     const hostUserId = closed
       ? null
       : parent.data()?.hostPlayerId === uid
@@ -2131,30 +2412,49 @@ async function leaveTriviaLobbyParticipant(uid: string, entry: GameLobbyDirector
       playerIds: remainingIds,
       queuedPlayerIds: queuedIds,
       hostPlayerId: hostUserId,
-      status: closed ? 'results' : parent.data()?.status,
-      completedAt: closed ? now : parent.data()?.completedAt ?? null,
+      status: closed || roundMustEnd ? 'results' : parent.data()?.status,
+      completedAt: closed || roundMustEnd ? now : parent.data()?.completedAt ?? null,
+      completionReason: closed ? 'emptyLobby' : roundMustEnd ? 'insufficientPlayers' : parent.data()?.completionReason ?? null,
+      rewardEligible: closed || roundMustEnd ? false : parent.data()?.rewardEligible ?? true,
       updatedAt: now,
     });
     transaction.update(gameRef, {
       totalPlayers: remainingIds.length,
       queuedPlayerCount: queuedIds.length,
       hostPlayerId: hostUserId,
-      status: closed ? 'results' : game.data()?.status,
+      status: closed || roundMustEnd ? 'results' : game.data()?.status,
+      completionReason: closed ? 'emptyLobby' : roundMustEnd ? 'insufficientPlayers' : game.data()?.completionReason ?? null,
+      rewardEligible: closed || roundMustEnd ? false : game.data()?.rewardEligible ?? true,
       updatedAt: now,
     });
     if (hostUserId) transaction.update(secretRef, { hostPlayerId: hostUserId, updatedAt: now });
-    return { closed, hostUserId, promotedUserId };
+    return { closed, hostUserId, promotedUserId, roundEnded: roundMustEnd };
   });
   return result;
 }
 
 async function removeRealtimeQueuedParticipant(uid: string, entry: GameLobbyDirectoryEntry) {
-  await admin.database().ref(`/gameSessions/${entry.sessionId}`).transaction((session) => {
+  const reference = admin.database().ref(`/gameSessions/${entry.sessionId}`);
+  const initialSnapshot = await reference.once('value');
+  if (!initialSnapshot.exists()) return;
+  const initialSession = initialSnapshot.val();
+  let mayUseInitialCacheFallback = true;
+  const result = await reference.transaction((cachedSession) => {
+    const session = cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
+    mayUseInitialCacheFallback = false;
     if (!session || session.lobbyId !== entry.lobbyId || !session.queuedPlayers?.[uid]) return session;
     const queuedPlayers = readRecord(session.queuedPlayers);
     delete queuedPlayers[uid];
     return { ...session, queuedPlayers, updatedAt: Date.now() };
   });
+  const finalSession = readRecord(result.snapshot.val());
+  if (
+    !result.committed ||
+    finalSession.lobbyId !== entry.lobbyId ||
+    readRecord(finalSession.queuedPlayers)[uid]
+  ) {
+    throw safeError('failed-precondition', 'lobby_leave_in_progress');
+  }
 }
 
 async function removeTriviaQueuedParticipant(uid: string, entry: GameLobbyDirectoryEntry) {
@@ -2215,7 +2515,8 @@ async function transferLobbyHostRecords(entry: GameLobbyDirectoryEntry, hostUser
 
 async function closeCanonicalGameLobby(uid: string, lobbyId: string) {
   const membership = await reconcileActiveLobbyMembership(uid);
-  if (!membership || membership.lobbyId !== lobbyId || membership.state !== 'active') {
+  if (!membership) return { status: 'closed' as const, clearedParticipantCount: 0 };
+  if (membership.lobbyId !== lobbyId || membership.state !== 'active') {
     throw safeError('permission-denied', 'not_authorized');
   }
   const directorySnapshot = await gameLobbyDirectoryRef(membership.squadId, membership.gameType).get();
@@ -2226,32 +2527,77 @@ async function closeCanonicalGameLobby(uid: string, lobbyId: string) {
     Date.now(),
   );
   const entry = directory.lobbies[lobbyId];
-  if (!entry || entry.hostUserId !== uid) throw safeError('permission-denied', 'not_authorized');
+  if (!entry) {
+    await clearLobbyMembershipIfMatches(uid, lobbyId);
+    return { status: 'closed' as const, clearedParticipantCount: 0 };
+  }
+  if (entry.hostUserId !== uid) throw safeError('permission-denied', 'not_authorized');
   const hydrated = await hydrateLobbyEntry(entry, uid);
   if (!hydrated) throw safeError('not-found', 'lobby_closed_or_expired');
-  if (hydrated.entry.activePlayerCount > 1 || hydrated.entry.queuedPlayerCount > 0) {
-    throw safeError('failed-precondition', 'host_must_transfer');
-  }
   if (entry.gameType === 'triviaBlitz') {
     const now = Timestamp.now();
     await admin.firestore().collection('sessions').doc(entry.sessionId).set({
       status: 'results',
       completedAt: now,
+      completionReason: 'closedByHost',
+      rewardEligible: false,
       updatedAt: now,
     }, { merge: true });
     await admin.firestore().collection('sessions').doc(entry.sessionId).collection('games').doc('triviaBlitz').set({
       status: 'results',
+      completionReason: 'closedByHost',
+      rewardEligible: false,
       updatedAt: now,
     }, { merge: true });
   } else {
-    await admin.database().ref(`/gameSessions/${entry.sessionId}`).update({
-      status: 'failed',
-      completedAt: Date.now(),
-      updatedAt: Date.now(),
+    const reference = admin.database().ref(`/gameSessions/${entry.sessionId}`);
+    const initialSnapshot = await reference.once('value');
+    const initialSession = initialSnapshot.val();
+    let mayUseInitialCacheFallback = true;
+    const result = await reference.transaction((cachedSession) => {
+      const session = cachedSession ?? (mayUseInitialCacheFallback ? initialSession : null);
+      mayUseInitialCacheFallback = false;
+      if (!session || session.lobbyId !== entry.lobbyId) return session;
+      const now = Date.now();
+      const players = Object.fromEntries(Object.entries(readRecord(session.players)).map(([playerId, value]) => [
+        playerId,
+        {
+          ...readRecord(value),
+          isReady: false,
+          isConnected: false,
+          leftAt: now,
+        },
+      ]));
+      return {
+        ...session,
+        players,
+        queuedPlayers: {},
+        status: 'canceled',
+        completedAt: now,
+        closeReason: 'closedByHost',
+        gameState: {
+          ...readRecord(session.gameState),
+          outcome: 'abandoned',
+          completionReason: 'closedByHost',
+          rewardEligible: false,
+        },
+        updatedAt: now,
+      };
     });
+    const finalSession = readRecord(result.snapshot.val());
+    if (
+      !result.committed ||
+      finalSession.lobbyId !== entry.lobbyId ||
+      finalSession.status !== 'canceled'
+    ) {
+      throw safeError('failed-precondition', 'lobby_leave_in_progress');
+    }
   }
   await closeLobbyDirectoryRecords(entry, uid, 'canceled');
-  return { status: 'closed' as const };
+  return {
+    status: 'closed' as const,
+    clearedParticipantCount: hydrated.entry.activePlayerCount + hydrated.entry.queuedPlayerCount,
+  };
 }
 
 async function closeLobbyDirectoryRecords(
@@ -2338,7 +2684,8 @@ async function createNextLobbyRound(
   }
   const host = participants.find((participant) => participant.uid === uid);
   if (!host) throw safeError('permission-denied', 'not_authorized');
-  const orderedParticipants = [host, ...participants.filter((participant) => participant.uid !== uid)]
+  const orderedParticipants = [...participants]
+    .sort((left, right) => left.joinOrder - right.joinOrder || left.uid.localeCompare(right.uid))
     .slice(0, hydrated.entry.capacity)
     .map((participant, index) => ({ ...participant, joinOrder: index + 1 }));
   const newSessionId = `${hydrated.entry.gameType === 'triviaBlitz' ? 'trivia' : 'game'}_${randomBytes(18).toString('base64url')}`;
@@ -2707,9 +3054,19 @@ async function createRealtimeSession(input: {
   const sceneId = `scene_${String(randomInt(1, 22)).padStart(3, '0')}`;
   const gameState = bombSteps
     ? {
-      currentStep: bombSteps[0],
-      currentStepIndex: 0,
+      roleSchemaVersion: BOMB_ROLE_SCHEMA_VERSION,
+      currentCommandId: null,
+      currentCommandIndex: 0,
+      publicCommand: null,
+      roleAssignment: null,
+      roleRevision: 0,
+      strikeCount: 0,
+      maxStrikes: BOMB_MAX_STRIKES,
+      correctCommandCount: 0,
       outcome: null,
+      completionReason: null,
+      rewardEligible: false,
+      lastResult: null,
       processedSubmissions: {},
     }
     : {
@@ -2760,6 +3117,7 @@ async function createRealtimeSession(input: {
   };
   if (bombSteps) {
     updates[`gameSessionSecrets/${sessionId}`] = {
+      roleSchemaVersion: BOMB_ROLE_SCHEMA_VERSION,
       bombSteps,
       expiresAt: session.expiresAt,
     };
@@ -3166,6 +3524,20 @@ async function startRealtimeGameSession(sessionId: string) {
     throw safeError('not-found', 'game_not_found');
   }
   const initialSession = initialSnapshot.val();
+  let bombCommands: BombPrivateCommand[] = [];
+  if (initialSession?.gameType === 'bomb_defusal') {
+    const secretSnapshot = await admin.database().ref('/gameSessionSecrets/' + sessionId).once('value');
+    const secret = readRecord(secretSnapshot.val());
+    const rawCommands = Array.isArray(secret.bombSteps) ? secret.bombSteps : [];
+    if (
+      secret.roleSchemaVersion !== BOMB_ROLE_SCHEMA_VERSION ||
+      rawCommands.length !== BOMB_COMMAND_COUNT ||
+      rawCommands.some((command) => !isBombPrivateCommand(command))
+    ) {
+      throw safeError('failed-precondition', 'client_update_required');
+    }
+    bombCommands = rawCommands as BombPrivateCommand[];
+  }
   let mayUseInitialCacheFallback = true;
   const result = await reference.transaction((cachedSession) => {
     const session =
@@ -3204,6 +3576,7 @@ async function startRealtimeGameSession(sessionId: string) {
     startedNow = true;
     startedAtMs = serverNowMs;
     const isSpotGame = session.gameType === legacyRealtimeGameType('spotTheDifferences');
+    const isBombGame = session.gameType === legacyRealtimeGameType('bombDefusal');
     const rebalanced = isSpotGame
       ? rebalanceSpotLobbyPlayers(players, serverNowMs)
       : null;
@@ -3211,6 +3584,13 @@ async function startRealtimeGameSession(sessionId: string) {
     const teamAssignments = isSpotGame
       ? createFrozenSpotAssignments(frozenPlayers)
       : undefined;
+    const bombAssignment = isBombGame
+      ? assignBombRoles(bombOrderedPlayersFromRecord(frozenPlayers), 0)
+      : null;
+    if (isBombGame && (!bombAssignment || !bombCommands[0])) {
+      reason = 'minimum_players_required';
+      return;
+    }
     return {
       ...session,
       players: frozenPlayers,
@@ -3229,7 +3609,24 @@ async function startRealtimeGameSession(sessionId: string) {
           result: readRecord(session.gameState).result ?? null,
           version: 2,
         }
-        : session.gameState,
+        : isBombGame
+          ? {
+            roleSchemaVersion: BOMB_ROLE_SCHEMA_VERSION,
+            currentCommandId: 'command-1',
+            currentCommandIndex: 0,
+            publicCommand: createBombPublicCommand(bombCommands[0], 0),
+            roleAssignment: bombAssignment,
+            roleRevision: 1,
+            strikeCount: 0,
+            maxStrikes: BOMB_MAX_STRIKES,
+            correctCommandCount: 0,
+            outcome: null,
+            completionReason: null,
+            rewardEligible: false,
+            lastResult: null,
+            processedSubmissions: {},
+          }
+          : session.gameState,
       updatedAt: serverNowMs,
     };
   });
@@ -3459,12 +3856,15 @@ function readStoredLobbyMembership(value: unknown): StoredLobbyMembership | null
   const sessionId = readStoredSessionId(record.sessionId);
   const squadId = readStoredSessionId(record.squadId);
   const gameType = readGameJoinCodeType(record.gameType);
-  const state = record.state === 'joining' || record.state === 'active' || record.state === 'queued'
+  const state = record.state === 'joining' || record.state === 'active' || record.state === 'queued' || record.state === 'leaving'
     ? record.state
+    : null;
+  const departureState = record.departureState === 'joining' || record.departureState === 'active' || record.departureState === 'queued'
+    ? record.departureState
     : null;
   const expiresAtMs = readTimestampMillis(record.expiresAt);
   if (!lobbyId || !sessionId || !squadId || !gameType || !state || !expiresAtMs) return null;
-  return { lobbyId, sessionId, squadId, gameType, state, expiresAtMs };
+  return { lobbyId, sessionId, squadId, gameType, state, departureState, expiresAtMs };
 }
 
 function readLobbyAllocation(
@@ -3747,13 +4147,15 @@ function readFinalizedSpotResult(value: unknown): FinalizedSpotDifferenceRound |
   };
 }
 
-function createBombPattern() {
-  const steps: Array<Record<string, string | number>> = [
-    { type: 'cut_wire', color: ['red', 'blue', 'yellow', 'green'][randomInt(4)] },
-    { type: 'press_button', label: ['A', 'B', 'C', 'D'][randomInt(4)] },
+function createBombPattern(): BombPrivateCommand[] {
+  const colors = ['red', 'blue', 'yellow', 'green'] as const;
+  const labels = ['A', 'B', 'C', 'D'] as const;
+  const steps: BombPrivateCommand[] = [
+    { type: 'cut_wire', color: colors[randomInt(colors.length)] },
+    { type: 'press_button', label: labels[randomInt(labels.length)] },
     { type: 'rotate_dial', target: randomInt(1, 11) },
     { type: 'enter_code', code: randomInt(100, 1000) },
-    { type: 'cut_wire', color: ['red', 'blue', 'yellow', 'green'][randomInt(4)] },
+    { type: 'cut_wire', color: colors[randomInt(colors.length)] },
   ];
   for (let index = steps.length - 1; index > 0; index -= 1) {
     const swapIndex = randomInt(index + 1);
@@ -3799,46 +4201,18 @@ function readBombAction(value: unknown): Record<string, string | number> {
   throw safeError('invalid-argument', 'not_authorized');
 }
 
-function bombActionMatches(
-  stepValue: unknown,
-  action: Record<string, string | number>,
-) {
-  const step = readRecord(stepValue);
-  if (step.type === 'cut_wire') return action.color === step.color;
-  if (step.type === 'press_button') return action.label === step.label;
-  if (step.type === 'rotate_dial') return action.target === step.target;
-  if (step.type === 'enter_code') return action.code === step.code;
-  return false;
-}
-
-function isSafeBombStep(value: unknown): value is BombStepRecord {
-  const step = readRecord(value);
-  if (step.type === 'cut_wire') {
-    return typeof step.color === 'string' && ['red', 'blue', 'yellow', 'green'].includes(step.color);
-  }
-  if (step.type === 'press_button') {
-    return typeof step.label === 'string' && ['A', 'B', 'C', 'D'].includes(step.label);
-  }
-  if (step.type === 'rotate_dial') {
-    return Number.isInteger(step.target) && Number(step.target) >= 1 && Number(step.target) <= 10;
-  }
-  if (step.type === 'enter_code') {
-    return Number.isInteger(step.code) && Number(step.code) >= 100 && Number(step.code) <= 999;
-  }
-  return false;
-}
-
 function readBombSubmissionResult(
   sessionValue: unknown,
   submissionKey: string,
   uid: string,
-  stepIndex: number,
+  commandId: string,
   actionHash: string,
 ): {
   correct: boolean;
-  nextStepIndex: number;
+  commandId: string;
+  nextCommandIndex: number;
+  strikeCount: number;
   outcome: 'playing' | 'defused' | 'exploded';
-  nextStep: BombStepRecord | null;
 } | null {
   const session = readRecord(sessionValue);
   const gameState = readRecord(session.gameState);
@@ -3847,29 +4221,64 @@ function readBombSubmissionResult(
   if (Object.keys(stored).length === 0) return null;
   if (
     stored.playerId !== uid ||
-    stored.stepIndex !== stepIndex ||
+    stored.commandId !== commandId ||
     stored.actionHash !== actionHash
   ) {
     throw safeError('already-exists', 'not_authorized');
   }
   const result = readRecord(stored.result);
   const outcome = result.outcome;
-  const nextStep = result.nextStep;
   if (
     typeof result.correct !== 'boolean' ||
-    !Number.isInteger(result.nextStepIndex) ||
-    (outcome !== 'playing' && outcome !== 'defused' && outcome !== 'exploded') ||
-    nextStep === undefined ||
-    (nextStep !== null && !isSafeBombStep(nextStep))
+    result.commandId !== commandId ||
+    !Number.isInteger(result.nextCommandIndex) ||
+    !Number.isInteger(result.strikeCount) ||
+    Number(result.strikeCount) < 0 ||
+    (outcome !== 'playing' && outcome !== 'defused' && outcome !== 'exploded')
   ) {
     throw safeError('internal', 'not_authorized');
   }
   return {
     correct: result.correct,
-    nextStepIndex: result.nextStepIndex as number,
+    commandId,
+    nextCommandIndex: Number(result.nextCommandIndex),
+    strikeCount: Number(result.strikeCount),
     outcome,
-    nextStep: nextStep as BombStepRecord | null,
   };
+}
+
+function bombOrderedPlayersFromRecord(players: Record<string, unknown>): BombOrderedPlayer[] {
+  return sortBombPlayers(Object.entries(players).flatMap(([uid, value]) => {
+    const player = readRecord(value);
+    const joinOrder = readPositiveNumber(player.joinOrder);
+    return joinOrder ? [{ uid, joinOrder }] : [];
+  }));
+}
+
+function readBombRoleAssignment(value: unknown) {
+  const assignment = readRecord(value);
+  const defuserUserId = readStoredSessionId(assignment.defuserUserId);
+  const expertUserId = readStoredSessionId(assignment.expertUserId);
+  return defuserUserId && expertUserId && defuserUserId !== expertUserId
+    ? { defuserUserId, expertUserId }
+    : null;
+}
+
+function readBombOutcome(value: unknown) {
+  return value === 'defused' || value === 'exploded' || value === 'abandoned'
+    ? value
+    : 'playing';
+}
+
+function readBombPublicResult(value: unknown) {
+  const result = readRecord(value);
+  const commandId = typeof result.commandId === 'string' ? result.commandId : null;
+  const correct = typeof result.correct === 'boolean' ? result.correct : null;
+  const reason = typeof result.reason === 'string' ? result.reason : null;
+  const resolvedAt = readPositiveNumber(result.resolvedAt);
+  return commandId && correct !== null && reason && resolvedAt
+    ? { commandId, correct, reason, resolvedAt }
+    : null;
 }
 
 function requireUid(context: firebaseFunctions.https.CallableContext) {
@@ -3955,6 +4364,10 @@ function readRealtimeDurationSeconds(
 
 function readPositiveNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function readNonNegativeInteger(value: unknown) {
+  return Number.isInteger(value) && Number(value) >= 0 ? Number(value) : 0;
 }
 
 function earliestPositiveNumber(...values: Array<number | null>) {

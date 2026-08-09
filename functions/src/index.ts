@@ -133,6 +133,7 @@ import {
 } from './sidelineStarsCore';
 import { readSeasonEligibleSquadIds } from './squadSeason';
 import { finalizeSpotDifferenceRoundForRewards } from './gameJoinCodes';
+import { BOMB_COMMAND_COUNT, BOMB_ROLE_SCHEMA_VERSION } from './bombDefusalCore';
 
 const functions = permanentAccountFunctions(firebaseFunctions);
 const communicationFunctions = permanentAccountFunctions(
@@ -179,6 +180,7 @@ export {
   createGameLobby,
   createGameJoinCode,
   getActiveSquadGameSession,
+  getBombDefusalPlayerView,
   getGameJoinCodeForSession,
   joinGameLobbyById,
   joinGameLobbyNextRound,
@@ -1979,19 +1981,21 @@ export const recordGameSessionResult = communicationFunctions.https.onCall(async
     } else {
       const gameState = realtimeSession.gameState as Record<string, unknown> | undefined;
       const outcome = gameState?.outcome;
-      const currentStepIndex = typeof gameState?.currentStepIndex === 'number'
-        ? gameState.currentStepIndex
+      const correctCommandCount = typeof gameState?.correctCommandCount === 'number'
+        ? Math.min(Math.max(Math.floor(gameState.correctCommandCount), 0), BOMB_COMMAND_COUNT)
         : 0;
       if (
         realtimeSession.status !== 'completed' ||
+        gameState?.roleSchemaVersion !== BOMB_ROLE_SCHEMA_VERSION ||
+        gameState?.rewardEligible !== true ||
         (outcome !== 'defused' && outcome !== 'exploded')
       ) {
         throw new functions.https.HttpsError('failed-precondition', 'The multiplayer game result is not final.');
       }
       canonicalMultiplayerResult = {
         outcome,
-        firstAttemptCorrectStepCount: outcome === 'defused' ? 5 : Math.min(Math.max(currentStepIndex, 0), 5),
-        totalSteps: 5,
+        firstAttemptCorrectStepCount: correctCommandCount,
+        totalSteps: BOMB_COMMAND_COUNT,
       };
     }
   }
@@ -2034,8 +2038,7 @@ export const recordGameSessionResult = communicationFunctions.https.onCall(async
       const totalSteps = canonicalMultiplayerResult?.totalSteps ?? data?.totalSteps;
       const breakdown = calculateBombDefusalReward({ outcome, firstAttemptCorrectStepCount, totalSteps });
       if (
-        !breakdown || totalSteps !== expectedTotal ||
-        (outcome === 'defused' && firstAttemptCorrectStepCount !== totalSteps)
+        !breakdown || totalSteps !== expectedTotal
       ) throw new functions.https.HttpsError('invalid-argument', 'The Bomb Defusal result is invalid.');
       finalizedResult = { outcome, firstAttemptCorrectStepCount, totalSteps };
     }
