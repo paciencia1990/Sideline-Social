@@ -24,7 +24,10 @@ const MAX_SIZE_BYTES = 2 * 1024 * 1024;
 
 type Props = {
   active?: boolean;
+  autoStartKey?: number | string | null;
   disabled?: boolean;
+  maxDurationMilliseconds?: number;
+  maxSizeBytes?: number;
   onChange: (draft: LocalVoiceMemoDraft | null) => void;
   uploadProgress?: number | null;
 };
@@ -153,11 +156,21 @@ class VoiceRecorderCreationBoundary extends React.Component<
   }
 }
 
-function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = false, onChange, uploadProgress }: Props & { audioModule: ExpoAudioModule }) {
+function VoiceMemoComposerAvailable({
+  audioModule,
+  active = true,
+  autoStartKey = null,
+  disabled = false,
+  maxDurationMilliseconds = MAX_DURATION_MS,
+  maxSizeBytes = MAX_SIZE_BYTES,
+  onChange,
+  uploadProgress,
+}: Props & { audioModule: ExpoAudioModule }) {
   const { t } = useTranslation();
   const recorder = audioModule.useAudioRecorder(VOICE_RECORDING_OPTIONS);
   const recordingRef = useRef<typeof recorder | null>(null);
   const draftRef = useRef<LocalVoiceMemoDraft | null>(null);
+  const lastAutoStartKeyRef = useRef<Props["autoStartKey"]>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const operationInFlightRef = useRef(false);
   const stopInFlightRef = useRef(false);
@@ -216,13 +229,13 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
         throw new VoiceRecorderLifecycleError("stop-recorder", new Error("Recording was too short."));
       }
       const sizeBytes = await getLocalVoiceMemoSize(uri);
-      if (sizeBytes < 1 || sizeBytes > MAX_SIZE_BYTES) {
+      if (sizeBytes < 1 || sizeBytes > maxSizeBytes) {
         await deleteLocalVoiceMemo(uri);
         throw new Error("voice_file_too_large");
       }
       const next: LocalVoiceMemoDraft = {
         uri,
-        durationMilliseconds: Math.min(durationMilliseconds, MAX_DURATION_MS),
+        durationMilliseconds: Math.min(durationMilliseconds, maxDurationMilliseconds),
         sizeBytes,
         mimeType: "audio/mp4",
         previewed: false,
@@ -254,7 +267,7 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
       operationInFlightRef.current = false;
       await restorePlaybackAudioMode();
     }
-  }, [clearTimer, onChange, restorePlaybackAudioMode, t]);
+  }, [clearTimer, maxDurationMilliseconds, maxSizeBytes, onChange, restorePlaybackAudioMode, t]);
 
   const startRecording = useCallback(async () => {
     if (!active || disabled || recordingRef.current || operationInFlightRef.current) return;
@@ -324,7 +337,10 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
       timerRef.current = setInterval(() => {
         const nextElapsed = Date.now() - startedAt.current;
         setElapsed(nextElapsed);
-        if (nextElapsed >= MAX_DURATION_MS) void finishRecording();
+        if (nextElapsed >= maxDurationMilliseconds && !stopInFlightRef.current) {
+          setError(t("voiceMemo.limitReached", { seconds: Math.floor(maxDurationMilliseconds / 1000) }));
+          void finishRecording();
+        }
       }, 250);
     } catch (nextError) {
       try {
@@ -353,7 +369,14 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
       operationInFlightRef.current = false;
       setStarting(false);
     }
-  }, [active, audioModule, disabled, finishRecording, recorder, restorePlaybackAudioMode, t]);
+  }, [active, audioModule, disabled, finishRecording, maxDurationMilliseconds, recorder, restorePlaybackAudioMode, t]);
+
+  useEffect(() => {
+    if (autoStartKey == null || lastAutoStartKeyRef.current === autoStartKey) return;
+    lastAutoStartKeyRef.current = autoStartKey;
+    if (!active || disabled || draftRef.current || recordingRef.current) return;
+    void startRecording();
+  }, [active, autoStartKey, disabled, startRecording]);
 
   const cancelRecording = useCallback(async () => {
     const activeRecorder = recordingRef.current;
@@ -426,11 +449,11 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
 
   return (
     <View style={styles.container}>
-      <Text style={styles.help}>{t("voiceMemo.help", { seconds: 90 })}</Text>
+      <Text style={styles.help}>{t("voiceMemo.help", { seconds: Math.floor(maxDurationMilliseconds / 1000) })}</Text>
       {recording ? (
-        <View accessibilityLabel={`${t("voiceMemo.recording")} ${formatTime(elapsed)}`} style={styles.recordingRow}>
+        <View accessibilityLabel={`${t("voiceMemo.recording")} ${formatTime(elapsed, maxDurationMilliseconds)}`} style={styles.recordingRow}>
           <View style={styles.recordingDot} />
-          <Text style={styles.recordingText}>{t("voiceMemo.recording")} {formatTime(elapsed)}</Text>
+          <Text style={styles.recordingText}>{t("voiceMemo.recording")} {formatTime(elapsed, maxDurationMilliseconds)}</Text>
           <TouchableOpacity accessibilityRole="button" onPress={finishRecording} style={styles.primaryButton}>
             <Text style={styles.primaryText}>{t("voiceMemo.stop")}</Text>
           </TouchableOpacity>
@@ -478,8 +501,8 @@ function VoiceMemoComposerAvailable({ audioModule, active = true, disabled = fal
   );
 }
 
-function formatTime(milliseconds: number) {
-  const seconds = Math.min(90, Math.floor(milliseconds / 1000));
+function formatTime(milliseconds: number, maxDurationMilliseconds = MAX_DURATION_MS) {
+  const seconds = Math.min(Math.floor(maxDurationMilliseconds / 1000), Math.floor(milliseconds / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 

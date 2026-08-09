@@ -19,9 +19,11 @@ import { formatFriendRequestSenderName } from "@/utils/friendPrivacy";
 import {
   countVisibleNotifications,
   getNotificationDestination,
+  getNotificationDestinationMode,
   isVisibleNotification,
   normalizeNotificationId,
   type AppNotificationType,
+  type NotificationDestinationMode,
   type NotificationNavigationData,
 } from "@/utils/notificationCore";
 
@@ -53,7 +55,12 @@ export type AppNotification = {
 
 export type NotificationOpenTarget = {
   notificationId: string | null;
+  requiredMode: NotificationDestinationMode | null;
   route: string;
+};
+
+export type NotificationOpenContext = {
+  activeMode?: unknown;
 };
 
 type FirestoreDate = Date | { toDate?: () => Date } | null | undefined;
@@ -211,22 +218,32 @@ export function retryPendingNotificationAcknowledgements() {
 
 export function getNotificationOpenTargetFromData(
   data: (NotificationNavigationData & { notificationId?: unknown }) | null | undefined,
+  context: NotificationOpenContext = {},
 ): NotificationOpenTarget | null {
-  const route = getNotificationDestination(data ?? {});
+  const route = getNotificationDestination({
+    ...(data ?? {}),
+    activeMode: context.activeMode ?? data?.activeMode,
+  });
   if (!route) return null;
+  const resolvedData = {
+    ...(data ?? {}),
+    activeMode: context.activeMode ?? data?.activeMode,
+  };
   const notificationId = normalizeNotificationId(data?.notificationId);
   return {
     notificationId,
+    requiredMode: getNotificationDestinationMode(resolvedData),
     route: notificationId
       ? `${route}${route.includes("?") ? "&" : "?"}notificationId=${encodeURIComponent(notificationId)}`
       : route,
   };
 }
 
-export async function getPendingNotificationOpenTarget() {
+export async function getPendingNotificationOpenTarget(context: NotificationOpenContext = {}) {
   const response = await Notifications.getLastNotificationResponseAsync();
   const target = getNotificationOpenTargetFromData(
     response?.notification.request.content.data as NotificationNavigationData & { notificationId?: unknown },
+    context,
   );
   if (!target) return null;
 

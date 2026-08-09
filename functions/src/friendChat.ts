@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -16,17 +16,37 @@ import {
 } from './permanentAuth';
 import {
   CHAT_SEND_COOLDOWN_MS,
+  FRIEND_CHAT_FORWARD_COOLDOWN_MS,
+  FRIEND_CHAT_FORWARD_MAX_DESTINATIONS,
+  FRIEND_CHAT_IMAGE_MAX_SIZE_BYTES,
+  FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_SIZE_BYTES,
+  FRIEND_CHAT_MEDIA_RESERVATION_COOLDOWN_MS,
+  FRIEND_CHAT_REACTIONS,
+  FRIEND_CHAT_PIN_DURATIONS,
+  FRIEND_CHAT_VOICE_MAX_SIZE_BYTES,
   MAX_CHAT_PARTICIPANTS,
   directConversationIdFor,
+  friendChatImageStoragePaths,
+  friendChatMediaPreview,
+  friendChatVoiceStoragePath,
   isAcceptedFriend,
+  mediaReservationIdFor,
   messageIdFor,
   normalizeChatUserId,
   normalizeClientMessageId,
   normalizeConversationId,
   normalizeFriendIds,
+  normalizeFriendChatReaction,
+  parseFriendChatMediaStoragePath,
   sanitizeChatMessage,
   sanitizeGroupName,
   sanitizeMessagePreview,
+  sanitizeOptionalChatCaption,
+  validateFriendChatImageMetadata,
+  validateFriendChatVoiceMetadata,
+  type FriendChatImageMetadata,
+  type FriendChatReaction,
+  type FriendChatVoiceMetadata,
 } from './friendChatCore';
 
 const functions = permanentAccountFunctions(firebaseFunctions);
@@ -47,6 +67,41 @@ type ConversationData = admin.firestore.DocumentData & {
   groupName?: string | null;
   lastMessageId?: string | null;
 };
+
+type FriendChatMediaUploadReservation = admin.firestore.DocumentData & {
+  caption?: string | null;
+  clientMessageId?: string;
+  conversationId?: string;
+  expiresAt?: Timestamp;
+  fullPath?: string;
+  image?: FriendChatImageMetadata;
+  kind?: 'image' | 'voice';
+  replyToMessageId?: string | null;
+  status?: 'pending' | 'finalized' | 'deletePending';
+  storagePath?: string;
+  targetId?: string;
+  thumbnailPath?: string;
+  userId?: string;
+  voiceMemo?: FriendChatVoiceMetadata;
+};
+
+type FriendChatMessageInput = {
+  caption?: string | null;
+  clientMessageId: string;
+  conversationId: string;
+  image?: Record<string, unknown>;
+  mediaStoragePaths?: string[];
+  messageType: 'image' | 'text' | 'voice';
+  reservationRef?: FirebaseFirestore.DocumentReference;
+  forwarded?: boolean;
+  replyToMessageId?: string | null;
+  senderUserId: string;
+  text?: string;
+  voiceMemo?: Record<string, unknown>;
+};
+
+const FRIEND_CHAT_MEDIA_UPLOAD_TTL_MS = 15 * 60 * 1000;
+const FRIEND_CHAT_MEDIA_SIGNED_URL_MS = 5 * 60 * 1000;
 
 function requireUid(context: firebaseFunctions.https.CallableContext) {
   const uid = context.auth?.uid;
@@ -86,8 +141,143 @@ function blockRef(blockerId: string, blockedId: string) {
   return firestore().collection('userBlocks').doc(blockerId).collection('blockedUsers').doc(blockedId);
 }
 
+function uploadReservationRef(reservationId: string) {
+  return firestore().collection('friendChatUploadReservations').doc(reservationId);
+}
+
+function mediaGrantRef(grantToken: string) {
+  return firestore().collection('friendChatMediaPlaybackGrants')
+    .doc(createHash('sha256').update(grantToken).digest('hex'));
+}
+
+function userMessageStateRef(conversationId: string, userId: string, messageId: string) {
+  return conversationRef(conversationId)
+    .collection('userMessageStates')
+    .doc(userId)
+    .collection('messages')
+    .doc(messageId);
+}
+
+function forwardRateRef(userId: string) {
+  return firestore().collection('friendChatForwardRateLimits').doc(hashId(userId));
+}
+
+function mediaReservationRateRef(userId: string) {
+  return firestore().collection('friendChatMediaReservationRateLimits').doc(hashId(userId));
+}
+
 function readIds(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function timestampMillis(value: unknown) {
+  if (value instanceof Timestamp) return value.toMillis();
+  if (
+    value &&
+    typeof value === 'object' &&
+    'toMillis' in value &&
+    typeof value.toMillis === 'function'
+  ) {
+    const millis = value.toMillis();
+    return Number.isFinite(millis) ? millis : null;
+  }
+  return null;
+}
+
+function contentIsModerated(value: admin.firestore.DocumentData | undefined) {
+  return value?.moderationState === 'hidden' ||
+    value?.moderationState === 'removed';
+}
+
+function messageIsUnavailableForUser(message: admin.firestore.DocumentData | undefined, userId: string) {
+  return !message ||
+    message.status === 'removed' ||
+    contentIsModerated(message) ||
+    message.messageType === 'system' ||
+    !readIds(message.visibleToUserIds).includes(userId);
+}
+
+function safeMessageExcerpt(message: admin.firestore.DocumentData) {
+  const messageType = message.messageType === 'image'
+    ? 'image'
+    : message.messageType === 'voice'
+      ? 'voice'
+      : 'text';
+  const text = messageType === 'text'
+    ? typeof message.text === 'string' ? message.text : ''
+    : typeof message.caption === 'string' ? message.caption : '';
+  return text ? sanitizeMessagePreview(text) : null;
+}
+
+async function resolveReplyContext(
+  transaction: admin.firestore.Transaction,
+  conversationId: string,
+  messageId: string | null | undefined,
+  userId: string,
+) {
+  const replyMessageId = normalizeConversationId(messageId);
+  if (!replyMessageId) return null;
+  const replyRef = conversationRef(conversationId).collection('messages').doc(replyMessageId);
+  const reply = await transaction.get(replyRef);
+  const replyData = reply.data();
+  if (messageIsUnavailableForUser(replyData, userId)) denied('Reply target is unavailable.');
+  const messageType = replyData?.messageType === 'image'
+    ? 'image'
+    : replyData?.messageType === 'voice'
+      ? 'voice'
+      : 'text';
+  return {
+    createdAt: replyData?.createdAt ?? null,
+    messageId: reply.id,
+    messageType,
+    senderDisplayName: typeof replyData?.senderDisplayName === 'string' ? safeName({ displayName: replyData.senderDisplayName }) || replyData.senderDisplayName : null,
+    senderUserId: typeof replyData?.senderUserId === 'string' ? replyData.senderUserId : null,
+    textExcerpt: replyData ? safeMessageExcerpt(replyData) : null,
+  };
+}
+
+function normalizeMessageIds(value: unknown, max = 20) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map(normalizeConversationId).filter((id): id is string => Boolean(id)))).slice(0, max);
+}
+
+function hashId(value: string) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function assertMediaReservationThrottle(
+  rateSnapshot: admin.firestore.DocumentSnapshot,
+  reservationId: string,
+  now: Timestamp,
+) {
+  const lastCreatedAt = timestampMillis(rateSnapshot.data()?.lastReservationCreatedAt);
+  const lastReservationId = typeof rateSnapshot.data()?.lastReservationId === 'string'
+    ? rateSnapshot.data()?.lastReservationId
+    : null;
+  if (
+    lastCreatedAt !== null &&
+    lastReservationId !== reservationId &&
+    now.toMillis() - lastCreatedAt < FRIEND_CHAT_MEDIA_RESERVATION_COOLDOWN_MS
+  ) {
+    throw new functions.https.HttpsError(
+      'resource-exhausted',
+      'Please wait a moment before sending another media message.',
+    );
+  }
+}
+
+function setMediaReservationThrottle(
+  transaction: admin.firestore.Transaction,
+  userId: string,
+  reservationId: string,
+  now: Timestamp,
+) {
+  transaction.set(mediaReservationRateRef(userId), {
+    lastReservationCreatedAt: now,
+    lastReservationId: reservationId,
+    updatedAt: FieldValue.serverTimestamp(),
+    userIdHash: hashId(userId),
+  }, { merge: true });
 }
 
 function baseMember(input: {
@@ -140,6 +330,115 @@ async function getBlockSnapshots(
   ])).values());
   const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)));
   return snapshots.some((snapshot) => snapshot.exists);
+}
+
+async function createFriendChatMessageTransaction(
+  db: FirebaseFirestore.Firestore,
+  input: FriendChatMessageInput,
+) {
+  const ref = db.collection('friendConversations').doc(input.conversationId);
+  const ownRef = ref.collection('members').doc(input.senderUserId);
+  const messageId = messageIdFor(input.senderUserId, input.clientMessageId);
+  const messageRef = ref.collection('messages').doc(messageId);
+  let conversationType: 'direct' | 'group' = 'direct';
+  let createdAt = Timestamp.now();
+  return db.runTransaction(async (transaction) => {
+    const [conversation, member, existingMessage, sender] = await Promise.all([
+      transaction.get(ref),
+      transaction.get(ownRef),
+      transaction.get(messageRef),
+      transaction.get(db.collection('users').doc(input.senderUserId)),
+    ]);
+    const conversationData = conversation.data() as ConversationData | undefined;
+    if (!conversation.exists || conversationData?.status !== 'active') failed('Conversation unavailable.');
+    if (!member.exists || member.data()?.status !== 'active') denied('Active membership required.');
+    if (existingMessage.exists) {
+      if (input.reservationRef) transaction.set(input.reservationRef, {
+        finalizedAt: FieldValue.serverTimestamp(),
+        status: 'finalized',
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      createdAt = existingMessage.data()?.createdAt ?? createdAt;
+      return {
+        conversationType,
+        created: false,
+        createdAt,
+        messageId,
+      };
+    }
+
+    const lastSentAt = member.data()?.lastSentAt?.toMillis?.() ?? 0;
+    createdAt = Timestamp.now();
+    if (createdAt.toMillis() - lastSentAt < CHAT_SEND_COOLDOWN_MS) {
+      throw new functions.https.HttpsError('resource-exhausted', 'Please wait a moment before sending again.');
+    }
+
+    conversationType = conversationData?.conversationType === 'group' ? 'group' : 'direct';
+    const participantIds = readIds(conversationData?.activeParticipantIds);
+    if (!participantIds.includes(input.senderUserId)) denied('Active membership required.');
+    const recipients = participantIds.filter((id) => id !== input.senderUserId);
+    if (recipients.length === 0) failed('Conversation unavailable.');
+    if (await getBlockSnapshots(transaction, recipients.map((recipientId) => [input.senderUserId, recipientId]))) {
+      denied('Messaging is unavailable for this connection.');
+    }
+    if (conversationType === 'direct') {
+      const friendId = recipients[0];
+      const friend = await transaction.get(db.collection('users').doc(friendId));
+      if (!sender.exists || !friend.exists || !isAcceptedFriend(sender.data(), friend.data(), input.senderUserId, friendId)) {
+        failed('You are no longer friends.');
+      }
+    } else if (!sender.exists) {
+      failed('Sender unavailable.');
+    }
+
+    const replyTo = await resolveReplyContext(transaction, input.conversationId, input.replyToMessageId, input.senderUserId);
+    const senderDisplayName = safeName(sender.data());
+    const visibleToUserIds = participantIds;
+    const messageData: Record<string, unknown> = {
+      caption: input.caption ?? null,
+      clientMessageId: input.clientMessageId,
+      conversationId: input.conversationId,
+      createdAt,
+      forwarded: input.forwarded === true,
+      image: input.image ?? null,
+      mediaStoragePaths: input.mediaStoragePaths ?? [],
+      messageId,
+      messageType: input.messageType,
+      reactionCounts: {},
+      reactionTotalCount: 0,
+      removedAt: null,
+      removedBy: null,
+      replyTo,
+      senderDisplayName,
+      senderUserId: input.senderUserId,
+      status: 'active',
+      text: input.messageType === 'text' ? input.text : input.caption ?? '',
+      visibleToUserIds,
+      voiceMemo: input.voiceMemo ?? null,
+    };
+    transaction.create(messageRef, messageData);
+    if (input.reservationRef) transaction.set(input.reservationRef, {
+      finalizedAt: FieldValue.serverTimestamp(),
+      status: 'finalized',
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    transaction.update(ref, {
+      lastMessageAt: createdAt,
+      lastMessageId: messageId,
+      lastMessagePreview: friendChatMediaPreview(input.messageType, input.messageType === 'text' ? input.text : input.caption),
+      lastMessageRemoved: false,
+      lastMessageType: input.messageType,
+      lastSenderId: input.senderUserId,
+      updatedAt: createdAt,
+    });
+    transaction.update(ownRef, { lastSentAt: createdAt, lastReadAt: createdAt, updatedAt: createdAt });
+    return {
+      conversationType,
+      created: true,
+      createdAt,
+      messageId,
+    };
+  });
 }
 
 export const createOrOpenDirectConversation = communicationChatFunctions.https.onCall(async (data, context) => {
@@ -543,63 +842,261 @@ export const sendFriendChatMessage = communicationChatFunctions.https.onCall(asy
   const uid = requireUid(context);
   const conversationId = normalizeConversationId(data?.conversationId);
   const clientMessageId = normalizeClientMessageId(data?.clientMessageId);
+  const replyToMessageId = normalizeConversationId(data?.replyToMessageId);
   if (!conversationId || !clientMessageId) invalid('Conversation and clientMessageId are required.');
   let text: string;
   try { text = sanitizeChatMessage(data?.text); } catch (error) { invalid((error as Error).message); }
   assertUserContentAllowed(text);
+  const result = await createFriendChatMessageTransaction(firestore(), {
+    clientMessageId,
+    conversationId,
+    messageType: 'text',
+    replyToMessageId,
+    senderUserId: uid,
+    text,
+  });
+  if (result.created) void sendMessagePushes(conversationId, uid, 'text', result.conversationType);
+  return {
+    messageId: result.messageId,
+    status: result.created ? 'sent' as const : 'alreadySent' as const,
+    createdAt: result.createdAt.toDate().toISOString(),
+  };
+});
+
+export const createFriendChatVoiceUpload = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const conversationId = normalizeConversationId(data?.conversationId);
+  const clientMessageId = normalizeClientMessageId(data?.clientMessageId);
+  const replyToMessageId = normalizeConversationId(data?.replyToMessageId);
+  if (!conversationId || !clientMessageId) invalid('Conversation and clientMessageId are required.');
+  let caption: string | null;
+  try { caption = sanitizeOptionalChatCaption(data?.caption); } catch (error) { invalid((error as Error).message); }
+  if (caption) assertUserContentAllowed(caption);
+  let voiceMemo: FriendChatVoiceMetadata;
+  try { voiceMemo = validateFriendChatVoiceMetadata(data?.voiceMemo); } catch (error) { invalid((error as Error).message); }
   const messageId = messageIdFor(uid, clientMessageId);
-  const messageRef = conversationRef(conversationId).collection('messages').doc(messageId);
-  let conversationType: 'direct' | 'group' = 'direct';
-  let createdAt = Timestamp.now();
-  let alreadySent = false;
+  const reservationId = mediaReservationIdFor(uid, clientMessageId, 'voice');
+  const storagePath = friendChatVoiceStoragePath({ conversationId, messageId, reservationId });
+  const createdAt = Timestamp.now();
+  const expiresAt = Timestamp.fromMillis(createdAt.toMillis() + FRIEND_CHAT_MEDIA_UPLOAD_TTL_MS);
 
   await firestore().runTransaction(async (transaction) => {
-    const ref = conversationRef(conversationId);
-    const ownRef = memberRef(conversationId, uid);
-    const [conversation, member, existingMessage, sender] = await Promise.all([
-      transaction.get(ref), transaction.get(ownRef), transaction.get(messageRef),
-      transaction.get(firestore().collection('users').doc(uid)),
+    const reservationRef = uploadReservationRef(reservationId);
+    const [existingReservation, conversation, member, rateLimit] = await Promise.all([
+      transaction.get(reservationRef),
+      transaction.get(conversationRef(conversationId)),
+      transaction.get(memberRef(conversationId, uid)),
+      transaction.get(mediaReservationRateRef(uid)),
     ]);
     if (!conversation.exists || conversation.data()?.status !== 'active') failed('Conversation unavailable.');
     if (!member.exists || member.data()?.status !== 'active') denied('Active membership required.');
-    if (existingMessage.exists) {
-      alreadySent = true;
-      createdAt = existingMessage.data()?.createdAt ?? createdAt;
-      return;
+    const conversationType = conversation.data()?.conversationType === 'group' ? 'group' : 'direct';
+    const participantIds = readIds(conversation.data()?.activeParticipantIds);
+    const recipients = participantIds.filter((id) => id !== uid);
+    if (!participantIds.includes(uid) || recipients.length === 0) denied('Active membership required.');
+    if (await getBlockSnapshots(transaction, recipients.map((recipientId) => [uid, recipientId]))) {
+      denied('Messaging is unavailable for this connection.');
     }
-    const lastSentAt = member.data()?.lastSentAt?.toMillis?.() ?? 0;
-    createdAt = Timestamp.now();
-    if (createdAt.toMillis() - lastSentAt < CHAT_SEND_COOLDOWN_MS) {
-      throw new functions.https.HttpsError('resource-exhausted', 'Please wait a moment before sending again.');
-    }
-    conversationType = conversation.data()?.conversationType === 'group' ? 'group' : 'direct';
     if (conversationType === 'direct') {
-      const participantIds = readIds(conversation.data()?.activeParticipantIds);
-      const friendId = participantIds.find((id) => id !== uid);
-      if (!friendId) failed('Direct conversation unavailable.');
-      const [friend, blockedByCaller, blockedByFriend] = await Promise.all([
+      const friendId = recipients[0];
+      const [sender, friend] = await Promise.all([
+        transaction.get(firestore().collection('users').doc(uid)),
         transaction.get(firestore().collection('users').doc(friendId)),
-        transaction.get(blockRef(uid, friendId)), transaction.get(blockRef(friendId, uid)),
       ]);
-      if (blockedByCaller.exists || blockedByFriend.exists) denied('Messaging is unavailable for this connection.');
       if (!sender.exists || !friend.exists || !isAcceptedFriend(sender.data(), friend.data(), uid, friendId)) {
         failed('You are no longer friends.');
       }
     }
-    const senderDisplayName = safeName(sender.data());
-    const visibleToUserIds = readIds(conversation.data()?.activeParticipantIds);
-    transaction.create(messageRef, {
-      messageId, conversationId, messageType: 'text', senderUserId: uid, senderDisplayName,
-      text, createdAt, status: 'active', removedAt: null, removedBy: null, clientMessageId, visibleToUserIds,
+    if (existingReservation.exists) {
+      const existing = existingReservation.data() as FriendChatMediaUploadReservation;
+      if (
+        existing.userId !== uid ||
+        existing.conversationId !== conversationId ||
+        existing.targetId !== messageId ||
+        existing.kind !== 'voice' ||
+        existing.storagePath !== storagePath
+      ) failed('Upload reservation unavailable.');
+      if (existing.status === 'finalized') return;
+      transaction.set(reservationRef, {
+        caption,
+        expiresAt,
+        replyToMessageId,
+        status: 'pending',
+        updatedAt: FieldValue.serverTimestamp(),
+        voiceMemo,
+      }, { merge: true });
+      return;
+    }
+    assertMediaReservationThrottle(rateLimit, reservationId, createdAt);
+    transaction.create(reservationRef, {
+      caption,
+      clientMessageId,
+      conversationId,
+      createdAt,
+      expiresAt,
+      kind: 'voice',
+      reservationId,
+      replyToMessageId,
+      status: 'pending',
+      storagePath,
+      targetId: messageId,
+      userId: uid,
+      voiceMemo,
     });
-    transaction.update(ref, {
-      lastMessageAt: createdAt, lastMessageId: messageId, lastMessagePreview: sanitizeMessagePreview(text),
-      lastMessageRemoved: false, lastSenderId: uid, updatedAt: createdAt,
-    });
-    transaction.update(ownRef, { lastSentAt: createdAt, lastReadAt: createdAt, updatedAt: createdAt });
+    setMediaReservationThrottle(transaction, uid, reservationId, createdAt);
   });
-  if (!alreadySent) void sendMessagePushes(conversationId, uid, text, conversationType);
-  return { messageId, status: alreadySent ? 'alreadySent' as const : 'sent' as const, createdAt: createdAt.toDate().toISOString() };
+
+  return { expiresAtMillis: expiresAt.toMillis(), reservationId, storagePath, targetId: messageId };
+});
+
+export const finalizeFriendChatVoiceMessage = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const reservationId = normalizeConversationId(data?.reservationId);
+  if (!reservationId) invalid('A valid reservation is required.');
+  const reservationRef = uploadReservationRef(reservationId);
+  const initialSnapshot = await reservationRef.get();
+  const initial = initialSnapshot.data() as FriendChatMediaUploadReservation | undefined;
+  if (!initialSnapshot.exists || initial?.kind !== 'voice' || initial.userId !== uid) failed('Upload expired.');
+  if (initial.status === 'finalized') return { messageId: initial.targetId, status: 'alreadyFinalized' as const };
+  const voiceMemo = await verifyUploadedFriendVoiceMemo(initial);
+  const conversationId = normalizeConversationId(initial.conversationId);
+  const clientMessageId = normalizeClientMessageId(initial.clientMessageId);
+  if (!conversationId || !clientMessageId) failed('Upload expired.');
+  const result = await createFriendChatMessageTransaction(firestore(), {
+    caption: typeof initial.caption === 'string' ? initial.caption : null,
+    clientMessageId,
+    conversationId,
+    mediaStoragePaths: [voiceMemo.storagePath],
+    messageType: 'voice',
+    reservationRef,
+    replyToMessageId: typeof initial.replyToMessageId === 'string' ? initial.replyToMessageId : null,
+    senderUserId: uid,
+    voiceMemo,
+  });
+  if (result.created) void sendMessagePushes(conversationId, uid, 'voice', result.conversationType);
+  return { messageId: result.messageId, status: result.created ? 'sent' as const : 'alreadyFinalized' as const };
+});
+
+export const createFriendChatImageUpload = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const conversationId = normalizeConversationId(data?.conversationId);
+  const clientMessageId = normalizeClientMessageId(data?.clientMessageId);
+  const replyToMessageId = normalizeConversationId(data?.replyToMessageId);
+  if (!conversationId || !clientMessageId) invalid('Conversation and clientMessageId are required.');
+  let caption: string | null;
+  try { caption = sanitizeOptionalChatCaption(data?.caption); } catch (error) { invalid((error as Error).message); }
+  if (caption) assertUserContentAllowed(caption);
+  let image: FriendChatImageMetadata;
+  try { image = validateFriendChatImageMetadata(data?.image); } catch (error) { invalid((error as Error).message); }
+  const messageId = messageIdFor(uid, clientMessageId);
+  const reservationId = mediaReservationIdFor(uid, clientMessageId, 'image');
+  const paths = friendChatImageStoragePaths({ conversationId, messageId, reservationId });
+  const createdAt = Timestamp.now();
+  const expiresAt = Timestamp.fromMillis(createdAt.toMillis() + FRIEND_CHAT_MEDIA_UPLOAD_TTL_MS);
+
+  await firestore().runTransaction(async (transaction) => {
+    const reservationRef = uploadReservationRef(reservationId);
+    const [existingReservation, conversation, member, rateLimit] = await Promise.all([
+      transaction.get(reservationRef),
+      transaction.get(conversationRef(conversationId)),
+      transaction.get(memberRef(conversationId, uid)),
+      transaction.get(mediaReservationRateRef(uid)),
+    ]);
+    if (!conversation.exists || conversation.data()?.status !== 'active') failed('Conversation unavailable.');
+    if (!member.exists || member.data()?.status !== 'active') denied('Active membership required.');
+    const conversationType = conversation.data()?.conversationType === 'group' ? 'group' : 'direct';
+    const participantIds = readIds(conversation.data()?.activeParticipantIds);
+    const recipients = participantIds.filter((id) => id !== uid);
+    if (!participantIds.includes(uid) || recipients.length === 0) denied('Active membership required.');
+    if (await getBlockSnapshots(transaction, recipients.map((recipientId) => [uid, recipientId]))) {
+      denied('Messaging is unavailable for this connection.');
+    }
+    if (conversationType === 'direct') {
+      const friendId = recipients[0];
+      const [sender, friend] = await Promise.all([
+        transaction.get(firestore().collection('users').doc(uid)),
+        transaction.get(firestore().collection('users').doc(friendId)),
+      ]);
+      if (!sender.exists || !friend.exists || !isAcceptedFriend(sender.data(), friend.data(), uid, friendId)) {
+        failed('You are no longer friends.');
+      }
+    }
+    if (existingReservation.exists) {
+      const existing = existingReservation.data() as FriendChatMediaUploadReservation;
+      if (
+        existing.userId !== uid ||
+        existing.conversationId !== conversationId ||
+        existing.targetId !== messageId ||
+        existing.kind !== 'image' ||
+        existing.fullPath !== paths.fullPath ||
+        existing.thumbnailPath !== paths.thumbnailPath
+      ) failed('Upload reservation unavailable.');
+      if (existing.status === 'finalized') return;
+      transaction.set(reservationRef, {
+        caption,
+        expiresAt,
+        image,
+        replyToMessageId,
+        status: 'pending',
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return;
+    }
+    assertMediaReservationThrottle(rateLimit, reservationId, createdAt);
+    transaction.create(reservationRef, {
+      caption,
+      clientMessageId,
+      conversationId,
+      createdAt,
+      expiresAt,
+      fullPath: paths.fullPath,
+      image,
+      kind: 'image',
+      reservationId,
+      replyToMessageId,
+      status: 'pending',
+      targetId: messageId,
+      thumbnailPath: paths.thumbnailPath,
+      userId: uid,
+    });
+    setMediaReservationThrottle(transaction, uid, reservationId, createdAt);
+  });
+
+  return {
+    expiresAtMillis: expiresAt.toMillis(),
+    fullPath: paths.fullPath,
+    reservationId,
+    targetId: messageId,
+    thumbnailPath: paths.thumbnailPath,
+  };
+});
+
+export const finalizeFriendChatImageMessage = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const reservationId = normalizeConversationId(data?.reservationId);
+  if (!reservationId) invalid('A valid reservation is required.');
+  const reservationRef = uploadReservationRef(reservationId);
+  const initialSnapshot = await reservationRef.get();
+  const initial = initialSnapshot.data() as FriendChatMediaUploadReservation | undefined;
+  if (!initialSnapshot.exists || initial?.kind !== 'image' || initial.userId !== uid) failed('Upload expired.');
+  if (initial.status === 'finalized') return { messageId: initial.targetId, status: 'alreadyFinalized' as const };
+  const image = await verifyUploadedFriendImage(initial);
+  const conversationId = normalizeConversationId(initial.conversationId);
+  const clientMessageId = normalizeClientMessageId(initial.clientMessageId);
+  if (!conversationId || !clientMessageId) failed('Upload expired.');
+  const result = await createFriendChatMessageTransaction(firestore(), {
+    caption: typeof initial.caption === 'string' ? initial.caption : null,
+    clientMessageId,
+    conversationId,
+    image,
+    mediaStoragePaths: [image.fullPath, image.thumbnailPath],
+    messageType: 'image',
+    reservationRef,
+    replyToMessageId: typeof initial.replyToMessageId === 'string' ? initial.replyToMessageId : null,
+    senderUserId: uid,
+  });
+  if (result.created) void sendMessagePushes(conversationId, uid, 'image', result.conversationType);
+  return { messageId: result.messageId, status: result.created ? 'sent' as const : 'alreadyFinalized' as const };
 });
 
 export const removeOwnFriendChatMessage = chatFunctions.https.onCall(async (data, context) => {
@@ -607,6 +1104,7 @@ export const removeOwnFriendChatMessage = chatFunctions.https.onCall(async (data
   const conversationId = normalizeConversationId(data?.conversationId);
   const messageId = normalizeConversationId(data?.messageId);
   if (!conversationId || !messageId) invalid('Conversation and message required.');
+  let mediaStoragePaths: string[] = [];
   await firestore().runTransaction(async (transaction) => {
     const ref = conversationRef(conversationId);
     const ownMember = await transaction.get(memberRef(conversationId, uid));
@@ -616,12 +1114,272 @@ export const removeOwnFriendChatMessage = chatFunctions.https.onCall(async (data
     if (!message.exists || message.data()?.senderUserId !== uid) denied('You may remove only your own message.');
     if (message.data()?.status === 'removed') return;
     const now = Timestamp.now();
-    transaction.update(message.ref, { status: 'removed', text: '', removedAt: now, removedBy: uid });
+    mediaStoragePaths = readIds(message.data()?.mediaStoragePaths);
+    const voicePath = typeof message.data()?.voiceMemo?.storagePath === 'string' ? message.data()?.voiceMemo?.storagePath : '';
+    const imageFullPath = typeof message.data()?.image?.fullPath === 'string' ? message.data()?.image?.fullPath : '';
+    const imageThumbnailPath = typeof message.data()?.image?.thumbnailPath === 'string' ? message.data()?.image?.thumbnailPath : '';
+    mediaStoragePaths = Array.from(new Set([...mediaStoragePaths, voicePath, imageFullPath, imageThumbnailPath]
+      .filter((path) => Boolean(parseFriendChatMediaStoragePath(path)))));
+    transaction.update(message.ref, {
+      caption: null,
+      image: null,
+      mediaStoragePaths: [],
+      reactionCounts: {},
+      reactionTotalCount: 0,
+      status: 'removed',
+      text: '',
+      removedAt: now,
+      removedBy: uid,
+      voiceMemo: null,
+    });
     if (conversation.data()?.lastMessageId === messageId) {
-      transaction.update(ref, { lastMessagePreview: null, lastMessageRemoved: true, updatedAt: now });
+      transaction.update(ref, { lastMessagePreview: null, lastMessageRemoved: true, lastMessageType: 'deleted', updatedAt: now });
     }
   });
-  return { removed: true };
+  const storageCleanup = await deleteFriendChatStorageObjects(mediaStoragePaths);
+  return { removed: true, storageCleanup };
+});
+
+export const deleteFriendChatMessagesForMe = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const conversationId = normalizeConversationId(data?.conversationId);
+  const messageIds = normalizeMessageIds(data?.messageIds, 20);
+  if (!conversationId || messageIds.length === 0) invalid('Messages are required.');
+  let hidden = 0;
+  await firestore().runTransaction(async (transaction) => {
+    const [conversation, member, ...messages] = await Promise.all([
+      transaction.get(conversationRef(conversationId)),
+      transaction.get(memberRef(conversationId, uid)),
+      ...messageIds.map((messageId) => transaction.get(conversationRef(conversationId).collection('messages').doc(messageId))),
+    ]);
+    if (!conversation.exists || conversation.data()?.status !== 'active') failed('Conversation unavailable.');
+    if (!member.exists || member.data()?.status !== 'active') denied('Active membership required.');
+    messages.forEach((message) => {
+      const messageData = message.data();
+      if (messageIsUnavailableForUser(messageData, uid)) return;
+      hidden += 1;
+      transaction.set(userMessageStateRef(conversationId, uid, message.id), {
+        conversationId,
+        hiddenForMe: true,
+        hiddenForMeAt: FieldValue.serverTimestamp(),
+        messageId: message.id,
+        updatedAt: FieldValue.serverTimestamp(),
+        userId: uid,
+      }, { merge: true });
+    });
+  });
+  return { hidden };
+});
+
+export const setFriendChatMessagesStarred = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const conversationId = normalizeConversationId(data?.conversationId);
+  const messageIds = normalizeMessageIds(data?.messageIds, 20);
+  const starred = data?.starred === true;
+  if (!conversationId || messageIds.length === 0) invalid('Messages are required.');
+  let updated = 0;
+  await firestore().runTransaction(async (transaction) => {
+    const [conversation, member, ...messages] = await Promise.all([
+      transaction.get(conversationRef(conversationId)),
+      transaction.get(memberRef(conversationId, uid)),
+      ...messageIds.map((messageId) => transaction.get(conversationRef(conversationId).collection('messages').doc(messageId))),
+    ]);
+    if (!conversation.exists || conversation.data()?.status !== 'active') failed('Conversation unavailable.');
+    if (!member.exists || member.data()?.status !== 'active') denied('Active membership required.');
+    messages.forEach((message) => {
+      const messageData = message.data();
+      if (messageIsUnavailableForUser(messageData, uid)) return;
+      updated += 1;
+      transaction.set(userMessageStateRef(conversationId, uid, message.id), {
+        conversationId,
+        messageId: message.id,
+        starred,
+        starredAt: starred ? FieldValue.serverTimestamp() : null,
+        updatedAt: FieldValue.serverTimestamp(),
+        userId: uid,
+      }, { merge: true });
+    });
+  });
+  return { updated };
+});
+
+export const forwardFriendChatMessages = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const sourceConversationId = normalizeConversationId(data?.conversationId);
+  const messageIds = normalizeMessageIds(data?.messageIds, 5);
+  const destinationConversationIds = normalizeMessageIds(data?.destinationConversationIds, FRIEND_CHAT_FORWARD_MAX_DESTINATIONS)
+    .filter((conversationId) => conversationId !== sourceConversationId);
+  if (!sourceConversationId || messageIds.length === 0 || destinationConversationIds.length === 0) invalid('Forward destinations and messages are required.');
+  const pushTargets: Array<{ conversationId: string; conversationType: 'direct' | 'group' }> = [];
+  let forwarded = 0;
+  await firestore().runTransaction(async (transaction) => {
+    const now = Timestamp.now();
+    const rate = await transaction.get(forwardRateRef(uid));
+    const lastForwardAt = timestampMillis(rate.data()?.lastForwardAt);
+    if (lastForwardAt !== null && now.toMillis() - lastForwardAt < FRIEND_CHAT_FORWARD_COOLDOWN_MS) {
+      throw new functions.https.HttpsError('resource-exhausted', 'Please wait a moment before forwarding again.');
+    }
+    const [sourceConversation, sourceMember, sender, ...sourceMessages] = await Promise.all([
+      transaction.get(conversationRef(sourceConversationId)),
+      transaction.get(memberRef(sourceConversationId, uid)),
+      transaction.get(firestore().collection('users').doc(uid)),
+      ...messageIds.map((messageId) => transaction.get(conversationRef(sourceConversationId).collection('messages').doc(messageId))),
+    ]);
+    if (!sourceConversation.exists || sourceConversation.data()?.status !== 'active') failed('Conversation unavailable.');
+    if (!sourceMember.exists || sourceMember.data()?.status !== 'active') denied('Active membership required.');
+    if (!sender.exists) failed('Sender unavailable.');
+    const sendableMessages = sourceMessages.flatMap((message) => {
+      const messageData = message.data();
+      if (messageIsUnavailableForUser(messageData, uid)) return [];
+      if (messageData?.messageType === 'image' || messageData?.messageType === 'voice') return [];
+      const text = typeof messageData?.text === 'string' && messageData.text.trim()
+        ? sanitizeChatMessage(messageData.text)
+        : typeof messageData?.caption === 'string' && messageData.caption.trim()
+          ? sanitizeOptionalChatCaption(messageData.caption)
+          : '';
+      return text ? [{ originalId: message.id, text }] : [];
+    });
+    if (sendableMessages.length === 0) failed('Only text or caption messages can be forwarded right now.');
+    const senderDisplayName = safeName(sender.data());
+    const destinations: Array<{
+      conversation: admin.firestore.DocumentSnapshot;
+      conversationId: string;
+      conversationType: 'direct' | 'group';
+      participantIds: string[];
+    }> = [];
+    for (const destinationConversationId of destinationConversationIds) {
+      const [destination, destinationMember] = await Promise.all([
+        transaction.get(conversationRef(destinationConversationId)),
+        transaction.get(memberRef(destinationConversationId, uid)),
+      ]);
+      const destinationData = destination.data() as ConversationData | undefined;
+      if (!destination.exists || destinationData?.status !== 'active') denied('Destination unavailable.');
+      if (!destinationMember.exists || destinationMember.data()?.status !== 'active') denied('Destination membership required.');
+      const participantIds = readIds(destinationData?.activeParticipantIds);
+      const recipients = participantIds.filter((id) => id !== uid);
+      if (!participantIds.includes(uid) || recipients.length === 0) denied('Destination membership required.');
+      if (await getBlockSnapshots(transaction, recipients.map((recipientId) => [uid, recipientId]))) {
+        denied('Messaging is unavailable for this connection.');
+      }
+      const conversationType = destinationData?.conversationType === 'group' ? 'group' : 'direct';
+      if (conversationType === 'direct') {
+        const friendId = recipients[0];
+        const friend = await transaction.get(firestore().collection('users').doc(friendId));
+        if (!friend.exists || !isAcceptedFriend(sender.data(), friend.data(), uid, friendId)) failed('You are no longer friends.');
+      }
+      destinations.push({ conversation: destination, conversationId: destinationConversationId, conversationType, participantIds });
+    }
+    for (const destination of destinations) {
+      for (const sourceMessage of sendableMessages) {
+        const clientMessageId = `forward_${randomUUID()}`;
+        const messageId = messageIdFor(uid, clientMessageId);
+        const messageRef = conversationRef(destination.conversationId).collection('messages').doc(messageId);
+        const createdAt = Timestamp.now();
+        transaction.create(messageRef, {
+          caption: null,
+          clientMessageId,
+          conversationId: destination.conversationId,
+          createdAt,
+          forwarded: true,
+          forwardedFrom: { messageType: 'text' },
+          image: null,
+          mediaStoragePaths: [],
+          messageId,
+          messageType: 'text',
+          reactionCounts: {},
+          reactionTotalCount: 0,
+          removedAt: null,
+          removedBy: null,
+          replyTo: null,
+          senderDisplayName,
+          senderUserId: uid,
+          status: 'active',
+          text: sourceMessage.text,
+          visibleToUserIds: destination.participantIds,
+          voiceMemo: null,
+        });
+        transaction.update(destination.conversation.ref, {
+          lastMessageAt: createdAt,
+          lastMessageId: messageId,
+          lastMessagePreview: friendChatMediaPreview('text', sourceMessage.text),
+          lastMessageRemoved: false,
+          lastMessageType: 'text',
+          lastSenderId: uid,
+          updatedAt: createdAt,
+        });
+        forwarded += 1;
+      }
+      pushTargets.push({ conversationId: destination.conversationId, conversationType: destination.conversationType });
+    }
+    transaction.set(forwardRateRef(uid), {
+      lastForwardAt: now,
+      updatedAt: FieldValue.serverTimestamp(),
+      userIdHash: hashId(uid),
+    }, { merge: true });
+  });
+  await Promise.allSettled(pushTargets.map((target) => sendMessagePushes(target.conversationId, uid, 'text', target.conversationType)));
+  return { forwarded, unsupportedMediaMessageIds: [] };
+});
+
+export const pinFriendChatMessage = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const conversationId = normalizeConversationId(data?.conversationId);
+  const messageId = normalizeConversationId(data?.messageId);
+  const duration = FRIEND_CHAT_PIN_DURATIONS.includes(data?.duration) ? data.duration as typeof FRIEND_CHAT_PIN_DURATIONS[number] : null;
+  if (!conversationId || !messageId || !duration) invalid('Pin references are required.');
+  const durationMs = duration === '24h' ? 24 * 60 * 60 * 1000 : duration === '7d' ? 7 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
+  await firestore().runTransaction(async (transaction) => {
+    const [conversation, member, message] = await Promise.all([
+      transaction.get(conversationRef(conversationId)),
+      transaction.get(memberRef(conversationId, uid)),
+      transaction.get(conversationRef(conversationId).collection('messages').doc(messageId)),
+    ]);
+    const conversationData = conversation.data() as ConversationData | undefined;
+    if (!conversation.exists || conversationData?.status !== 'active') failed('Conversation unavailable.');
+    if (!member.exists || member.data()?.status !== 'active') denied('Active membership required.');
+    if (conversationData?.conversationType === 'group' && !['owner', 'admin'].includes(member.data()?.role)) {
+      denied('Group admin access required.');
+    }
+    const messageData = message.data();
+    if (messageIsUnavailableForUser(messageData, uid)) denied('Message is unavailable.');
+    const pinnedContext = await resolveReplyContext(transaction, conversationId, messageId, uid);
+    if (!pinnedContext) denied('Message is unavailable.');
+    const now = Timestamp.now();
+    transaction.update(conversation.ref, {
+      pinnedMessage: {
+        ...pinnedContext,
+        expiresAt: Timestamp.fromMillis(now.toMillis() + durationMs),
+        pinnedAt: now,
+        pinnedByUserId: uid,
+      },
+      updatedAt: now,
+    });
+  });
+  return { pinned: true };
+});
+
+export const unpinFriendChatMessage = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const conversationId = normalizeConversationId(data?.conversationId);
+  const messageId = normalizeConversationId(data?.messageId);
+  if (!conversationId || !messageId) invalid('Pin references are required.');
+  await firestore().runTransaction(async (transaction) => {
+    const [conversation, member] = await Promise.all([
+      transaction.get(conversationRef(conversationId)),
+      transaction.get(memberRef(conversationId, uid)),
+    ]);
+    const conversationData = conversation.data() as ConversationData | undefined;
+    if (!conversation.exists || conversationData?.status !== 'active') failed('Conversation unavailable.');
+    if (!member.exists || member.data()?.status !== 'active') denied('Active membership required.');
+    if (conversationData?.conversationType === 'group' && !['owner', 'admin'].includes(member.data()?.role)) {
+      denied('Group admin access required.');
+    }
+    const pinned = conversationData?.pinnedMessage as { messageId?: unknown } | undefined;
+    if (pinned?.messageId === messageId) {
+      transaction.update(conversation.ref, { pinnedMessage: FieldValue.delete(), updatedAt: Timestamp.now() });
+    }
+  });
+  return { unpinned: true };
 });
 
 export const blockFriendChatUser = safetyChatFunctions.https.onCall(async (data, context) => {
@@ -704,13 +1462,452 @@ export const reportFriendChatMessage = safetyChatFunctions.https.onCall(async (d
   const message = await conversationRef(conversationId).collection('messages').doc(messageId).get();
   if (!message.exists) failed('Message unavailable.');
   if (!readIds(message.data()?.visibleToUserIds).includes(uid)) denied('Message is not visible to this member.');
+  const messageData = message.data() ?? {};
+  const messageType = messageData.messageType === 'voice'
+    ? 'voice'
+    : messageData.messageType === 'image'
+      ? 'image'
+      : 'text';
   const ref = firestore().collection('chatModerationReports').doc();
   await ref.set({
-    reportId: ref.id, reporterUserId: uid, reportedUserId: message.data()?.senderUserId ?? null,
+    attachmentEvidence: {
+      image: messageType === 'image' ? {
+        fullPath: typeof messageData.image?.fullPath === 'string' ? messageData.image.fullPath : null,
+        height: Number.isInteger(messageData.image?.height) ? messageData.image.height : null,
+        mimeType: typeof messageData.image?.mimeType === 'string' ? messageData.image.mimeType : null,
+        thumbnailPath: typeof messageData.image?.thumbnailPath === 'string' ? messageData.image.thumbnailPath : null,
+        width: Number.isInteger(messageData.image?.width) ? messageData.image.width : null,
+      } : null,
+      voiceMemo: messageType === 'voice' ? {
+        durationMilliseconds: Number.isInteger(messageData.voiceMemo?.durationMilliseconds) ? messageData.voiceMemo.durationMilliseconds : null,
+        mimeType: typeof messageData.voiceMemo?.mimeType === 'string' ? messageData.voiceMemo.mimeType : null,
+        sizeBytes: Number.isInteger(messageData.voiceMemo?.sizeBytes) ? messageData.voiceMemo.sizeBytes : null,
+        storagePath: typeof messageData.voiceMemo?.storagePath === 'string' ? messageData.voiceMemo.storagePath : null,
+      } : null,
+    },
+    contentSnapshot: {
+      caption: typeof messageData.caption === 'string' ? sanitizeMessagePreview(messageData.caption) : null,
+      messageType,
+      text: typeof messageData.text === 'string' ? sanitizeMessagePreview(messageData.text) : null,
+    },
+    reportId: ref.id, reporterUserId: uid, reportedUserId: messageData.senderUserId ?? null,
     conversationId, messageId, reason, reportType: 'message', status: 'open', createdAt: Timestamp.now(),
   });
   return { reportId: ref.id, reported: true };
 });
+
+export const toggleFriendChatReaction = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const conversationId = normalizeConversationId(data?.conversationId);
+  const messageId = normalizeConversationId(data?.messageId);
+  const emoji = normalizeFriendChatReaction(data?.emoji);
+  if (!conversationId || !messageId || !emoji) invalid('A supported reaction is required.');
+  const messageRef = conversationRef(conversationId).collection('messages').doc(messageId);
+  const reactionRef = messageRef.collection('reactions').doc(uid);
+  await firestore().runTransaction(async (transaction) => {
+    const [conversation, member, message, reactionSnapshot] = await Promise.all([
+      transaction.get(conversationRef(conversationId)),
+      transaction.get(memberRef(conversationId, uid)),
+      transaction.get(messageRef),
+      transaction.get(messageRef.collection('reactions')),
+    ]);
+    if (!conversation.exists || conversation.data()?.status !== 'active') failed('Conversation unavailable.');
+    if (!member.exists || member.data()?.status !== 'active') denied('Active membership required.');
+    const messageData = message.data();
+    if (
+      !message.exists ||
+      messageData?.status === 'removed' ||
+      contentIsModerated(messageData) ||
+      messageData?.messageType === 'system' ||
+      !readIds(messageData?.visibleToUserIds).includes(uid)
+    ) denied('Message is unavailable.');
+    const participantIds = readIds(conversation.data()?.activeParticipantIds);
+    const recipients = participantIds.filter((id) => id !== uid);
+    if (await getBlockSnapshots(transaction, recipients.map((recipientId) => [uid, recipientId]))) {
+      denied('Messaging is unavailable for this connection.');
+    }
+    const existingReactions = new Map<string, FriendChatReaction>();
+    reactionSnapshot.docs.forEach((reactionDocument) => {
+      const existingEmoji = normalizeFriendChatReaction(reactionDocument.get('emoji'));
+      if (existingEmoji) existingReactions.set(reactionDocument.id, existingEmoji);
+    });
+    const currentEmoji = existingReactions.get(uid) ?? null;
+    if (currentEmoji === emoji) {
+      existingReactions.delete(uid);
+      transaction.delete(reactionRef);
+    } else {
+      existingReactions.set(uid, emoji);
+      transaction.set(reactionRef, {
+        emoji,
+        reactedAt: FieldValue.serverTimestamp(),
+        userId: uid,
+      });
+    }
+    const compactCounts: Partial<Record<FriendChatReaction, number>> = {};
+    for (const reaction of existingReactions.values()) {
+      compactCounts[reaction] = Math.min(MAX_CHAT_PARTICIPANTS, (compactCounts[reaction] ?? 0) + 1);
+    }
+    transaction.update(messageRef, {
+      reactionCounts: compactCounts,
+      reactionTotalCount: Object.values(compactCounts).reduce((sum: number, count) => sum + Number(count ?? 0), 0),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+  return { updated: true };
+});
+
+export const getFriendChatMediaDownloadUrl = communicationChatFunctions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const messageId = normalizeConversationId(data?.messageId);
+  const storagePath = typeof data?.storagePath === 'string' ? data.storagePath.trim() : '';
+  const storageReference = parseFriendChatMediaStoragePath(storagePath);
+  if (!messageId || !storageReference || storageReference.messageId !== messageId) {
+    invalid('A valid media reference is required.');
+  }
+  const authorized = await canAccessFriendChatMedia(firestore(), uid, storagePath);
+  if (!authorized) denied('Media is unavailable.');
+
+  const expiresAtMillis = Date.now() + FRIEND_CHAT_MEDIA_SIGNED_URL_MS;
+  const bucket = admin.storage().bucket();
+  const storageEmulatorHost = process.env.STORAGE_EMULATOR_HOST;
+  const storageEmulatorOrigin = storageEmulatorHost && /^https?:\/\//u.test(storageEmulatorHost)
+    ? storageEmulatorHost
+    : `http://${storageEmulatorHost}`;
+  const file = bucket.file(storagePath);
+  let url: string;
+  if (process.env.FUNCTIONS_EMULATOR === 'true' && storageEmulatorHost) {
+    const [metadata] = await file.getMetadata();
+    const existingToken = metadata.metadata?.firebaseStorageDownloadTokens;
+    const emulatorToken = typeof existingToken === 'string' && existingToken
+      ? existingToken.split(',')[0]
+      : randomBytes(18).toString('hex');
+    if (!existingToken) {
+      await file.setMetadata({
+        metadata: {
+          ...metadata.metadata,
+          firebaseStorageDownloadTokens: emulatorToken,
+        },
+      });
+    }
+    url = `${storageEmulatorOrigin}/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(emulatorToken)}`;
+  } else {
+    const grantToken = randomBytes(32).toString('hex');
+    await mediaGrantRef(grantToken).create({
+      conversationId: storageReference.conversationId,
+      expiresAt: Timestamp.fromMillis(expiresAtMillis),
+      messageId,
+      mediaKind: storageReference.kind,
+      storagePath,
+      userId: uid,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    const projectId = process.env.GCLOUD_PROJECT || admin.app().options.projectId;
+    if (!projectId) failed('Media access is unavailable.');
+    url = `https://us-central1-${projectId}.cloudfunctions.net/streamFriendChatMedia?grant=${grantToken}`;
+  }
+  return { expiresAtMillis, url };
+});
+
+export const streamFriendChatMedia = chatFunctions.https.onRequest(async (request, response) => {
+  response.set('Cache-Control', 'private, no-store, max-age=0');
+  response.set('X-Content-Type-Options', 'nosniff');
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    response.status(405).set('Allow', 'GET, HEAD').end();
+    return;
+  }
+  const grantToken = typeof request.query.grant === 'string' ? request.query.grant : '';
+  if (!/^[a-f0-9]{64}$/u.test(grantToken)) {
+    response.status(404).end();
+    return;
+  }
+  try {
+    const grant = await mediaGrantRef(grantToken).get();
+    const data = grant.data();
+    const expiresAtMillis = timestampMillis(data?.expiresAt) ?? 0;
+    const storagePath = typeof data?.storagePath === 'string' ? data.storagePath : '';
+    const uid = typeof data?.userId === 'string' ? data.userId : '';
+    if (!grant.exists || !uid || expiresAtMillis <= Date.now() || !await canAccessFriendChatMedia(firestore(), uid, storagePath)) {
+      response.status(404).end();
+      return;
+    }
+    const storageReference = parseFriendChatMediaStoragePath(storagePath);
+    if (!storageReference) {
+      response.status(404).end();
+      return;
+    }
+    const file = admin.storage().bucket().file(storagePath);
+    const [metadata] = await file.getMetadata();
+    const sizeBytes = Number(metadata.size);
+    const mimeType = typeof metadata.contentType === 'string' ? metadata.contentType : '';
+    const maxSize = storageReference.kind === 'thumbnail'
+      ? FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_SIZE_BYTES
+      : storageReference.kind === 'image'
+        ? FRIEND_CHAT_IMAGE_MAX_SIZE_BYTES
+        : FRIEND_CHAT_VOICE_MAX_SIZE_BYTES;
+    const allowed = storageReference.kind === 'voice'
+      ? ['audio/mp4', 'audio/m4a', 'audio/x-m4a'].includes(mimeType)
+      : ['image/jpeg', 'image/webp'].includes(mimeType);
+    if (!Number.isInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > maxSize || !allowed) {
+      response.status(415).end();
+      return;
+    }
+    const range = parseByteRange(request.get('range'), sizeBytes);
+    if (range === 'invalid') {
+      response.status(416).set('Content-Range', `bytes */${sizeBytes}`).end();
+      return;
+    }
+    response.set('Accept-Ranges', 'bytes');
+    response.type(mimeType);
+    if (range) {
+      response.status(206);
+      response.set('Content-Range', `bytes ${range.start}-${range.end}/${sizeBytes}`);
+      response.set('Content-Length', String(range.end - range.start + 1));
+    } else {
+      response.status(200);
+      response.set('Content-Length', String(sizeBytes));
+    }
+    if (request.method === 'HEAD') {
+      response.end();
+      return;
+    }
+    const [contents] = await file.download(range ? { start: range.start, end: range.end } : undefined);
+    response.send(contents);
+  } catch (error) {
+    functions.logger.warn('friend_chat_media_stream_failed', { reason: error instanceof Error ? error.message : 'unknown' });
+    if (!response.headersSent) response.status(404).end();
+    else response.end();
+  }
+});
+
+export const cleanupAbandonedFriendChatMediaUploads = chatFunctions.pubsub
+  .schedule('every 24 hours')
+  .onRun(async () => {
+    const snapshot = await firestore().collection('friendChatUploadReservations')
+      .where('status', '==', 'pending')
+      .where('expiresAt', '<=', Timestamp.now())
+      .limit(100)
+      .get();
+    let deletedObjects = 0;
+    await Promise.all(snapshot.docs.map(async (document) => {
+      const storagePaths = storagePathsForReservation(document.data() as FriendChatMediaUploadReservation);
+      await Promise.all(storagePaths.map(async (storagePath) => {
+        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        deletedObjects += 1;
+      }));
+      await document.ref.delete();
+    }));
+    const deletePendingSnapshot = await firestore().collection('friendChatUploadReservations')
+      .where('status', '==', 'deletePending')
+      .limit(100)
+      .get();
+    await Promise.all(deletePendingSnapshot.docs.map(async (document) => {
+      const storagePaths = storagePathsForReservation(document.data() as FriendChatMediaUploadReservation);
+      await Promise.all(storagePaths.map(async (storagePath) => {
+        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        deletedObjects += 1;
+      }));
+      await document.ref.delete();
+    }));
+    const grants = await firestore().collection('friendChatMediaPlaybackGrants')
+      .where('expiresAt', '<=', Timestamp.now())
+      .limit(500)
+      .get();
+    if (!grants.empty) {
+      const writer = firestore().bulkWriter();
+      grants.docs.forEach((document) => writer.delete(document.ref));
+      await writer.close();
+    }
+    functions.logger.info('friend_chat_media_cleanup_completed', {
+      deletedObjects,
+      reservations: snapshot.size + deletePendingSnapshot.size,
+    });
+    return null;
+  });
+
+async function verifyUploadedFriendVoiceMemo(reservation: FriendChatMediaUploadReservation) {
+  const storagePath = typeof reservation.storagePath === 'string' ? reservation.storagePath : '';
+  const storageReference = parseFriendChatMediaStoragePath(storagePath);
+  const voiceMemo = reservation.voiceMemo;
+  if (
+    !storageReference ||
+    storageReference.kind !== 'voice' ||
+    storageReference.reservationId !== reservation.reservationId ||
+    storageReference.messageId !== reservation.targetId ||
+    !voiceMemo
+  ) failed('Upload expired.');
+  if ((timestampMillis(reservation.expiresAt) ?? 0) <= Date.now()) failed('Upload expired.');
+  const [metadata] = await admin.storage().bucket().file(storagePath).getMetadata();
+  const sizeBytes = Number(metadata.size);
+  const mimeType = typeof metadata.contentType === 'string' ? metadata.contentType : '';
+  if (
+    sizeBytes !== voiceMemo.sizeBytes ||
+    sizeBytes < 1 ||
+    sizeBytes > FRIEND_CHAT_VOICE_MAX_SIZE_BYTES ||
+    mimeType !== voiceMemo.mimeType
+  ) failed('Uploaded voice message could not be verified.');
+  return { ...voiceMemo, storagePath };
+}
+
+async function verifyUploadedFriendImage(reservation: FriendChatMediaUploadReservation) {
+  const image = reservation.image;
+  const fullPath = typeof reservation.fullPath === 'string' ? reservation.fullPath : '';
+  const thumbnailPath = typeof reservation.thumbnailPath === 'string' ? reservation.thumbnailPath : '';
+  const fullReference = parseFriendChatMediaStoragePath(fullPath);
+  const thumbnailReference = parseFriendChatMediaStoragePath(thumbnailPath);
+  if (
+    !image ||
+    !fullReference ||
+    !thumbnailReference ||
+    fullReference.kind !== 'image' ||
+    thumbnailReference.kind !== 'thumbnail' ||
+    fullReference.reservationId !== reservation.reservationId ||
+    thumbnailReference.reservationId !== reservation.reservationId ||
+    fullReference.messageId !== reservation.targetId ||
+    thumbnailReference.messageId !== reservation.targetId
+  ) failed('Upload expired.');
+  if ((timestampMillis(reservation.expiresAt) ?? 0) <= Date.now()) failed('Upload expired.');
+  const [fullMetadata, thumbnailMetadata] = await Promise.all([
+    admin.storage().bucket().file(fullPath).getMetadata().then(([metadata]) => metadata),
+    admin.storage().bucket().file(thumbnailPath).getMetadata().then(([metadata]) => metadata),
+  ]);
+  const fullSize = Number(fullMetadata.size);
+  const thumbnailSize = Number(thumbnailMetadata.size);
+  if (
+    fullSize !== image.main.sizeBytes ||
+    thumbnailSize !== image.thumbnail.sizeBytes ||
+    fullMetadata.contentType !== image.main.mimeType ||
+    thumbnailMetadata.contentType !== image.thumbnail.mimeType ||
+    fullSize < 1 ||
+    thumbnailSize < 1 ||
+    fullSize > FRIEND_CHAT_IMAGE_MAX_SIZE_BYTES ||
+    thumbnailSize > FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_SIZE_BYTES
+  ) failed('Uploaded image could not be verified.');
+  return {
+    fullPath,
+    height: image.main.height,
+    mimeType: image.main.mimeType,
+    sizeBytes: image.main.sizeBytes,
+    sourceMimeType: image.sourceMimeType,
+    sourceSizeBytes: image.sourceSizeBytes,
+    thumbnailHeight: image.thumbnail.height,
+    thumbnailMimeType: image.thumbnail.mimeType,
+    thumbnailPath,
+    thumbnailSizeBytes: image.thumbnail.sizeBytes,
+    thumbnailWidth: image.thumbnail.width,
+    width: image.main.width,
+  };
+}
+
+async function canAccessFriendChatMedia(
+  db: FirebaseFirestore.Firestore,
+  userId: string,
+  storagePath: string,
+) {
+  if (!await accountCanCommunicate(userId)) return false;
+  const storageReference = parseFriendChatMediaStoragePath(storagePath);
+  if (!storageReference) return false;
+  const conversation = db.collection('friendConversations').doc(storageReference.conversationId);
+  const messageRef = conversation.collection('messages').doc(storageReference.messageId);
+  const reservationRef = db.collection('friendChatUploadReservations').doc(storageReference.reservationId);
+  const [conversationSnapshot, memberSnapshot, messageSnapshot, reservationSnapshot] = await Promise.all([
+    conversation.get(),
+    conversation.collection('members').doc(userId).get(),
+    messageRef.get(),
+    reservationRef.get(),
+  ]);
+  const conversationData = conversationSnapshot.data();
+  const message = messageSnapshot.data();
+  const reservation = reservationSnapshot.data() as FriendChatMediaUploadReservation | undefined;
+  if (
+    !conversationSnapshot.exists ||
+    !memberSnapshot.exists ||
+    memberSnapshot.data()?.status !== 'active' ||
+    !messageSnapshot.exists ||
+    message?.status === 'removed' ||
+    contentIsModerated(message) ||
+    !readIds(message?.visibleToUserIds).includes(userId) ||
+    !reservationSnapshot.exists ||
+    reservation?.status !== 'finalized' ||
+    reservation.conversationId !== storageReference.conversationId ||
+    reservation.targetId !== storageReference.messageId
+  ) return false;
+  const participantIds = readIds(conversationData?.activeParticipantIds);
+  const otherParticipantIds = participantIds.filter((id) => id !== userId);
+  const blockSnapshots = await Promise.all(otherParticipantIds.flatMap((otherId) => [
+    blockRef(userId, otherId).get(),
+    blockRef(otherId, userId).get(),
+  ]));
+  if (blockSnapshots.some((snapshot) => snapshot.exists)) return false;
+  if (storageReference.kind === 'voice') {
+    return message?.messageType === 'voice' &&
+      message?.voiceMemo?.storagePath === storagePath &&
+      reservation.storagePath === storagePath;
+  }
+  const expectedPath = storageReference.kind === 'image'
+    ? message?.image?.fullPath
+    : message?.image?.thumbnailPath;
+  const reservationPath = storageReference.kind === 'image'
+    ? reservation.fullPath
+    : reservation.thumbnailPath;
+  return message?.messageType === 'image' &&
+    expectedPath === storagePath &&
+    reservationPath === storagePath;
+}
+
+function storagePathsForReservation(reservation: FriendChatMediaUploadReservation) {
+  const paths = [
+    typeof reservation.storagePath === 'string' ? reservation.storagePath : '',
+    typeof reservation.fullPath === 'string' ? reservation.fullPath : '',
+    typeof reservation.thumbnailPath === 'string' ? reservation.thumbnailPath : '',
+  ].filter((path) => Boolean(parseFriendChatMediaStoragePath(path)));
+  return Array.from(new Set(paths));
+}
+
+async function deleteFriendChatStorageObjects(storagePaths: string[]) {
+  const validPaths = Array.from(new Set(storagePaths.filter((path) => Boolean(parseFriendChatMediaStoragePath(path)))));
+  if (validPaths.length === 0) return 'notRequired' as const;
+  await Promise.allSettled(validPaths.map(async (storagePath) => {
+    const storageReference = parseFriendChatMediaStoragePath(storagePath);
+    if (storageReference) {
+      await uploadReservationRef(storageReference.reservationId).set({
+        expiresAt: Timestamp.now(),
+        status: 'deletePending',
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+    await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+  }));
+  await Promise.allSettled(validPaths.map(async (storagePath) => {
+    const storageReference = parseFriendChatMediaStoragePath(storagePath);
+    if (storageReference) await uploadReservationRef(storageReference.reservationId).delete();
+  }));
+  return 'deleted' as const;
+}
+
+function parseByteRange(value: string | undefined, sizeBytes: number) {
+  if (!value) return null;
+  const match = /^bytes=(\d*)-(\d*)$/u.exec(value.trim());
+  if (!match || (!match[1] && !match[2])) return 'invalid' as const;
+  let start: number;
+  let end: number;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isInteger(suffixLength) || suffixLength < 1) return 'invalid' as const;
+    start = Math.max(0, sizeBytes - suffixLength);
+    end = sizeBytes - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : sizeBytes - 1;
+  }
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= sizeBytes
+  ) return 'invalid' as const;
+  return { start, end: Math.min(end, sizeBytes - 1) };
+}
 
 async function assertActiveMember(conversationId: string, userId: string) {
   const snapshot = await memberRef(conversationId, userId).get();

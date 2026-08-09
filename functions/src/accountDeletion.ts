@@ -54,6 +54,13 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (_data, con
   await deleteAuthoredMessagesAndAudio(firestore, uid, summary);
   await deleteAuthoredAnnouncements(firestore, uid, summary);
   await deleteVoiceUploadReservations(firestore, uid, summary);
+  await deleteFriendChatMediaUploadReservations(firestore, uid, summary);
+  summary.deletedDocuments += await deleteMatchingDocuments(
+    firestore.collection('friendChatMediaPlaybackGrants').where('userId', '==', uid),
+  );
+  summary.deletedDocuments += await deleteMatchingDocuments(
+    firestore.collectionGroup('reactions').where('userId', '==', uid),
+  );
   summary.deletedDocuments += await deleteMatchingDocuments(
     firestore.collectionGroup('replies').where('userId', '==', uid),
   );
@@ -169,9 +176,18 @@ async function deleteAuthoredMessagesAndAudio(
         await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
+      for (const friendStoragePath of friendChatMediaStoragePaths(message.data())) {
+        await admin.storage().bucket().file(friendStoragePath).delete({ ignoreNotFound: true });
+        summary.deletedStorageObjects += 1;
+      }
       await message.ref.set({
         caption: '',
         contentType: 'text',
+        image: null,
+        mediaStoragePaths: [],
+        messageType: 'text',
+        reactionCounts: {},
+        reactionTotalCount: 0,
         removedAt: FieldValue.serverTimestamp(),
         removedBy: 'account-deletion',
         senderDisplayName: 'Deleted user',
@@ -218,6 +234,25 @@ async function deleteVoiceUploadReservations(
     await Promise.all(snapshot.docs.map(async (reservation) => {
       const storagePath = stringValue(reservation.data()?.storagePath);
       if (storagePath?.startsWith('teamVoiceMemos/')) {
+        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        summary.deletedStorageObjects += 1;
+      }
+      await reservation.ref.delete();
+      summary.deletedDocuments += 1;
+    }));
+  }
+}
+
+async function deleteFriendChatMediaUploadReservations(
+  firestore: FirebaseFirestore.Firestore,
+  uid: string,
+  summary: DeletionSummary,
+) {
+  while (true) {
+    const snapshot = await firestore.collection('friendChatUploadReservations').where('userId', '==', uid).limit(100).get();
+    if (snapshot.empty) return;
+    await Promise.all(snapshot.docs.map(async (reservation) => {
+      for (const storagePath of friendChatMediaStoragePaths(reservation.data())) {
         await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
@@ -634,6 +669,21 @@ function stringArray(value: unknown): string[] {
 
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function friendChatMediaStoragePaths(data: FirebaseFirestore.DocumentData | undefined) {
+  const candidates = [
+    data?.voiceMemo?.storagePath,
+    data?.image?.fullPath,
+    data?.image?.thumbnailPath,
+    data?.storagePath,
+    data?.fullPath,
+    data?.thumbnailPath,
+    ...(Array.isArray(data?.mediaStoragePaths) ? data.mediaStoragePaths : []),
+  ];
+  return Array.from(new Set(candidates
+    .map((value) => stringValue(value))
+    .filter((value): value is string => Boolean(value?.startsWith('friendChatMedia/')))));
 }
 
 function safeLabel(value: unknown, fallback: string) {

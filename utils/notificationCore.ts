@@ -1,6 +1,7 @@
 export const APP_NOTIFICATION_TYPES = [
   "coachAnnouncement",
   "teamPrivateMessage",
+  "friendChatMessage",
   "friendRequest",
   "friendRequestAccepted",
   "chatGroupInvitation",
@@ -11,12 +12,15 @@ export const APP_NOTIFICATION_TYPES = [
 
 export type AppNotificationType = (typeof APP_NOTIFICATION_TYPES)[number];
 
+export type NotificationDestinationMode = "parent" | "coach";
+
 export type NotificationNavigationData = {
   type?: unknown;
   teamId?: unknown;
   announcementId?: unknown;
   conversationId?: unknown;
   conversationType?: unknown;
+  activeMode?: unknown;
   squadId?: unknown;
   squadAdminInvitationId?: unknown;
 };
@@ -36,6 +40,14 @@ function isValidRouteId(value: unknown): value is string {
   return typeof value === "string" && /^[^/]{1,128}$/u.test(value);
 }
 
+function readNotificationMode(value: unknown): NotificationDestinationMode | null {
+  return value === "parent" || value === "coach" ? value : null;
+}
+
+function getPrivateMessageRecipientMode(data: NotificationNavigationData) {
+  return readNotificationMode(data.conversationType) ?? readNotificationMode(data.activeMode) ?? "parent";
+}
+
 export function normalizeNotificationId(value: unknown) {
   return typeof value === "string" && /^[^/]{1,256}$/u.test(value) ? value : null;
 }
@@ -47,14 +59,12 @@ export function getNotificationDestination(data: NotificationNavigationData): st
   }
 
   if (data.type === "teamPrivateMessage") {
-    if (!isValidRouteId(data.teamId) || !isValidRouteId(data.conversationId)) return null;
-    if (data.conversationType === "coach") {
-      return `/coach/team-messages/${encodeURIComponent(data.conversationId)}`;
+    if (!isValidRouteId(data.teamId)) return null;
+    const teamId = encodeURIComponent(data.teamId);
+    if (getPrivateMessageRecipientMode(data) === "coach") {
+      return `/coach/team-messages?teamId=${teamId}&focus=privateMessages`;
     }
-    if (data.conversationType === "parent") {
-      return `/teams/${encodeURIComponent(data.teamId)}/messages/${encodeURIComponent(data.conversationId)}`;
-    }
-    return null;
+    return `/teams/${teamId}?focus=privateMessages`;
   }
 
   if (
@@ -85,6 +95,13 @@ export function getNotificationDestination(data: NotificationNavigationData): st
     return `/(social)/chat/${encodeURIComponent(data.conversationId)}`;
   }
 
+  return null;
+}
+
+export function getNotificationDestinationMode(data: NotificationNavigationData): NotificationDestinationMode | null {
+  if (data.type === "teamPrivateMessage" && isValidRouteId(data.teamId)) {
+    return getPrivateMessageRecipientMode(data);
+  }
   return null;
 }
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { ArrowLeft, ChevronRight, LockKeyhole, Mail, MoreVertical } from "lucide-react-native";
@@ -18,14 +18,17 @@ import {
 } from "@/services/parentTeamService";
 
 import { setParentTeamChildLinks } from "@/services/childService";
+import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import { hasCoachAccess, leaveParentTeam } from "@/services/teamService";
 
 type TeamAction = "remove-child" | "leave" | null;
 
 export default function ParentTeamHubScreen() {
   const { i18n, t } = useTranslation();
-  const params = useLocalSearchParams<{ teamId?: string | string[] }>();
+  const params = useLocalSearchParams<{ teamId?: string | string[]; notificationId?: string | string[] }>();
   const teamId = normalizeParam(params.teamId);
+  const notificationId = normalizeParam(params.notificationId);
+  const acknowledgedNotificationIds = useRef(new Set<string>());
   const [summary, setSummary] = useState<ParentTeamSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +45,10 @@ export default function ParentTeamHubScreen() {
       const nextSummary = await getParentTeamSummary(teamId);
       setSummary(nextSummary);
       setSelectedChildIds(nextSummary.children.map((child) => child.id));
+      if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
+        acknowledgedNotificationIds.current.add(notificationId);
+        void acknowledgeNotificationAfterOpen(notificationId);
+      }
     } catch (nextError) {
       console.warn("[ParentTeamHub] load error:", getErrorCode(nextError));
       setSummary(null);
@@ -49,7 +56,7 @@ export default function ParentTeamHubScreen() {
     } finally {
       setLoading(false);
     }
-  }, [t, teamId]);
+  }, [notificationId, t, teamId]);
 
   useFocusEffect(useCallback(() => {
     void loadTeam();

@@ -390,7 +390,42 @@ service cloud.firestore {
         allow get, list: if isActiveFriendConversationMember(conversationId) &&
           request.auth.uid in resource.data.visibleToUserIds;
         allow create, update, delete: if false;
+
+        match /reactions/{userId} {
+          allow get, list: if isActiveFriendConversationMember(conversationId) &&
+            exists(/databases/$(database)/documents/friendConversations/$(conversationId)/messages/$(messageId)) &&
+            get(/databases/$(database)/documents/friendConversations/$(conversationId)/messages/$(messageId)).data.status == "active" &&
+            (
+              !("moderationState" in get(/databases/$(database)/documents/friendConversations/$(conversationId)/messages/$(messageId)).data) ||
+              !(get(/databases/$(database)/documents/friendConversations/$(conversationId)/messages/$(messageId)).data.moderationState in ["hidden", "removed"])
+            ) &&
+            (
+              !("messageType" in get(/databases/$(database)/documents/friendConversations/$(conversationId)/messages/$(messageId)).data) ||
+              get(/databases/$(database)/documents/friendConversations/$(conversationId)/messages/$(messageId)).data.messageType != "system"
+            ) &&
+            request.auth.uid in get(/databases/$(database)/documents/friendConversations/$(conversationId)/messages/$(messageId)).data.visibleToUserIds;
+          allow create, update, delete: if false;
+        }
       }
+
+      match /userMessageStates/{userId}/messages/{messageId} {
+        allow get, list: if signedIn() &&
+          request.auth.uid == userId &&
+          isActiveFriendConversationMember(conversationId);
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /friendChatUploadReservations/{reservationId} {
+      allow read, write: if false;
+    }
+
+    match /friendChatForwardRateLimits/{userHash} {
+      allow read, write: if false;
+    }
+
+    match /friendChatMediaPlaybackGrants/{grantId} {
+      allow read, write: if false;
     }
 
     match /userBlocks/{blockerUserId} {

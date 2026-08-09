@@ -15,7 +15,10 @@ import {
   fetchMyAccountStanding,
   subscribeToMyAccountStanding,
 } from "@/services/accountStandingService";
-import { clearRestrictedUserLocalState } from "@/services/localUserStateService";
+import {
+  clearProtectedMediaMemoryState,
+  clearRestrictedUserLocalState,
+} from "@/services/localUserStateService";
 import type { AccountStanding } from "@/types/accountStanding";
 
 type AccountStandingContextValue = {
@@ -50,15 +53,18 @@ export function AccountStandingProvider({ children }: { children: ReactNode }) {
       setStanding(next);
       setError(false);
       if (
+        next.status === "messagingRestricted" ||
         next.status === "suspended" ||
         next.status === "banned"
       ) {
-        const restrictionKey = `${firebaseUser.uid}:${next.revision}`;
+        const restrictionKey = `${firebaseUser.uid}:${next.status}:${next.revision}`;
         if (clearedRestriction.current !== restrictionKey) {
-          await clearRestrictedUserLocalState();
+          if (next.status === "messagingRestricted") await clearProtectedMediaMemoryState();
+          else await clearRestrictedUserLocalState();
           clearedRestriction.current = restrictionKey;
         }
       } else {
+        clearedRestriction.current = null;
         // Read the server-owned standing with the currently valid ID token first.
         // A serious moderation action revokes refresh tokens; forcing a refresh
         // before this read would hide the restriction/appeal shell behind a

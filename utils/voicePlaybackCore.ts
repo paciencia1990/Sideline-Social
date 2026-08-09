@@ -6,7 +6,7 @@ export type LocalVoicePlaybackSource = {
 export type PersistedVoicePlaybackSource = {
   kind: "persisted-message";
   messageId: string;
-  messageKind: "announcement" | "privateMessage";
+  messageKind: "announcement" | "friendChatMessage" | "privateMessage";
   storagePath: string;
 };
 

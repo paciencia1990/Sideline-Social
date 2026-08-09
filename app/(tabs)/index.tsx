@@ -16,9 +16,11 @@ import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { IcebreakerCard } from "@/components/IcebreakerCard";
+import { LocalPerkAdCard, LocalPerkOfferPreviewModal } from "@/components/LocalPerkAdCard";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SquadIdentity } from "@/components/SquadIdentity";
 import { SquadSelector } from "@/components/SquadSelector";
+import { getLocalPerkPreviewOffer, LOCAL_PERK_AD_PREVIEW_ENABLED } from "@/constants/localPerkPreview";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
@@ -70,6 +72,7 @@ export default function HomeScreen() {
   const [activeChallenge, setActiveChallenge] = useState<UserWeeklyChallenge | null>(null);
   const [challengeError, setChallengeError] = useState<string | null>(null);
   const [challengeCompletionLoading, setChallengeCompletionLoading] = useState(false);
+  const [localPerkPreviewOpen, setLocalPerkPreviewOpen] = useState(false);
   const [squadSelectorOpen, setSquadSelectorOpen] = useState(false);
   const {
     retry: retryActiveSession,
@@ -83,6 +86,7 @@ export default function HomeScreen() {
 
   const safeUnreadCount = Number.isFinite(unreadCount) ? Math.max(0, unreadCount) : 0;
   const unreadBadge = formatUnreadBadgeCount(safeUnreadCount);
+  const localPerkPreviewOffer = LOCAL_PERK_AD_PREVIEW_ENABLED ? getLocalPerkPreviewOffer(t) : null;
 
   useEffect(() => {
     if (__DEV__) {
@@ -312,7 +316,27 @@ export default function HomeScreen() {
         />
 
         <IcebreakerCard />
+
+        {LOCAL_PERK_AD_PREVIEW_ENABLED && localPerkPreviewOffer ? (
+          <LocalPerkAdCard
+            accessibilityLabel={localPerkPreviewOffer.accessibilityLabel}
+            advertiserName={localPerkPreviewOffer.advertiserName}
+            ctaLabel={localPerkPreviewOffer.ctaLabel}
+            disclosure={localPerkPreviewOffer.disclosure}
+            headline={localPerkPreviewOffer.headline}
+            logoAccessibilityLabel={localPerkPreviewOffer.logoAccessibilityLabel}
+            logoInitials={localPerkPreviewOffer.logoInitials}
+            onPress={() => setLocalPerkPreviewOpen(true)}
+          />
+        ) : null}
       </ScrollView>
+      {LOCAL_PERK_AD_PREVIEW_ENABLED && localPerkPreviewOffer ? (
+        <LocalPerkOfferPreviewModal
+          offer={localPerkPreviewOffer}
+          onClose={() => setLocalPerkPreviewOpen(false)}
+          visible={localPerkPreviewOpen}
+        />
+      ) : null}
     </ScreenWrapper>
   );
 }

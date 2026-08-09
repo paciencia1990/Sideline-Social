@@ -5,6 +5,7 @@ export type FriendChatUiError =
   | "invited"
   | "removed"
   | "blocked"
+  | "rateLimited"
   | "missingIndex"
   | "unknown";
 
@@ -12,6 +13,7 @@ export function mapFriendChatError(error: unknown): FriendChatUiError {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (code.includes("permission-denied")) return message.includes("block") || message.includes("messaging is unavailable") ? "blocked" : "permission";
+  if (code.includes("resource-exhausted")) return "rateLimited";
   if (code.includes("failed-precondition") && message.includes("no longer friends")) return "friendshipEnded";
   if (code.includes("failed-precondition") && message.includes("invitation")) return "invited";
   if (code.includes("not-found")) return "removed";

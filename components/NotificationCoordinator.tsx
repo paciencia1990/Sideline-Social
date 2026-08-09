@@ -3,6 +3,7 @@ import { AppState, Platform } from "react-native";
 import { router, usePathname } from "expo-router";
 import * as Notifications from "expo-notifications";
 
+import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import i18n from "@/i18n";
 import { isViewingFriendConversation } from "@/services/chatService";
@@ -26,6 +27,7 @@ Notifications.setNotificationHandler({
 });
 
 export function NotificationCoordinator() {
+  const { activeMode, modeHydrated, setActiveMode } = useApp();
   const { user } = useAuth();
   const pathname = usePathname();
   const handledResponses = useRef(new Set<string>());
@@ -57,7 +59,7 @@ export function NotificationCoordinator() {
   useEffect(() => {
     // The root index owns cold-start notification routing. Waiting until it
     // leaves "/" prevents the normal signed-in redirect from winning a race.
-    if (!user?.uid || pathname === "/") return;
+    if (!user?.uid || !modeHydrated || pathname === "/") return;
     void retryPendingNotificationAcknowledgements();
 
     const openResponse = (response: Notifications.NotificationResponse | null) => {
@@ -69,7 +71,7 @@ export function NotificationCoordinator() {
       }
       const identifier = response.notification.request.identifier;
       if (handledResponses.current.has(identifier)) return;
-      const target = getNotificationOpenTargetFromData(response.notification.request.content.data);
+      const target = getNotificationOpenTargetFromData(response.notification.request.content.data, { activeMode });
       if (!target) return;
 
       handledResponses.current.add(identifier);
@@ -77,12 +79,17 @@ export function NotificationCoordinator() {
       void retryPendingNotificationAcknowledgements();
       Notifications.clearLastNotificationResponseAsync()
         .catch((error) => console.warn("[Notifications] clear response error:", getErrorCode(error)));
-      router.push(target.route as never);
+      if (target.requiredMode && target.requiredMode !== activeMode) {
+        setActiveMode(target.requiredMode);
+        setTimeout(() => router.push(target.route as never), 0);
+      } else {
+        router.push(target.route as never);
+      }
     };
 
     const subscription = Notifications.addNotificationResponseReceivedListener(openResponse);
     return () => subscription.remove();
-  }, [pathname, user?.uid]);
+  }, [activeMode, modeHydrated, pathname, setActiveMode, user?.uid]);
 
   return null;
 }

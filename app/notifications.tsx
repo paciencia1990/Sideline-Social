@@ -8,6 +8,7 @@ import { AuthenticatedRouteGate } from "@/components/AuthenticatedRouteGate";
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import {
   clearAllNotifications,
@@ -27,6 +28,7 @@ export default function ProtectedNotificationInboxScreen() {
 
 function NotificationInboxScreen() {
   const { i18n, t } = useTranslation();
+  const { activeMode, modeHydrated, setActiveMode } = useApp();
   const { user } = useAuth();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,8 +62,11 @@ function NotificationInboxScreen() {
   }, [retryKey, user?.uid]);
 
   const openNotification = useCallback(async (notification: AppNotification) => {
-    if (!user?.uid || openingInFlight.current) return;
-    const target = getNotificationOpenTargetFromData({ ...notification, notificationId: notification.id });
+    if (!user?.uid || !modeHydrated || openingInFlight.current) return;
+    const target = getNotificationOpenTargetFromData(
+      { ...notification, notificationId: notification.id },
+      { activeMode },
+    );
     if (!target) {
       Alert.alert(t("notifications.unavailableTitle"), t("notifications.unavailableBody"));
       return;
@@ -69,14 +74,19 @@ function NotificationInboxScreen() {
     openingInFlight.current = true;
     setOpeningId(notification.id);
     try {
-      router.push(target.route as never);
+      if (target.requiredMode && target.requiredMode !== activeMode) {
+        setActiveMode(target.requiredMode);
+        setTimeout(() => router.push(target.route as never), 0);
+      } else {
+        router.push(target.route as never);
+      }
     } catch (error) {
       logInboxIssue("openNotification", error);
       Alert.alert(t("notifications.unavailableTitle"), t("notifications.unavailableBody"));
       openingInFlight.current = false;
       setOpeningId(null);
     }
-  }, [t, user?.uid]);
+  }, [activeMode, modeHydrated, setActiveMode, t, user?.uid]);
 
   const clearAll = useCallback(async () => {
     if (!user?.uid || clearingAll) return;

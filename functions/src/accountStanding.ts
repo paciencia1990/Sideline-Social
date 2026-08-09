@@ -9,6 +9,7 @@ import {
   requirePermanentUid,
   resolveAccountStanding,
 } from "./permanentAuth";
+import { parseFriendChatMediaStoragePath } from "./friendChatCore";
 
 const safetyFunctions = permanentAccountFunctions(
   firebaseFunctions,
@@ -290,16 +291,25 @@ async function cancelRestrictedArtifacts(
 ) {
   if (standing === "active") return;
   const firestore = admin.firestore();
-  const [uploadReservations, outgoingRequests] = await Promise.all([
+  const [uploadReservations, friendMediaReservations, friendMediaGrants, outgoingRequests] = await Promise.all([
     firestore.collection("teamVoiceUploadReservations")
       .where("userId", "==", uid)
       .limit(200)
+      .get(),
+    firestore.collection("friendChatUploadReservations")
+      .where("userId", "==", uid)
+      .limit(200)
+      .get(),
+    firestore.collection("friendChatMediaPlaybackGrants")
+      .where("userId", "==", uid)
+      .limit(500)
       .get(),
     firestore.collection("friendRequests")
       .where("fromUserId", "==", uid)
       .limit(200)
       .get(),
   ]);
+  const friendMediaStoragePaths = new Set<string>();
   const writer = firestore.bulkWriter();
   uploadReservations.docs
     .filter((entry) => entry.data()?.status === "pending")
@@ -308,6 +318,21 @@ async function cancelRestrictedArtifacts(
       canceledAt: FieldValue.serverTimestamp(),
       cancelReason: "accountStanding",
     }, { merge: true }));
+  friendMediaReservations.docs
+    .filter((entry) => entry.data()?.status === "pending")
+    .forEach((entry) => {
+      friendMediaReservationStoragePaths(entry.data()).forEach((storagePath) => {
+        friendMediaStoragePaths.add(storagePath);
+      });
+      writer.set(entry.ref, {
+        status: "deletePending",
+        canceledAt: FieldValue.serverTimestamp(),
+        cancelReason: "accountStanding",
+        expiresAt: Timestamp.now(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+  friendMediaGrants.docs.forEach((entry) => writer.delete(entry.ref));
   outgoingRequests.docs
     .filter((entry) => entry.data()?.status === "pending")
     .forEach((entry) => writer.set(entry.ref, {
@@ -333,6 +358,17 @@ async function cancelRestrictedArtifacts(
       }, { merge: true }));
   }
   await writer.close();
+  await Promise.allSettled(Array.from(friendMediaStoragePaths).map((storagePath) =>
+    admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true })));
+}
+
+function friendMediaReservationStoragePaths(data: admin.firestore.DocumentData | undefined) {
+  if (!data) return [];
+  return [
+    typeof data.storagePath === "string" ? data.storagePath : "",
+    typeof data.fullPath === "string" ? data.fullPath : "",
+    typeof data.thumbnailPath === "string" ? data.thumbnailPath : "",
+  ].filter((storagePath) => Boolean(parseFriendChatMediaStoragePath(storagePath)));
 }
 
 function readPublicReasonCode(value: unknown) {

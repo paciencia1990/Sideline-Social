@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { Check, Shield, UserPlus, Users } from "lucide-react-native";
+import { Check, Shield, Star, UserPlus, Users } from "lucide-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
@@ -107,6 +107,14 @@ export default function FriendChatManageScreen() {
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>{t("chat.notifications")}</Text>
           <TouchableOpacity accessibilityRole="button" disabled={Boolean(busy)} onPress={() => conversationId && void run("mute", () => setFriendConversationMuted(conversationId, !access.member.muted))} style={styles.outline}><Text style={styles.outlineText}>{access.member.muted ? t("chat.unmute") : t("chat.mute")}</Text></TouchableOpacity>
+        </Card>
+
+        <Card style={styles.section}>
+          <View style={styles.sectionHeading}><Star color={Colors.accentGold} size={20} /><Text style={styles.sectionTitle}>{t("chat.starredMessages")}</Text></View>
+          <Text style={styles.bodyLeft}>{t("chat.starredMessagesBody")}</Text>
+          <TouchableOpacity accessibilityLabel={t("chat.openStarredMessages")} accessibilityRole="button" onPress={() => conversationId && router.push({ pathname: "/(social)/chat/starred", params: { conversationId } })} style={styles.outline}>
+            <Text style={styles.outlineText}>{t("chat.viewStarredMessages")}</Text>
+          </TouchableOpacity>
         </Card>
 
         {isGroup ? <>

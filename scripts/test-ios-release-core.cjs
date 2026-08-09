@@ -8,6 +8,8 @@ const IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION = "Sideline Social uses your lo
 const IOS_MICROPHONE_USAGE_DESCRIPTION = "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.";
 const IOS_MOTION_USAGE_DESCRIPTION = "Sideline Social may use motion activity to support location features when you choose Find Nearby. Motion data is not displayed to other users.";
 const IOS_MOTION_USAGE_DESCRIPTION_ES = "Sideline Social puede usar la actividad de movimiento para admitir las funciones de ubicación cuando eliges Buscar cerca. Los datos de movimiento no se muestran a otros usuarios.";
+const IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION = "Sideline Social lets you choose a photo when you send an image message in a private friend chat. Photo metadata is stripped before upload.";
+const IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION_ES = "Sideline Social te permite elegir una foto cuando envías un mensaje con imagen en un chat privado de amistades. Los metadatos de la foto se eliminan antes de subirla.";
 
 function resolveProductionExpoConfig() {
   const expoCli = path.join(process.cwd(), "node_modules", "expo", "bin", "cli");
@@ -91,6 +93,7 @@ assert.equal(resolvedConfig.ios?.bundleIdentifier, "com.sidelinesocial.app");
 assert.equal(resolvedInfoPlist.NSLocationWhenInUseUsageDescription, IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION);
 assert.equal(resolvedInfoPlist.NSMicrophoneUsageDescription, IOS_MICROPHONE_USAGE_DESCRIPTION);
 assert.equal(resolvedInfoPlist.NSMotionUsageDescription, IOS_MOTION_USAGE_DESCRIPTION);
+assert.equal(resolvedInfoPlist.NSPhotoLibraryUsageDescription, IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION);
 assert.equal(resolvedInfoPlist.ITSAppUsesNonExemptEncryption, false);
 assert.equal(
   englishLocale.ios.NSMicrophoneUsageDescription,
@@ -101,12 +104,20 @@ assert.equal(
   IOS_MOTION_USAGE_DESCRIPTION,
 );
 assert.equal(
+  englishLocale.ios.NSPhotoLibraryUsageDescription,
+  IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION,
+);
+assert.equal(
   spanishLocale.ios.NSMicrophoneUsageDescription,
   "Sideline Social usa tu micrófono únicamente cuando eliges grabar un mensaje de voz en un chat o una conversación del equipo.",
 );
 assert.equal(
   spanishLocale.ios.NSMotionUsageDescription,
   IOS_MOTION_USAGE_DESCRIPTION_ES,
+);
+assert.equal(
+  spanishLocale.ios.NSPhotoLibraryUsageDescription,
+  IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION_ES,
 );
 
 console.log("iOS config, contextual permissions, account deletion, and legal/settings discoverability checks passed.");

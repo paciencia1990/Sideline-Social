@@ -21,12 +21,16 @@ const myTeamsIndex = layout.indexOf("<MyTeamsCard");
 const actionsIndex = layout.indexOf("<SecondaryActions");
 const squadIndex = layout.indexOf("<YourSquadCard");
 const challengeIndex = layout.indexOf("<ChallengeCard");
+const localPerkIndex = layout.indexOf("<LocalPerkAdCard");
 const icebreakerIndex = layout.indexOf("<IcebreakerCard />");
 assert.ok(myTeamsIndex >= 0 && myTeamsIndex < actionsIndex, "My Teams must precede Chat and Leaderboard");
 assert.ok(actionsIndex < squadIndex, "Chat and Leaderboard must precede Your Squad");
 assert.ok(squadIndex < challengeIndex, "Your Squad must precede Weekly Challenge");
+assert.ok(challengeIndex < localPerkIndex, "Weekly Challenge must precede the development Local Perk preview");
 assert.ok(challengeIndex < icebreakerIndex, "Weekly Challenge must precede Icebreaker");
-assert.equal(layout.slice(icebreakerIndex).trim(), "<IcebreakerCard />", "Icebreaker must remain the final Home section");
+assert.ok(icebreakerIndex < localPerkIndex, "The development Local Perk preview must stay below Icebreaker");
+assert.equal((layout.match(/<LocalPerkAdCard/g) ?? []).length, 1, "Home must render no more than one Local Perk preview card");
+assert.doesNotMatch(layout.slice(localPerkIndex + 1), /<(?:MyTeamsCard|StateCard|SecondaryActions|YourSquadCard|SquadSelector|ChallengeCard|IcebreakerCard|LocalPerkAdCard)\b/, "Local Perk must remain the final Home content card");
 assert.match(home, /home\.chat[\s\S]*home\.leaderboard/, "Chat must precede Leaderboard");
 
 assert.match(home, /membershipLoading[\s\S]*membershipError[\s\S]*mySquads/, "Home must consume canonical membership state");

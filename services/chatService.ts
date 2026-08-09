@@ -11,14 +11,21 @@ import {
   Timestamp,
   where,
   type DocumentData,
-  type QueryDocumentSnapshot,
   type Unsubscribe,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
+import { ref, uploadBytesResumable, type UploadTask } from "firebase/storage";
 
-import { auth, db, functions } from "@/config/firebase";
+import { auth, db, functions, storage } from "@/config/firebase";
+import type { LocalFriendChatImageDraft } from "@/services/friendChatImageService";
 import { getPublicUserProfiles, type PublicUserProfile } from "@/services/publicProfileService";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
+import {
+  cancelFriendChatImageUploadTasks,
+  type FriendChatImageUploadCancelResult,
+} from "@/utils/friendChatUploadCancellation";
+import { normalizeVoicePlaybackUrlResponse } from "@/utils/voicePlaybackCore";
+import type { LocalVoiceMemoDraft, StoredVoiceMemo } from "@/types/teamVoiceMessaging";
 export { mapFriendChatError, type FriendChatUiError } from "@/utils/friendChatError";
 
 export const MAX_CHAT_PARTICIPANTS = 10;
@@ -27,6 +34,17 @@ export const CHAT_INITIAL_MESSAGE_LIMIT = 50;
 export const CHAT_EARLIER_PAGE_SIZE = 25;
 export const CHAT_LIST_LIMIT = 25;
 export const CHAT_LIST_MAX = 100;
+export const FRIEND_CHAT_VOICE_LIMIT_MS = 120_000;
+export const FRIEND_CHAT_VOICE_SIZE_LIMIT_BYTES = 3 * 1024 * 1024;
+export const FRIEND_CHAT_QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
+export const FRIEND_CHAT_REACTIONS = [
+  ...FRIEND_CHAT_QUICK_REACTIONS,
+  "🔥", "🎉", "👏", "💪", "🙌", "😄",
+  "😍", "😎", "🤔", "😬", "😤", "🤯",
+  "🥳", "💯", "✅", "⭐", "🏆", "⚾",
+  "🏀", "⚽", "🏈",
+] as const;
+export const FRIEND_CHAT_FORWARD_MAX_DESTINATIONS = 3;
 
 export type FriendConversationType = "direct" | "group";
 export type FriendConversationMemberStatus = "invited" | "active" | "declined" | "left" | "removed";
@@ -63,10 +81,45 @@ export type FriendConversation = {
   updatedAt: Date | null;
   lastMessageAt: Date | null;
   lastMessageId: string | null;
+  lastMessageType: FriendChatMessageType | "deleted" | null;
   lastMessagePreview: string | null;
   lastMessageRemoved: boolean;
   lastSenderId: string | null;
+  pinnedMessage: FriendChatPinnedMessage | null;
   status: "active" | "archived";
+};
+
+export type FriendChatMessageType = "image" | "system" | "text" | "voice";
+export type FriendChatReactionEmoji = typeof FRIEND_CHAT_REACTIONS[number];
+
+export type FriendChatReactionSummary = {
+  count: number;
+  emoji: FriendChatReactionEmoji;
+  reactedBySelf: boolean;
+};
+
+export type FriendChatReplyContext = {
+  createdAt: Date | null;
+  messageId: string;
+  messageType: FriendChatMessageType;
+  senderDisplayName: string | null;
+  senderUserId: string | null;
+  textExcerpt: string | null;
+};
+
+export type StoredFriendChatImage = {
+  fullPath: string;
+  height: number;
+  mimeType: "image/jpeg" | "image/webp";
+  sizeBytes: number;
+  sourceMimeType: string | null;
+  sourceSizeBytes: number;
+  thumbnailHeight: number;
+  thumbnailMimeType: "image/jpeg" | "image/webp";
+  thumbnailPath: string;
+  thumbnailSizeBytes: number;
+  thumbnailWidth: number;
+  width: number;
 };
 
 export type FriendConversationListItem = FriendConversation & {
@@ -77,16 +130,43 @@ export type FriendConversationListItem = FriendConversation & {
 export type FriendChatMessage = {
   messageId: string;
   conversationId: string;
-  messageType: "text" | "system";
+  messageType: FriendChatMessageType;
   senderUserId: string | null;
   senderDisplayName: string | null;
   senderProfileState?: PublicUserProfile["profileState"];
   text: string;
+  caption: string | null;
   createdAt: Date | null;
   createdAtTimestamp: Timestamp | null;
   status: "active" | "removed";
   isModerated: boolean;
+  image: StoredFriendChatImage | null;
   clientMessageId: string | null;
+  forwarded: boolean;
+  reactions: FriendChatReactionSummary[];
+  replyTo: FriendChatReplyContext | null;
+  starredBySelf: boolean;
+  voiceMemo: StoredVoiceMemo | null;
+};
+
+export type FriendChatPinnedMessage = FriendChatReplyContext & {
+  expiresAt: Date | null;
+  pinnedByUserId: string | null;
+};
+
+export type FriendChatVoiceUploadReservation = {
+  expiresAtMillis: number;
+  reservationId: string;
+  storagePath: string;
+  targetId: string;
+};
+
+export type FriendChatImageUploadReservation = {
+  expiresAtMillis: number;
+  fullPath: string;
+  reservationId: string;
+  targetId: string;
+  thumbnailPath: string;
 };
 
 export type ConversationAccess = {
@@ -118,6 +198,12 @@ function safeName(value: unknown) {
   return formatPublicUserName(typeof value === "string" ? value : null) ?? "";
 }
 
+function readFriendChatMessageType(value: unknown): FriendChatMessageType | "deleted" | null {
+  if (value === "deleted") return "deleted";
+  if (value === "image" || value === "system" || value === "text" || value === "voice") return value;
+  return null;
+}
+
 function toConversation(document: { id: string; data: () => DocumentData | undefined }): FriendConversation {
   const data = document.data() ?? {};
   const names = typeof data.participantNameSnapshots === "object" && data.participantNameSnapshots
@@ -141,10 +227,25 @@ function toConversation(document: { id: string; data: () => DocumentData | undef
     updatedAt: toDate(data.updatedAt as FirestoreDate),
     lastMessageAt: toDate(data.lastMessageAt as FirestoreDate),
     lastMessageId: typeof data.lastMessageId === "string" ? data.lastMessageId : null,
+    lastMessageType: readFriendChatMessageType(data.lastMessageType),
     lastMessagePreview: typeof data.lastMessagePreview === "string" ? data.lastMessagePreview : null,
     lastMessageRemoved: data.lastMessageRemoved === true,
     lastSenderId: typeof data.lastSenderId === "string" ? data.lastSenderId : null,
+    pinnedMessage: normalizePinnedMessage(data.pinnedMessage),
     status: data.status === "archived" ? "archived" : "active",
+  };
+}
+
+function normalizePinnedMessage(value: unknown): FriendChatPinnedMessage | null {
+  const reply = normalizeReplyContext(value);
+  if (!reply || !value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  const expiresAt = toDate(data.expiresAt as FirestoreDate);
+  if (expiresAt && expiresAt.getTime() <= Date.now()) return null;
+  return {
+    ...reply,
+    expiresAt,
+    pinnedByUserId: typeof data.pinnedByUserId === "string" ? data.pinnedByUserId : null,
   };
 }
 
@@ -166,23 +267,130 @@ function toMember(document: { id: string; data: () => DocumentData | undefined }
   };
 }
 
-function toMessage(document: QueryDocumentSnapshot<DocumentData>): FriendChatMessage {
+function toMessage(document: { id: string; data: () => DocumentData }): FriendChatMessage {
   const data = document.data();
   const isModerated = data.moderationState === "hidden" ||
     data.moderationState === "removed";
+  const status = isModerated || data.status === "removed" ? "removed" : "active";
+  const rawMessageType = readFriendChatMessageType(data.messageType);
+  const messageType: FriendChatMessageType = rawMessageType && rawMessageType !== "deleted" ? rawMessageType : "text";
   return {
     messageId: document.id,
     conversationId: typeof data.conversationId === "string" ? data.conversationId : "",
-    messageType: data.messageType === "system" ? "system" : "text",
+    messageType,
     senderUserId: typeof data.senderUserId === "string" ? data.senderUserId : null,
     senderDisplayName: safeName(data.senderDisplayName) || null,
     text: isModerated ? "" : typeof data.text === "string" ? data.text : "",
+    caption: isModerated ? null : typeof data.caption === "string" && data.caption.trim() ? data.caption.trim() : null,
     createdAt: toDate(data.createdAt as FirestoreDate),
     createdAtTimestamp: data.createdAt && typeof data.createdAt.toDate === "function" ? data.createdAt as Timestamp : null,
-    status: isModerated || data.status === "removed" ? "removed" : "active",
+    status,
     isModerated,
+    image: status === "active" && messageType === "image" ? normalizeStoredFriendImage(data.image) : null,
     clientMessageId: typeof data.clientMessageId === "string" ? data.clientMessageId : null,
+    forwarded: data.forwarded === true,
+    reactions: status === "active" && messageType !== "system"
+      ? normalizeReactionSummary(data.reactionCounts, null)
+      : [],
+    replyTo: status === "active" ? normalizeReplyContext(data.replyTo) : null,
+    starredBySelf: false,
+    voiceMemo: status === "active" && messageType === "voice" ? normalizeStoredFriendVoice(data.voiceMemo) : null,
   };
+}
+
+function normalizeReplyContext(value: unknown): FriendChatReplyContext | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  const messageId = typeof data.messageId === "string" && data.messageId ? data.messageId : "";
+  if (!messageId) return null;
+  const messageType = readFriendChatMessageType(data.messageType);
+  return {
+    createdAt: toDate(data.createdAt as FirestoreDate),
+    messageId,
+    messageType: messageType && messageType !== "deleted" ? messageType : "text",
+    senderDisplayName: safeName(data.senderDisplayName) || null,
+    senderUserId: typeof data.senderUserId === "string" ? data.senderUserId : null,
+    textExcerpt: typeof data.textExcerpt === "string" && data.textExcerpt.trim() ? data.textExcerpt.trim() : null,
+  };
+}
+
+function normalizeStoredFriendVoice(value: unknown): StoredVoiceMemo | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  const storagePath = typeof data.storagePath === "string" ? data.storagePath.trim() : "";
+  const durationMilliseconds = Number(data.durationMilliseconds);
+  const sizeBytes = Number(data.sizeBytes);
+  const mimeType = typeof data.mimeType === "string" ? data.mimeType.trim() : "audio/mp4";
+  if (
+    !/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/voice\.m4a$/u.test(storagePath) ||
+    !Number.isInteger(durationMilliseconds) ||
+    durationMilliseconds < 1 ||
+    durationMilliseconds > FRIEND_CHAT_VOICE_LIMIT_MS ||
+    !Number.isInteger(sizeBytes) ||
+    sizeBytes < 1 ||
+    sizeBytes > FRIEND_CHAT_VOICE_SIZE_LIMIT_BYTES ||
+    !["audio/mp4", "audio/m4a", "audio/x-m4a"].includes(mimeType)
+  ) return null;
+  return { durationMilliseconds, mimeType: mimeType as StoredVoiceMemo["mimeType"], sizeBytes, storagePath };
+}
+
+function normalizeStoredFriendImage(value: unknown): StoredFriendChatImage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  const fullPath = typeof data.fullPath === "string" ? data.fullPath.trim() : "";
+  const thumbnailPath = typeof data.thumbnailPath === "string" ? data.thumbnailPath.trim() : "";
+  const width = Number(data.width);
+  const height = Number(data.height);
+  const thumbnailWidth = Number(data.thumbnailWidth);
+  const thumbnailHeight = Number(data.thumbnailHeight);
+  const sizeBytes = Number(data.sizeBytes);
+  const thumbnailSizeBytes = Number(data.thumbnailSizeBytes);
+  const mimeType = typeof data.mimeType === "string" ? data.mimeType.trim() : "image/jpeg";
+  const thumbnailMimeType = typeof data.thumbnailMimeType === "string" ? data.thumbnailMimeType.trim() : "image/jpeg";
+  if (
+    !/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/image\.jpg$/u.test(fullPath) ||
+    !/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/thumbnail\.jpg$/u.test(thumbnailPath) ||
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    !Number.isInteger(thumbnailWidth) ||
+    !Number.isInteger(thumbnailHeight) ||
+    !Number.isInteger(sizeBytes) ||
+    !Number.isInteger(thumbnailSizeBytes) ||
+    !["image/jpeg", "image/webp"].includes(mimeType) ||
+    !["image/jpeg", "image/webp"].includes(thumbnailMimeType)
+  ) return null;
+  return {
+    fullPath,
+    height,
+    mimeType: mimeType as StoredFriendChatImage["mimeType"],
+    sizeBytes,
+    sourceMimeType: typeof data.sourceMimeType === "string" ? data.sourceMimeType : null,
+    sourceSizeBytes: Number.isInteger(Number(data.sourceSizeBytes)) ? Number(data.sourceSizeBytes) : 0,
+    thumbnailHeight,
+    thumbnailMimeType: thumbnailMimeType as StoredFriendChatImage["thumbnailMimeType"],
+    thumbnailPath,
+    thumbnailSizeBytes,
+    thumbnailWidth,
+    width,
+  };
+}
+
+function normalizeReactionSummary(value: unknown, ownReaction: FriendChatReactionEmoji | null): FriendChatReactionSummary[] {
+  const data = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return FRIEND_CHAT_REACTIONS.flatMap((emoji) => {
+    const count = Number(data[emoji]);
+    return Number.isInteger(count) && count > 0
+      ? [{ count, emoji, reactedBySelf: ownReaction === emoji }]
+      : [];
+  });
+}
+
+function readReactionEmoji(value: unknown): FriendChatReactionEmoji | null {
+  return FRIEND_CHAT_REACTIONS.includes(value as FriendChatReactionEmoji)
+    ? value as FriendChatReactionEmoji
+    : null;
 }
 
 export function getConversationDisplayTitle(
@@ -336,7 +544,7 @@ export function listenToFriendChatMessages(
     ),
     (snapshot) => {
       const messages = snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse();
-      void hydrateChatMessages(messages).then(onNext).catch(onError);
+      void hydrateChatMessages(messages, uid).then(onNext).catch(onError);
     },
     onError,
   );
@@ -357,9 +565,51 @@ export async function loadEarlierFriendChatMessages(
   ));
   const blocked = new Set(blockedUserIds);
   return {
-    messages: await hydrateChatMessages(snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse()),
+    messages: await hydrateChatMessages(snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse(), uid),
     hasMore: snapshot.size === CHAT_EARLIER_PAGE_SIZE,
   };
+}
+
+export function subscribeToStarredFriendChatMessages(
+  conversationId: string,
+  uid: string,
+  blockedUserIds: string[],
+  onNext: (messages: FriendChatMessage[]) => void,
+  onError: (error: unknown) => void,
+): Unsubscribe {
+  let generation = 0;
+  const blocked = new Set(blockedUserIds);
+  return onSnapshot(
+    query(
+      collection(db, "friendConversations", conversationId, "userMessageStates", uid, "messages"),
+      where("starred", "==", true),
+      limit(CHAT_LIST_MAX),
+    ),
+    (snapshot) => {
+      const currentGeneration = ++generation;
+      void (async () => {
+        const states = snapshot.docs
+          .map((stateSnapshot) => ({ data: stateSnapshot.data(), messageId: stateSnapshot.id }))
+          .filter((state) => state.data.hiddenForMe !== true)
+          .sort((a, b) => (toDate(b.data.updatedAt as FirestoreDate)?.getTime() ?? 0) - (toDate(a.data.updatedAt as FirestoreDate)?.getTime() ?? 0));
+        const messageSnapshots = await Promise.all(states.map((state) =>
+          state.data.hiddenForMe === true
+            ? Promise.resolve(null)
+            : getDoc(doc(db, "friendConversations", conversationId, "messages", state.messageId)).catch(() => null)));
+        if (currentGeneration !== generation) return;
+        const messages = messageSnapshots.flatMap((messageSnapshot) => {
+          if (!messageSnapshot?.exists()) return [];
+          const message = toMessage({ id: messageSnapshot.id, data: () => messageSnapshot.data() });
+          if (message.status !== "active" || message.messageType === "system") return [];
+          if (message.senderUserId && blocked.has(message.senderUserId)) return [];
+          return [message];
+        });
+        const hydrated = await hydrateChatMessages(messages, uid);
+        if (currentGeneration === generation) onNext(hydrated.filter((message) => message.starredBySelf));
+      })().catch(onError);
+    },
+    onError,
+  );
 }
 
 async function loadCurrentChatProfiles(userIds: string[]) {
@@ -385,17 +635,56 @@ function hydrateConversationNames(conversation: FriendConversation, profiles: Re
   return { ...conversation, participantNameSnapshots, participantProfileStates };
 }
 
-async function hydrateChatMessages(messages: FriendChatMessage[]) {
+async function hydrateChatMessages(messages: FriendChatMessage[], uid: string) {
   const profiles = await loadCurrentChatProfiles(messages.flatMap((message) => message.senderUserId ? [message.senderUserId] : []));
-  return messages.map((message) => {
+  const [ownReactions, ownStates] = await Promise.all([
+    loadOwnMessageReactions(messages, uid),
+    loadOwnMessageStates(messages, uid),
+  ]);
+  return messages.flatMap((message) => {
+    const state = ownStates.get(message.messageId);
+    if (state?.hiddenForMe) return [];
     if (!message.senderUserId) return message;
     const profile = profiles.get(message.senderUserId);
     return {
       ...message,
       senderDisplayName: profile?.displayName ?? (profile ? null : message.senderDisplayName),
       senderProfileState: profile?.profileState,
+      reactions: normalizeReactionSummary(
+        Object.fromEntries(message.reactions.map((reaction) => [reaction.emoji, reaction.count])),
+        ownReactions.get(message.messageId) ?? null,
+      ),
+      starredBySelf: state?.starred === true,
     };
   });
+}
+
+async function loadOwnMessageReactions(messages: FriendChatMessage[], uid: string) {
+  const activeMessages = messages.filter((message) => message.status === "active" && message.messageType !== "system");
+  if (activeMessages.length === 0) return new Map<string, FriendChatReactionEmoji>();
+  const snapshots = await Promise.all(activeMessages.map((message) =>
+    getDoc(doc(db, "friendConversations", message.conversationId, "messages", message.messageId, "reactions", uid))
+      .catch(() => null)));
+  return new Map(snapshots.flatMap((snapshot, index) => {
+    const emoji = snapshot?.exists() ? readReactionEmoji(snapshot.data().emoji) : null;
+    return emoji ? [[activeMessages[index].messageId, emoji] as const] : [];
+  }));
+}
+
+async function loadOwnMessageStates(messages: FriendChatMessage[], uid: string) {
+  const activeMessages = messages.filter((message) => message.status === "active" && message.messageType !== "system");
+  if (activeMessages.length === 0) return new Map<string, { hiddenForMe: boolean; starred: boolean }>();
+  const snapshots = await Promise.all(activeMessages.map((message) =>
+    getDoc(doc(db, "friendConversations", message.conversationId, "userMessageStates", uid, "messages", message.messageId))
+      .catch(() => null)));
+  return new Map(snapshots.flatMap((snapshot, index) => {
+    if (!snapshot?.exists()) return [];
+    const data = snapshot.data();
+    return [[activeMessages[index].messageId, {
+      hiddenForMe: data.hiddenForMe === true,
+      starred: data.starred === true,
+    }] as const];
+  }));
 }
 
 export function setActiveFriendConversation(conversationId: string | null) {
@@ -457,11 +746,211 @@ export async function markFriendConversationRead(conversationId: string) {
   return call("markFriendConversationRead", { conversationId });
 }
 
-export async function sendFriendChatMessage(conversationId: string, text: string, clientMessageId: string) {
+export async function sendFriendChatMessage(
+  conversationId: string,
+  text: string,
+  clientMessageId: string,
+  replyToMessageId?: string | null,
+) {
   return call<
-    { conversationId: string; text: string; clientMessageId: string },
+    { conversationId: string; text: string; clientMessageId: string; replyToMessageId?: string | null },
     { messageId: string; status: "sent" | "alreadySent"; createdAt: string }
-  >("sendFriendChatMessage", { conversationId, text, clientMessageId });
+  >("sendFriendChatMessage", { conversationId, text, clientMessageId, replyToMessageId: replyToMessageId ?? null });
+}
+
+export async function reserveFriendChatVoiceUpload(input: {
+  caption?: string | null;
+  clientMessageId: string;
+  conversationId: string;
+  replyToMessageId?: string | null;
+  voiceMemo: LocalVoiceMemoDraft;
+}) {
+  const { uri: _uri, previewed: _previewed, ...voiceMemo } = input.voiceMemo;
+  return call<
+    { caption?: string | null; clientMessageId: string; conversationId: string; replyToMessageId?: string | null; voiceMemo: Omit<LocalVoiceMemoDraft, "previewed" | "uri"> },
+    FriendChatVoiceUploadReservation
+  >("createFriendChatVoiceUpload", {
+    caption: input.caption ?? null,
+    clientMessageId: input.clientMessageId,
+    conversationId: input.conversationId,
+    replyToMessageId: input.replyToMessageId ?? null,
+    voiceMemo,
+  });
+}
+
+export async function uploadReservedFriendChatVoiceMemo(
+  reservation: FriendChatVoiceUploadReservation,
+  draft: LocalVoiceMemoDraft,
+  onProgress?: (progress: number) => void,
+): Promise<{ completion: Promise<void>; task: UploadTask }> {
+  if (!draft.previewed) throw new Error("voice_preview_required");
+  if (!/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/voice\.m4a$/u.test(reservation.storagePath)) {
+    throw new Error("invalid_voice_storage_path");
+  }
+  return uploadBlobToReservedPath(reservation.storagePath, draft.uri, draft.sizeBytes, draft.mimeType, onProgress);
+}
+
+export async function finalizeFriendChatVoiceMessage(reservationId: string) {
+  return call<{ reservationId: string }, { messageId: string; status: "alreadyFinalized" | "sent" }>(
+    "finalizeFriendChatVoiceMessage",
+    { reservationId },
+  );
+}
+
+export async function reserveFriendChatImageUpload(input: {
+  caption?: string | null;
+  clientMessageId: string;
+  conversationId: string;
+  image: LocalFriendChatImageDraft;
+  replyToMessageId?: string | null;
+}) {
+  return call<
+    {
+      caption?: string | null;
+      clientMessageId: string;
+      conversationId: string;
+      image: {
+        main: Omit<LocalFriendChatImageDraft["full"], "uri">;
+        sourceMimeType: string | null;
+        sourceSizeBytes: number;
+        thumbnail: Omit<LocalFriendChatImageDraft["thumbnail"], "uri">;
+      };
+      replyToMessageId?: string | null;
+    },
+    FriendChatImageUploadReservation
+  >("createFriendChatImageUpload", {
+    caption: input.caption ?? null,
+    clientMessageId: input.clientMessageId,
+    conversationId: input.conversationId,
+    image: {
+      main: stripImageDraftUri(input.image.full),
+      sourceMimeType: input.image.sourceMimeType,
+      sourceSizeBytes: input.image.sourceSizeBytes,
+      thumbnail: stripImageDraftUri(input.image.thumbnail),
+    },
+    replyToMessageId: input.replyToMessageId ?? null,
+  });
+}
+
+export async function uploadReservedFriendChatImage(
+  reservation: FriendChatImageUploadReservation,
+  draft: LocalFriendChatImageDraft,
+  onProgress?: (progress: number) => void,
+): Promise<{ cancel: () => FriendChatImageUploadCancelResult; completion: Promise<void> }> {
+  if (!/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/image\.jpg$/u.test(reservation.fullPath) ||
+    !/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/thumbnail\.jpg$/u.test(reservation.thumbnailPath)) {
+    throw new Error("invalid_image_storage_path");
+  }
+  const progressState = { full: 0, thumbnail: 0 };
+  let canceled = false;
+  const full = await uploadBlobToReservedPath(reservation.fullPath, draft.full.uri, draft.full.sizeBytes, draft.full.mimeType, (progress) => {
+    progressState.full = progress;
+    onProgress?.((progressState.full * 0.8) + (progressState.thumbnail * 0.2));
+  });
+  let thumbnail: Awaited<ReturnType<typeof uploadBlobToReservedPath>>;
+  try {
+    thumbnail = await uploadBlobToReservedPath(
+      reservation.thumbnailPath,
+      draft.thumbnail.uri,
+      draft.thumbnail.sizeBytes,
+      draft.thumbnail.mimeType,
+      (progress) => {
+        progressState.thumbnail = progress;
+        onProgress?.((progressState.full * 0.8) + (progressState.thumbnail * 0.2));
+      },
+    );
+  } catch (error) {
+    cancelFriendChatImageUploadTasks(full.task, null);
+    void full.completion.catch(() => undefined);
+    throw error;
+  }
+  return {
+    cancel: () => {
+      canceled = true;
+      return cancelFriendChatImageUploadTasks(full.task, thumbnail.task);
+    },
+    completion: Promise.all([full.completion, thumbnail.completion])
+      .then(() => {
+        if (canceled) throw new Error("media_upload_canceled");
+      })
+      .catch((error) => {
+        if (canceled) throw new Error("media_upload_canceled");
+        throw error;
+      }),
+  };
+}
+
+export async function finalizeFriendChatImageMessage(reservationId: string) {
+  return call<{ reservationId: string }, { messageId: string; status: "alreadyFinalized" | "sent" }>(
+    "finalizeFriendChatImageMessage",
+    { reservationId },
+  );
+}
+
+export async function toggleFriendChatReaction(
+  conversationId: string,
+  messageId: string,
+  emoji: FriendChatReactionEmoji,
+) {
+  return call("toggleFriendChatReaction", { conversationId, messageId, emoji });
+}
+
+export async function setFriendChatMessagesStarred(
+  conversationId: string,
+  messageIds: string[],
+  starred: boolean,
+) {
+  return call<{ conversationId: string; messageIds: string[]; starred: boolean }, { updated: number }>(
+    "setFriendChatMessagesStarred",
+    { conversationId, messageIds, starred },
+  );
+}
+
+export async function deleteFriendChatMessagesForMe(conversationId: string, messageIds: string[]) {
+  return call<{ conversationId: string; messageIds: string[] }, { hidden: number }>(
+    "deleteFriendChatMessagesForMe",
+    { conversationId, messageIds },
+  );
+}
+
+export async function forwardFriendChatMessages(
+  conversationId: string,
+  messageIds: string[],
+  destinationConversationIds: string[],
+) {
+  return call<
+    { conversationId: string; destinationConversationIds: string[]; messageIds: string[] },
+    { forwarded: number; unsupportedMediaMessageIds: string[] }
+  >("forwardFriendChatMessages", { conversationId, destinationConversationIds, messageIds });
+}
+
+export async function pinFriendChatMessage(
+  conversationId: string,
+  messageId: string,
+  duration: "24h" | "7d" | "30d",
+) {
+  return call<{ conversationId: string; duration: "24h" | "7d" | "30d"; messageId: string }, { pinned: boolean }>(
+    "pinFriendChatMessage",
+    { conversationId, duration, messageId },
+  );
+}
+
+export async function unpinFriendChatMessage(conversationId: string, messageId: string) {
+  return call<{ conversationId: string; messageId: string }, { unpinned: boolean }>(
+    "unpinFriendChatMessage",
+    { conversationId, messageId },
+  );
+}
+
+export async function getFriendChatMediaDownloadUrl(input: {
+  messageId: string;
+  storagePath: string;
+}) {
+  const result = await call<typeof input, { expiresAtMillis: number; url: string }>(
+    "getFriendChatMediaDownloadUrl",
+    input,
+  );
+  return normalizeVoicePlaybackUrlResponse(result, { allowLocalHttp: __DEV__ });
 }
 
 export async function removeOwnFriendChatMessage(conversationId: string, messageId: string) {
@@ -491,6 +980,48 @@ export async function reportFriendChatMessage(
 
 export async function unblockFriendChatUser(blockedUserId: string) {
   return call("unblockFriendChatUser", { blockedUserId });
+}
+
+async function uploadBlobToReservedPath(
+  storagePath: string,
+  uri: string,
+  expectedSizeBytes: number,
+  contentType: string,
+  onProgress?: (progress: number) => void,
+): Promise<{ completion: Promise<void>; task: UploadTask }> {
+  if (!/^(?:file|content|cache):/iu.test(uri)) throw new Error("invalid_local_media_uri");
+  const blob = await (await fetch(uri)).blob();
+  if (blob.size < 1 || blob.size !== expectedSizeBytes) {
+    const closable = blob as unknown as { close?: () => void };
+    if (typeof closable.close === "function") closable.close();
+    throw new Error("media_upload_size_mismatch");
+  }
+  const task = uploadBytesResumable(ref(storage, storagePath), blob, { contentType });
+  const completion = new Promise<void>((resolve, reject) => {
+    task.on("state_changed", (snapshot) => {
+      onProgress?.(snapshot.totalBytes ? snapshot.bytesTransferred / snapshot.totalBytes : 0);
+    }, reject, () => {
+      const snapshot = task.snapshot;
+      if (
+        snapshot.bytesTransferred !== expectedSizeBytes ||
+        snapshot.totalBytes !== expectedSizeBytes ||
+        snapshot.metadata.contentType !== contentType
+      ) {
+        reject(new Error("media_upload_verification_failed"));
+        return;
+      }
+      resolve();
+    });
+  }).finally(() => {
+    const closable = blob as unknown as { close?: () => void };
+    if (typeof closable.close === "function") closable.close();
+  });
+  return { completion, task };
+}
+
+function stripImageDraftUri<T extends { uri: string }>(draft: T): Omit<T, "uri"> {
+  const { uri: _uri, ...metadata } = draft;
+  return metadata;
 }
 
 export function createChatClientMessageId() {

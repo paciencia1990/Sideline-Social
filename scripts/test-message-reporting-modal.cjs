@@ -32,17 +32,22 @@ for (const [name, source] of [
   ["private Team", privateThread],
   ["parent announcements", parentThread],
   ["coach announcements", coachThread],
-  ["Friend Chat", friendThread],
 ]) {
   assert.match(source, /MessageActionsModal/, `${name} uses the shared actions modal`);
   assert.match(source, /More(?:Horizontal|Vertical)/, `${name} has an explicit overflow control`);
   assert.match(source, /teamMessages\.messageActions/, `${name} localizes the accessibility label`);
   assert.doesNotMatch(source, /showContentReportPrompt/, `${name} does not use the native reason alert`);
 }
+assert.match(friendThread, /MessageActionsModal/, "Friend Chat keeps the shared actions modal available for delete/report actions");
+assert.match(friendThread, /FriendChatReactionTray/, "Friend Chat uses the floating reaction tray instead of a permanent bubble overflow button");
+assert.match(friendThread, /FriendChatSelectionOverflowMenu/, "Friend Chat uses selection mode for expanded message actions");
+assert.match(friendThread, /onLongPress=\{openReactionTray\}/, "Friend Chat opens reactions from a deliberate long press");
+assert.match(friendThread, /name: "more"/, "Friend Chat exposes More message actions as an accessibility action");
+assert.match(friendThread, /setActionMessage\(selectedMessages\[0\]\)/, "Friend Chat selection overflow can report the selected incoming message");
+assert.doesNotMatch(friendThread, /style=\{styles\.messageMenu\}/, "Friend Chat no longer renders a permanent per-message overflow button");
 assert.doesNotMatch(parentThread, /reportButton/);
-assert.doesNotMatch(friendThread, /onLongPress/);
 assert.doesNotMatch(friendThread, /Alert\.alert/);
-assert.match(friendThread, /reportFriendChatMessage\(chatId, actionMessage\.messageId, reason\)/);
+assert.match(friendThread, /reportFriendChatMessage\(reportAction\.chatId, reportAction\.messageId, reason\)/);
 assert.match(privateThread, /report=\{!selectedMine/);
 assert.match(parentThread, /report=\{actionTarget && !actionTarget\.mine/);
 assert.match(coachThread, /report=\{actionTarget && !actionTarget\.mine/);

@@ -32,6 +32,12 @@ export type MessageModalAction = {
 type Props = {
   actions: MessageModalAction[];
   onDismiss: () => void;
+  reactions?: {
+    errorMessage: string;
+    onToggle: (emoji: string) => Promise<void>;
+    options: string[];
+    selectedEmoji?: string | null;
+  };
   report?: {
     errorMessage: string;
     onSubmit: (reason: MessageReportReason) => Promise<void>;
@@ -48,7 +54,7 @@ const REPORT_REASONS: MessageReportReason[] = [
   "other",
 ];
 
-export function MessageActionsModal({ actions, onDismiss, report, visible }: Props) {
+export function MessageActionsModal({ actions, onDismiss, reactions, report, visible }: Props) {
   const { t } = useTranslation();
   const [phase, setPhase] = useState<"actions" | "confirmation" | "report">("actions");
   const [pendingAction, setPendingAction] = useState<MessageModalAction | null>(null);
@@ -95,6 +101,22 @@ export function MessageActionsModal({ actions, onDismiss, report, visible }: Pro
       onDismiss();
     } catch {
       if (operationIdRef.current === operationId && visibleRef.current) setError(action.errorMessage);
+    } finally {
+      if (operationIdRef.current === operationId) setSubmitting(false);
+    }
+  };
+
+  const toggleReaction = async (emoji: string) => {
+    if (!reactions || submitting) return;
+    const operationId = ++operationIdRef.current;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await reactions.onToggle(emoji);
+      if (operationIdRef.current !== operationId) return;
+      onDismiss();
+    } catch {
+      if (operationIdRef.current === operationId && visibleRef.current) setError(reactions.errorMessage);
     } finally {
       if (operationIdRef.current === operationId) setSubmitting(false);
     }
@@ -154,6 +176,29 @@ export function MessageActionsModal({ actions, onDismiss, report, visible }: Pro
 
           {phase === "actions" ? (
             <View style={styles.content}>
+              {reactions ? (
+                <View>
+                  <Text style={styles.reactionTitle}>{t("chat.reactions")}</Text>
+                  <View accessibilityRole="radiogroup" style={styles.reactionRow}>
+                    {reactions.options.map((emoji) => {
+                      const selected = reactions.selectedEmoji === emoji;
+                      return (
+                        <TouchableOpacity
+                          accessibilityLabel={t("chat.reactWith", { emoji })}
+                          accessibilityRole="button"
+                          accessibilityState={{ checked: selected, disabled: submitting }}
+                          disabled={submitting}
+                          key={emoji}
+                          onPress={() => { void toggleReaction(emoji); }}
+                          style={[styles.reactionButton, selected && styles.reactionButtonSelected]}
+                        >
+                          <Text style={styles.reactionEmoji}>{emoji}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : null}
               {actions.map((action) => (
                 <TouchableOpacity
                   accessibilityRole="button"
@@ -311,6 +356,19 @@ const styles = StyleSheet.create({
   destructiveAction: { borderColor: Colors.primary },
   actionText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   destructiveText: { color: Colors.primary },
+  reactionButton: {
+    alignItems: "center",
+    borderColor: Colors.secondary,
+    borderRadius: 20,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  reactionButtonSelected: { backgroundColor: Colors.secondary, borderColor: Colors.primary },
+  reactionEmoji: { fontSize: 22 },
+  reactionRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  reactionTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, marginBottom: Spacing.sm },
   prompt: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 22 },
   reasons: { gap: Spacing.xs },
   reason: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, minHeight: 48 },

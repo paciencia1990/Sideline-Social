@@ -1,6 +1,6 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { ChevronRight } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
@@ -9,12 +9,17 @@ import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useCoachBackNavigation } from "@/hooks/useCoachBackNavigation";
+import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import { getTeamPrivateMessageInboxPage } from "@/services/teamPrivateMessageService";
 import type { TeamPrivateConversation } from "@/types/teamVoiceMessaging";
 
 export default function CoachTeamMessagesInboxScreen() {
   const { t } = useTranslation();
   const navigateBack = useCoachBackNavigation();
+  const params = useLocalSearchParams<{ teamId?: string | string[]; notificationId?: string | string[] }>();
+  const selectedTeamId = normalizeParam(params.teamId) || undefined;
+  const notificationId = normalizeParam(params.notificationId);
+  const acknowledgedNotificationIds = useRef(new Set<string>());
   const [conversations, setConversations] = useState<TeamPrivateConversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -24,25 +29,29 @@ export default function CoachTeamMessagesInboxScreen() {
   const load = useCallback(async () => {
     setLoading(true); setError(false);
     try {
-      const page = await getTeamPrivateMessageInboxPage("coach");
+      const page = await getTeamPrivateMessageInboxPage("coach", selectedTeamId);
       setConversations(page.conversations);
       setHasMore(page.hasMore);
       setNextOffset(page.nextOffset);
+      if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
+        acknowledgedNotificationIds.current.add(notificationId);
+        void acknowledgeNotificationAfterOpen(notificationId);
+      }
     }
     catch { setConversations([]); setError(true); }
     finally { setLoading(false); }
-  }, []);
+  }, [notificationId, selectedTeamId]);
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true); setError(false);
     try {
-      const page = await getTeamPrivateMessageInboxPage("coach", undefined, nextOffset);
+      const page = await getTeamPrivateMessageInboxPage("coach", selectedTeamId, nextOffset);
       setConversations((current) => [...current, ...page.conversations]);
       setHasMore(page.hasMore);
       setNextOffset(page.nextOffset);
     } catch { setError(true); }
     finally { setLoadingMore(false); }
-  }, [hasMore, loadingMore, nextOffset]);
+  }, [hasMore, loadingMore, nextOffset, selectedTeamId]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
   return (
     <ScreenWrapper>
@@ -105,6 +114,10 @@ function formatDuration(preview: string) {
   const milliseconds = Number(preview.split(":")[1] ?? 0);
   const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function normalizeParam(value?: string | string[]) {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
 const styles = StyleSheet.create({

@@ -161,6 +161,10 @@ function ConversationRow({ conversation, locale }: { conversation: FriendConvers
   const typeLabel = conversation.conversationType === "group" ? t("chat.groupConversation") : t("chat.directConversation");
   const preview = conversation.lastMessageRemoved
     ? t("chat.messageRemoved")
+    : conversation.lastMessageType === "image"
+      ? conversation.lastMessagePreview && conversation.lastMessagePreview !== "photo" ? `${t("chat.photoPreview")}: ${conversation.lastMessagePreview}` : t("chat.photoPreview")
+      : conversation.lastMessageType === "voice"
+        ? conversation.lastMessagePreview && conversation.lastMessagePreview !== "voice" ? `${t("chat.voicePreview")}: ${conversation.lastMessagePreview}` : t("chat.voicePreview")
     : conversation.lastMessagePreview || t("chat.noMessages");
   const time = conversation.lastMessageAt?.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" }) ?? "";
   return (

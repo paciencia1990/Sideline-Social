@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const admin = require("../functions/node_modules/firebase-admin");
@@ -141,6 +142,121 @@ async function seedVoiceReservation(client, reservationId, targetId) {
   });
 }
 
+function hashHex(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+async function seedFriendMediaAccessGrant(client, otherUid, label) {
+  const conversationId = `standingmedia_${hashHex(`${label}:conversation`).slice(0, 16)}`;
+  const messageId = `message_${hashHex(`${label}:message`)}`;
+  const reservationId = `media_${hashHex(`${label}:reservation`)}`;
+  const storagePath = `friendChatMedia/${conversationId}/${messageId}/${reservationId}/voice.m4a`;
+  const grantToken = hashHex(`${label}:grant`);
+  const grantDocId = hashHex(grantToken);
+  const now = admin.firestore.Timestamp.now();
+  await Promise.all([
+    adminDb.collection("friendConversations").doc(conversationId).set({
+      conversationId,
+      conversationType: "direct",
+      status: "active",
+      activeParticipantIds: [client.uid, otherUid],
+    }),
+    adminDb.collection("friendConversations").doc(conversationId)
+      .collection("members").doc(client.uid).set({
+        userId: client.uid,
+        status: "active",
+      }),
+    adminDb.collection("friendConversations").doc(conversationId)
+      .collection("members").doc(otherUid).set({
+        userId: otherUid,
+        status: "active",
+      }),
+    adminDb.collection("friendConversations").doc(conversationId)
+      .collection("messages").doc(messageId).set({
+        caption: null,
+        conversationId,
+        createdAt: now,
+        mediaStoragePaths: [storagePath],
+        messageId,
+        messageType: "voice",
+        senderUserId: client.uid,
+        status: "active",
+        text: "",
+        visibleToUserIds: [client.uid, otherUid],
+        voiceMemo: {
+          durationMilliseconds: 1_000,
+          mimeType: "audio/mp4",
+          sizeBytes: 4,
+          storagePath,
+        },
+      }),
+    adminDb.collection("friendChatUploadReservations").doc(reservationId).set({
+      clientMessageId: `client_${hashHex(`${label}:client`).slice(0, 16)}`,
+      conversationId,
+      createdAt: now,
+      expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+      kind: "voice",
+      reservationId,
+      status: "finalized",
+      storagePath,
+      targetId: messageId,
+      userId: client.uid,
+      voiceMemo: {
+        durationMilliseconds: 1_000,
+        mimeType: "audio/mp4",
+        sizeBytes: 4,
+      },
+    }),
+    adminDb.collection("friendChatMediaPlaybackGrants").doc(grantDocId).set({
+      conversationId,
+      createdAt: now,
+      expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+      mediaKind: "voice",
+      messageId,
+      storagePath,
+      userId: client.uid,
+    }),
+    admin.storage().bucket().file(storagePath).save(Buffer.from([1, 2, 3, 4]), {
+      metadata: { contentType: "audio/mp4" },
+    }),
+  ]);
+  return { conversationId, grantDocId, grantToken, reservationId, storagePath };
+}
+
+async function seedPendingFriendMediaReservation(client, label) {
+  const conversationId = `standingpending_${hashHex(`${label}:conversation`).slice(0, 16)}`;
+  const messageId = `message_${hashHex(`${label}:message`)}`;
+  const reservationId = `media_${hashHex(`${label}:reservation`)}`;
+  const storagePath = `friendChatMedia/${conversationId}/${messageId}/${reservationId}/voice.m4a`;
+  await adminDb.collection("friendChatUploadReservations").doc(reservationId).set({
+    conversationId,
+    expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+    kind: "voice",
+    reservationId,
+    status: "pending",
+    storagePath,
+    targetId: messageId,
+    userId: client.uid,
+    voiceMemo: {
+      durationMilliseconds: 1_000,
+      mimeType: "audio/mp4",
+      sizeBytes: 4,
+    },
+  });
+  await admin.storage().bucket().file(storagePath).save(Buffer.from([1, 2, 3, 4]), {
+    metadata: { contentType: "audio/mp4" },
+  });
+  return { reservationId, storagePath };
+}
+
+async function streamFriendMediaStatus(grantToken, method = "HEAD") {
+  const response = await fetch(
+    `http://127.0.0.1:5001/${projectId}/us-central1/streamFriendChatMedia?grant=${grantToken}`,
+    { method },
+  );
+  return response.status;
+}
+
 async function installDatabaseRulesForFunctionsNamespace() {
   const emulatorHost = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
   assert.equal(typeof emulatorHost, "string", "The Realtime Database emulator host is required");
@@ -251,6 +367,23 @@ async function run() {
       }),
   ]);
 
+  const [activeMedia, restrictedMedia, suspendedMedia, bannedMedia] = await Promise.all([
+    seedFriendMediaAccessGrant(activeParent, activeCoach.uid, "active-media"),
+    seedFriendMediaAccessGrant(messagingRestricted, activeParent.uid, "restricted-media"),
+    seedFriendMediaAccessGrant(suspended, activeParent.uid, "suspended-media"),
+    seedFriendMediaAccessGrant(banned, activeParent.uid, "banned-media"),
+  ]);
+  const [restrictedPendingMedia, suspendedPendingMedia, bannedPendingMedia] = await Promise.all([
+    seedPendingFriendMediaReservation(messagingRestricted, "restricted-pending-media"),
+    seedPendingFriendMediaReservation(suspended, "suspended-pending-media"),
+    seedPendingFriendMediaReservation(banned, "banned-pending-media"),
+  ]);
+  assert.equal(await streamFriendMediaStatus(activeMedia.grantToken), 200);
+  assert.equal(await streamFriendMediaStatus(activeMedia.grantToken, "GET"), 200);
+  assert.equal(await streamFriendMediaStatus(restrictedMedia.grantToken), 200);
+  assert.equal(await streamFriendMediaStatus(suspendedMedia.grantToken), 200);
+  assert.equal(await streamFriendMediaStatus(bannedMedia.grantToken), 200);
+
   await Promise.all([
     setStanding(messagingRestricted, { status: "active", messagingRestricted: true }),
     setStanding(suspended, {
@@ -261,18 +394,77 @@ async function run() {
   ]);
 
   await waitFor(async () => {
-    const [reservation, request, token, notification] = await Promise.all([
+    const [
+      reservation,
+      request,
+      token,
+      notification,
+      restrictedPending,
+      suspendedPending,
+      bannedPending,
+      restrictedGrant,
+      suspendedGrant,
+      bannedGrant,
+    ] = await Promise.all([
       adminDb.collection("teamVoiceUploadReservations").doc("voice-restricted").get(),
       adminDb.collection("friendRequests").doc("pending-before-restriction").get(),
       adminDb.collection("notificationTokens").doc("suspended-token").get(),
       adminDb.collection("userNotifications").doc(suspended.uid)
         .collection("notifications").doc("standing-notification").get(),
+      adminDb.collection("friendChatUploadReservations").doc(restrictedPendingMedia.reservationId).get(),
+      adminDb.collection("friendChatUploadReservations").doc(suspendedPendingMedia.reservationId).get(),
+      adminDb.collection("friendChatUploadReservations").doc(bannedPendingMedia.reservationId).get(),
+      adminDb.collection("friendChatMediaPlaybackGrants").doc(restrictedMedia.grantDocId).get(),
+      adminDb.collection("friendChatMediaPlaybackGrants").doc(suspendedMedia.grantDocId).get(),
+      adminDb.collection("friendChatMediaPlaybackGrants").doc(bannedMedia.grantDocId).get(),
     ]);
     return reservation.data()?.status === "canceled" &&
       request.data()?.status === "canceled" &&
       !token.exists &&
-      notification.data()?.status === "dismissed";
+      notification.data()?.status === "dismissed" &&
+      restrictedPending.data()?.status === "deletePending" &&
+      suspendedPending.data()?.status === "deletePending" &&
+      bannedPending.data()?.status === "deletePending" &&
+      !restrictedGrant.exists &&
+      !suspendedGrant.exists &&
+      !bannedGrant.exists;
   });
+
+  assert.equal(
+    await streamFriendMediaStatus(activeMedia.grantToken),
+    200,
+    "active accounts keep authorized historical friend media access",
+  );
+  assert.notEqual(
+    await streamFriendMediaStatus(restrictedMedia.grantToken),
+    200,
+    "messaging-restricted accounts lose historical friend media access",
+  );
+  assert.notEqual(
+    await streamFriendMediaStatus(suspendedMedia.grantToken),
+    200,
+    "suspended accounts lose historical friend media access",
+  );
+  assert.notEqual(
+    await streamFriendMediaStatus(bannedMedia.grantToken),
+    200,
+    "banned accounts lose historical friend media access",
+  );
+  await rejectsCode(
+    messagingRestricted.call("createFriendChatVoiceUpload", {}),
+    "permission-denied",
+    "messaging-restricted stale credentials cannot reserve friend media",
+  );
+  await rejectsCode(
+    suspended.call("createFriendChatVoiceUpload", {}),
+    "permission-denied",
+    "suspended stale credentials cannot reserve friend media",
+  );
+  await rejectsCode(
+    banned.call("createFriendChatVoiceUpload", {}),
+    "permission-denied",
+    "banned stale credentials cannot reserve friend media",
+  );
 
   assert.equal(
     (await admin.auth().getUser(moderator.uid)).customClaims?.moderationRole,

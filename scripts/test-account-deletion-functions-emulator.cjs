@@ -10,9 +10,11 @@ if (!admin.apps.length) {
   admin.initializeApp({
     projectId,
     databaseURL: `https://${projectId}.firebaseio.com`,
+    storageBucket: `${projectId}.appspot.com`,
   });
 }
 const db = admin.firestore();
+const bucket = admin.storage().bucket();
 
 async function createClient(label) {
   const app = initializeApp({ apiKey: "demo-key", projectId }, label);
@@ -42,8 +44,16 @@ async function run() {
   const triviaCreateRateLimitId = createHash("sha256").update(`create:${deletingUser.uid}`).digest("hex");
   const sharedTriviaSessionId = "shared-trivia-session";
   const soloTriviaSessionId = "solo-trivia-session";
+  const friendVoicePath = "friendChatMedia/privacy-conversation/message_" + "a".repeat(64) + "/media_" + "1".repeat(64) + "/voice.m4a";
+  const friendImagePath = "friendChatMedia/privacy-conversation/message_" + "b".repeat(64) + "/media_" + "2".repeat(64) + "/image.jpg";
+  const friendThumbnailPath = "friendChatMedia/privacy-conversation/message_" + "b".repeat(64) + "/media_" + "2".repeat(64) + "/thumbnail.jpg";
+  const friendReservedPath = "friendChatMedia/privacy-conversation/message_" + "c".repeat(64) + "/media_" + "3".repeat(64) + "/image.jpg";
 
   await Promise.all([
+    bucket.file(friendVoicePath).save(Buffer.from("voice")),
+    bucket.file(friendImagePath).save(Buffer.from("image")),
+    bucket.file(friendThumbnailPath).save(Buffer.from("thumbnail")),
+    bucket.file(friendReservedPath).save(Buffer.from("reserved")),
     db.collection("users").doc(deletingUser.uid).set({ displayName: "Delete Me", friendIds: [friend.uid] }),
     db.collection("users").doc(deletingUser.uid).collection("children").doc("child-1").set({ firstName: "Child" }),
     db.collection("publicUserProfiles").doc(deletingUser.uid).set({ displayName: "Delete D." }),
@@ -153,6 +163,47 @@ async function run() {
     db.collection("friendConversations").doc("privacy-conversation").collection("messages").doc("friend-message").set({
       senderUserId: friend.uid, text: "Hello", visibleToUserIds: [deletingUser.uid, friend.uid],
     }),
+    db.collection("friendConversations").doc("privacy-conversation").collection("messages").doc("authored-media-message").set({
+      caption: "Media from deleting user",
+      conversationId: "privacy-conversation",
+      image: {
+        fullPath: friendImagePath,
+        height: 900,
+        mimeType: "image/jpeg",
+        sizeBytes: 5,
+        thumbnailHeight: 288,
+        thumbnailMimeType: "image/jpeg",
+        thumbnailPath: friendThumbnailPath,
+        thumbnailSizeBytes: 9,
+        thumbnailWidth: 512,
+        width: 1600,
+      },
+      mediaStoragePaths: [friendImagePath, friendThumbnailPath, friendVoicePath],
+      messageType: "image",
+      reactionCounts: { "👍": 1 },
+      reactionTotalCount: 1,
+      senderDisplayName: "Delete Me",
+      senderUserId: deletingUser.uid,
+      status: "active",
+      text: "",
+      visibleToUserIds: [deletingUser.uid, friend.uid],
+      voiceMemo: { durationMilliseconds: 1000, mimeType: "audio/mp4", sizeBytes: 5, storagePath: friendVoicePath },
+    }),
+    db.collection("friendConversations").doc("privacy-conversation").collection("messages").doc("friend-message")
+      .collection("reactions").doc(deletingUser.uid).set({
+        emoji: "👍",
+        userId: deletingUser.uid,
+      }),
+    db.collection("friendChatUploadReservations").doc("delete-media-reservation").set({
+      fullPath: friendReservedPath,
+      status: "pending",
+      thumbnailPath: friendThumbnailPath,
+      userId: deletingUser.uid,
+    }),
+    db.collection("friendChatMediaPlaybackGrants").doc("delete-media-grant").set({
+      storagePath: friendVoicePath,
+      userId: deletingUser.uid,
+    }),
     db.collection("teamPrivateConversations").doc("privacy-team-conversation").set({
       coachUserId: friend.uid,
       parentUserId: deletingUser.uid,
@@ -232,6 +283,22 @@ async function run() {
   assert.equal(friendConversation.participantNameSnapshots[deletingUser.uid], undefined);
   assert.deepEqual((await db.collection("friendConversations").doc("privacy-conversation")
     .collection("messages").doc("friend-message").get()).data().visibleToUserIds, [friend.uid]);
+  const authoredMediaMessage = (await db.collection("friendConversations").doc("privacy-conversation")
+    .collection("messages").doc("authored-media-message").get()).data();
+  assert.equal(authoredMediaMessage.status, "removed");
+  assert.equal(authoredMediaMessage.senderUserId, null);
+  assert.equal(authoredMediaMessage.image, null);
+  assert.equal(authoredMediaMessage.voiceMemo, null);
+  assert.deepEqual(authoredMediaMessage.mediaStoragePaths, []);
+  assert.deepEqual(authoredMediaMessage.reactionCounts, {});
+  assert.equal((await bucket.file(friendVoicePath).exists())[0], false);
+  assert.equal((await bucket.file(friendImagePath).exists())[0], false);
+  assert.equal((await bucket.file(friendThumbnailPath).exists())[0], false);
+  assert.equal((await bucket.file(friendReservedPath).exists())[0], false);
+  assert.equal((await db.collection("friendChatUploadReservations").doc("delete-media-reservation").get()).exists, false);
+  assert.equal((await db.collection("friendChatMediaPlaybackGrants").doc("delete-media-grant").get()).exists, false);
+  assert.equal((await db.collection("friendConversations").doc("privacy-conversation").collection("messages").doc("friend-message")
+    .collection("reactions").doc(deletingUser.uid).get()).exists, false);
   const privateConversation = (await db.collection("teamPrivateConversations").doc("privacy-team-conversation").get()).data();
   assert.deepEqual(privateConversation.participantUserIds, [friend.uid]);
   assert.equal(privateConversation.parentUserId, null);

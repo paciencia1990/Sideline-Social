@@ -21,9 +21,19 @@ const serverCore = loadTypeScript("functions/src/notificationDismissalCore.ts");
 assert.equal(core.getNotificationDestination({ type: "coachAnnouncement", teamId: "team-1", announcementId: "update-1" }), "/teams/team-1/announcements/update-1");
 assert.equal(core.getNotificationDestination({ type: "coach_update", teamId: "team-1", announcementId: "update-1" }), "/teams/team-1/announcements/update-1");
 assert.equal(core.getNotificationDestination({ type: "coachAnnouncement", teamId: "bad/path", announcementId: "update-1" }), null);
-assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "private-1", conversationType: "coach" }), "/coach/team-messages/private-1");
-assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "private-1", conversationType: "parent" }), "/teams/team-1/messages/private-1");
-assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "private-1" }), null);
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "private-1", conversationType: "coach" }), "/coach/team-messages?teamId=team-1&focus=privateMessages");
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "private-1", conversationType: "parent" }), "/teams/team-1?focus=privateMessages");
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "private-1" }), "/teams/team-1?focus=privateMessages");
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", activeMode: "coach" }), "/coach/team-messages?teamId=team-1&focus=privateMessages");
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", activeMode: "parent" }), "/teams/team-1?focus=privateMessages");
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", conversationId: "bad/path", conversationType: "parent" }), "/teams/team-1?focus=privateMessages");
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "bad/path", conversationType: "coach" }), null);
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", conversationId: "private-1", conversationType: "parent" }), null);
+assert.equal(core.getNotificationDestination({ type: "teamPrivateMessage", teamId: "team-1", activeMode: "coach" }).includes("profile"), false);
+assert.equal(core.getNotificationDestinationMode({ type: "teamPrivateMessage", teamId: "team-1", conversationType: "coach", activeMode: "parent" }), "coach");
+assert.equal(core.getNotificationDestinationMode({ type: "teamPrivateMessage", teamId: "team-1", conversationType: "parent", activeMode: "coach" }), "parent");
+assert.equal(core.getNotificationDestinationMode({ type: "teamPrivateMessage", teamId: "team-1", activeMode: "coach" }), "coach");
+assert.equal(core.getNotificationDestinationMode({ type: "teamPrivateMessage", teamId: "bad/path", activeMode: "coach" }), null);
 assert.equal(core.getNotificationDestination({ type: "friendRequest" }), "/(tabs)/friends");
 assert.equal(core.getNotificationDestination({ type: "friendRequestAccepted" }), "/(tabs)/friends");
 assert.equal(core.getNotificationDestination({ type: "chatGroupInvitation", conversationId: "group-1" }), "/(social)/chat/invitation/group-1");
@@ -65,6 +75,7 @@ assert.equal(serverCore.getNotificationCleanupReason({ isRead: false, readAt: nu
 assert.equal(serverCore.getNotificationCleanupReason({ dismissedAt: null, expiresAt: timestamp(now - 1), createdAt: timestamp(now - 91 * 86400000) }, now), "unresolved90d");
 
 const home = read("app", "(tabs)", "index.tsx");
+const rootIndex = read("app", "index.tsx");
 const inbox = read("app", "notifications.tsx");
 const service = read("services", "notificationService.ts");
 const coordinator = read("components", "NotificationCoordinator.tsx");
@@ -73,6 +84,8 @@ const notificationService = read("services", "notificationService.ts");
 const dismissalFunctions = read("functions", "src", "userNotificationDismissal.ts");
 const announcementDestination = read("app", "teams", "[teamId]", "announcements", "[announcementId].tsx");
 const friendsDestination = read("app", "(tabs)", "friends.tsx");
+const parentTeamHub = read("app", "teams", "[teamId]", "index.tsx");
+const coachPrivateInbox = read("app", "coach", "team-messages", "index.tsx");
 const translations = read("i18n", "index.ts");
 const indexes = JSON.parse(read("firestore.indexes.json"));
 
@@ -95,13 +108,27 @@ assert.equal(service.includes("acknowledgeNotificationOpened"), true);
 assert.equal(service.includes("clearUserNotifications"), true);
 assert.equal(service.includes("formatFriendRequestSenderName"), true);
 assert.equal(service.includes("actorDisplayName ? { ...params, actorName: actorDisplayName } : params"), true);
+assert.equal(service.includes("activeMode: context.activeMode ?? data?.activeMode"), true);
+assert.equal(service.includes("requiredMode: getNotificationDestinationMode(resolvedData)"), true);
+assert.equal(rootIndex.includes("getPendingNotificationOpenTarget({ activeMode })"), true);
+assert.equal(rootIndex.includes("setActiveMode(pendingTarget.requiredMode)"), true);
 assert.equal(coordinator.includes("getNotificationOpenTargetFromData"), true);
+assert.equal(coordinator.includes("const { activeMode, modeHydrated, setActiveMode } = useApp();"), true);
+assert.equal(coordinator.includes("getNotificationOpenTargetFromData(response.notification.request.content.data, { activeMode })"), true);
+assert.equal(coordinator.includes("setActiveMode(target.requiredMode)"), true);
 assert.equal(coordinator.includes("markNotificationRead"), false);
 assert.equal(coordinator.includes("retryPendingNotificationAcknowledgements"), true);
+assert.match(inbox, /getNotificationOpenTargetFromData\(\s*\{ \.\.\.notification, notificationId: notification\.id \},\s*\{ activeMode \},\s*\)/);
+assert.equal(inbox.includes("setActiveMode(target.requiredMode)"), true);
 assert.equal(announcementDestination.includes("acknowledgeNotificationAfterOpen(notificationId)"), true);
 assert.ok(announcementDestination.indexOf("setAnnouncement(nextAnnouncement)") < announcementDestination.indexOf("acknowledgeNotificationAfterOpen(notificationId)"));
 assert.equal(friendsDestination.includes("acknowledgeNotificationAfterOpen(notificationId)"), true);
 assert.ok(friendsDestination.indexOf("setSuggestedUsers(nextSuggested)") < friendsDestination.indexOf("acknowledgeNotificationAfterOpen(notificationId)"));
+assert.equal(parentTeamHub.includes("acknowledgeNotificationAfterOpen(notificationId)"), true);
+assert.ok(parentTeamHub.indexOf("setSummary(nextSummary)") < parentTeamHub.indexOf("acknowledgeNotificationAfterOpen(notificationId)"));
+assert.equal(coachPrivateInbox.includes("getTeamPrivateMessageInboxPage(\"coach\", selectedTeamId)"), true);
+assert.equal(coachPrivateInbox.includes("acknowledgeNotificationAfterOpen(notificationId)"), true);
+assert.ok(coachPrivateInbox.indexOf("setConversations(page.conversations)") < coachPrivateInbox.indexOf("acknowledgeNotificationAfterOpen(notificationId)"));
 assert.equal(dismissalFunctions.includes("functions.region('us-central1')"), true);
 assert.equal(dismissalFunctions.includes("acknowledgeNotificationOpened"), true);
 assert.equal(dismissalFunctions.includes("clearUserNotifications"), true);
@@ -129,6 +156,10 @@ const teamAnnouncement = functionsSource.slice(
   functionsSource.indexOf("export const notifyParentsOfTeamAnnouncement"),
   functionsSource.indexOf("// Public social profile reads"),
 );
+const privateTeamMessage = functionsSource.slice(
+  functionsSource.indexOf("async function notifyPrivateTeamMessage"),
+  functionsSource.indexOf("async function enforceTeamMessageRateLimit"),
+);
 for (const source of [friendCreated, friendAccepted, teamAnnouncement]) {
   assert.equal(source.includes("createPersonalNotificationAndPush"), true);
   assert.equal(source.includes("fcmToken"), false);
@@ -154,6 +185,10 @@ assert.equal(requestNotificationResolver.includes("status: 'dismissed'"), true);
 assert.equal(actorNameResolver.toLowerCase().includes("email"), false);
 assert.equal(teamAnnouncement.includes("storedAnnouncementRecipientUserIds(announcement.recipientUserIds)"), true);
 assert.equal(teamAnnouncement.includes("resolveAnnouncementRecipientUserIds"), true);
+assert.equal(privateTeamMessage.includes("type: 'teamPrivateMessage'"), true);
+assert.equal(privateTeamMessage.includes("teamId: String(conversation.teamId ?? '')"), true);
+assert.equal(privateTeamMessage.includes("conversationId: String(conversation.conversationId ?? '')"), true);
+assert.equal(privateTeamMessage.includes("conversationType: recipientIsCoach ? 'coach' : 'parent'"), true);
 assert.equal(notificationService.includes('Platform.OS === "ios"'), true);
 assert.equal(notificationService.includes("getExpoPushTokenAsync"), true);
 assert.equal(functionsSource.includes("cleanupExpoPushReceipts"), true);

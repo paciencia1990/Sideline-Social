@@ -102,6 +102,10 @@ async function run() {
   assert.match(composer, /AppState\.addEventListener\("change"/, "backgrounding cancels active recording state");
   assert.match(composer, /resetPreparedVoiceRecorder/, "failure and unmount release prepared recorder state");
   assert.match(composer, /restorePlaybackAudioMode/, "all lifecycle exits restore playback audio mode");
+  assert.match(composer, /autoStartKey\?:/, "friend chat can opt into one-tap recording without changing coach/team composers");
+  assert.match(composer, /lastAutoStartKeyRef/, "auto-start keys are consumed exactly once");
+  assert.match(composer, /void startRecording\(\)/, "auto-start reuses the guarded manual recording path");
+  assert.match(composer, /voiceMemo\.limitReached/, "auto-stopped recordings explain the max-duration limit");
   assert.match(composer, /voiceMemo\.saveRecordingError/);
   assert.match(composer, /voiceMemo\.startRecordingError/);
 

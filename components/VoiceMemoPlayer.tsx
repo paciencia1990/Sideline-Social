@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 
 import { auth } from "@/config/firebase";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { getFriendChatMediaDownloadUrl } from "@/services/chatService";
 import { getVoiceMemoDownloadUrl } from "@/services/teamPrivateMessageService";
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { activateVoicePlayback, releaseVoicePlayback } from "@/services/voiceMemoAudioService";
@@ -305,8 +306,9 @@ function VoiceMemoPlayerAvailable({
           }
           await createReadyPlayer(playbackUri, diagnostics, generation);
         },
-        requestSignedUrl: ({ messageId, messageKind, storagePath }) =>
-          getVoiceMemoDownloadUrl({ messageId, messageKind, storagePath }),
+        requestSignedUrl: ({ messageId, messageKind, storagePath }) => messageKind === "friendChatMessage"
+          ? getFriendChatMediaDownloadUrl({ messageId, storagePath })
+          : getVoiceMemoDownloadUrl({ messageId, messageKind, storagePath }),
         shouldRetry: (nextError) => !isPlaybackCancellation(nextError),
         source,
       });

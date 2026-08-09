@@ -37,7 +37,6 @@ type GameCardConfig = {
   bodyKey: string;
   route: string;
   players: string;
-  durationMinutes: { min: number; max?: number };
   Icon: LucideIcon;
   supportsLocalTest?: boolean;
 };
@@ -49,7 +48,6 @@ const GAME_CARDS: GameCardConfig[] = [
     bodyKey: "games.bombDefusal.desc",
     route: "/(games)/bomb-defusal/Lobby",
     players: "2-6",
-    durationMinutes: { min: 3, max: 8 },
     Icon: Bomb,
   },
   {
@@ -58,7 +56,6 @@ const GAME_CARDS: GameCardConfig[] = [
     bodyKey: "games.spotDifference.desc",
     route: "/(games)/spot-the-difference/Lobby",
     players: "4-12",
-    durationMinutes: { min: 7 },
     Icon: Search,
   },
   {
@@ -67,7 +64,6 @@ const GAME_CARDS: GameCardConfig[] = [
     bodyKey: "games.triviaBlitz.desc",
     route: "/(games)/trivia-blitz/Lobby",
     players: "2-20",
-    durationMinutes: { min: 5, max: 15 },
     Icon: Zap,
   },
 ];
@@ -282,16 +278,6 @@ function GameCard({ config, onLocalTest, onOpen }: { config: GameCardConfig; onL
           <Users size={13} color={Colors.textHeading} />
           <Text style={styles.metaText}>{config.players} {t("games.players")}</Text>
         </View>
-        <View style={styles.metaPill}>
-          <Text style={styles.metaText}>
-            {config.durationMinutes.max
-              ? t("games.durationMinutes", {
-                  min: config.durationMinutes.min,
-                  max: config.durationMinutes.max,
-                })
-              : t("games.durationMinutesExact", { count: config.durationMinutes.min })}
-          </Text>
-        </View>
       </View>
 
       <TouchableOpacity activeOpacity={0.86} onPress={onOpen} style={styles.primaryButton}>
@@ -500,6 +486,7 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   metaRow: {
+    alignSelf: "flex-start",
     flexDirection: "row",
     flexWrap: "wrap",
     gap: Spacing.sm,

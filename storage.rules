@@ -47,6 +47,10 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/teamVoiceUploadReservations/$(reservationId)).data;
     }
 
+    function friendReservation(reservationId) {
+      return firestore.get(/databases/(default)/documents/friendChatUploadReservations/$(reservationId)).data;
+    }
+
     function validVoiceUpload(reservationId, teamId, kind, targetId) {
       let upload = reservation(reservationId);
       return canCommunicate() &&
@@ -76,6 +80,68 @@ service firebase.storage {
     match /teamVoiceMemos/{teamId}/privateConversations/{conversationId}/{messageId}/{reservationId}/memo.m4a {
       allow create: if validVoiceUpload(reservationId, teamId, "privateMessage", messageId) &&
         reservation(reservationId).conversationId == conversationId;
+      allow read, update, delete: if false;
+    }
+
+    match /friendChatMedia/{conversationId}/{messageId}/{reservationId}/voice.m4a {
+      allow create: if canCommunicate() &&
+        friendReservation(reservationId).status == "pending" &&
+        friendReservation(reservationId).kind == "voice" &&
+        friendReservation(reservationId).userId == request.auth.uid &&
+        friendReservation(reservationId).conversationId == conversationId &&
+        friendReservation(reservationId).targetId == messageId &&
+        friendReservation(reservationId).storagePath == "friendChatMedia/" + conversationId + "/" + messageId + "/" + reservationId + "/voice.m4a" &&
+        friendReservation(reservationId).expiresAt > request.time &&
+        friendReservation(reservationId).voiceMemo is map &&
+        friendReservation(reservationId).voiceMemo.mimeType in ["audio/mp4", "audio/m4a", "audio/x-m4a"] &&
+        friendReservation(reservationId).voiceMemo.durationMilliseconds is int &&
+        friendReservation(reservationId).voiceMemo.durationMilliseconds > 0 &&
+        friendReservation(reservationId).voiceMemo.durationMilliseconds <= 120000 &&
+        friendReservation(reservationId).voiceMemo.sizeBytes is int &&
+        friendReservation(reservationId).voiceMemo.sizeBytes > 0 &&
+        friendReservation(reservationId).voiceMemo.sizeBytes <= 3 * 1024 * 1024 &&
+        request.resource.size == friendReservation(reservationId).voiceMemo.sizeBytes &&
+        request.resource.contentType == friendReservation(reservationId).voiceMemo.mimeType;
+      allow read, update, delete: if false;
+    }
+
+    match /friendChatMedia/{conversationId}/{messageId}/{reservationId}/image.jpg {
+      allow create: if canCommunicate() &&
+        friendReservation(reservationId).status == "pending" &&
+        friendReservation(reservationId).kind == "image" &&
+        friendReservation(reservationId).userId == request.auth.uid &&
+        friendReservation(reservationId).conversationId == conversationId &&
+        friendReservation(reservationId).targetId == messageId &&
+        friendReservation(reservationId).fullPath == "friendChatMedia/" + conversationId + "/" + messageId + "/" + reservationId + "/image.jpg" &&
+        friendReservation(reservationId).expiresAt > request.time &&
+        friendReservation(reservationId).image is map &&
+        friendReservation(reservationId).image.main is map &&
+        friendReservation(reservationId).image.main.mimeType in ["image/jpeg", "image/webp"] &&
+        friendReservation(reservationId).image.main.sizeBytes is int &&
+        friendReservation(reservationId).image.main.sizeBytes > 0 &&
+        friendReservation(reservationId).image.main.sizeBytes <= 3 * 1024 * 1024 &&
+        request.resource.size == friendReservation(reservationId).image.main.sizeBytes &&
+        request.resource.contentType == friendReservation(reservationId).image.main.mimeType;
+      allow read, update, delete: if false;
+    }
+
+    match /friendChatMedia/{conversationId}/{messageId}/{reservationId}/thumbnail.jpg {
+      allow create: if canCommunicate() &&
+        friendReservation(reservationId).status == "pending" &&
+        friendReservation(reservationId).kind == "image" &&
+        friendReservation(reservationId).userId == request.auth.uid &&
+        friendReservation(reservationId).conversationId == conversationId &&
+        friendReservation(reservationId).targetId == messageId &&
+        friendReservation(reservationId).thumbnailPath == "friendChatMedia/" + conversationId + "/" + messageId + "/" + reservationId + "/thumbnail.jpg" &&
+        friendReservation(reservationId).expiresAt > request.time &&
+        friendReservation(reservationId).image is map &&
+        friendReservation(reservationId).image.thumbnail is map &&
+        friendReservation(reservationId).image.thumbnail.mimeType in ["image/jpeg", "image/webp"] &&
+        friendReservation(reservationId).image.thumbnail.sizeBytes is int &&
+        friendReservation(reservationId).image.thumbnail.sizeBytes > 0 &&
+        friendReservation(reservationId).image.thumbnail.sizeBytes <= 512 * 1024 &&
+        request.resource.size == friendReservation(reservationId).image.thumbnail.sizeBytes &&
+        request.resource.contentType == friendReservation(reservationId).image.thumbnail.mimeType;
       allow read, update, delete: if false;
     }
 

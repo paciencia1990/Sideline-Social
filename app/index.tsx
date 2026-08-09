@@ -6,16 +6,18 @@ import { ActivityIndicator, LogBox, StyleSheet, View } from "react-native";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors } from "@/constants/theme";
+import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 
 import { getPendingNotificationOpenTarget } from "@/services/notificationService";
 LogBox.ignoreAllLogs(false);
 
 export default function Index() {
+  const { activeMode, modeHydrated, setActiveMode } = useApp();
   const { user, loading } = useAuth();
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || !modeHydrated) return;
 
     let mounted = true;
 
@@ -25,10 +27,15 @@ export default function Index() {
 
       if (user) {
         try {
-          const pendingTarget = await getPendingNotificationOpenTarget();
+          const pendingTarget = await getPendingNotificationOpenTarget({ activeMode });
           if (!mounted) return;
           if (pendingTarget) {
-            router.replace(pendingTarget.route as never);
+            if (pendingTarget.requiredMode && pendingTarget.requiredMode !== activeMode) {
+              setActiveMode(pendingTarget.requiredMode);
+              setTimeout(() => router.replace(pendingTarget.route as never), 0);
+            } else {
+              router.replace(pendingTarget.route as never);
+            }
             return;
           }
         } catch (error) {
@@ -47,7 +54,7 @@ export default function Index() {
     return () => {
       mounted = false;
     };
-  }, [loading, user]);
+  }, [activeMode, loading, modeHydrated, setActiveMode, user]);
 
   return (
     <ScreenWrapper>

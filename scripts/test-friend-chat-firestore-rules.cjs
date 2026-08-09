@@ -24,6 +24,11 @@ async function seed(env) {
     }
     await setDoc(doc(db, "friendConversations", "group-1", "messages", "before"), { conversationId: "group-1", senderUserId: "active-b", text: "before", createdAt: Timestamp.fromMillis(1500), visibleToUserIds: ["active-b"], status: "active" });
     await setDoc(doc(db, "friendConversations", "group-1", "messages", "after"), { conversationId: "group-1", senderUserId: "active-b", text: "after", createdAt: Timestamp.fromMillis(2500), visibleToUserIds: ["active-a", "active-b"], status: "active" });
+    await setDoc(doc(db, "friendConversations", "group-1", "messages", "after", "reactions", "active-b"), { emoji: "👍", userId: "active-b", updatedAt: Timestamp.fromMillis(2600) });
+    await setDoc(doc(db, "friendConversations", "group-1", "userMessageStates", "active-a", "messages", "after"), { conversationId: "group-1", hiddenForMe: false, messageId: "after", starred: true, updatedAt: Timestamp.fromMillis(2700), userId: "active-a" });
+    await setDoc(doc(db, "friendChatUploadReservations", "pending-media"), { conversationId: "group-1", status: "pending", userId: "active-a" });
+    await setDoc(doc(db, "friendChatForwardRateLimits", "hash-a"), { lastForwardAt: Timestamp.fromMillis(2800), userIdHash: "hash-a" });
+    await setDoc(doc(db, "friendChatMediaPlaybackGrants", "playback-grant"), { conversationId: "group-1", status: "active", userId: "active-a" });
   });
 }
 
@@ -58,6 +63,23 @@ async function run() {
     await assertFails(getDocs(query(collection(active, "friendConversations", "group-1", "messages"), orderBy("createdAt", "desc"), limit(50))));
     await assertFails(getDoc(doc(invited, "friendConversations", "group-1", "messages", "after")));
     await assertFails(getDoc(doc(removed, "friendConversations", "group-1", "messages", "after")));
+    await assertSucceeds(getDoc(doc(active, "friendConversations", "group-1", "messages", "after", "reactions", "active-b")));
+    await assertSucceeds(getDocs(collection(active, "friendConversations", "group-1", "messages", "after", "reactions")));
+    await assertFails(getDoc(doc(invited, "friendConversations", "group-1", "messages", "after", "reactions", "active-b")));
+    await assertFails(setDoc(doc(active, "friendConversations", "group-1", "messages", "after", "reactions", "active-a"), { emoji: "❤️", userId: "active-a" }));
+    await assertFails(updateDoc(doc(active, "friendConversations", "group-1", "messages", "after", "reactions", "active-b"), { emoji: "😂" }));
+    await assertSucceeds(getDoc(doc(active, "friendConversations", "group-1", "userMessageStates", "active-a", "messages", "after")));
+    await assertSucceeds(getDocs(query(collection(active, "friendConversations", "group-1", "userMessageStates", "active-a", "messages"), where("starred", "==", true), limit(50))));
+    await assertFails(getDoc(doc(active, "friendConversations", "group-1", "userMessageStates", "active-b", "messages", "after")));
+    await assertFails(getDoc(doc(outsider, "friendConversations", "group-1", "userMessageStates", "active-a", "messages", "after")));
+    await assertFails(setDoc(doc(active, "friendConversations", "group-1", "userMessageStates", "active-a", "messages", "tampered"), { starred: true }));
+    await assertFails(getDoc(doc(active, "friendChatUploadReservations", "pending-media")));
+    await assertFails(getDoc(doc(active, "friendChatForwardRateLimits", "hash-a")));
+    await assertFails(getDoc(doc(active, "friendChatMediaPlaybackGrants", "playback-grant")));
+    await env.withSecurityRulesDisabled(async (context) => {
+      await updateDoc(doc(context.firestore(), "friendConversations", "group-1", "messages", "after"), { status: "removed" });
+    });
+    await assertFails(getDoc(doc(active, "friendConversations", "group-1", "messages", "after", "reactions", "active-b")));
 
     await assertFails(setDoc(doc(active, "friendConversations", "injected"), { activeParticipantIds: ["active-a"] }));
     await assertFails(updateDoc(conversation(active), { activeParticipantIds: ["active-a", "outsider"] }));
