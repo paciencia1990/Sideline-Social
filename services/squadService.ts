@@ -75,7 +75,7 @@ export interface UserSquadState {
   selectedSquadId: string | null;
 }
 
-export type LocationPermissionState = "undetermined" | "granted" | "denied";
+export type LocationPermissionState = "undetermined" | "granted" | "denied" | "error";
 
 export interface LocationPermissionResult {
   status: LocationPermissionState;
@@ -232,7 +232,7 @@ export async function getLocationPermissionStatus(): Promise<LocationPermissionR
     return normalizePermission(await Location.getForegroundPermissionsAsync());
   } catch (error) {
     logSquadDiagnostic("permission-status", error);
-    return { status: "undetermined", canAskAgain: true };
+    return { status: "error", canAskAgain: true };
   }
 }
 
@@ -241,7 +241,7 @@ export async function requestLocationPermission(): Promise<LocationPermissionRes
     return normalizePermission(await Location.requestForegroundPermissionsAsync());
   } catch (error) {
     logSquadDiagnostic("permission-request", error);
-    return { status: "denied", canAskAgain: false };
+    return { status: "error", canAskAgain: true };
   }
 }
 

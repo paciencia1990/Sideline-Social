@@ -11,7 +11,6 @@ import { Bomb, BookOpen, ShieldCheck, Users } from "lucide-react-native";
 import LottieView from "lottie-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { GameEndActions } from "@/components/GameEndActions";
@@ -26,9 +25,9 @@ import {
   startGameLobbyRematch,
   submitBombDefusalStep,
   type BombDefusalPlayerView,
-  type BombPrivateInstruction,
   type BombPublicCommand,
   type BombPublicOption,
+  type BombSolution,
   type GameJoinCodeFailureReason,
 } from "@/services/gameJoinCodeService";
 import { subscribeToSession } from "@/services/gameService";
@@ -45,7 +44,7 @@ const explosionAnimation = require("../../assets/animations/explosion.json");
 const wireCutAnimation = require("../../assets/animations/wireCut.json");
 
 export default function BombDefusalScreen() {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
   const { user } = useAuth();
   const { currentSquad, selectedSquadId } = useSquad();
   const params = useLocalSearchParams<{ sessionId?: string | string[]; lobbyId?: string | string[] }>();
@@ -58,7 +57,6 @@ export default function BombDefusalScreen() {
   const [hostUserId, setHostUserId] = useState("");
   const [timeLeft, setTimeLeft] = useState(0);
   const [deadlineLocalMs, setDeadlineLocalMs] = useState(0);
-  const [codeInput, setCodeInput] = useState("");
   const [actionSubmitting, setActionSubmitting] = useState(false);
   const [actionError, setActionError] = useState<GameJoinCodeFailureReason | null>(null);
   const [rewardSessionId, setRewardSessionId] = useState("");
@@ -72,6 +70,7 @@ export default function BombDefusalScreen() {
   const finalizedRewardKeyRef = useRef("");
   const rematchInFlightRef = useRef(false);
   const submissionIdsRef = useRef(new Map<string, string>());
+  const locale = i18n.resolvedLanguage?.toLowerCase().startsWith("es") ? "es" : "en";
 
   const refreshPlayerView = useCallback(async (showLoading = false) => {
     if (!sessionId) {
@@ -81,7 +80,7 @@ export default function BombDefusalScreen() {
     const requestSequence = ++requestSequenceRef.current;
     if (showLoading) setViewLoading(true);
     try {
-      const nextView = await getBombDefusalPlayerView({ sessionId });
+      const nextView = await getBombDefusalPlayerView({ locale, sessionId });
       if (requestSequence !== requestSequenceRef.current) return;
       setPlayerView(nextView);
       setViewError(null);
@@ -95,7 +94,7 @@ export default function BombDefusalScreen() {
     } finally {
       if (requestSequence === requestSequenceRef.current) setViewLoading(false);
     }
-  }, [sessionId]);
+  }, [locale, sessionId]);
 
   useEffect(() => {
     requestSequenceRef.current += 1;
@@ -107,7 +106,6 @@ export default function BombDefusalScreen() {
     setViewError(null);
     setViewLoading(Boolean(sessionId));
     setActionError(null);
-    setCodeInput("");
     if (sessionId) void refreshPlayerView(true);
   }, [refreshPlayerView, sessionId]);
 
@@ -154,10 +152,7 @@ export default function BombDefusalScreen() {
     void refreshPlayerView(false);
   }, [playerView, refreshPlayerView, sessionId, timeLeft]);
 
-  useEffect(() => {
-    setCodeInput("");
-    setActionError(null);
-  }, [playerView?.commandId]);
+  useEffect(() => setActionError(null), [playerView?.commandId]);
 
   useEffect(() => {
     let active = true;
@@ -345,12 +340,8 @@ export default function BombDefusalScreen() {
             ) : (
               <BombControls
                 actionSubmitting={actionSubmitting}
-                codeInput={codeInput}
                 interactive={playerView.role === "defuser"}
-                onClearCode={() => setCodeInput("")}
-                onCodeDigit={(digit) => setCodeInput((value) => value.length >= 3 ? value : `${value}${digit}`)}
                 onSubmit={submitAction}
-                onSubmitCode={() => void submitAction({ code: Number(codeInput) })}
                 publicCommand={playerView.publicCommand}
               />
             )}
@@ -368,6 +359,7 @@ export default function BombDefusalScreen() {
             rewardError={rewardError}
             rewardLoading={rewardLoading}
             rewardResult={rewardResult}
+            solution={playerView?.solution ?? null}
           />
         )}
       </ScrollView>
@@ -386,6 +378,7 @@ function RoleCard({ playerView }: { playerView: BombDefusalPlayerView }) {
         defuser: playerView.defuserDisplayName,
         expert: playerView.expertDisplayName,
       })}
+      accessibilityLiveRegion="polite"
       style={styles.roleCard}
     >
       <View style={styles.roleHeading}>
@@ -410,13 +403,21 @@ function RoleCard({ playerView }: { playerView: BombDefusalPlayerView }) {
 
 function ExpertInstruction({ playerView }: { playerView: BombDefusalPlayerView }) {
   const { t } = useTranslation();
-  const instruction = playerView.instruction
-    ? describePrivateInstruction(playerView.instruction, playerView.publicCommand, t)
-    : t("bomb.feedback.actionFailed");
+  const instruction = playerView.instruction?.prompt ?? t("bomb.feedback.actionFailed");
   return (
     <View accessible accessibilityLabel={`${t("bomb.privateInstructionTitle")}. ${instruction}`} style={styles.instructionCard}>
-      <Text style={styles.instructionEyebrow}>{t("bomb.privateInstructionTitle")}</Text>
+      <Text style={styles.instructionEyebrow}>
+        {t("bomb.privateInstructionStage", {
+          stage: t(`bomb.stages.${playerView.instruction?.stage ?? "direct"}`),
+        })}
+      </Text>
       <Text style={styles.instructionText}>{instruction}</Text>
+      {playerView.instruction?.key ? (
+        <View style={styles.cipherKey}>
+          <Text style={styles.cipherKeyLabel}>{t("bomb.cipherKey")}</Text>
+          <Text style={styles.cipherKeyText}>{playerView.instruction.key}</Text>
+        </View>
+      ) : null}
       <Text style={styles.instructionHint}>{t("bomb.privateInstructionHint")}</Text>
     </View>
   );
@@ -424,70 +425,17 @@ function ExpertInstruction({ playerView }: { playerView: BombDefusalPlayerView }
 
 function BombControls({
   actionSubmitting,
-  codeInput,
   interactive,
-  onClearCode,
-  onCodeDigit,
   onSubmit,
-  onSubmitCode,
   publicCommand,
 }: {
   actionSubmitting: boolean;
-  codeInput: string;
   interactive: boolean;
-  onClearCode: () => void;
-  onCodeDigit: (digit: string) => void;
   onSubmit: (action: Record<string, string | number>) => void | Promise<void>;
-  onSubmitCode: () => void;
   publicCommand: BombPublicCommand;
 }) {
   const { t } = useTranslation();
   const title = interactive ? t("bomb.defuserControlsTitle") : t("bomb.supportControlsTitle");
-  if (publicCommand.type === "enter_code") {
-    return (
-      <View style={styles.controlsCard}>
-        <Text style={styles.controlsTitle}>{title}</Text>
-        {!interactive ? <Text style={styles.readOnlyHint}>{t("bomb.readOnlyHint")}</Text> : null}
-        {interactive ? (
-          <Text accessibilityLabel={t("bomb.accessibility.codeReadout", { code: codeInput || t("bomb.emptyCode") })} style={styles.codeReadout}>
-            {codeInput.padEnd(3, "_")}
-          </Text>
-        ) : null}
-        <View style={styles.optionGrid}>
-          {publicCommand.options.map((option) => (
-            <OptionControl
-              disabled={actionSubmitting || !interactive}
-              interactive={interactive}
-              key={option.id}
-              label={t("bomb.options.digit", { digit: option.value })}
-              marker={t("bomb.markers.keypad")}
-              number={option.number}
-              onPress={() => onCodeDigit(String(option.value))}
-            />
-          ))}
-        </View>
-        {interactive ? (
-          <View style={styles.codeActions}>
-            <Pressable accessibilityRole="button" onPress={onClearCode} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>{t("bomb.controls.clear")}</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ disabled: codeInput.length !== 3 || actionSubmitting }}
-              disabled={codeInput.length !== 3 || actionSubmitting}
-              onPress={onSubmitCode}
-              style={[styles.submitButton, (codeInput.length !== 3 || actionSubmitting) && styles.disabledButton]}
-            >
-              {actionSubmitting
-                ? <ActivityIndicator color={Colors.surface} size="small" />
-                : <Text style={styles.submitButtonText}>{t("bomb.controls.enter")}</Text>}
-            </Pressable>
-          </View>
-        ) : null}
-      </View>
-    );
-  }
-
   return (
     <View style={styles.controlsCard}>
       <Text style={styles.controlsTitle}>{title}</Text>
@@ -498,11 +446,11 @@ function BombControls({
             disabled={actionSubmitting || !interactive}
             interactive={interactive}
             key={option.id}
-            label={describePublicOption(publicCommand.type, option, t)}
+            label={option.label}
             marker={t(`bomb.markers.${option.marker}`)}
             number={option.number}
-            onPress={() => void onSubmit(actionForOption(publicCommand.type, option))}
-            swatch={publicCommand.type === "cut_wire" ? String(option.value) : undefined}
+            onPress={() => void onSubmit(actionForOption(option))}
+            swatch={option.color}
           />
         ))}
       </View>
@@ -568,6 +516,7 @@ function BombResult({
   rewardError,
   rewardLoading,
   rewardResult,
+  solution,
 }: {
   correctCommandCount: number;
   hostCanRematch: boolean;
@@ -578,6 +527,7 @@ function BombResult({
   rewardError: string | null;
   rewardLoading: boolean;
   rewardResult: GameRewardResult | null;
+  solution: BombSolution | null;
 }) {
   const { t } = useTranslation();
   const resultKey = outcome === "defused" ? "defused" : outcome === "exploded" ? "exploded" : "abandoned";
@@ -590,6 +540,12 @@ function BombResult({
       ) : null}
       <Text accessibilityRole="header" style={styles.resultTitle}>{t(`bomb.results.${resultKey}Title`)}</Text>
       <Text style={styles.resultBody}>{t(`bomb.results.${resultKey}Body`)}</Text>
+      {solution && outcome !== "abandoned" ? (
+        <View accessible accessibilityLabel={`${t("bomb.results.correctAnswer", { answer: solution.correctOptionLabel })}. ${solution.explanation}`} style={styles.solutionCard}>
+          <Text style={styles.solutionTitle}>{t("bomb.results.correctAnswer", { answer: solution.correctOptionLabel })}</Text>
+          <Text style={styles.solutionBody}>{solution.explanation}</Text>
+        </View>
+      ) : null}
       {outcome !== "abandoned" ? (
         <GameRewardSummary
           detailLines={[t("rewards.accuracyBonus", { count: correctCommandCount })]}
@@ -638,50 +594,8 @@ function BombUnavailable({
   );
 }
 
-function describePrivateInstruction(
-  instruction: BombPrivateInstruction,
-  publicCommand: BombPublicCommand,
-  t: TFunction,
-) {
-  if (instruction.type === "cut_wire") {
-    const option = publicCommand.options.find((candidate) => candidate.value === instruction.color);
-    return t("bomb.instructions.cutWireDetailed", {
-      color: t(`bomb.colors.${instruction.color}`),
-      marker: option ? t(`bomb.markers.${option.marker}`) : "",
-      number: option?.number ?? "",
-    });
-  }
-  if (instruction.type === "press_button") {
-    const option = publicCommand.options.find((candidate) => candidate.value === instruction.label);
-    return t("bomb.instructions.pressButtonDetailed", {
-      label: instruction.label,
-      marker: option ? t(`bomb.markers.${option.marker}`) : "",
-      number: option?.number ?? "",
-    });
-  }
-  if (instruction.type === "rotate_dial") {
-    return t("bomb.instructions.rotateDial", { target: instruction.target });
-  }
-  return t("bomb.instructions.enterCode", { code: instruction.code });
-}
-
-function describePublicOption(type: BombPublicCommand["type"], option: BombPublicOption, t: TFunction) {
-  if (type === "cut_wire") {
-    return t("bomb.options.wire", { color: t(`bomb.colors.${String(option.value)}`) });
-  }
-  if (type === "press_button") return t("bomb.options.button", { label: option.value });
-  if (type === "rotate_dial") return t("bomb.options.dial", { value: option.value });
-  return t("bomb.options.digit", { digit: option.value });
-}
-
-function actionForOption(
-  type: BombPublicCommand["type"],
-  option: BombPublicOption,
-): Record<string, string | number> {
-  if (type === "cut_wire") return { color: String(option.value) };
-  if (type === "press_button") return { label: String(option.value) };
-  if (type === "rotate_dial") return { target: Number(option.value) };
-  return { code: Number(option.value) };
+function actionForOption(option: BombPublicOption): Record<string, string | number> {
+  return { optionId: option.id };
 }
 
 function readBombOutcome(value: unknown): Exclude<BombOutcome, "playing"> | null {
@@ -724,6 +638,9 @@ const styles = StyleSheet.create({
   instructionCard: { backgroundColor: `${Colors.accentGreen}22`, borderColor: Colors.communicationLink, borderRadius: Radius.card, borderWidth: 2, gap: Spacing.sm, padding: Spacing.lg },
   instructionEyebrow: { color: Colors.communicationLink, fontFamily: Typography.bodyBold, fontSize: 12, textTransform: "uppercase" },
   instructionText: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 24, lineHeight: 32 },
+  cipherKey: { backgroundColor: Colors.surface, borderColor: Colors.communicationLink, borderRadius: Radius.sm, borderWidth: 1, gap: Spacing.xs, padding: Spacing.sm },
+  cipherKeyLabel: { color: Colors.communicationLink, fontFamily: Typography.bodyBold, fontSize: 12 },
+  cipherKeyText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 14, lineHeight: 20 },
   instructionHint: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 19 },
   controlsCard: { backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.card, borderWidth: 1, gap: Spacing.md, padding: Spacing.md },
   controlsTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 18 },
@@ -741,8 +658,6 @@ const styles = StyleSheet.create({
   greenWire: { backgroundColor: Colors.accentGreen },
   optionLabel: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 15 },
   optionMarker: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12 },
-  codeReadout: { alignSelf: "stretch", backgroundColor: Colors.textHeading, borderRadius: Radius.sm, color: Colors.surface, fontFamily: Typography.bodyBold, fontSize: 30, padding: Spacing.md, textAlign: "center" },
-  codeActions: { flexDirection: "row", gap: Spacing.sm },
   submitButton: { alignItems: "center", alignSelf: "stretch", backgroundColor: Colors.primary, borderRadius: Radius.button, flex: 1, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
   submitButtonText: { color: Colors.surface, fontFamily: Typography.bodyBold, fontSize: 15, textAlign: "center" },
   secondaryButton: { alignItems: "center", alignSelf: "stretch", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flex: 1, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
@@ -751,6 +666,9 @@ const styles = StyleSheet.create({
   resultCard: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.card, borderWidth: 1, gap: Spacing.md, padding: Spacing.lg },
   resultTitle: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 25, textAlign: "center" },
   resultBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 22, textAlign: "center" },
+  solutionCard: { alignSelf: "stretch", backgroundColor: `${Colors.accentGold}18`, borderColor: Colors.accentGold, borderRadius: Radius.sm, borderWidth: 1, gap: Spacing.xs, padding: Spacing.md },
+  solutionTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 15, lineHeight: 21 },
+  solutionBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21 },
   bodyText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
   rematchHint: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12, lineHeight: 18, textAlign: "center" },
   animation: { height: 150, width: 150 },

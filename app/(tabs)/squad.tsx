@@ -14,7 +14,7 @@ import {
   View,
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE, type Region } from "react-native-maps";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { MapPin, Plus, Search } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -35,6 +35,10 @@ import {
   type Coordinates,
   type Squad,
 } from "@/services/squadService";
+import {
+  clearSquadSystemReturn,
+  rememberSquadSystemReturn,
+} from "@/services/systemRouteResumeService";
 import { getParentTabScrollBottomPadding } from "@/utils/safeAreaLayout";
 
 type LocationPhase = "idle" | "loading" | "granted" | "denied" | "permanent" | "unavailable" | "error";
@@ -63,47 +67,141 @@ export default function SquadScreen() {
   const [venueQuery, setVenueQuery] = useState("");
   const [searchMode, setSearchMode] = useState<"nearby" | "venue">("nearby");
   const listRef = useRef<FlatList<Squad> | null>(null);
+  const mountedRef = useRef(true);
+  const screenFocusedRef = useRef(false);
+  const locationRequestIdRef = useRef(0);
+  const permissionCheckIdRef = useRef(0);
+  const permissionRequestIdRef = useRef(0);
+  const locationInFlightRef = useRef<Promise<void> | null>(null);
+  const permissionCheckInFlightRef = useRef<Promise<void> | null>(null);
+  const permissionRequestInFlightRef = useRef<Promise<void> | null>(null);
+  const locationPhaseRef = useRef(locationPhase);
+  const coordsRef = useRef(coords);
+  const radiusMilesRef = useRef(radiusMiles);
+  locationPhaseRef.current = locationPhase;
+  coordsRef.current = coords;
+  radiusMilesRef.current = radiusMiles;
 
-  const retrieveLocation = useCallback(async () => {
-    setLocationPhase("loading");
-    const location = await getCurrentLocation();
-    if (!location.coords) {
-      setCoords(null);
-      setLocationPhase(location.error === "services_disabled" ? "unavailable" : "error");
-      return;
-    }
-    setCoords(location.coords);
-    setSearchMode("nearby");
-    setLocationPhase("granted");
-    try {
-      await fetchSquads(location.coords.latitude, location.coords.longitude, radiusMiles);
-    } catch {
-      setLocationPhase("error");
-    }
-  }, [fetchSquads, radiusMiles]);
+  const retrieveLocation = useCallback(() => {
+    if (locationInFlightRef.current) return locationInFlightRef.current;
+    const requestId = ++locationRequestIdRef.current;
+    const request = (async () => {
+      setLocationPhase("loading");
+      const location = await getCurrentLocation();
+      if (!mountedRef.current || requestId !== locationRequestIdRef.current) return;
+      if (!location.coords) {
+        setCoords(null);
+        setLocationPhase(location.error === "services_disabled" ? "unavailable" : "error");
+        return;
+      }
+      setCoords(location.coords);
+      setSearchMode("nearby");
+      try {
+        await fetchSquads(
+          location.coords.latitude,
+          location.coords.longitude,
+          radiusMilesRef.current,
+        );
+        if (mountedRef.current && requestId === locationRequestIdRef.current) {
+          setLocationPhase("granted");
+        }
+      } catch {
+        if (mountedRef.current && requestId === locationRequestIdRef.current) {
+          setLocationPhase("error");
+        }
+      }
+    })();
+    locationInFlightRef.current = request;
+    void request.finally(() => {
+      if (locationInFlightRef.current === request) locationInFlightRef.current = null;
+    });
+    return request;
+  }, [fetchSquads]);
+
+  const recheckPermission = useCallback(() => {
+    if (permissionCheckInFlightRef.current) return permissionCheckInFlightRef.current;
+    const requestId = ++permissionCheckIdRef.current;
+    const request = (async () => {
+      const permission = await getLocationPermissionStatus();
+      if (
+        !mountedRef.current ||
+        !screenFocusedRef.current ||
+        requestId !== permissionCheckIdRef.current
+      ) return;
+      await clearSquadSystemReturn().catch(() => undefined);
+      if (permission.status === "granted") {
+        const shouldResume = !coordsRef.current || ["idle", "denied", "permanent", "error", "unavailable"]
+          .includes(locationPhaseRef.current);
+        if (shouldResume) await retrieveLocation();
+        return;
+      }
+      if (permission.status === "denied") {
+        setLocationPhase(permission.canAskAgain ? "denied" : "permanent");
+      } else if (permission.status === "error") {
+        setLocationPhase("error");
+      } else if (locationPhaseRef.current === "loading") {
+        setLocationPhase("idle");
+      }
+    })();
+    permissionCheckInFlightRef.current = request;
+    void request.finally(() => {
+      if (permissionCheckInFlightRef.current === request) permissionCheckInFlightRef.current = null;
+    });
+    return request;
+  }, [retrieveLocation]);
 
   useEffect(() => {
-    let active = true;
-    void getLocationPermissionStatus().then((permission) => {
-      if (!active) return;
-      if (permission.status === "granted") void retrieveLocation();
-      else if (permission.status === "denied") setLocationPhase(permission.canAskAgain ? "denied" : "permanent");
-    });
-    return () => { active = false; };
-  }, [retrieveLocation]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      locationRequestIdRef.current += 1;
+      permissionCheckIdRef.current += 1;
+      permissionRequestIdRef.current += 1;
+    };
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    screenFocusedRef.current = true;
+    void recheckPermission();
+    return () => {
+      screenFocusedRef.current = false;
+      permissionCheckIdRef.current += 1;
+      permissionCheckInFlightRef.current = null;
+    };
+  }, [recheckPermission]));
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
       if (state !== "active") return;
       void refreshLastActive();
-      if (locationPhase === "permanent") {
-        void getLocationPermissionStatus().then((permission) => {
-          if (permission.status === "granted") void retrieveLocation();
-        });
-      }
+      if (screenFocusedRef.current) void recheckPermission();
     });
     return () => subscription.remove();
-  }, [locationPhase, refreshLastActive, retrieveLocation]);
+  }, [recheckPermission, refreshLastActive]);
+
+  const requestPermissionAndSearch = useCallback(() => {
+    if (permissionRequestInFlightRef.current) return permissionRequestInFlightRef.current;
+    const requestId = ++permissionRequestIdRef.current;
+    const request = (async () => {
+      setLocationPhase("loading");
+      await rememberSquadSystemReturn().catch(() => undefined);
+      const permission = await requestLocationPermission();
+      await clearSquadSystemReturn().catch(() => undefined);
+      if (!mountedRef.current || !screenFocusedRef.current || requestId !== permissionRequestIdRef.current) return;
+      if (permission.status === "granted") {
+        await retrieveLocation();
+      } else if (permission.status === "denied") {
+        setLocationPhase(permission.canAskAgain ? "denied" : "permanent");
+      } else {
+        setLocationPhase("error");
+      }
+    })();
+    permissionRequestInFlightRef.current = request;
+    void request.finally(() => {
+      if (permissionRequestInFlightRef.current === request) permissionRequestInFlightRef.current = null;
+    });
+    return request;
+  }, [retrieveLocation]);
 
   const askForLocation = useCallback(() => {
     Alert.alert(
@@ -113,18 +211,15 @@ export default function SquadScreen() {
         { text: t("squad.notNow"), style: "cancel" },
         {
           text: t("startMode.continue"),
-          onPress: () => {
-            void requestLocationPermission().then((permission) => {
-              if (permission.status === "granted") void retrieveLocation();
-              else setLocationPhase(permission.canAskAgain ? "denied" : "permanent");
-            });
-          },
+          onPress: () => void requestPermissionAndSearch(),
         },
       ],
     );
-  }, [retrieveLocation, t]);
+  }, [requestPermissionAndSearch, t]);
 
   const handleUseMyLocation = useCallback(async () => {
+    if (locationPhaseRef.current === "loading") return;
+    setLocationPhase("loading");
     const permission = await getLocationPermissionStatus();
     if (permission.status === "granted") {
       await retrieveLocation();
@@ -134,11 +229,28 @@ export default function SquadScreen() {
       setLocationPhase("permanent");
       return;
     }
+    if (permission.status === "error") {
+      setLocationPhase("error");
+      return;
+    }
+    setLocationPhase("idle");
     askForLocation();
   }, [askForLocation, retrieveLocation]);
 
+  const handleOpenSettings = useCallback(async () => {
+    await rememberSquadSystemReturn().catch(() => undefined);
+    try {
+      await Linking.openSettings();
+    } catch {
+      await clearSquadSystemReturn().catch(() => undefined);
+      setLocationPhase("error");
+    }
+  }, []);
+
   const handleVenueSearch = useCallback(async () => {
     if (venueQuery.trim().length < 2) return;
+    locationRequestIdRef.current += 1;
+    locationInFlightRef.current = null;
     setSearchMode("venue");
     try {
       await searchSquads(venueQuery);
@@ -192,6 +304,8 @@ export default function SquadScreen() {
 
   const isBusy = loading || locationPhase === "loading";
   const mapRegion = coords ? toRegion(coords) : null;
+  const locationActionIsRetry = locationPhase === "denied" || locationPhase === "error" || locationPhase === "unavailable";
+  const locationButtonLabel = locationActionIsRetry ? t("squad.retryLocation") : t("squad.useMyLocation");
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -223,18 +337,23 @@ export default function SquadScreen() {
             <View style={styles.actionsCard}>
               <Text style={styles.actionTitle}>{t("squad.findNearby")}</Text>
               <Text style={styles.actionBody}>{t("squad.locationDisclosure")}</Text>
-              <TouchableOpacity
-                accessibilityLabel={t("squad.useMyLocationAccessibility")}
-                accessibilityRole="button"
-                activeOpacity={0.85}
-                onPress={() => void handleUseMyLocation()}
-                style={styles.locationButton}
-              >
-                <MapPin color={Colors.surface} size={18} />
-                <Text style={styles.locationButtonText}>{t("squad.useMyLocation")}</Text>
-              </TouchableOpacity>
+              {locationPhase !== "permanent" ? (
+                <TouchableOpacity
+                  accessibilityLabel={locationActionIsRetry ? locationButtonLabel : t("squad.useMyLocationAccessibility")}
+                  accessibilityRole="button"
+                  activeOpacity={0.85}
+                  disabled={locationPhase === "loading"}
+                  onPress={() => void handleUseMyLocation()}
+                  style={[styles.locationButton, locationPhase === "loading" && styles.disabledButton]}
+                >
+                  {locationPhase === "loading"
+                    ? <ActivityIndicator color={Colors.surface} size="small" />
+                    : <MapPin color={Colors.surface} size={18} />}
+                  <Text style={styles.locationButtonText}>{locationButtonLabel}</Text>
+                </TouchableOpacity>
+              ) : null}
               {locationPhase === "permanent" ? (
-                <TouchableOpacity accessibilityRole="button" onPress={() => void Linking.openSettings()} style={styles.secondaryButton}>
+                <TouchableOpacity accessibilityRole="button" onPress={() => void handleOpenSettings()} style={styles.secondaryButton}>
                   <Text style={styles.secondaryButtonText}>{t("squad.openSettings")}</Text>
                 </TouchableOpacity>
               ) : null}
@@ -358,6 +477,7 @@ const styles = StyleSheet.create({
   actionBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 19 },
   locationButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, flexDirection: "row", gap: Spacing.sm, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
   locationButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 15 },
+  disabledButton: { opacity: 0.6 },
   secondaryButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.md },
   secondaryButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   stateText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 18 },

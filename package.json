@@ -85,6 +85,7 @@
     "test:sideline-stars": "npm --prefix functions run build && node scripts/test-sideline-stars-core.cjs",
     "test:emulator:sideline-stars": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-stars-functions-test --only auth,database,firestore,functions \"node scripts/test-sideline-stars-functions-emulator.cjs\"",
     "test:squads": "npm --prefix functions run build && node scripts/test-squad-core.cjs && node scripts/test-squad-ui-core.cjs",
+    "test:squad-location": "node scripts/test-squad-location-navigation.cjs",
     "test:home-squad": "node scripts/test-home-squad-consolidation.cjs",
     "test:squad-seasons": "npm --prefix functions run build && node scripts/test-squad-season-core.cjs && node scripts/test-squad-season-normalization.cjs && node scripts/test-squad-season-ui.cjs && node scripts/test-season-picker-compatibility.cjs",
     "test:games-active-session": "node scripts/test-games-active-session-state.cjs",

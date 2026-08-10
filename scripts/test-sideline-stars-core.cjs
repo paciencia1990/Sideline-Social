@@ -53,7 +53,7 @@ assert.equal(amount(core.calculateSpotTeamReward({ outcome: "teamWin", playerTea
 assert.equal(amount(core.calculateSpotTeamReward({ outcome: "tie", playerTeamId: "A", winnerTeamId: null, perfectCompletion: false })), 6);
 assert.equal(amount(core.calculateSpotTeamReward({ outcome: "teamWin", playerTeamId: "A", winnerTeamId: "A", perfectCompletion: true })), 15);
 assert.equal(amount(core.calculateSpotTeamReward({ outcome: "tie", playerTeamId: "B", winnerTeamId: null, perfectCompletion: true })), 11);
-assert.equal(amount(core.calculateBombDefusalReward({ outcome: "exploded", firstAttemptCorrectStepCount: 3, totalSteps: 4 })), 8);
+assert.equal(amount(core.calculateBombDefusalReward({ outcome: "exploded", firstAttemptCorrectStepCount: 3, totalSteps: 4 })), 3);
 assert.equal(amount(core.calculateBombDefusalReward({ outcome: "defused", firstAttemptCorrectStepCount: 4, totalSteps: 4 })), 14);
 assert.equal(amount(core.calculateBombDefusalReward({ outcome: "defused", firstAttemptCorrectStepCount: 5, totalSteps: 5 })), 15);
 assert.ok(weekly.WEEKLY_CHALLENGES.every((challenge) => challenge.points === 5), "every new Weekly Challenge awards five Stars");

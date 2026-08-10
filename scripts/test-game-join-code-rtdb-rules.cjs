@@ -26,14 +26,14 @@ async function run() {
         },
         status: 'lobby',
         expiresAt: Date.now() + 60_000,
-        gameState: { roleSchemaVersion: 2, publicCommand: null },
+        gameState: { roleSchemaVersion: 3, publicCommand: null },
       }),
       admin.database().ref('gameSessions/session-expired').set({
         sessionId: 'session-expired', gameType: 'bomb_defusal', squadId: 'squad-a', hostUserId: 'host',
         players: { host: { displayName: 'Host', isReady: true }, player: { displayName: 'Player', isReady: true } },
         status: 'lobby',
         expiresAt: Date.now() - 1_000,
-        gameState: { roleSchemaVersion: 2, publicCommand: null },
+        gameState: { roleSchemaVersion: 3, publicCommand: null },
       }),
       admin.database().ref('gameSessionSecrets/session-a').set({
         expiresAt: Date.now() + 60_000,
@@ -52,7 +52,7 @@ async function run() {
         status: 'completed',
         completedAt: now - 1000,
         expiresAt: now + 600_000,
-        gameState: { roleSchemaVersion: 2, publicCommand: null, outcome: 'defused' },
+        gameState: { roleSchemaVersion: 3, publicCommand: null, outcome: 'defused' },
       }),
       admin.database().ref('gameSessions/session-results-stale').set({
         sessionId: 'session-results-stale', gameType: 'bomb_defusal', hostUserId: 'host',
@@ -60,14 +60,14 @@ async function run() {
         status: 'completed',
         completedAt: now - 301_000,
         expiresAt: now + 600_000,
-        gameState: { roleSchemaVersion: 2, publicCommand: null, outcome: 'defused' },
+        gameState: { roleSchemaVersion: 3, publicCommand: null, outcome: 'defused' },
       }),
       admin.database().ref('gameSessions/session-public-answer').set({
         sessionId: 'session-public-answer', gameType: 'bomb_defusal', hostUserId: 'host',
         players: { host: { displayName: 'Host' }, player: { displayName: 'Player' } },
         status: 'active',
         expiresAt: now + 600_000,
-        gameState: { roleSchemaVersion: 2, correctAnswer: 'blue', publicCommand: { type: 'cut_wire' } },
+        gameState: { roleSchemaVersion: 3, correctAnswer: 'blue', publicCommand: { controlKind: 'wire' } },
       }),
       admin.database().ref('gameSessions/spot-team-session').set({
         sessionId: 'spot-team-session', gameType: 'spot_difference', squadId: 'squad-a', hostUserId: 'host',

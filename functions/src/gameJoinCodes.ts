@@ -10,10 +10,15 @@ import {
   BOMB_ROLE_SCHEMA_VERSION,
   assignBombRoles,
   bombCommandMatches,
+  createBombChallengeSequence,
+  createBombExpertInstruction,
   createBombPublicCommand,
-  isBombPrivateCommand,
+  createBombSolution,
+  localizeBombPublicCommand,
+  normalizeBombLocale,
   roleForBombPlayer,
   sortBombPlayers,
+  validateBombChallengeSequence,
   type BombOrderedPlayer,
   type BombPrivateCommand,
 } from './bombDefusalCore';
@@ -982,6 +987,7 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
 export const getBombDefusalPlayerView = functions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const sessionId = readSessionId(data?.sessionId);
+  const locale = normalizeBombLocale(data?.locale);
   const timedOut = await expireBombDefusalRoundIfNeeded(sessionId);
   if (timedOut) await markGameJoinCodeEndedFromServer('bombDefusal', sessionId);
 
@@ -1017,7 +1023,7 @@ export const getBombDefusalPlayerView = functions.https.onCall(async (data, cont
     commandIndex >= BOMB_COMMAND_COUNT ||
     !assignment ||
     !command ||
-    !isBombPrivateCommand(command)
+    !validateBombChallengeSequence(commands as BombPrivateCommand[])
   ) {
     throw safeError('failed-precondition', 'client_update_required');
   }
@@ -1031,8 +1037,10 @@ export const getBombDefusalPlayerView = functions.https.onCall(async (data, cont
     commandId: typeof gameState.currentCommandId === 'string' ? gameState.currentCommandId : '',
     commandIndex,
     totalCommands: BOMB_COMMAND_COUNT,
-    publicCommand: readRecord(gameState.publicCommand),
-    instruction: role === 'expert' ? command : null,
+    publicCommand: localizeBombPublicCommand(command as BombPrivateCommand, commandIndex, locale),
+    instruction: role === 'expert'
+      ? createBombExpertInstruction(command as BombPrivateCommand, locale)
+      : null,
     defuserUserId: assignment.defuserUserId,
     defuserDisplayName: typeof defuser.displayName === 'string' ? defuser.displayName : 'Player',
     expertUserId: assignment.expertUserId,
@@ -1042,6 +1050,9 @@ export const getBombDefusalPlayerView = functions.https.onCall(async (data, cont
     correctCommandCount: readNonNegativeInteger(gameState.correctCommandCount),
     outcome: readBombOutcome(gameState.outcome),
     lastResult: readBombPublicResult(gameState.lastResult),
+    solution: readBombOutcome(gameState.outcome) === 'playing'
+      ? null
+      : createBombSolution(command as BombPrivateCommand, locale),
     endsAtMs: readPositiveNumber(session.endsAt) ?? 0,
     serverNowMs: Date.now(),
   };
@@ -1098,7 +1109,7 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
   const commandId = typeof data?.commandId === 'string' ? data.commandId.trim() : '';
   const submissionId =
     typeof data?.submissionId === 'string' ? data.submissionId.trim() : '';
-  if (!/^command-[1-5]$/.test(commandId) || !/^[A-Za-z0-9_-]{10,200}$/.test(submissionId)) {
+  if (!/^command-[1-6]$/.test(commandId) || !/^[A-Za-z0-9_-]{10,200}$/.test(submissionId)) {
     throw safeError('invalid-argument', 'not_authorized');
   }
   const action = readBombAction(data?.action);
@@ -1116,7 +1127,7 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
   const bombSteps = Array.isArray(secret.bombSteps)
     ? secret.bombSteps
     : [];
-  if (bombSteps.length !== BOMB_COMMAND_COUNT || bombSteps.some((step) => !isBombPrivateCommand(step))) {
+  if (!validateBombChallengeSequence(bombSteps as BombPrivateCommand[])) {
     throw safeError('failed-precondition', 'client_update_required');
   }
   const initialGameState = readRecord(initialSession.gameState);
@@ -1203,23 +1214,23 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
 
     const command = bombSteps[currentCommandIndex] as BombPrivateCommand;
     const correct = bombCommandMatches(command, action);
-    const strikeCount = readNonNegativeInteger(gameState.strikeCount) + (correct ? 0 : 1);
+    const strikeCount = correct ? 0 : BOMB_MAX_STRIKES;
     const correctCommandCount = readNonNegativeInteger(gameState.correctCommandCount) + (correct ? 1 : 0);
-    const nextCommandIndex = currentCommandIndex + 1;
-    const outcome = strikeCount >= BOMB_MAX_STRIKES
+    const nextCommandIndex = correct ? currentCommandIndex + 1 : currentCommandIndex;
+    const outcome = !correct
       ? 'exploded' as const
       : nextCommandIndex >= bombSteps.length
         ? 'defused' as const
         : 'playing' as const;
     const orderedPlayers = bombOrderedPlayersFromRecord(readRecord(session.players));
-    const nextAssignment = outcome === 'playing'
+    const nextAssignment = correct && outcome === 'playing'
       ? assignBombRoles(orderedPlayers, nextCommandIndex)
       : assignment;
     if (outcome === 'playing' && !nextAssignment) {
       reason = 'minimum_players_required';
       return;
     }
-    const nextCommand = outcome === 'playing'
+    const nextCommand = correct && outcome === 'playing'
       ? createBombPublicCommand(bombSteps[nextCommandIndex] as BombPrivateCommand, nextCommandIndex)
       : null;
     resultPayload = { correct, commandId, nextCommandIndex, strikeCount, outcome };
@@ -1244,7 +1255,7 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
         currentCommandId: nextCommand?.commandId ?? commandId,
         publicCommand: nextCommand ?? gameState.publicCommand,
         roleAssignment: nextAssignment,
-        roleRevision: readNonNegativeInteger(gameState.roleRevision) + 1,
+        roleRevision: readNonNegativeInteger(gameState.roleRevision) + (correct && outcome === 'playing' ? 1 : 0),
         strikeCount,
         correctCommandCount,
         outcome: outcome === 'playing' ? null : outcome,
@@ -1472,6 +1483,7 @@ async function provisionCanonicalLobbyRound(input: {
   hostUserId: string;
   participants: TriviaLobbyParticipant[];
   expiresAtMs: number;
+  previousBombChallengeIds?: string[];
 }) {
   if (input.gameType === 'triviaBlitz') {
     return provisionTriviaLobbySession(input);
@@ -1485,6 +1497,7 @@ async function provisionCanonicalLobbyRound(input: {
     sourceSquadId: input.squadId,
     participants: input.participants,
     expiresAtMs: input.expiresAtMs,
+    previousBombChallengeIds: input.previousBombChallengeIds,
   });
 }
 
@@ -2708,6 +2721,9 @@ async function createNextLobbyRound(
     .map((participant, index) => ({ ...participant, joinOrder: index + 1 }));
   const newSessionId = `${hydrated.entry.gameType === 'triviaBlitz' ? 'trivia' : 'game'}_${randomBytes(18).toString('base64url')}`;
   const expiresAtMs = Date.now() + JOIN_CODE_TTL_MS;
+  const previousBombChallengeIds = hydrated.entry.gameType === 'bombDefusal'
+    ? await readStoredBombChallengeIds(hydrated.entry.sessionId)
+    : [];
   const rematch = await reserveLobbyRematch({
     entry: hydrated.entry,
     newSessionId,
@@ -2725,6 +2741,7 @@ async function createNextLobbyRound(
       hostUserId: uid,
       participants: orderedParticipants,
       expiresAtMs,
+      previousBombChallengeIds,
     });
     await completeLobbyRematch({
       entry: hydrated.entry,
@@ -3043,6 +3060,7 @@ async function createRealtimeSession(input: {
   sourceSquadId: string | null;
   participants?: TriviaLobbyParticipant[];
   expiresAtMs?: number;
+  previousBombChallengeIds?: string[];
 }) {
   const sessionId = input.sessionId ?? `game_${randomBytes(18).toString('base64url')}`;
   const existing = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
@@ -3068,7 +3086,9 @@ async function createRealtimeSession(input: {
     throw safeError('failed-precondition', 'session_creation_failed');
   }
   const now = Date.now();
-  const bombSteps = input.gameType === 'bombDefusal' ? createBombPattern() : null;
+  const bombSteps = input.gameType === 'bombDefusal'
+    ? createBombChallengeSequence((limit) => randomInt(limit), input.previousBombChallengeIds)
+    : null;
   const sceneId = `scene_${String(randomInt(1, 22)).padStart(3, '0')}`;
   const gameState = bombSteps
     ? {
@@ -3127,7 +3147,7 @@ async function createRealtimeSession(input: {
     minPlayers: input.gameType === 'bombDefusal' ? 2 : 4,
     maxPlayers,
     settings: input.gameType === 'bombDefusal'
-      ? { timerSeconds: 60 }
+      ? { timerSeconds: 120 }
       : { roundDuration: 90 },
   };
   const updates: Record<string, unknown> = {
@@ -3137,6 +3157,7 @@ async function createRealtimeSession(input: {
     updates[`gameSessionSecrets/${sessionId}`] = {
       roleSchemaVersion: BOMB_ROLE_SCHEMA_VERSION,
       bombSteps,
+      challengeIds: bombSteps.map((command) => command.challengeId),
       expiresAt: session.expiresAt,
     };
   } else {
@@ -3550,7 +3571,7 @@ async function startRealtimeGameSession(sessionId: string) {
     if (
       secret.roleSchemaVersion !== BOMB_ROLE_SCHEMA_VERSION ||
       rawCommands.length !== BOMB_COMMAND_COUNT ||
-      rawCommands.some((command) => !isBombPrivateCommand(command))
+      !validateBombChallengeSequence(rawCommands as BombPrivateCommand[])
     ) {
       throw safeError('failed-precondition', 'client_update_required');
     }
@@ -4166,58 +4187,27 @@ function readFinalizedSpotResult(value: unknown): FinalizedSpotDifferenceRound |
   };
 }
 
-function createBombPattern(): BombPrivateCommand[] {
-  const colors = ['red', 'blue', 'yellow', 'green'] as const;
-  const labels = ['A', 'B', 'C', 'D'] as const;
-  const steps: BombPrivateCommand[] = [
-    { type: 'cut_wire', color: colors[randomInt(colors.length)] },
-    { type: 'press_button', label: labels[randomInt(labels.length)] },
-    { type: 'rotate_dial', target: randomInt(1, 11) },
-    { type: 'enter_code', code: randomInt(100, 1000) },
-    { type: 'cut_wire', color: colors[randomInt(colors.length)] },
-  ];
-  for (let index = steps.length - 1; index > 0; index -= 1) {
-    const swapIndex = randomInt(index + 1);
-    [steps[index], steps[swapIndex]] = [steps[swapIndex], steps[index]];
-  }
-  return steps;
-}
-
 function readBombAction(value: unknown): Record<string, string | number> {
   const action = readRecord(value);
   const keys = Object.keys(action);
   if (keys.length !== 1) throw safeError('invalid-argument', 'not_authorized');
-  if (
-    keys[0] === 'color' &&
-    typeof action.color === 'string' &&
-    ['red', 'blue', 'yellow', 'green'].includes(action.color)
-  ) {
-    return { color: action.color };
-  }
-  if (
-    keys[0] === 'label' &&
-    typeof action.label === 'string' &&
-    ['A', 'B', 'C', 'D'].includes(action.label)
-  ) {
-    return { label: action.label };
-  }
-  if (
-    keys[0] === 'target' &&
-    Number.isInteger(action.target) &&
-    Number(action.target) >= 1 &&
-    Number(action.target) <= 10
-  ) {
-    return { target: Number(action.target) };
-  }
-  if (
-    keys[0] === 'code' &&
-    Number.isInteger(action.code) &&
-    Number(action.code) >= 100 &&
-    Number(action.code) <= 999
-  ) {
-    return { code: Number(action.code) };
+  if (keys[0] === 'optionId' && typeof action.optionId === 'string' && /^[a-z0-9-]{4,80}$/.test(action.optionId)) {
+    return { optionId: action.optionId };
   }
   throw safeError('invalid-argument', 'not_authorized');
+}
+
+async function readStoredBombChallengeIds(sessionId: string) {
+  const snapshot = await admin.database().ref(`/gameSessionSecrets/${sessionId}`).once('value');
+  const secret = readRecord(snapshot.val());
+  const storedIds = readStringArray(secret.challengeIds);
+  if (storedIds.length === BOMB_COMMAND_COUNT) return storedIds;
+  return Array.isArray(secret.bombSteps)
+    ? secret.bombSteps.flatMap((value) => {
+      const command = readRecord(value);
+      return typeof command.challengeId === 'string' ? [command.challengeId] : [];
+    })
+    : [];
 }
 
 function readBombSubmissionResult(

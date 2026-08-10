@@ -10,6 +10,7 @@ import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 
 import { getPendingNotificationOpenTarget } from "@/services/notificationService";
+import { consumeSystemReturnRoute } from "@/services/systemRouteResumeService";
 LogBox.ignoreAllLogs(false);
 
 export default function Index() {
@@ -40,6 +41,13 @@ export default function Index() {
           }
         } catch (error) {
           console.warn("[Notifications] initial route error:", getErrorCode(error));
+        }
+
+        const systemReturnRoute = await consumeSystemReturnRoute().catch(() => null);
+        if (!mounted) return;
+        if (systemReturnRoute) {
+          router.replace(systemReturnRoute as never);
+          return;
         }
 
         router.replace("/(tabs)");

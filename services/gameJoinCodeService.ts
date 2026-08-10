@@ -257,24 +257,37 @@ export async function setRealtimeGamePlayerReady(input: {
 
 export type BombPlayerRole = 'defuser' | 'expert' | 'support';
 
-export type BombPrivateInstruction =
-  | { type: 'cut_wire'; color: 'red' | 'blue' | 'yellow' | 'green' }
-  | { type: 'press_button'; label: 'A' | 'B' | 'C' | 'D' }
-  | { type: 'rotate_dial'; target: number }
-  | { type: 'enter_code'; code: number };
+export type BombChallengeStage = 'direct' | 'interpretation' | 'reasoning' | 'combined';
+export type BombChallengeCategory = 'direct' | 'position' | 'math' | 'word' | 'riddle' | 'cipher' | 'combined';
+
+export type BombPrivateInstruction = {
+  stage: BombChallengeStage;
+  category: BombChallengeCategory;
+  prompt: string;
+  key: string | null;
+};
 
 export type BombPublicOption = {
   id: string;
-  value: string | number;
   number: number;
   marker: string;
+  label: string;
+  color?: 'red' | 'blue' | 'yellow' | 'green';
 };
 
 export type BombPublicCommand = {
   commandId: string;
   commandIndex: number;
-  type: BombPrivateInstruction['type'];
+  stage: BombChallengeStage;
+  category: BombChallengeCategory;
+  controlKind: 'wire' | 'symbol' | 'number' | 'word' | 'mixed';
   options: BombPublicOption[];
+};
+
+export type BombSolution = {
+  correctOptionId: string;
+  correctOptionLabel: string;
+  explanation: string;
 };
 
 export type BombDefusalPlayerView = {
@@ -300,11 +313,12 @@ export type BombDefusalPlayerView = {
     reason: string;
     resolvedAt: number;
   } | null;
+  solution: BombSolution | null;
   endsAtMs: number;
   serverNowMs: number;
 };
 
-export async function getBombDefusalPlayerView(input: { sessionId: string }) {
+export async function getBombDefusalPlayerView(input: { sessionId: string; locale: 'en' | 'es' }) {
   const callable = httpsCallable<typeof input, BombDefusalPlayerView>(functions, 'getBombDefusalPlayerView');
   return (await callable(input)).data;
 }

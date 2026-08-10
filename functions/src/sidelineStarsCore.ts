@@ -124,7 +124,7 @@ export function calculateBombDefusalReward(input: {
     !isBoundedInteger(input.firstAttemptCorrectStepCount, 0, input.totalSteps)
   ) return null;
   return capBreakdown({
-    completionStars: 5,
+    completionStars: input.outcome === 'defused' ? 5 : 0,
     performanceStars: Math.min(input.firstAttemptCorrectStepCount, 5),
     achievementStars: input.outcome === 'defused' ? 5 : 0,
   });

@@ -243,7 +243,7 @@ async function run() {
     participantUid: parentA.uid,
     status: "completed",
     gameState: {
-      roleSchemaVersion: 2,
+      roleSchemaVersion: 3,
       currentCommandIndex: 3,
       correctCommandCount: 3,
       outcome: "exploded",
@@ -251,11 +251,11 @@ async function run() {
     },
   });
   await createSession({ gameType: "bombDefusal", sessionId: explodedBombSession });
-  await recordResult({ gameType: "bombDefusal", sessionId: explodedBombSession, outcome: "exploded", firstAttemptCorrectStepCount: 3, totalSteps: 5 });
+  await recordResult({ gameType: "bombDefusal", sessionId: explodedBombSession, outcome: "exploded", firstAttemptCorrectStepCount: 3, totalSteps: 6 });
   const explodedBombReward = (await finalize({ gameType: "bombDefusal", sessionId: explodedBombSession })).data;
-  assert.equal(explodedBombReward.starsAwarded, 8);
+  assert.equal(explodedBombReward.starsAwarded, 3);
   assert.equal(explodedBombReward.breakdown.performanceStars, 3);
-  assert.equal(explodedBombReward.totalSidelineStars, 44);
+  assert.equal(explodedBombReward.totalSidelineStars, 39);
 
   const defusedBombSession = "bomb-multiplayer-defused";
   await seedRealtimeGameSession({
@@ -264,19 +264,19 @@ async function run() {
     participantUid: parentA.uid,
     status: "completed",
     gameState: {
-      roleSchemaVersion: 2,
-      currentCommandIndex: 4,
-      correctCommandCount: 5,
+      roleSchemaVersion: 3,
+      currentCommandIndex: 5,
+      correctCommandCount: 6,
       outcome: "defused",
       rewardEligible: true,
     },
   });
   await createSession({ gameType: "bombDefusal", sessionId: defusedBombSession });
-  await recordResult({ gameType: "bombDefusal", sessionId: defusedBombSession, outcome: "defused", firstAttemptCorrectStepCount: 5, totalSteps: 5 });
+  await recordResult({ gameType: "bombDefusal", sessionId: defusedBombSession, outcome: "defused", firstAttemptCorrectStepCount: 6, totalSteps: 6 });
   const defusedBombReward = (await finalize({ gameType: "bombDefusal", sessionId: defusedBombSession })).data;
   assert.equal(defusedBombReward.starsAwarded, 15);
   assert.equal(defusedBombReward.breakdown.achievementStars, 5);
-  assert.equal(defusedBombReward.totalSidelineStars, 59);
+  assert.equal(defusedBombReward.totalSidelineStars, 54);
 
   const triviaId = "TRIVIA10";
   await db.collection("sessions").doc(triviaId).set({
@@ -290,7 +290,7 @@ async function run() {
   await db.collection("sessions").doc(triviaId).collection("games").doc("triviaBlitz").collection("players").doc(parentA.uid).set({ ready: true });
   const triviaReward = (await finalize({ gameType: "triviaBlitz", sessionId: triviaId })).data;
   assert.equal(triviaReward.starsAwarded, 12);
-  assert.equal(triviaReward.totalSidelineStars, 71);
+  assert.equal(triviaReward.totalSidelineStars, 66);
 
   const getWeekly = httpsCallable(parentA.functions, "getCurrentWeeklyChallenge");
   const completeWeekly = httpsCallable(parentA.functions, "completeWeeklyChallenge");
@@ -298,7 +298,7 @@ async function run() {
   assert.equal(assignment.points, 5);
   const weeklyReward = (await completeWeekly({ weekKey: assignment.weekKey })).data;
   assert.equal(weeklyReward.pointsAwarded, 5);
-  assert.equal(weeklyReward.sidelineStars, 76);
+  assert.equal(weeklyReward.sidelineStars, 71);
   assert.equal((await completeWeekly({ weekKey: assignment.weekKey })).data.pointsAwarded, 0);
   const weeklyActivityId = `weeklyChallenge_${assignment.weekKey}_${parentA.uid}`;
   const weeklyActivitySnapshot = await db.collection("activity").doc(weeklyActivityId).get();
@@ -313,13 +313,13 @@ async function run() {
   assert.equal(weeklyActivities.size, 1, "an idempotent retry must not duplicate trusted activity history");
 
   const secondLeaderboard = (await getLeaderboardA({ squadId: secondSquadId })).data;
-  await waitForSeasonStars(squadId, firstSeason.seasonId, parentA.uid, 66);
-  await waitForSeasonStars(secondSquadId, secondSeason.seasonId, parentA.uid, 66);
+  await waitForSeasonStars(squadId, firstSeason.seasonId, parentA.uid, 61);
+  await waitForSeasonStars(secondSquadId, secondSeason.seasonId, parentA.uid, 61);
   const projectedFirstLeaderboard = (await getLeaderboardA({ squadId })).data;
   const projectedSecondLeaderboard = (await getLeaderboardA({ squadId: secondSquadId })).data;
-  assert.equal(projectedFirstLeaderboard.currentUserEntry.seasonStars, 66);
-  assert.equal(projectedSecondLeaderboard.currentUserEntry.seasonStars, 66, "one global reward projects to every eligible Squad season");
-  assert.equal(projectedSecondLeaderboard.currentUserLifetimeStars, 76, "lifetime Stars increment only once");
+  assert.equal(projectedFirstLeaderboard.currentUserEntry.seasonStars, 61);
+  assert.equal(projectedSecondLeaderboard.currentUserEntry.seasonStars, 61, "one global reward projects to every eligible Squad season");
+  assert.equal(projectedSecondLeaderboard.currentUserLifetimeStars, 71, "lifetime Stars increment only once");
   const rewardDocs = await db.collection("users").doc(parentA.uid).collection("rewardTransactions").get();
   assert.equal(rewardDocs.size, 6, "more than three game sessions remain rewardable and each source has one ledger entry");
   assert.ok(rewardDocs.docs.every((document) => document.data().seasonEligibleSquadIds.length === 2), "each reward stores the trusted membership snapshot");
@@ -331,10 +331,10 @@ async function run() {
   await endSeason({ squadId, seasonId: firstSeason.seasonId });
   const noActive = (await getLeaderboardA({ squadId })).data;
   assert.equal(noActive.season, null);
-  assert.equal(noActive.currentUserLifetimeStars, 76);
+  assert.equal(noActive.currentUserLifetimeStars, 71);
   const finalStandings = (await getLeaderboardA({ squadId, seasonId: firstSeason.seasonId })).data;
   assert.equal(finalStandings.season.status, "closed");
-  assert.equal(finalStandings.currentUserEntry.seasonStars, 66);
+  assert.equal(finalStandings.currentUserEntry.seasonStars, 61);
   await assert.rejects(
     () => updateSeason({ squadId, seasonId: firstSeason.seasonId, name: "Changed History" }),
     (error) => String(error?.code).includes("failed-precondition"),
@@ -346,11 +346,11 @@ async function run() {
   const resetLeaderboard = (await getLeaderboardA({ squadId })).data;
   assert.equal(resetLeaderboard.season.seasonId, newSeason.seasonId);
   assert.equal(resetLeaderboard.currentUserEntry.seasonStars, 0, "a new season is zero-based");
-  assert.equal(resetLeaderboard.currentUserLifetimeStars, 76, "starting a season never resets lifetime Stars");
+  assert.equal(resetLeaderboard.currentUserLifetimeStars, 71, "starting a season never resets lifetime Stars");
 
   await membership(squadId, parentA.uid, "left", "away");
   const starsAfterLeave = (await db.collection("users").doc(parentA.uid).get()).data().sidelineStars;
-  assert.equal(starsAfterLeave, 76, "leaving preserves lifetime Stars");
+  assert.equal(starsAfterLeave, 71, "leaving preserves lifetime Stars");
   await assert.rejects(
     () => getLeaderboardA({ squadId }),
     (error) => String(error?.code).includes("permission-denied"),

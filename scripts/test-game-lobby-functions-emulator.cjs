@@ -464,11 +464,25 @@ async function run() {
   assert.equal(thirdView.instruction, null, 'Support Crew cannot read the private command');
   assert.equal(fourthView.instruction, null, 'all Support Crew views hide the private command');
   assert.ok(secondView.instruction, 'only the Command Expert receives the instruction');
+  assert.equal('challengeId' in secondView.instruction, false, 'server-only challenge IDs stay out of the Expert view');
+  assert.equal('correctOptionId' in secondView.instruction, false, 'the Expert view does not reveal the answer');
   assert.deepEqual(hostView.publicCommand, secondView.publicCommand);
   assert.deepEqual(hostView.publicCommand, thirdView.publicCommand);
   assert.deepEqual(hostView.publicCommand, fourthView.publicCommand);
   assert.equal('correctAnswer' in hostView.publicCommand, false);
-  const firstAction = actionForBombInstruction(secondView.instruction);
+  assert.equal('solution' in hostView && hostView.solution === null, true, 'live views do not reveal a solution');
+  const initialBombSecret = (await database.ref(`gameSessionSecrets/${roleLobby.sessionId}`).get()).val();
+  assert.equal(initialBombSecret.bombSteps.length, 6);
+  assert.deepEqual(initialBombSecret.bombSteps.map((command) => command.stage), [
+    'direct', 'interpretation', 'reasoning', 'reasoning', 'reasoning', 'combined',
+  ]);
+  assert.equal(new Set(initialBombSecret.bombSteps.slice(2, 5).map((command) => command.category)).size, 3);
+  const secondSpanishView = await bombSecond.call('getBombDefusalPlayerView', {
+    sessionId: roleLobby.sessionId,
+    locale: 'es',
+  });
+  assert.notEqual(secondSpanishView.instruction.prompt, secondView.instruction.prompt, 'the Expert clue is localized per caller');
+  const firstAction = await bombActionForSession(database, roleLobby.sessionId, true);
   await assert.rejects(
     () => bombSecond.call('submitBombDefusalStep', {
       sessionId: roleLobby.sessionId,
@@ -515,29 +529,17 @@ async function run() {
   assert.equal(rotatedHost.role, 'support');
   assert.equal(rotatedDefuser.role, 'defuser');
   assert.equal(rotatedExpert.role, 'expert');
-  const wrongResult = await bombSecond.call('submitBombDefusalStep', {
-    sessionId: roleLobby.sessionId,
-    commandId: rotatedDefuser.commandId,
-    action: wrongBombAction(rotatedExpert.instruction),
-    submissionId: 'defuser-wrong-command-0002',
-  });
-  assert.equal(wrongResult.correct, false);
-  assert.equal(wrongResult.strikeCount, 1);
-  const simultaneousDefuser = await bombThird.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId });
-  const simultaneousExpert = await bombFourth.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId });
-  assert.equal(simultaneousDefuser.role, 'defuser');
-  assert.equal(simultaneousExpert.role, 'expert');
-  const simultaneousAction = actionForBombInstruction(simultaneousExpert.instruction);
+  const simultaneousAction = await bombActionForSession(database, roleLobby.sessionId, true);
   const simultaneousResults = await Promise.allSettled([
-    bombThird.call('submitBombDefusalStep', {
+    bombSecond.call('submitBombDefusalStep', {
       sessionId: roleLobby.sessionId,
-      commandId: simultaneousDefuser.commandId,
+      commandId: rotatedDefuser.commandId,
       action: simultaneousAction,
       submissionId: 'simultaneous-command-choice-a',
     }),
-    bombThird.call('submitBombDefusalStep', {
+    bombSecond.call('submitBombDefusalStep', {
       sessionId: roleLobby.sessionId,
-      commandId: simultaneousDefuser.commandId,
+      commandId: rotatedDefuser.commandId,
       action: simultaneousAction,
       submissionId: 'simultaneous-command-choice-b',
     }),
@@ -545,51 +547,84 @@ async function run() {
   assert.equal(simultaneousResults.filter((result) => result.status === 'fulfilled').length, 1, 'only one simultaneous choice is accepted');
   assert.equal(simultaneousResults.filter((result) => result.status === 'rejected').length, 1);
 
-  const activeFourthView = await bombFourth.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId });
-  assert.equal(activeFourthView.role, 'defuser');
-  await bombFourth.call('leaveGameLobby', { lobbyId: roleLobby.lobbyId });
-  const [afterDefuserLeaveHost, afterDefuserLeaveSecond] = await Promise.all([
+  const activeThirdView = await bombThird.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId });
+  assert.equal(activeThirdView.role, 'defuser');
+  await bombThird.call('leaveGameLobby', { lobbyId: roleLobby.lobbyId });
+  const [afterDefuserLeaveHost, afterDefuserLeaveFourth] = await Promise.all([
     bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
-    bombSecond.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombFourth.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
   ]);
-  assert.equal(afterDefuserLeaveHost.role, 'defuser', 'an active Defuser departure reassigns the role');
-  assert.equal(afterDefuserLeaveSecond.role, 'expert');
+  assert.equal(afterDefuserLeaveHost.role, 'expert', 'an active Defuser departure safely reassigns both active roles');
+  assert.equal(afterDefuserLeaveFourth.role, 'defuser');
 
   await bombSecond.call('leaveGameLobby', { lobbyId: roleLobby.lobbyId });
-  const [twoPlayerExpert, twoPlayerDefuser] = await Promise.all([
+  const [twoPlayerDefuser, twoPlayerExpert] = await Promise.all([
     bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
-    bombThird.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    bombFourth.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
   ]);
-  assert.equal(twoPlayerExpert.role, 'expert', 'an active Expert departure safely rotates the remaining pair');
-  assert.equal(twoPlayerDefuser.role, 'defuser');
-  const strikeTwo = await bombThird.call('submitBombDefusalStep', {
-    sessionId: roleLobby.sessionId,
-    commandId: twoPlayerDefuser.commandId,
-    action: wrongBombAction(twoPlayerExpert.instruction),
-    submissionId: 'post-departure-wrong-command-0004',
-  });
-  assert.equal(strikeTwo.strikeCount, 2);
-  const [finalDefuser, finalExpert] = await Promise.all([
-    bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
-    bombThird.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
-  ]);
-  assert.equal(finalDefuser.role, 'defuser');
-  assert.equal(finalExpert.role, 'expert');
+  assert.equal(twoPlayerDefuser.role, 'defuser', 'two-player rotation follows frozen surviving join order');
+  assert.equal(twoPlayerExpert.role, 'expert');
+  const beforeWrongState = (await database.ref(`gameSessions/${roleLobby.sessionId}/gameState`).get()).val();
   const terminalBombResult = await bombHost.call('submitBombDefusalStep', {
     sessionId: roleLobby.sessionId,
-    commandId: finalDefuser.commandId,
-    action: wrongBombAction(finalExpert.instruction),
-    submissionId: 'terminal-wrong-command-0005',
+    commandId: twoPlayerDefuser.commandId,
+    action: await bombActionForSession(database, roleLobby.sessionId, false),
+    submissionId: 'one-wrong-move-detonates',
   });
+  assert.equal(terminalBombResult.correct, false);
+  assert.equal(terminalBombResult.strikeCount, 1);
   assert.equal(terminalBombResult.outcome, 'exploded');
+  const afterWrongState = (await database.ref(`gameSessions/${roleLobby.sessionId}/gameState`).get()).val();
+  assert.equal(afterWrongState.currentCommandIndex, beforeWrongState.currentCommandIndex, 'a wrong move does not advance');
+  assert.equal(afterWrongState.roleRevision, beforeWrongState.roleRevision, 'a wrong move does not rotate roles');
+  const explodedView = await bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId });
+  assert.equal(explodedView.outcome, 'exploded');
+  assert.ok(explodedView.solution?.correctOptionId, 'terminal participants receive the correct answer');
+  assert.ok(explodedView.solution?.explanation, 'terminal participants receive a concise explanation');
+  const postDetonationAction = await bombActionForSession(database, roleLobby.sessionId, true);
+  await assert.rejects(
+    () => bombHost.call('submitBombDefusalStep', {
+      sessionId: roleLobby.sessionId,
+      commandId: twoPlayerDefuser.commandId,
+      action: postDetonationAction,
+      submissionId: 'post-detonation-command',
+    }),
+    hasReason('game_already_started'),
+  );
   const bombRematch = await bombHost.call('startGameLobbyRematch', { lobbyId: roleLobby.lobbyId });
   assert.equal(bombRematch.lobbyId, roleLobby.lobbyId);
   assert.equal(bombRematch.joinCode, roleLobby.joinCode);
   assert.notEqual(bombRematch.sessionId, roleLobby.sessionId, 'a rematch provisions fresh trusted round state');
   const bombRematchState = (await database.ref(`gameSessions/${bombRematch.sessionId}/gameState`).get()).val();
-  assert.equal(bombRematchState.roleSchemaVersion, 2);
+  assert.equal(bombRematchState.roleSchemaVersion, 3);
   assert.equal(bombRematchState.strikeCount, 0);
   assert.equal(bombRematchState.currentCommandId ?? null, null);
+  const rematchSecret = (await database.ref(`gameSessionSecrets/${bombRematch.sessionId}`).get()).val();
+  assert.notDeepEqual(rematchSecret.challengeIds, initialBombSecret.challengeIds, 'the complete challenge sequence changes on rematch');
+  await Promise.all([bombHost, bombFourth].map((client) =>
+    client.call('setRealtimeGamePlayerReady', { sessionId: bombRematch.sessionId, ready: true })));
+  await bombHost.call('updateGameJoinCodeStatus', {
+    gameType: 'bombDefusal', sessionId: bombRematch.sessionId, status: 'started',
+  });
+  for (let commandIndex = 0; commandIndex < 6; commandIndex += 1) {
+    const [hostCommandView, fourthCommandView] = await Promise.all([
+      bombHost.call('getBombDefusalPlayerView', { sessionId: bombRematch.sessionId }),
+      bombFourth.call('getBombDefusalPlayerView', { sessionId: bombRematch.sessionId }),
+    ]);
+    const defuserClient = hostCommandView.role === 'defuser' ? bombHost : bombFourth;
+    const defuserView = hostCommandView.role === 'defuser' ? hostCommandView : fourthCommandView;
+    const result = await defuserClient.call('submitBombDefusalStep', {
+      sessionId: bombRematch.sessionId,
+      commandId: defuserView.commandId,
+      action: await bombActionForSession(database, bombRematch.sessionId, true),
+      submissionId: `successful-rematch-command-${commandIndex + 1}`,
+    });
+    assert.equal(result.correct, true);
+    assert.equal(result.outcome, commandIndex === 5 ? 'defused' : 'playing');
+  }
+  const completedRematchView = await bombHost.call('getBombDefusalPlayerView', { sessionId: bombRematch.sessionId });
+  assert.equal(completedRematchView.outcome, 'defused');
+  assert.equal(completedRematchView.correctCommandCount, 6);
   await bombHost.call('closeGameLobby', { lobbyId: roleLobby.lobbyId });
   for (const participant of [bombHost, bombSecond, bombThird, bombFourth]) {
     assert.equal((await firestore.collection('activeGameLobbyMemberships').doc(participant.uid).get()).exists, false);
@@ -643,26 +678,17 @@ run().catch(async (error) => {
   process.exit(1);
 });
 
-function actionForBombInstruction(instruction) {
-  if (instruction.type === 'cut_wire') return { color: instruction.color };
-  if (instruction.type === 'press_button') return { label: instruction.label };
-  if (instruction.type === 'rotate_dial') return { target: instruction.target };
-  if (instruction.type === 'enter_code') return { code: instruction.code };
-  throw new Error(`Unknown Bomb instruction: ${String(instruction?.type)}`);
-}
-
-function wrongBombAction(instruction) {
-  if (instruction.type === 'cut_wire') {
-    return { color: instruction.color === 'red' ? 'blue' : 'red' };
-  }
-  if (instruction.type === 'press_button') {
-    return { label: instruction.label === 'A' ? 'B' : 'A' };
-  }
-  if (instruction.type === 'rotate_dial') {
-    return { target: instruction.target === 10 ? 9 : instruction.target + 1 };
-  }
-  if (instruction.type === 'enter_code') {
-    return { code: instruction.code === 999 ? 998 : instruction.code + 1 };
-  }
-  throw new Error(`Unknown Bomb instruction: ${String(instruction?.type)}`);
+async function bombActionForSession(database, sessionId, correct) {
+  const [sessionSnapshot, secretSnapshot] = await Promise.all([
+    database.ref(`gameSessions/${sessionId}/gameState`).get(),
+    database.ref(`gameSessionSecrets/${sessionId}/bombSteps`).get(),
+  ]);
+  const state = sessionSnapshot.val();
+  const commands = secretSnapshot.val();
+  const command = commands?.[state?.currentCommandIndex];
+  assert.ok(command?.correctOptionId, 'the emulator needs a server-side canonical answer');
+  if (correct) return { optionId: command.correctOptionId };
+  const wrongOption = command.options.find((option) => option.id !== command.correctOptionId);
+  assert.ok(wrongOption?.id, 'every challenge needs a safe incorrect test option');
+  return { optionId: wrongOption.id };
 }

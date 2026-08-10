@@ -87,6 +87,7 @@ export function SquadProvider({ children }: { children: ReactNode }) {
   const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const activeUserId = useRef(user?.uid);
   const membershipRequestId = useRef(0);
+  const squadSearchRequestId = useRef(0);
 
   const reloadMemberships = useCallback(async () => {
     const requestUserId = user?.uid;
@@ -145,6 +146,7 @@ export function SquadProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     activeUserId.current = user?.uid;
     membershipRequestId.current += 1;
+    squadSearchRequestId.current += 1;
     setNearbySquads([]);
     setError(null);
     void reloadMemberships();
@@ -155,33 +157,40 @@ export function SquadProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const fetchSquads = useCallback(async (lat: number, lng: number, radiusMiles?: number) => {
+    const requestId = ++squadSearchRequestId.current;
     setLoading(true);
     setError(null);
     try {
       const results = await fetchNearbySquads(lat, lng, radiusMiles ?? appConfig.squadRadiusMiles);
-      setNearbySquads(results);
+      if (requestId === squadSearchRequestId.current) setNearbySquads(results);
     } catch (nextError) {
       logContextDiagnostic("nearby-search", nextError);
-      setNearbySquads([]);
-      setError("nearby_load_failed");
+      if (requestId === squadSearchRequestId.current) {
+        setNearbySquads([]);
+        setError("nearby_load_failed");
+      }
       throw nextError;
     } finally {
-      setLoading(false);
+      if (requestId === squadSearchRequestId.current) setLoading(false);
     }
   }, [appConfig.squadRadiusMiles]);
 
   const searchSquads = useCallback(async (queryText: string) => {
+    const requestId = ++squadSearchRequestId.current;
     setLoading(true);
     setError(null);
     try {
-      setNearbySquads(await searchVenueSquads(queryText));
+      const results = await searchVenueSquads(queryText);
+      if (requestId === squadSearchRequestId.current) setNearbySquads(results);
     } catch (nextError) {
       logContextDiagnostic("venue-search", nextError);
-      setNearbySquads([]);
-      setError("nearby_load_failed");
+      if (requestId === squadSearchRequestId.current) {
+        setNearbySquads([]);
+        setError("nearby_load_failed");
+      }
       throw nextError;
     } finally {
-      setLoading(false);
+      if (requestId === squadSearchRequestId.current) setLoading(false);
     }
   }, []);
 

@@ -36,7 +36,8 @@ for (const sportId of ["baseball", "softball", "basketball", "soccer", "football
   assert.match(sports, new RegExp(`"${sportId}"`), `${sportId} must remain a supported Squad sport`);
 }
 assert.doesNotMatch(`${home}\n${games}`, /mySquadIds\s*\[\s*0\s*\]/, "active flows must not depend on array order");
-assert.match(squadScreen, /Alert\.alert\([\s\S]*locationDisclosure[\s\S]*requestLocationPermission/, "the explanation must precede the system request");
+assert.match(squadScreen, /const askForLocation[\s\S]*Alert\.alert\([\s\S]*locationDisclosure[\s\S]*requestPermissionAndSearch/, "the explanation action must invoke the guarded permission request");
+assert.match(squadScreen, /const requestPermissionAndSearch[\s\S]*requestLocationPermission/, "the guarded action must own the system permission request");
 assert.match(squadScreen, /searchByVenue/, "manual venue search must remain available");
 assert.doesNotMatch(squadScreen, /useEffect\([\s\S]{0,300}requestLocationPermission/, "permission must not be requested on mount");
 assert.doesNotMatch(`${service}\n${squadScreen}\n${home}`, /updateUserLocation/, "parent coordinates must not be persisted");

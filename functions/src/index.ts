@@ -1934,7 +1934,7 @@ export const createGameRewardSession = communicationFunctions.https.onCall(async
       sourceSquadId: sourceSquadId ?? null,
       mode: 'multiplayer',
       status: 'active',
-      expectedTotal: gameType === 'spotDifferences' ? 10 : 5,
+      expectedTotal: gameType === 'spotDifferences' ? 10 : BOMB_COMMAND_COUNT,
       createdAt: timestamp,
       updatedAt: timestamp,
     });
