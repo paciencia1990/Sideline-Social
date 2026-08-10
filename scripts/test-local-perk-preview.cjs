@@ -26,25 +26,24 @@ const modalBody = component.slice(component.indexOf("export function LocalPerkOf
 const previewConfigProd = loadTypeScript("constants/localPerkPreview.ts", false);
 const previewConfigDev = loadTypeScript("constants/localPerkPreview.ts", true);
 
-assert.equal(previewConfigDev.LOCAL_PERK_AD_PREVIEW_ENABLED, true, "Local Perk preview should render only in development.");
-assert.equal(previewConfigProd.LOCAL_PERK_AD_PREVIEW_ENABLED, false, "Local Perk preview must not render when __DEV__ is false.");
-assert.match(previewConfig, /LOCAL_PERK_AD_PREVIEW_ENABLED\s*=\s*__DEV__ === true/, "The preview flag must be guarded directly by __DEV__.");
-assert.doesNotMatch(previewConfig, /process\.env|Constants\.expoConfig|extra\?/, "The development preview must not be enabled by environment config.");
+assert.equal(previewConfigDev.LOCAL_PERK_AD_PREVIEW_ENABLED, false, "Local Perk must remain disabled in development.");
+assert.equal(previewConfigProd.LOCAL_PERK_AD_PREVIEW_ENABLED, false, "Local Perk must remain disabled in production.");
+assert.match(previewConfig, /LOCAL_PERK_AD_PREVIEW_ENABLED:\s*boolean\s*=\s*false/, "The centralized Local Perk kill switch must be explicitly false.");
+assert.doesNotMatch(previewConfig, /__DEV__|process\.env|Constants\.expoConfig|extra\?/, "No build environment may implicitly enable Local Perk.");
 
 const challengeIndex = scrollLayout.indexOf("<ChallengeCard");
 const localPerkIndex = scrollLayout.indexOf("<LocalPerkAdCard");
 const icebreakerIndex = scrollLayout.indexOf("<IcebreakerCard />");
 assert.ok(challengeIndex >= 0, "Home must still render Weekly Challenge.");
 assert.ok(icebreakerIndex > challengeIndex, "Weekly Challenge must appear before Icebreaker.");
-assert.ok(localPerkIndex > icebreakerIndex, "Local Perk preview card must appear below the complete Icebreaker section.");
-assert.equal((scrollLayout.match(/<LocalPerkAdCard/g) ?? []).length, 1, "Home must render no more than one Local Perk preview card.");
-assert.equal((home.match(/<LocalPerkAdCard/g) ?? []).length, 1, "Home must render the Local Perk preview card exactly once.");
-assert.doesNotMatch(scrollLayout.slice(localPerkIndex + 1), /<(?:MyTeamsCard|StateCard|SecondaryActions|YourSquadCard|SquadSelector|ChallengeCard|IcebreakerCard|LocalPerkAdCard)\b/, "Local Perk must be the final Home content component.");
-assert.ok(home.indexOf("<LocalPerkOfferPreviewModal") > home.indexOf("</ScrollView>"), "The offer preview modal must sit outside the Home scroll content so the ad card remains final.");
-assert.match(home, /LOCAL_PERK_AD_PREVIEW_ENABLED && localPerkPreviewOffer \?/, "Home must not leave placeholder spacing when the preview is disabled.");
-assert.match(home, /setLocalPerkPreviewOpen\(true\)/, "The View Offer CTA must open the internal preview.");
-assert.match(home, /setLocalPerkPreviewOpen\(false\)/, "The internal preview must expose a close action.");
-assert.match(home, /<LocalPerkOfferPreviewModal[\s\S]*visible=\{localPerkPreviewOpen\}/, "Home must mount the internal offer preview modal.");
+assert.ok(localPerkIndex > icebreakerIndex, "The disabled future slot must remain after Icebreaker so nearby Home content keeps its order.");
+assert.equal((scrollLayout.match(/<LocalPerkAdCard/g) ?? []).length, 1, "The future card architecture must not be duplicated.");
+assert.equal((home.match(/<LocalPerkOfferPreviewModal/g) ?? []).length, 1, "The future modal architecture must not be duplicated.");
+assert.match(home, /const localPerkPreviewOffer = LOCAL_PERK_AD_PREVIEW_ENABLED \? getLocalPerkPreviewOffer\(t\) : null;/, "Disabled Local Perk must not build offer content.");
+assert.match(scrollLayout, /\{LOCAL_PERK_AD_PREVIEW_ENABLED && localPerkPreviewOffer \? \(\s*<LocalPerkAdCard[\s\S]*?\) : null\}/, "The card must be an unwrapped null-rendering conditional with no reserved layout space.");
+assert.match(home.slice(home.indexOf("</ScrollView>")), /\{LOCAL_PERK_AD_PREVIEW_ENABLED && localPerkPreviewOffer \? \(\s*<LocalPerkOfferPreviewModal[\s\S]*?\) : null\}/, "The offer modal must remain unmounted while the kill switch is false.");
+assert.match(home, /onPress=\{\(\) => setLocalPerkPreviewOpen\(true\)\}/, "The preserved future interaction must exist only inside the disabled card branch.");
+assert.match(home, /onClose=\{\(\) => setLocalPerkPreviewOpen\(false\)\}/, "The preserved future close action must exist only inside the disabled modal branch.");
 
 assert.match(component, /export type LocalPerkAdCardProps/, "Local Perk card must expose typed reusable props.");
 assert.match(component, /logoSource\?: ImageSourcePropType/, "The card must support a logo image source.");
@@ -113,4 +112,4 @@ assert.doesNotMatch(localPerkSources, /analytics|Firebase|Firestore|httpsCallabl
 assert.doesNotMatch(packageJson, /admob|adsense|doubleclick|facebook-ads|react-native-google-mobile-ads/iu, "The preview must not add advertising SDKs.");
 assert.doesNotMatch(component, /FlatList|Carousel|Banner|Interstitial/iu, "The preview must not be a carousel, banner, pop-up, or interstitial.");
 
-console.log("Development-only Local Perk preview placement, localization, accessibility, styling, modal, and no-side-effect tests passed.");
+console.log("Disabled Local Perk kill switch, Home ordering, zero-layout slot, preserved architecture, and no-side-effect tests passed.");

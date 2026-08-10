@@ -1,4 +1,5 @@
-export const LOCAL_PERK_AD_PREVIEW_ENABLED = __DEV__ === true;
+/** Master kill switch. Keep disabled until Local Perk is approved for an intentional rollout. */
+export const LOCAL_PERK_AD_PREVIEW_ENABLED: boolean = false;
 
 type LocalPerkPreviewTranslator = (key: string, options?: Record<string, unknown>) => string;
 
