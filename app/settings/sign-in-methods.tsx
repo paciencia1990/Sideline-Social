@@ -11,6 +11,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SettingsBackButton } from "@/components/SettingsBackButton";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
+import { useAuthProviderAvailability } from "@/hooks/useAuthProviderAvailability";
 import type { FederatedAuthProvider, SignInMethod } from "@/utils/federatedAuthCore";
 
 export default function SignInMethodsScreen() {
@@ -27,8 +28,11 @@ export default function SignInMethodsScreen() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const hasPassword = signInMethods.includes("password");
+  const hasGoogle = signInMethods.includes("google");
+  const hasApple = signInMethods.includes("apple");
+  const { showApple, showGoogle } = useAuthProviderAvailability();
 
-  const run = async (key: string, operation: () => Promise<void>, successKey: string) => {
+  const run = async (key: string, operation: () => Promise<unknown>, successKey: string) => {
     if (busy) return;
     setBusy(key);
     setError(null);
@@ -74,20 +78,24 @@ export default function SignInMethodsScreen() {
         <Text style={styles.body}>{t("settings.signInMethods.body")}</Text>
 
         <MethodCard method="password" linked={hasPassword} />
-        <MethodCard
-          busy={busy}
-          linked={signInMethods.includes("google")}
-          method="google"
-          onConnect={() => connect("google")}
-          onDisconnect={() => disconnect("google")}
-        />
-        <MethodCard
-          busy={busy}
-          linked={signInMethods.includes("apple")}
-          method="apple"
-          onConnect={() => connect("apple")}
-          onDisconnect={() => disconnect("apple")}
-        />
+        {showGoogle || hasGoogle ? (
+          <MethodCard
+            busy={busy}
+            linked={hasGoogle}
+            method="google"
+            onConnect={showGoogle ? () => connect("google") : undefined}
+            onDisconnect={() => disconnect("google")}
+          />
+        ) : null}
+        {showApple || hasApple ? (
+          <MethodCard
+            busy={busy}
+            linked={hasApple}
+            method="apple"
+            onConnect={showApple ? () => connect("apple") : undefined}
+            onDisconnect={() => disconnect("apple")}
+          />
+        ) : null}
 
         <Card style={styles.verifyCard}>
           <Text style={styles.sectionTitle}>{t("settings.signInMethods.verifyTitle")}</Text>
@@ -109,7 +117,7 @@ export default function SignInMethodsScreen() {
               />
             </>
           ) : null}
-          {signInMethods.includes("google") ? (
+          {hasGoogle && showGoogle ? (
             <OutlineButton
               disabled={Boolean(busy)}
               loading={busy === "verify-google"}
@@ -117,7 +125,7 @@ export default function SignInMethodsScreen() {
               title={t("settings.signInMethods.verifyGoogle")}
             />
           ) : null}
-          {signInMethods.includes("apple") ? (
+          {hasApple && showApple ? (
             <OutlineButton
               disabled={Boolean(busy)}
               loading={busy === "verify-apple"}
@@ -193,4 +201,3 @@ const styles = StyleSheet.create({
   title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 30 },
   verifyCard: { gap: Spacing.md },
 });
-

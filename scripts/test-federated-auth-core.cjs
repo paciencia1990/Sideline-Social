@@ -16,6 +16,32 @@ require.extensions[".ts"] = (module, filename) => {
 const root = process.cwd();
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), "utf8");
 const core = require(path.join(root, "utils", "federatedAuthCore.ts"));
+const availability = require(path.join(root, "utils", "authProviderAvailability.ts"));
+
+assert.deepEqual(availability.resolveAuthProviderVisibility({
+  appleAvailable: true,
+  appleEnabled: true,
+  googleEnabled: true,
+  platform: "ios",
+}), { showApple: true, showGoogle: true });
+assert.deepEqual(availability.resolveAuthProviderVisibility({
+  appleAvailable: false,
+  appleEnabled: true,
+  googleEnabled: true,
+  platform: "ios",
+}), { showApple: false, showGoogle: true });
+assert.deepEqual(availability.resolveAuthProviderVisibility({
+  appleAvailable: true,
+  appleEnabled: true,
+  googleEnabled: false,
+  platform: "android",
+}), { showApple: false, showGoogle: false });
+assert.deepEqual(availability.resolveAuthProviderVisibility({
+  appleAvailable: true,
+  appleEnabled: false,
+  googleEnabled: false,
+  platform: "ios",
+}), { showApple: false, showGoogle: false });
 
 assert.deepEqual(core.readSignInMethods([
   { providerId: "password" },
@@ -48,6 +74,8 @@ assert.match(providerService, /CryptoDigestAlgorithm\.SHA256/u);
 assert.match(providerService, /rawNonce/u);
 assert.match(providerService, /isAvailableAsync/u, "Apple sign-in must fail closed when the native capability is unavailable.");
 assert.match(providerService, /response\.state !== state/u, "Apple OAuth state must be validated before Firebase exchange.");
+assert.match(providerService, /authorizationCode: response\.authorizationCode/u, "Fresh Apple authorization codes must be returned only to the reauthentication caller.");
+assert.match(providerService, /addRevokeListener/u, "Revoked Apple credentials must sign the local account out.");
 assert.match(providerService, /scopes: null/u, "Google must not request additional API scopes.");
 assert.match(providerService, /offlineAccess: false/u, "Google refresh/server tokens must not be requested.");
 assert.match(providerService, /googleIosClientId/u, "Manual iOS Google setup must pass the public iOS client ID.");
@@ -71,11 +99,22 @@ assert.match(auth, /auth\/cannot-unlink-last-provider/u);
 assert.match(auth, /assertRecentAuthentication/u);
 assert.match(auth, /ensureFederatedUserProfile/u);
 assert.match(auth, /return \{ exists: true, profile: undefined \}/u, "A transient profile read failure must not force an existing account into new-account onboarding.");
+assert.match(auth, /subscribeToAppleCredentialRevocation/u);
+assert.match(auth, /void signOut\(\)\.catch/u, "A revoked Apple credential must clear local authentication without deleting account data.");
 
 const signIn = read("app", "(auth)", "sign-in.tsx");
-assert.match(signIn, /Platform\.OS === "ios" \? appleButton : googleButton/u);
-assert.match(signIn, /Platform\.OS === "ios" \? googleButton : appleButton/u);
-assert.match(signIn, /AppleAuthenticationButton/u);
+const signUp = read("app", "(auth)", "sign-up.tsx");
+const providerButtons = read("components", "FederatedAuthButtons.tsx");
+const availabilityHook = read("hooks", "useAuthProviderAvailability.ts");
+assert.match(signIn, /FederatedAuthButtons/u);
+assert.match(signUp, /FederatedAuthButtons/u, "Provider-based account creation must remain available on the sign-up screen.");
+assert.match(providerButtons, /if \(!showApple && !showGoogle\) return null/u, "Disabled providers must reserve no layout space.");
+assert.match(providerButtons, /showApple \?/u);
+assert.match(providerButtons, /showGoogle \?/u);
+assert.match(providerButtons, /AppleAuthenticationButton/u);
+assert.equal(providerButtons.includes("numberOfLines"), false, "Provider labels must remain readable with large text.");
+assert.match(availabilityHook, /AppleAuthentication\.isAvailableAsync\(\)/u);
+assert.match(availabilityHook, /\.catch\(\(\) =>/u, "Runtime Apple availability failures must hide the action safely.");
 assert.match(signIn, /accessibilityLiveRegion="assertive"/u);
 
 const methods = read("app", "settings", "sign-in-methods.tsx");
@@ -83,12 +122,21 @@ assert.match(methods, /reauthenticateWithPassword/u);
 assert.match(methods, /reauthenticateWithProvider/u);
 assert.match(methods, /unlinkProvider/u);
 assert.match(methods, /appleConsentBody/u);
+assert.match(methods, /showGoogle \|\| hasGoogle/u);
+assert.match(methods, /showApple \|\| hasApple/u);
 
 const deletion = read("app", "settings", "delete-account.tsx");
 assert.match(deletion, /signInMethods\.includes\("google"\)/u);
 assert.match(deletion, /signInMethods\.includes\("apple"\)/u);
-assert.match(deletion, /deleteOwnAccount\(\)/u);
-assert.match(read("functions", "src", "accountDeletion.ts"), /token\.auth_time/u);
+assert.match(deletion, /appleAuthorizationRef/u);
+assert.match(deletion, /deleteOwnAccount\(appleAuthorizationCode \? \{ appleAuthorizationCode \} : \{\}\)/u);
+const deletionFunction = read("functions", "src", "accountDeletion.ts");
+assert.match(deletionFunction, /token\.auth_time/u);
+assert.match(deletionFunction, /providerData\.map\(\(provider\) => provider\.providerId\)/u);
+assert.ok(
+  deletionFunction.indexOf("const appleRevocationRef = await ensureAppleAuthorizationRevoked") < deletionFunction.indexOf("await deleteAuthoredMessagesAndAudio"),
+  "Apple revocation must run before destructive account cleanup.",
+);
 
 const appConfig = read("app.config.js");
 assert.match(appConfig, /usesAppleSignIn: true/u);
@@ -98,7 +146,7 @@ assert.match(appConfig, /EXPO_PUBLIC_GOOGLE_AUTH_ENABLED/u);
 assert.match(appConfig, /EXPO_PUBLIC_APPLE_AUTH_ENABLED/u);
 
 const translations = read("i18n", "index.ts");
-for (const key of ["continueWithEmail", "completeAccountTitle", "legalAcceptance", "adultEligibility", "providerErrors", "signInMethods"]) {
+for (const key of ["continueWithEmail", "completeAccountTitle", "legalAcceptance", "adultEligibility", "providerErrors", "signInMethods", "deleteAppleRevocationError"]) {
   assert.equal((translations.match(new RegExp(`\\b${key}:`, "gu")) ?? []).length, 2, `${key} must have English and Spanish translations.`);
 }
 

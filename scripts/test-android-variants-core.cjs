@@ -44,6 +44,8 @@ assert.equal(development.extra.authProviders.appleEnabled, false);
 
 const eas = JSON.parse(read("eas.json"));
 const packageJson = JSON.parse(read("package.json"));
+const providerButtons = read("components", "FederatedAuthButtons.tsx");
+const providerAvailability = read("utils", "authProviderAvailability.ts");
 assert.equal(eas.build.development.developmentClient, true);
 assert.equal(eas.build.development.android.buildType, "apk");
 assert.equal(eas.build.development.env.APP_VARIANT, "development");
@@ -55,6 +57,8 @@ assert.equal(eas.build.production.env.REQUIRE_PRODUCTION_LEGAL_CONFIG, "true");
 assert.equal(eas.build.development.env.REQUIRE_PRODUCTION_LEGAL_CONFIG, undefined);
 assert.match(read("app.config.js"), /assertProductionLegalConfig\(\{/u);
 assert.equal(packageJson.scripts["start:dev-client"], "expo start --dev-client --scheme sidelinesquad-dev");
+assert.match(providerAvailability, /platform === "ios" && appleEnabled && appleAvailable/u);
+assert.equal(providerButtons.includes('title={t("auth.continueWithApple")}'), false, "Android must not receive an outline Apple fallback button.");
 
 const gradle = read("android", "app", "build.gradle");
 assert.equal(gradle.includes('applicationId \'com.sidelinesquad.app\''), true);

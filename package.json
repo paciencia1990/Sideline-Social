@@ -25,6 +25,7 @@
     "test:app-size-audit": "node scripts/test-app-size-audit.cjs",
     "test:auth-navigation": "node scripts/test-auth-navigation-core.cjs",
     "test:federated-auth": "node scripts/test-federated-auth-core.cjs",
+    "test:apple-authorization-revocation": "npm --prefix functions run build && node scripts/test-apple-authorization-revocation.cjs",
     "test:local-user-state": "node scripts/test-local-user-state.cjs",
     "test:auth-profile-ui": "node scripts/test-auth-profile-ui-core.cjs",
     "test:post-sdk57-regressions": "node scripts/test-post-sdk57-regressions.cjs",

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Alert, StyleSheet, Text, TextInput } from "react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -13,6 +13,7 @@ import { SettingsBackButton } from "@/components/SettingsBackButton";
 import { SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
+import { useAuthProviderAvailability } from "@/hooks/useAuthProviderAvailability";
 import { deleteOwnAccount } from "@/services/accountService";
 import { revokeGoogleAccessIfAvailable } from "@/services/federatedAuthService";
 import type { FederatedAuthProvider } from "@/utils/federatedAuthCore";
@@ -28,12 +29,18 @@ export default function DeleteAccountScreen() {
   } = useAuth();
   const [confirmation, setConfirmation] = useState("");
   const [password, setPassword] = useState("");
-  const [verified, setVerified] = useState(false);
+  const [verifiedProvider, setVerifiedProvider] = useState<FederatedAuthProvider | null>(null);
   const [busy, setBusy] = useState(false);
   const [verifyingProvider, setVerifyingProvider] = useState<FederatedAuthProvider | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const appleAuthorizationRef = useRef<{ code: string; createdAt: number } | null>(null);
   const hasPassword = signInMethods.includes("password");
-  const hasVerification = verified || (hasPassword && password.length > 0);
+  const hasGoogle = signInMethods.includes("google");
+  const hasApple = signInMethods.includes("apple");
+  const { showApple, showGoogle } = useAuthProviderAvailability();
+  const hasVerification = hasApple
+    ? verifiedProvider === "apple"
+    : verifiedProvider !== null || (hasPassword && password.length > 0);
   const confirmed = confirmation.trim().toUpperCase() === "DELETE" && hasVerification;
 
   const verifyProvider = useCallback(async (provider: FederatedAuthProvider) => {
@@ -41,9 +48,15 @@ export default function DeleteAccountScreen() {
     setVerifyingProvider(provider);
     setError(null);
     try {
-      await reauthenticateWithProvider(provider);
-      setVerified(true);
+      const result = await reauthenticateWithProvider(provider);
+      if (provider === "apple") {
+        if (!result.authorizationCode) throw codedError("auth/apple-authorization-code-required");
+        appleAuthorizationRef.current = { code: result.authorizationCode, createdAt: Date.now() };
+      }
+      setVerifiedProvider(provider);
     } catch (nextError) {
+      if (provider === "apple") appleAuthorizationRef.current = null;
+      setVerifiedProvider(null);
       setError(deletionErrorMessage(nextError, t));
     } finally {
       setVerifyingProvider(null);
@@ -54,10 +67,21 @@ export default function DeleteAccountScreen() {
     setBusy(true);
     setError(null);
     try {
-      if (!verified && hasPassword) await reauthenticateWithPassword(password);
+      let appleAuthorizationCode: string | undefined;
+      if (hasApple) {
+        const pendingAppleAuthorization = appleAuthorizationRef.current;
+        appleAuthorizationRef.current = null;
+        setVerifiedProvider(null);
+        if (!pendingAppleAuthorization || Date.now() - pendingAppleAuthorization.createdAt > 5 * 60 * 1000) {
+          throw codedError("auth/apple-authorization-code-required");
+        }
+        appleAuthorizationCode = pendingAppleAuthorization.code;
+      } else if (verifiedProvider === null && hasPassword) {
+        await reauthenticateWithPassword(password);
+      }
       const googleIdentity = firebaseUser?.email ?? firebaseUser?.uid;
-      await deleteOwnAccount();
-      if (signInMethods.includes("google")) await revokeGoogleAccessIfAvailable(googleIdentity);
+      await deleteOwnAccount(appleAuthorizationCode ? { appleAuthorizationCode } : {});
+      if (hasGoogle) await revokeGoogleAccessIfAvailable(googleIdentity);
       await signOut();
       router.dismissAll();
       router.replace(SIGN_IN_ROUTE as never);
@@ -65,7 +89,7 @@ export default function DeleteAccountScreen() {
       setError(deletionErrorMessage(nextError, t));
       setBusy(false);
     }
-  }, [firebaseUser?.email, firebaseUser?.uid, hasPassword, password, reauthenticateWithPassword, signInMethods, signOut, t, verified]);
+  }, [firebaseUser?.email, firebaseUser?.uid, hasApple, hasGoogle, hasPassword, password, reauthenticateWithPassword, signOut, t, verifiedProvider]);
 
   const confirmDeletion = useCallback(() => {
     Alert.alert(t("settings.deleteConfirmTitle"), t("settings.deleteConfirmBody"), [
@@ -93,20 +117,25 @@ export default function DeleteAccountScreen() {
           />
 
           <Text style={styles.label}>{t("settings.deleteVerifyTitle")}</Text>
-          {hasPassword ? (
+          {hasApple ? <Text style={styles.body}>{t("settings.deleteAppleReauthBody")}</Text> : null}
+          {hasApple && !showApple ? <Text style={styles.warningDetail}>{t("settings.deleteAppleDeviceRequired")}</Text> : null}
+          {!hasApple && !hasPassword && hasGoogle && !showGoogle ? (
+            <Text style={styles.warningDetail}>{t("settings.deleteProviderUnavailable")}</Text>
+          ) : null}
+          {!hasApple && hasPassword ? (
             <PasswordInput
               autoCapitalize="none"
               autoComplete="current-password"
               containerStyle={styles.passwordContainer}
               onChangeText={(value) => {
                 setPassword(value);
-                setVerified(false);
+                setVerifiedProvider(null);
               }}
               placeholder={t("settings.currentPassword")}
               value={password}
             />
           ) : null}
-          {signInMethods.includes("google") ? (
+          {!hasApple && hasGoogle && showGoogle ? (
             <OutlineButton
               disabled={busy || Boolean(verifyingProvider)}
               loading={verifyingProvider === "google"}
@@ -114,7 +143,7 @@ export default function DeleteAccountScreen() {
               title={t("settings.verifyWithGoogle")}
             />
           ) : null}
-          {signInMethods.includes("apple") ? (
+          {hasApple && showApple ? (
             <OutlineButton
               disabled={busy || Boolean(verifyingProvider)}
               loading={verifyingProvider === "apple"}
@@ -122,7 +151,7 @@ export default function DeleteAccountScreen() {
               title={t("settings.verifyWithApple")}
             />
           ) : null}
-          {verified ? <Text accessibilityLiveRegion="polite" style={styles.verified}>{t("settings.identityVerified")}</Text> : null}
+          {verifiedProvider ? <Text accessibilityLiveRegion="polite" style={styles.verified}>{t("settings.identityVerified")}</Text> : null}
           <PrimaryButton disabled={!confirmed || busy} loading={busy} onPress={confirmDeletion} title={t("settings.deletePermanently")} />
           {error ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
         </Card>
@@ -133,6 +162,26 @@ export default function DeleteAccountScreen() {
 
 function deletionErrorMessage(error: unknown, t: (key: string) => string) {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+  const reason = typeof error === "object" && error && "details" in error
+    ? String((error as { details?: { reason?: unknown } }).details?.reason ?? "")
+    : "";
+  if (
+    code.includes("apple-authorization-code-required") ||
+    reason === "apple_authorization_code_required" ||
+    reason === "apple_authorization_code_invalid"
+  ) {
+    return t("settings.deleteAppleReauthRequired");
+  }
+  if (reason === "apple_provider_not_linked") return t("settings.deleteAppleAccountMismatch");
+  if (
+    reason === "apple_token_exchange_failed" ||
+    reason === "apple_revocation_failed" ||
+    reason === "apple_credentials_unavailable" ||
+    reason === "apple_subject_mismatch"
+  ) {
+    return t("settings.deleteAppleRevocationError");
+  }
+  if (reason === "account_deletion_in_progress") return t("settings.deleteInProgress");
   if (code.includes("failed-precondition")) return t("settings.deleteOwnershipError");
   if (code.includes("cancel")) return t("auth.providerErrors.cancelled");
   if (code.includes("unsupported_platform")) return t("auth.providerErrors.appleAndroidUnavailable");
@@ -140,6 +189,12 @@ function deletionErrorMessage(error: unknown, t: (key: string) => string) {
   if (code.includes("wrong-password") || code.includes("invalid-credential")) return t("settings.deleteReauthError");
   if (code.includes("unauthenticated") || code.includes("requires-recent-login")) return t("settings.deleteRecentLoginError");
   return t("settings.deleteError");
+}
+
+function codedError(code: string) {
+  const error = new Error(code);
+  (error as Error & { code: string }).code = code;
+  return error;
 }
 
 const styles = StyleSheet.create({
@@ -153,4 +208,5 @@ const styles = StyleSheet.create({
   title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 30 },
   verified: { color: Colors.communicationLink, fontFamily: Typography.bodySemiBold },
   warning: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 18, lineHeight: 24 },
+  warningDetail: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, lineHeight: 21 },
 });

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
 import { FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -8,6 +8,14 @@ import { activeSquadAdminIds, isActiveSquadAdmin } from './squadAdminCore';
 import { hasCoachAccess, isTeamActive } from './teamMembershipCore';
 import { deleteTeamAnnouncementData } from './teamAnnouncementDeletionCore';
 import { permanentAccountFunctions } from './permanentAuth';
+import {
+  APPLE_REVOCATION_SECRET_NAMES,
+  AppleDeletionAuthorizationError,
+  AppleRevocationError,
+  readAppleRevocationSecrets,
+  resolveAppleDeletionAuthorization,
+  revokeAppleAuthorizationCode,
+} from './appleAuthorizationRevocation';
 
 const functions = permanentAccountFunctions(firebaseFunctions, "safety");
 
@@ -19,7 +27,11 @@ type DeletionSummary = {
 
 const deletionFunctions = functions
   .region('us-central1')
-  .runWith({ timeoutSeconds: 540, memory: '1GB' });
+  .runWith({
+    timeoutSeconds: 540,
+    memory: '1GB',
+    secrets: [...APPLE_REVOCATION_SECRET_NAMES],
+  });
 
 /**
  * Permanently deletes the authenticated account and its associated data.
@@ -29,7 +41,7 @@ const deletionFunctions = functions
  * reports are retained without user identifiers; the final retention policy
  * still requires privacy/legal approval before release.
  */
-export const deleteOwnAccount = deletionFunctions.https.onCall(async (_data, context) => {
+export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
   if (!uid) {
     throw new functions.https.HttpsError('unauthenticated', 'Sign in again before deleting your account.');
@@ -51,6 +63,12 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (_data, con
       { reason: 'sole_owner', ...blockers },
     );
   }
+
+  const appleRevocationRef = await ensureAppleAuthorizationRevoked(
+    firestore,
+    uid,
+    stringValue(data?.appleAuthorizationCode),
+  );
 
   const summary: DeletionSummary = {
     anonymizedDocuments: 0,
@@ -133,9 +151,114 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (_data, con
   // Deleting Auth last ensures a partial Firestore/Storage failure can be
   // retried by the same authenticated user without privileged support.
   await admin.auth().deleteUser(uid);
+  if (appleRevocationRef) {
+    await appleRevocationRef.delete().catch((error: unknown) => {
+      functions.logger.warn('apple_revocation_marker_cleanup_failed', {
+        category: error instanceof Error ? error.name : 'unknown',
+        uidHash: hashForLog(uid),
+      });
+    });
+  }
   functions.logger.info('account_deletion_completed', { uidHash: hashForLog(uid), ...summary });
   return { deleted: true, ...summary };
 });
+
+async function ensureAppleAuthorizationRevoked(
+  firestore: FirebaseFirestore.Firestore,
+  uid: string,
+  authorizationCode: string | null,
+) {
+  const authUser = await admin.auth().getUser(uid);
+  const appleProvider = authUser.providerData.find((provider) => provider.providerId === 'apple.com');
+  let requiredAuthorizationCode: string | null;
+  try {
+    requiredAuthorizationCode = resolveAppleDeletionAuthorization({
+      authorizationCode,
+      providerIds: authUser.providerData.map((provider) => provider.providerId),
+    });
+  } catch (error) {
+    if (error instanceof AppleDeletionAuthorizationError && error.category === 'apple_provider_not_linked') {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'The current account is not connected to Apple.',
+        { reason: 'apple_provider_not_linked' },
+      );
+    }
+    if (error instanceof AppleDeletionAuthorizationError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'Verify with Apple again before deleting this account.',
+        { reason: error.category },
+      );
+    }
+    throw error;
+  }
+  if (!requiredAuthorizationCode) return null;
+  if (!appleProvider?.uid) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'The Apple account link is unavailable.',
+      { reason: 'apple_provider_not_linked' },
+    );
+  }
+
+  const markerRef = firestore.collection('accountDeletionAppleRevocations').doc(hashIdentifier(uid));
+  const correlationId = randomUUID();
+  const now = Date.now();
+  const state = await firestore.runTransaction(async (transaction) => {
+    const marker = await transaction.get(markerRef);
+    const markerData = marker.data();
+    if (markerData?.status === 'revoked') return 'revoked' as const;
+    const expiresAt = markerData?.expiresAt instanceof Timestamp
+      ? markerData.expiresAt.toMillis()
+      : 0;
+    if (markerData?.status === 'processing' && expiresAt > now) {
+      throw new functions.https.HttpsError(
+        'aborted',
+        'Account deletion is already in progress.',
+        { reason: 'account_deletion_in_progress' },
+      );
+    }
+    transaction.set(markerRef, {
+      correlationId,
+      expiresAt: Timestamp.fromMillis(now + 10 * 60 * 1000),
+      startedAt: FieldValue.serverTimestamp(),
+      status: 'processing',
+    });
+    return 'claimed' as const;
+  });
+  if (state === 'revoked') return markerRef;
+
+  try {
+    await revokeAppleAuthorizationCode({
+      authorizationCode: requiredAuthorizationCode,
+      expectedAppleSubject: appleProvider.uid,
+      secrets: readAppleRevocationSecrets(),
+    });
+    await markerRef.set({
+      completedAt: FieldValue.serverTimestamp(),
+      correlationId,
+      expiresAt: FieldValue.delete(),
+      status: 'revoked',
+    }, { merge: true });
+    functions.logger.info('apple_authorization_revocation_completed', { correlationId });
+    return markerRef;
+  } catch (error) {
+    const category = error instanceof AppleRevocationError
+      ? error.category
+      : 'apple_revocation_failed';
+    await firestore.runTransaction(async (transaction) => {
+      const marker = await transaction.get(markerRef);
+      if (marker.data()?.correlationId === correlationId) transaction.delete(markerRef);
+    }).catch(() => undefined);
+    functions.logger.error('apple_authorization_revocation_failed', { category, correlationId });
+    throw new functions.https.HttpsError(
+      'unavailable',
+      'Apple authorization could not be revoked. Verify with Apple again and retry.',
+      { reason: category, correlationId },
+    );
+  }
+}
 
 async function findOwnershipBlockers(firestore: FirebaseFirestore.Firestore, uid: string) {
   const teamSnapshots = await firestore.collection('teams').where('createdBy', '==', uid).get();

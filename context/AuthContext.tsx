@@ -25,6 +25,7 @@ import {
   ProviderFlowError,
   rememberPendingProviderConflict,
   requestFederatedCredential,
+  subscribeToAppleCredentialRevocation,
 } from "@/services/federatedAuthService";
 import { clearSignedInUserLocalState } from "@/services/localUserStateService";
 import { unregisterCurrentDeviceNotificationToken } from "@/services/notificationService";
@@ -67,6 +68,11 @@ type SignUpProfile = {
   phoneNumber?: string | null;
 };
 
+export type ProviderReauthenticationResult = {
+  authorizationCode: string | null;
+  provider: FederatedAuthProvider;
+};
+
 interface AuthContextType {
   user: AppUser | null;
   firebaseUser: User | null;
@@ -81,7 +87,7 @@ interface AuthContextType {
   signInWithApple: () => Promise<void>;
   linkProvider: (provider: FederatedAuthProvider) => Promise<void>;
   reauthenticateWithPassword: (password: string) => Promise<void>;
-  reauthenticateWithProvider: (provider: FederatedAuthProvider) => Promise<void>;
+  reauthenticateWithProvider: (provider: FederatedAuthProvider) => Promise<ProviderReauthenticationResult>;
   unlinkProvider: (provider: FederatedAuthProvider) => Promise<void>;
 };
 
@@ -110,7 +116,7 @@ const AuthContext = createContext<AuthContextType>({
   signInWithApple: async () => {},
   linkProvider: async () => {},
   reauthenticateWithPassword: async () => {},
-  reauthenticateWithProvider: async () => {},
+  reauthenticateWithProvider: async (provider) => ({ authorizationCode: null, provider }),
   unlinkProvider: async () => {},
 });
 
@@ -237,6 +243,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  useEffect(() => subscribeToAppleCredentialRevocation(() => {
+    void signOut().catch((error) => {
+      console.warn("[Auth] Apple credential revocation sign-out unavailable:", getErrorCode(error));
+    });
+  }), [signOut]);
+
   const signInFederated = useCallback(async (provider: FederatedAuthProvider) => {
     await runExclusiveAuthOperation(async (operationId) => {
       setUser(null);
@@ -250,6 +262,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (getErrorCode(error) === "auth/account-exists-with-different-credential") {
             rememberPendingProviderConflict({
               ...providerResult,
+              authorizationCode: null,
               email: getErrorEmail(error) ?? providerResult.email,
             });
             throw codedError("auth/linking-required");
@@ -366,12 +379,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [runExclusiveAuthOperation]);
 
   const reauthenticateWithProvider = useCallback(async (provider: FederatedAuthProvider) => {
-    await runExclusiveAuthOperation(async () => {
+    return runExclusiveAuthOperation(async () => {
       const currentUser = auth.currentUser;
       if (!currentUser) throw codedError("auth/requires-recent-login");
       const providerResult = await requestFederatedCredential(provider);
       await reauthenticateWithCredential(currentUser, providerResult.credential);
       await currentUser.getIdToken(true);
+      return {
+        authorizationCode: providerResult.authorizationCode,
+        provider: providerResult.provider,
+      };
     });
   }, [runExclusiveAuthOperation]);
 

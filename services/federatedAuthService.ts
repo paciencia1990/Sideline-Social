@@ -9,6 +9,7 @@ import { AUTH_PROVIDER_CONFIG } from "@/config/authProviders";
 import type { FederatedAuthProvider } from "@/utils/federatedAuthCore";
 
 export type FederatedCredentialResult = {
+  authorizationCode: string | null;
   credential: AuthCredential;
   email: string | null;
   firstName: string | null;
@@ -62,6 +63,16 @@ export function clearPendingProviderConflict() {
   pendingConflict = null;
 }
 
+export function subscribeToAppleCredentialRevocation(onRevoked: () => void) {
+  if (Platform.OS !== "ios" || !AUTH_PROVIDER_CONFIG.appleEnabled) return undefined;
+  try {
+    const subscription = loadAppleAuthentication().addRevokeListener(onRevoked);
+    return () => subscription.remove();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function revokeGoogleAccessIfAvailable(identity: string | null | undefined) {
   if (!identity) return;
   try {
@@ -108,6 +119,7 @@ async function requestGoogleCredential(): Promise<FederatedCredentialResult> {
     }
 
     return {
+      authorizationCode: null,
       credential: GoogleAuthProvider.credential(response.data.idToken),
       email: response.data.user.email,
       firstName: response.data.user.givenName,
@@ -162,6 +174,7 @@ async function requestAppleCredential(): Promise<FederatedCredentialResult> {
       rawNonce,
     });
     return {
+      authorizationCode: response.authorizationCode,
       credential,
       email: response.email,
       firstName: response.fullName?.givenName?.trim() || null,

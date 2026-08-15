@@ -29,16 +29,37 @@ async function createClient(label) {
   };
 }
 
+function createUnauthenticatedClient(label) {
+  const app = initializeApp({ apiKey: "demo-key", projectId }, label);
+  const callableFunctions = getFunctions(app, "us-central1");
+  connectFunctionsEmulator(callableFunctions, "127.0.0.1", 5001);
+  return {
+    call: (name, data = {}) => httpsCallable(callableFunctions, name)(data).then((result) => result.data),
+  };
+}
+
 function hasCode(code) {
   return (error) => String(error?.code).includes(code);
 }
 
 async function run() {
-  const [deletingUser, friend, soleOwner] = await Promise.all([
+  const [deletingUser, friend, soleOwner, providerMismatch] = await Promise.all([
     createClient("delete-account-user"),
     createClient("delete-account-friend"),
     createClient("delete-account-owner"),
+    createClient("delete-account-provider-mismatch"),
   ]);
+  const unauthenticated = createUnauthenticatedClient("delete-account-unauthenticated");
+  await db.collection("users").doc(providerMismatch.uid).set({ displayName: "Provider Mismatch" });
+  await assert.rejects(
+    () => unauthenticated.call("deleteOwnAccount"),
+    hasCode("unauthenticated"),
+  );
+  await assert.rejects(
+    () => providerMismatch.call("deleteOwnAccount", { appleAuthorizationCode: "not-authorized-for-this-account" }),
+    hasCode("failed-precondition"),
+  );
+  assert.equal((await db.collection("users").doc(providerMismatch.uid).get()).exists, true);
   const joinRateLimitId = createHash("sha256").update(deletingUser.uid).digest("hex");
   const triviaRateLimitId = joinRateLimitId;
   const triviaCreateRateLimitId = createHash("sha256").update(`create:${deletingUser.uid}`).digest("hex");
