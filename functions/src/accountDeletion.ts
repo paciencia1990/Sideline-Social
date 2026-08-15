@@ -34,6 +34,13 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (_data, con
   if (!uid) {
     throw new functions.https.HttpsError('unauthenticated', 'Sign in again before deleting your account.');
   }
+  const authenticatedAt = Number(context.auth?.token.auth_time ?? 0);
+  if (!Number.isFinite(authenticatedAt) || authenticatedAt <= 0 || Date.now() / 1000 - authenticatedAt > 10 * 60) {
+    throw new functions.https.HttpsError(
+      'unauthenticated',
+      'Verify a sign-in method again before deleting your account.',
+    );
+  }
 
   const firestore = admin.firestore();
   const blockers = await findOwnershipBlockers(firestore, uid);

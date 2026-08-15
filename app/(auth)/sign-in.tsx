@@ -1,42 +1,121 @@
-import React, { useCallback } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as AppleAuthentication from "expo-apple-authentication";
 import { useRouter } from "expo-router";
+import React, { useCallback, useState } from "react";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 
 import { OutlineButton } from "@/components/OutlineButton";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { EMAIL_SIGN_IN_ROUTE, SIGN_UP_ROUTE } from "@/constants/routes";
-import { Colors, Spacing, Typography } from "@/constants/theme";
+import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useAuth } from "@/context/AuthContext";
+import type { FederatedAuthProvider } from "@/utils/federatedAuthCore";
 
 export default function SignInScreen() {
   const router = useRouter();
   const { t } = useTranslation();
+  const { signInWithApple, signInWithGoogle } = useAuth();
+  const [providerLoading, setProviderLoading] = useState<FederatedAuthProvider | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleEmailSignIn = useCallback(() => {
-    if (__DEV__) console.info("[AuthDebug] Email login pressed");
     router.push(EMAIL_SIGN_IN_ROUTE as never);
   }, [router]);
 
   const handleCreateAccount = useCallback(() => {
-    if (__DEV__) console.info("[AuthDebug] Sign up pressed");
     router.push(SIGN_UP_ROUTE as never);
   }, [router]);
+
+  const handleProvider = useCallback(async (provider: FederatedAuthProvider) => {
+    if (providerLoading) return;
+    setProviderLoading(provider);
+    setError(null);
+    try {
+      if (provider === "google") await signInWithGoogle();
+      else await signInWithApple();
+      await AsyncStorage.setItem("onboardingComplete", "true").catch(() => undefined);
+      router.replace("/" as never);
+    } catch (nextError) {
+      setError(providerErrorMessage(getErrorCode(nextError), t));
+    } finally {
+      setProviderLoading(null);
+    }
+  }, [providerLoading, router, signInWithApple, signInWithGoogle, t]);
+
+  const appleButton = Platform.OS === "ios" ? (
+    <NativeAppleButton
+      busy={Boolean(providerLoading)}
+      label={t("auth.continueWithApple")}
+      onPress={() => void handleProvider("apple")}
+    />
+  ) : (
+    <OutlineButton
+      disabled={Boolean(providerLoading)}
+      loading={providerLoading === "apple"}
+      onPress={() => void handleProvider("apple")}
+      title={t("auth.continueWithApple")}
+    />
+  );
+
+  const googleButton = (
+    <OutlineButton
+      disabled={Boolean(providerLoading)}
+      loading={providerLoading === "google"}
+      onPress={() => void handleProvider("google")}
+      title={t("auth.continueWithGoogle")}
+    />
+  );
 
   return (
     <ScreenWrapper>
       <View style={styles.content}>
-        <Text style={styles.title}>{t("auth.welcomeBack")}</Text>
+        <Text accessibilityRole="header" style={styles.title}>{t("auth.welcomeBack")}</Text>
         <Text style={styles.body}>{t("auth.signInSubtitle")}</Text>
-        <PrimaryButton title={t("auth.signInWithEmail")} onPress={handleEmailSignIn} />
-        <OutlineButton title={t("auth.createAccount")} onPress={handleCreateAccount} />
+        {Platform.OS === "ios" ? appleButton : googleButton}
+        {Platform.OS === "ios" ? googleButton : appleButton}
+        <PrimaryButton disabled={Boolean(providerLoading)} onPress={handleEmailSignIn} title={t("auth.continueWithEmail")} />
+        {error ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
+        <OutlineButton disabled={Boolean(providerLoading)} onPress={handleCreateAccount} title={t("auth.createAccount")} />
       </View>
     </ScreenWrapper>
   );
 }
 
+function NativeAppleButton({ busy, label, onPress }: { busy: boolean; label: string; onPress: () => void }) {
+  return (
+    <AppleAuthentication.AppleAuthenticationButton
+      accessibilityLabel={label}
+      buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+      buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+      cornerRadius={Radius.button}
+      onPress={onPress}
+      style={[styles.appleButton, busy && styles.disabled]}
+    />
+  );
+}
+
+function providerErrorMessage(code: string, t: (key: string) => string) {
+  if (code.includes("cancel")) return t("auth.providerErrors.cancelled");
+  if (code.includes("network")) return t("auth.providerErrors.network");
+  if (code.includes("linking-required")) return t("auth.providerErrors.linkingRequired");
+  if (code.includes("conflict-email-mismatch")) return t("auth.providerErrors.accountMismatch");
+  if (code.includes("unsupported_platform")) return t("auth.providerErrors.appleAndroidUnavailable");
+  if (code.includes("configuration")) return t("auth.providerErrors.configuration");
+  if (code.includes("operation-in-progress")) return t("auth.providerErrors.inProgress");
+  return t("auth.providerErrors.generic");
+}
+
+function getErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+}
+
 const styles = StyleSheet.create({
-  content: { flex: 1, justifyContent: "center", padding: Spacing.lg, gap: Spacing.md },
-  title: { fontFamily: Typography.heading, fontSize: 34, color: Colors.textHeading, textAlign: "center" },
-  body: { fontFamily: Typography.bodyRegular, fontSize: 16, color: Colors.textPrimary, textAlign: "center", marginBottom: Spacing.md },
+  appleButton: { height: 48, width: "100%" },
+  body: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 16, marginBottom: Spacing.md, textAlign: "center" },
+  content: { flex: 1, gap: Spacing.md, justifyContent: "center", padding: Spacing.lg },
+  disabled: { opacity: 0.6 },
+  error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, lineHeight: 20, textAlign: "center" },
+  title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 34, textAlign: "center" },
 });

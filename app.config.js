@@ -7,6 +7,28 @@ const IOS_BUNDLE_IDENTIFIER = "com.sidelinesocial.app";
 const APP_VARIANT = process.env.APP_VARIANT === "development" ? "development" : "production";
 const IS_DEVELOPMENT = APP_VARIANT === "development";
 const ANDROID_PACKAGE = IS_DEVELOPMENT ? "com.sidelinesquad.app.dev" : "com.sidelinesquad.app";
+const ANDROID_GOOGLE_SERVICES_FILE = IS_DEVELOPMENT
+  ? process.env.GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT
+  : "./google-services.json";
+const IOS_GOOGLE_SERVICES_FILE = process.env.GOOGLE_SERVICES_INFO_PLIST;
+const GOOGLE_IOS_URL_SCHEME = process.env.EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME;
+const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+const GOOGLE_AUTH_ENABLED = process.env.EXPO_PUBLIC_GOOGLE_AUTH_ENABLED === "true";
+const APPLE_AUTH_ENABLED = process.env.EXPO_PUBLIC_APPLE_AUTH_ENABLED === "true";
+const GOOGLE_SIGN_IN_PLUGIN = IOS_GOOGLE_SERVICES_FILE
+  ? [
+      "react-native-nitro-google-signin",
+      {
+        iosGoogleServicesFile: IOS_GOOGLE_SERVICES_FILE,
+        ...(ANDROID_GOOGLE_SERVICES_FILE
+          ? { androidGoogleServicesFile: ANDROID_GOOGLE_SERVICES_FILE }
+          : {}),
+      },
+    ]
+  : GOOGLE_IOS_URL_SCHEME
+    ? ["react-native-nitro-google-signin", { iosUrlScheme: GOOGLE_IOS_URL_SCHEME }]
+    : null;
 const APP_NAME = IS_DEVELOPMENT ? "Sideline Social Dev" : "Sideline Social";
 const APP_SCHEME = IS_DEVELOPMENT ? "sidelinesquad-dev" : "sidelinesquad";
 const IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION = "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.";
@@ -21,6 +43,21 @@ if (!IS_DEVELOPMENT && process.env.REQUIRE_PRODUCTION_LEGAL_CONFIG === "true") {
     supportUrl: process.env.EXPO_PUBLIC_SUPPORT_URL,
     supportEmail: SUPPORT_EMAIL,
   });
+}
+
+if (GOOGLE_AUTH_ENABLED && !GOOGLE_SIGN_IN_PLUGIN) {
+  throw new Error(
+    "Google authentication is enabled, but no verified iOS Google services file or URL scheme was supplied.",
+  );
+}
+if (
+  GOOGLE_AUTH_ENABLED &&
+  !IOS_GOOGLE_SERVICES_FILE &&
+  (!GOOGLE_IOS_CLIENT_ID || !GOOGLE_WEB_CLIENT_ID)
+) {
+  throw new Error(
+    "Google authentication without an iOS Google services file requires public iOS and Web OAuth client IDs.",
+  );
 }
 
 module.exports = ({ config }) => ({
@@ -45,9 +82,10 @@ module.exports = ({ config }) => ({
   ios: {
     supportsTablet: false,
     bundleIdentifier: IOS_BUNDLE_IDENTIFIER,
+    usesAppleSignIn: true,
     icon: "./assets/images/icon-ios.png",
-    ...(process.env.GOOGLE_SERVICES_INFO_PLIST
-      ? { googleServicesFile: process.env.GOOGLE_SERVICES_INFO_PLIST }
+    ...(IOS_GOOGLE_SERVICES_FILE
+      ? { googleServicesFile: IOS_GOOGLE_SERVICES_FILE }
       : {}),
     infoPlist: {
       CFBundleAllowMixedLocalizations: true,
@@ -73,11 +111,9 @@ module.exports = ({ config }) => ({
     allowBackup: false,
     versionCode: 5,
     softwareKeyboardLayoutMode: "resize",
-    ...(IS_DEVELOPMENT
-      ? (process.env.GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT
-        ? { googleServicesFile: process.env.GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT }
-        : {})
-      : { googleServicesFile: "./google-services.json" }),
+    ...(ANDROID_GOOGLE_SERVICES_FILE
+      ? { googleServicesFile: ANDROID_GOOGLE_SERVICES_FILE }
+      : {}),
     permissions: ["android.permission.RECORD_AUDIO"],
     config: {
       googleMaps: {
@@ -99,6 +135,8 @@ module.exports = ({ config }) => ({
   plugins: [
     "./plugins/withAndroidBackupProtection",
     "expo-router",
+    "expo-apple-authentication",
+    ...(GOOGLE_SIGN_IN_PLUGIN ? [GOOGLE_SIGN_IN_PLUGIN] : []),
     "@react-native-community/datetimepicker",
     "expo-web-browser",
     "expo-asset",
@@ -148,6 +186,12 @@ module.exports = ({ config }) => ({
 
   extra: {
     ...(config.extra || {}),
+    authProviders: {
+      appleEnabled: APPLE_AUTH_ENABLED,
+      googleEnabled: GOOGLE_AUTH_ENABLED,
+      googleIosClientId: GOOGLE_IOS_CLIENT_ID || null,
+      googleWebClientId: GOOGLE_WEB_CLIENT_ID || "autoDetect",
+    },
     eas: {
       ...((config.extra && config.extra.eas) || {}),
       projectId: "7ea7aaf2-355d-4aec-a175-82898c8cc0c7",

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { Redirect } from "expo-router";
 
-import { CHOOSE_START_MODE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
+import { CHOOSE_START_MODE_ROUTE, COMPLETE_ACCOUNT_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { isPermanentFirebaseUser } from "@/utils/authIdentity";
@@ -20,6 +20,10 @@ export function AuthenticatedRouteGate({ children }: { children: ReactNode }) {
 
   if (!user || !isPermanentFirebaseUser(firebaseUser)) {
     return <Redirect href={SIGN_IN_ROUTE as never} />;
+  }
+
+  if (!user.accountOnboardingCompleted) {
+    return <Redirect href={COMPLETE_ACCOUNT_ROUTE as never} />;
   }
 
   if (!user.modeOnboardingCompleted) {

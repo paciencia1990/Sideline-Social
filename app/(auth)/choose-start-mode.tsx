@@ -9,6 +9,7 @@ import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import {
   COACH_MODE_ROUTE,
+  COMPLETE_ACCOUNT_ROUTE,
   PARENT_HOME_ROUTE,
   SIGN_IN_ROUTE,
 } from "@/constants/routes";
@@ -55,6 +56,10 @@ export default function ChooseStartModeScreen() {
 
   if (!user) {
     return <Redirect href={SIGN_IN_ROUTE as never} />;
+  }
+
+  if (!user.accountOnboardingCompleted) {
+    return <Redirect href={COMPLETE_ACCOUNT_ROUTE as never} />;
   }
 
   if (user.modeOnboardingCompleted && !savingMode) {

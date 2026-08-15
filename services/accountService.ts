@@ -1,7 +1,6 @@
 import { httpsCallable } from "firebase/functions";
-import { EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 
-import { auth, functions } from "@/config/firebase";
+import { functions } from "@/config/firebase";
 
 export type DeleteAccountResult = {
   deleted: true;
@@ -10,10 +9,7 @@ export type DeleteAccountResult = {
   deletedStorageObjects: number;
 };
 
-export async function deleteOwnAccount(password: string) {
-  const user = auth.currentUser;
-  if (!user?.email) throw new Error("Email account is unavailable for reauthentication.");
-  await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, password));
+export async function deleteOwnAccount() {
   const callable = httpsCallable<Record<string, never>, DeleteAccountResult>(functions, "deleteOwnAccount", {
     timeout: 540_000,
   });

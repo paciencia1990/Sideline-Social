@@ -4,7 +4,7 @@ import React, { useEffect } from "react";
 import { ActivityIndicator, LogBox, StyleSheet, View } from "react-native";
 
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { SIGN_IN_ROUTE } from "@/constants/routes";
+import { COMPLETE_ACCOUNT_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
@@ -27,6 +27,10 @@ export default function Index() {
       if (!mounted) return;
 
       if (user) {
+        if (!user.accountOnboardingCompleted) {
+          router.replace(COMPLETE_ACCOUNT_ROUTE as never);
+          return;
+        }
         try {
           const pendingTarget = await getPendingNotificationOpenTarget({ activeMode });
           if (!mounted) return;

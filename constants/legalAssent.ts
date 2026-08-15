@@ -1,0 +1,2 @@
+export const CURRENT_LEGAL_ASSENT_VERSION = "1.0.0-2026-08-14";
+

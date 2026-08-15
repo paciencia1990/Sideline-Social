@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { TabIcon } from "@/components/TabIcon";
-import { CHOOSE_START_MODE_ROUTE, COACH_MODE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
+import { CHOOSE_START_MODE_ROUTE, COACH_MODE_ROUTE, COMPLETE_ACCOUNT_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
@@ -37,6 +37,10 @@ export default function TabLayout() {
 
   if (!user) {
     return <Redirect href={SIGN_IN_ROUTE as never} />;
+  }
+
+  if (!user.accountOnboardingCompleted) {
+    return <Redirect href={COMPLETE_ACCOUNT_ROUTE as never} />;
   }
 
   if (!user.modeOnboardingCompleted) {

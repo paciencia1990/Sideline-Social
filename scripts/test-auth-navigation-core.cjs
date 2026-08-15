@@ -18,6 +18,7 @@ const root = process.cwd();
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), "utf8");
 const {
   CHOOSE_START_MODE_ROUTE,
+  COMPLETE_ACCOUNT_ROUTE,
   EMAIL_SIGN_IN_ROUTE,
   FORGOT_PASSWORD_ROUTE,
   SIGN_IN_ROUTE,
@@ -29,10 +30,11 @@ assert.equal(EMAIL_SIGN_IN_ROUTE, "/email-login");
 assert.equal(SIGN_UP_ROUTE, "/sign-up");
 assert.equal(FORGOT_PASSWORD_ROUTE, "/forgot-password");
 assert.equal(CHOOSE_START_MODE_ROUTE, "/choose-start-mode");
-for (const publicRoute of [SIGN_IN_ROUTE, EMAIL_SIGN_IN_ROUTE, SIGN_UP_ROUTE, FORGOT_PASSWORD_ROUTE, CHOOSE_START_MODE_ROUTE]) {
+assert.equal(COMPLETE_ACCOUNT_ROUTE, "/complete-account");
+for (const publicRoute of [SIGN_IN_ROUTE, EMAIL_SIGN_IN_ROUTE, SIGN_UP_ROUTE, FORGOT_PASSWORD_ROUTE, COMPLETE_ACCOUNT_ROUTE, CHOOSE_START_MODE_ROUTE]) {
   assert.equal(publicRoute.includes("(auth)"), false, "Public Expo Router URLs must omit route-group segments.");
 }
-for (const routeFile of ["sign-in.tsx", "email-login.tsx", "sign-up.tsx", "forgot-password.tsx", "choose-start-mode.tsx", "_layout.tsx"]) {
+for (const routeFile of ["sign-in.tsx", "email-login.tsx", "sign-up.tsx", "forgot-password.tsx", "complete-account.tsx", "choose-start-mode.tsx", "_layout.tsx"]) {
   assert.equal(fs.existsSync(path.join(root, "app", "(auth)", routeFile)), true, `${routeFile} must exist in the auth route group.`);
 }
 
@@ -58,11 +60,14 @@ const tabsLayout = read("app", "(tabs)", "_layout.tsx");
 const loadingIndex = tabsLayout.indexOf("if (authLoading || !modeHydrated)");
 const signedOutIndex = tabsLayout.indexOf("if (!user)");
 const onboardingIndex = tabsLayout.indexOf("if (!user.modeOnboardingCompleted)");
+const accountOnboardingIndex = tabsLayout.indexOf("if (!user.accountOnboardingCompleted)");
 const coachModeIndex = tabsLayout.indexOf('if (activeMode === "coach")');
 const tabsIndex = tabsLayout.indexOf("<Tabs", coachModeIndex);
 assert.ok(tabsLayout.includes('import { Redirect, Tabs } from "expo-router";'), "Tabs must use declarative Expo Router redirects.");
 assert.ok(loadingIndex >= 0 && signedOutIndex > loadingIndex, "Tabs must resolve loading before signed-out routing.");
+assert.ok(accountOnboardingIndex > signedOutIndex, "Tabs must route incomplete account setup before mode onboarding.");
 assert.ok(onboardingIndex > signedOutIndex, "Tabs must route incomplete new accounts to mode onboarding.");
+assert.ok(onboardingIndex > accountOnboardingIndex, "Mode onboarding must follow account completion.");
 assert.ok(coachModeIndex > onboardingIndex, "Tabs must resolve mode only after onboarding completes.");
 assert.ok(tabsIndex > coachModeIndex, "Parent users must reach the Tabs navigator.");
 assert.equal(tabsLayout.includes("useEffect"), false, "Tabs mode routing must not use an Effect.");

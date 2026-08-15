@@ -5,6 +5,7 @@ import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
+import { LegalAssentControls } from "@/components/LegalAssentControls";
 import { PasswordInput } from "@/components/PasswordInput";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { CHOOSE_START_MODE_ROUTE } from "@/constants/routes";
@@ -20,12 +21,14 @@ export default function SignUpScreen() {
   const [password, setPassword] = useState("");
   const [zipCode, setZipCode] = useState("");
   const [sport, setSport] = useState("");
+  const [policiesAccepted, setPoliciesAccepted] = useState(false);
+  const [adultConfirmed, setAdultConfirmed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const handleCreate = async () => {
     setError("");
-    if (!firstName.trim() || !lastName.trim() || !email.trim() || password.length < 8) {
+    if (!firstName.trim() || !lastName.trim() || !email.trim() || password.length < 8 || !policiesAccepted || !adultConfirmed) {
       setError(t("auth.errors.signupRequired"));
       return;
     }
@@ -37,6 +40,8 @@ export default function SignUpScreen() {
         lastName: lastName.trim(),
         zipCode: zipCode.trim(),
         sports: sport.trim() ? [sport.trim()] : [],
+        policiesAccepted,
+        adultEligibilityConfirmed: adultConfirmed,
       });
       await AsyncStorage.setItem("onboardingComplete", "true");
       router.replace(CHOOSE_START_MODE_ROUTE as never);
@@ -71,6 +76,12 @@ export default function SignUpScreen() {
           />
           <TextInput style={styles.input} placeholder={t("auth.zipCode")} value={zipCode} onChangeText={setZipCode} keyboardType="number-pad" />
           <TextInput style={styles.input} placeholder={t("auth.selectSportOptional")} value={sport} onChangeText={setSport} />
+          <LegalAssentControls
+            adultConfirmed={adultConfirmed}
+            onAdultConfirmedChange={setAdultConfirmed}
+            onPoliciesAcceptedChange={setPoliciesAccepted}
+            policiesAccepted={policiesAccepted}
+          />
           {!!error && <Text style={styles.error}>{error}</Text>}
           <TouchableOpacity style={styles.button} onPress={handleCreate} disabled={loading}>
             {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>{t("auth.createAccountButton")}</Text>}

@@ -7,6 +7,7 @@ export const PARENT_HOME_ROUTE = "/(tabs)";
 export const SIGN_IN_ROUTE = "/sign-in";
 export const EMAIL_SIGN_IN_ROUTE = "/email-login";
 export const SIGN_UP_ROUTE = "/sign-up";
+export const COMPLETE_ACCOUNT_ROUTE = "/complete-account";
 export const CHOOSE_START_MODE_ROUTE = "/choose-start-mode";
 export const ONBOARDING_ROUTE = "/onboarding";
 export const FORGOT_PASSWORD_ROUTE = "/forgot-password";

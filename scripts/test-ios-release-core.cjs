@@ -57,7 +57,9 @@ assert.equal(profile.includes('router.push("/settings"'), true);
 assert.equal(settings.includes("requestNotificationPermissionAndRegister"), true);
 assert.equal(deleteScreen.includes('confirmation.trim().toUpperCase() === "DELETE"'), true);
 assert.equal(deleteScreen.includes("Alert.alert"), true);
-assert.equal(accountService.includes("reauthenticateWithCredential"), true);
+assert.equal(accountService.includes("reauthenticateWithCredential"), false);
+assert.equal(deleteScreen.includes("reauthenticateWithPassword"), true);
+assert.equal(deleteScreen.includes("reauthenticateWithProvider"), true);
 assert.equal(accountService.includes('"deleteOwnAccount"'), true);
 assert.equal(deletionFunction.includes("admin.auth().deleteUser(uid)"), true);
 assert.equal(deletionFunction.includes("deleteRealtimeGameParticipation"), true);
@@ -90,6 +92,12 @@ assert.equal(config.includes("motionUsagePermission: false"), false);
 assert.match(config, /record a voice message in a chat or team conversation/);
 assert.equal(resolvedConfig.version, "1.0.0");
 assert.equal(resolvedConfig.ios?.bundleIdentifier, "com.sidelinesocial.app");
+assert.equal(resolvedConfig.ios?.usesAppleSignIn, true);
+assert.deepEqual(
+  resolvedConfig.ios?.entitlements?.["com.apple.developer.applesignin"],
+  ["Default"],
+  "The resolved iOS app must contain only the required Sign in with Apple entitlement.",
+);
 assert.equal(resolvedInfoPlist.NSLocationWhenInUseUsageDescription, IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION);
 assert.equal(resolvedInfoPlist.NSMicrophoneUsageDescription, IOS_MICROPHONE_USAGE_DESCRIPTION);
 assert.equal(resolvedInfoPlist.NSMotionUsageDescription, IOS_MOTION_USAGE_DESCRIPTION);

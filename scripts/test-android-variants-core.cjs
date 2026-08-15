@@ -31,12 +31,16 @@ assert.equal(production.name, "Sideline Social");
 assert.equal(production.android.package, "com.sidelinesquad.app");
 assert.equal(production.android.googleServicesFile, "./google-services.json");
 assert.equal(production.scheme, "sidelinesquad");
+assert.equal(production.extra.authProviders.googleEnabled, false);
+assert.equal(production.extra.authProviders.appleEnabled, false);
 
 const development = resolvedConfig("development", "C:/secure/google-services.dev.json");
 assert.equal(development.name, "Sideline Social Dev");
 assert.equal(development.android.package, "com.sidelinesquad.app.dev");
 assert.equal(development.android.googleServicesFile, "C:/secure/google-services.dev.json");
 assert.equal(development.scheme, "sidelinesquad-dev");
+assert.equal(development.extra.authProviders.googleEnabled, false);
+assert.equal(development.extra.authProviders.appleEnabled, false);
 
 const eas = JSON.parse(read("eas.json"));
 const packageJson = JSON.parse(read("package.json"));

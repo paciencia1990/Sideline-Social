@@ -55,6 +55,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </Card>
 
+        <SettingsLink label={t("settings.signInMethods.title")} onPress={() => router.push("/settings/sign-in-methods" as never)} />
         <SettingsLink label={t("settings.privacyLegal")} onPress={() => router.push("/settings/legal" as never)} />
         <SettingsLink label={t("settings.blockedUsers")} onPress={() => router.push("/settings/blocked-users" as never)} />
         <SettingsLink destructive label={t("settings.deleteAccount")} onPress={() => router.push("/settings/delete-account" as never)} />
