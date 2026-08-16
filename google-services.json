@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "903830626771",
+    "firebase_url": "https://sideline-squad-default-rtdb.firebaseio.com",
     "project_id": "sideline-squad",
     "storage_bucket": "sideline-squad.firebasestorage.app"
   },
@@ -12,7 +13,28 @@
           "package_name": "com.sidelinesquad.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "903830626771-bs74gjq0h1iekqfj4h3r3s7r2po0l1hg.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.sidelinesquad.app",
+            "certificate_hash": "1127e779624a3685f4ff047ecd5659112c387c14"
+          }
+        },
+        {
+          "client_id": "903830626771-cgoqfbjs7qect7o09e516bbdh2kgcsa3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.sidelinesquad.app",
+            "certificate_hash": "62747fe51f3b85c4f129fea0d8769f283345a1b0"
+          }
+        },
+        {
+          "client_id": "903830626771-k2unc5kb7ddg83g28ie29ho6jnc9tj34.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyCG4ym5jJQPG724Pp_Da7yBj3wBdPEOdOs"
@@ -20,7 +42,71 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "903830626771-k2unc5kb7ddg83g28ie29ho6jnc9tj34.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "903830626771-a4tq4gvutt3brdg4dm7lmsmuoo8iq1dj.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.sidelinesocial.app"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:903830626771:android:6c8c74c03bde9177dfcf26",
+        "android_client_info": {
+          "package_name": "com.sidelinesquad.app.dev"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "903830626771-87kdl6r8gg7qoatkvqoirlp032d518lt.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.sidelinesquad.app.dev",
+            "certificate_hash": "62747fe51f3b85c4f129fea0d8769f283345a1b0"
+          }
+        },
+        {
+          "client_id": "903830626771-k55mlm7p7u1et94kt8l992g23nreg2tq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.sidelinesquad.app.dev",
+            "certificate_hash": "1127e779624a3685f4ff047ecd5659112c387c14"
+          }
+        },
+        {
+          "client_id": "903830626771-k2unc5kb7ddg83g28ie29ho6jnc9tj34.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCG4ym5jJQPG724Pp_Da7yBj3wBdPEOdOs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "903830626771-k2unc5kb7ddg83g28ie29ho6jnc9tj34.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "903830626771-a4tq4gvutt3brdg4dm7lmsmuoo8iq1dj.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.sidelinesocial.app"
+              }
+            }
+          ]
         }
       }
     }
