@@ -4,7 +4,45 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const read = (...segments) => fs.readFileSync(path.join(root, ...segments), "utf8");
+const readBuffer = (...segments) => fs.readFileSync(path.join(root, ...segments));
 const configure = require(path.join(root, "app.config.js"));
+
+function selectFirebaseClient(googleServices, packageName) {
+  const matches = googleServices.client.filter(
+    (client) => client?.client_info?.android_client_info?.package_name === packageName,
+  );
+  assert.equal(matches.length, 1, `Expected exactly one Firebase client for ${packageName}.`);
+  return matches[0];
+}
+
+function assertFirebaseOAuthConfiguration(client, packageName) {
+  const oauthClients = Array.isArray(client.oauth_client) ? client.oauth_client : [];
+  const androidOAuthClients = oauthClients.filter(
+    (oauthClient) =>
+      oauthClient?.client_type === 1 &&
+      oauthClient?.android_info?.package_name === packageName,
+  );
+  const webOAuthClients = oauthClients.filter((oauthClient) => oauthClient?.client_type === 3);
+
+  assert.ok(androidOAuthClients.length > 0, `Missing Android OAuth configuration for ${packageName}.`);
+  assert.ok(
+    androidOAuthClients.every(
+      (oauthClient) =>
+        typeof oauthClient.client_id === "string" &&
+        oauthClient.client_id.length > 0 &&
+        typeof oauthClient.android_info.certificate_hash === "string" &&
+        oauthClient.android_info.certificate_hash.length > 0,
+    ),
+    `Android OAuth configuration is incomplete for ${packageName}.`,
+  );
+  assert.ok(webOAuthClients.length > 0, `Missing Web OAuth configuration for ${packageName}.`);
+  assert.ok(
+    webOAuthClients.every(
+      (oauthClient) => typeof oauthClient.client_id === "string" && oauthClient.client_id.length > 0,
+    ),
+    `Web OAuth configuration is incomplete for ${packageName}.`,
+  );
+}
 
 function resolvedConfig(variant, developmentGoogleServicesFile) {
   const previousVariant = process.env.APP_VARIANT;
@@ -70,11 +108,43 @@ const manifest = read("android", "app", "src", "main", "AndroidManifest.xml");
 assert.equal(manifest.includes('${applicationId}'), true);
 assert.equal(manifest.includes('${APP_SCHEME}'), true);
 
-const productionGoogleServices = JSON.parse(read("google-services.json"));
-const productionPackages = productionGoogleServices.client
-  .map((client) => client?.client_info?.android_client_info?.package_name)
-  .filter(Boolean);
-assert.equal(productionPackages.includes("com.sidelinesquad.app"), true);
-assert.equal(productionPackages.includes("com.sidelinesquad.app.dev"), false);
+const rootGoogleServices = JSON.parse(read("google-services.json"));
+const productionFirebaseClient = selectFirebaseClient(
+  rootGoogleServices,
+  "com.sidelinesquad.app",
+);
+const developmentFirebaseClient = selectFirebaseClient(
+  rootGoogleServices,
+  "com.sidelinesquad.app.dev",
+);
 
-console.log("Android production/development package, label, scheme, artifact, versioning, and Firebase separation checks passed.");
+assertFirebaseOAuthConfiguration(productionFirebaseClient, "com.sidelinesquad.app");
+assertFirebaseOAuthConfiguration(developmentFirebaseClient, "com.sidelinesquad.app.dev");
+
+assert.equal(
+  productionFirebaseClient.client_info.android_client_info.package_name,
+  production.android.package,
+);
+assert.notEqual(
+  productionFirebaseClient.client_info.android_client_info.package_name,
+  development.android.package,
+);
+assert.equal(
+  developmentFirebaseClient.client_info.android_client_info.package_name,
+  development.android.package,
+);
+assert.notEqual(
+  developmentFirebaseClient.client_info.android_client_info.package_name,
+  production.android.package,
+);
+
+assert.equal(
+  Buffer.compare(
+    readBuffer("google-services.json"),
+    readBuffer("android", "app", "google-services.json"),
+  ),
+  0,
+  "Root and native Android Firebase files must remain byte-identical.",
+);
+
+console.log("Android production/development package, label, scheme, artifact, versioning, Firebase client selection, and OAuth shape checks passed.");
