@@ -1,5 +1,15 @@
-import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  type AccessibilityActionEvent,
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { Image } from "expo-image";
 import { X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -11,16 +21,43 @@ import {
 } from "@/services/chatService";
 
 type Props = {
+  active: boolean;
   image: StoredFriendChatImage;
   messageId: string;
+  onForward: () => void;
+  onLongPress: () => void;
+  onSave: () => void;
+  onSelect: () => void;
+  onUnavailable: () => void;
+  saving: boolean;
+  selectionMode: boolean;
 };
 
-export function FriendChatImageMessage({ image, messageId }: Props) {
+const LONG_PRESS_TAP_GUARD_MS = 700;
+
+export function FriendChatImageMessage({
+  active,
+  image,
+  messageId,
+  onForward,
+  onLongPress,
+  onSave,
+  onSelect,
+  onUnavailable,
+  saving,
+  selectionMode,
+}: Props) {
   const { t } = useTranslation();
+  const lastLongPressAtRef = useRef(0);
+  const onUnavailableRef = useRef(onUnavailable);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [fullUrl, setFullUrl] = useState<string | null>(null);
+  const [actionMenuVisible, setActionMenuVisible] = useState(false);
+  const [openingActions, setOpeningActions] = useState(false);
   const [viewerVisible, setViewerVisible] = useState(false);
   const [error, setError] = useState(false);
+
+  useEffect(() => { onUnavailableRef.current = onUnavailable; }, [onUnavailable]);
 
   useEffect(() => {
     let mounted = true;
@@ -31,17 +68,69 @@ export function FriendChatImageMessage({ image, messageId }: Props) {
         if (mounted) setThumbnailUrl(result.url);
       })
       .catch(() => {
-        if (mounted) setError(true);
+        if (mounted) {
+          setError(true);
+          onUnavailableRef.current();
+        }
       });
     return () => { mounted = false; };
   }, [image.thumbnailPath, messageId]);
 
-  const openViewer = () => {
-    setViewerVisible(true);
-    if (fullUrl) return;
-    void getFriendChatMediaDownloadUrl({ messageId, storagePath: image.fullPath })
-      .then((result) => setFullUrl(result.url))
-      .catch(() => setError(true));
+  useEffect(() => {
+    if (active) return;
+    setActionMenuVisible(false);
+    setViewerVisible(false);
+    setFullUrl(null);
+  }, [active]);
+
+  const ensureFullImageAccess = async () => {
+    try {
+      const result = await getFriendChatMediaDownloadUrl({ messageId, storagePath: image.fullPath });
+      setFullUrl(result.url);
+      return true;
+    } catch {
+      setError(true);
+      onUnavailableRef.current();
+      return false;
+    }
+  };
+
+  const openActionMenu = async () => {
+    if (!active || !thumbnailUrl || openingActions) return;
+    setOpeningActions(true);
+    const authorized = await ensureFullImageAccess();
+    setOpeningActions(false);
+    if (authorized) setActionMenuVisible(true);
+  };
+
+  const openViewer = async () => {
+    setActionMenuVisible(false);
+    if (await ensureFullImageAccess()) setViewerVisible(true);
+  };
+
+  const handlePress = () => {
+    if (Date.now() - lastLongPressAtRef.current < LONG_PRESS_TAP_GUARD_MS) return;
+    if (selectionMode) {
+      onSelect();
+      return;
+    }
+    void openActionMenu();
+  };
+
+  const handleLongPress = () => {
+    if (!active) return;
+    lastLongPressAtRef.current = Date.now();
+    setActionMenuVisible(false);
+    onLongPress();
+  };
+
+  const handleAccessibilityAction = (event: AccessibilityActionEvent) => {
+    if (!active) return;
+    if (event.nativeEvent.actionName === "viewPhoto") void openViewer();
+    if (event.nativeEvent.actionName === "forwardPhoto") onForward();
+    if (event.nativeEvent.actionName === "savePhoto" && !saving) onSave();
+    if (event.nativeEvent.actionName === "reactToPhoto") handleLongPress();
+    if (event.nativeEvent.actionName === "morePhotoActions") void openActionMenu();
   };
 
   if (error) {
@@ -50,10 +139,23 @@ export function FriendChatImageMessage({ image, messageId }: Props) {
 
   return (
     <>
-      <TouchableOpacity
-        accessibilityLabel={t("chat.openImageViewer")}
+      <Pressable
+        accessibilityActions={active
+          ? [
+            { label: t("chat.viewPhoto"), name: "viewPhoto" },
+            { label: t("chat.forwardPhoto"), name: "forwardPhoto" },
+            { label: t("chat.savePhoto"), name: "savePhoto" },
+            { label: t("chat.reactToPhoto"), name: "reactToPhoto" },
+            { label: t("chat.morePhotoActions"), name: "morePhotoActions" },
+          ]
+          : undefined}
+        accessibilityLabel={t("chat.photoMessageAccessibility")}
         accessibilityRole="imagebutton"
-        onPress={openViewer}
+        accessibilityState={{ busy: openingActions || saving }}
+        delayLongPress={360}
+        onAccessibilityAction={handleAccessibilityAction}
+        onLongPress={handleLongPress}
+        onPress={handlePress}
         style={styles.thumbnailFrame}
       >
         {thumbnailUrl ? (
@@ -69,7 +171,31 @@ export function FriendChatImageMessage({ image, messageId }: Props) {
             <ActivityIndicator accessibilityLabel={t("chat.imageLoading")} color={Colors.primary} size="small" />
           </View>
         )}
-      </TouchableOpacity>
+      </Pressable>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setActionMenuVisible(false)}
+        presentationStyle="overFullScreen"
+        transparent
+        visible={actionMenuVisible}
+      >
+        <View style={styles.actionBackdrop}>
+          <Pressable
+            accessibilityLabel={t("chat.dismissPhotoActions")}
+            accessibilityRole="button"
+            onPress={() => setActionMenuVisible(false)}
+            style={styles.actionBackdropDismiss}
+          />
+          <View accessibilityLabel={t("chat.photoActionsTitle")} accessibilityViewIsModal style={styles.actionSheet}>
+            <Text accessibilityRole="header" style={styles.actionTitle}>{t("chat.photoActionsTitle")}</Text>
+            <PhotoAction label={t("chat.viewPhoto")} onPress={() => { void openViewer(); }} />
+            <PhotoAction label={t("chat.forwardPhoto")} onPress={() => { setActionMenuVisible(false); onForward(); }} />
+            <PhotoAction disabled={saving} label={saving ? t("chat.savingPhoto") : t("chat.savePhoto")} onPress={() => { setActionMenuVisible(false); onSave(); }} />
+            <PhotoAction label={t("common.cancel")} onPress={() => setActionMenuVisible(false)} />
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         animationType="fade"
@@ -116,7 +242,36 @@ export function FriendChatImageMessage({ image, messageId }: Props) {
   );
 }
 
+function PhotoAction({ disabled = false, label, onPress }: { disabled?: boolean; label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={[styles.action, disabled && styles.actionDisabled]}
+    >
+      <Text style={styles.actionText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
+  action: { justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
+  actionBackdrop: { backgroundColor: "rgba(47, 65, 86, 0.18)", flex: 1, justifyContent: "flex-end" },
+  actionBackdropDismiss: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
+  actionDisabled: { opacity: 0.45 },
+  actionSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: Radius.card,
+    borderTopRightRadius: Radius.card,
+    paddingBottom: Spacing.lg,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
+  },
+  actionText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 15 },
+  actionTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 18, padding: Spacing.md },
   closeButton: { alignItems: "center", height: 44, justifyContent: "center", width: 44 },
   error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   fullImage: { height: "100%", width: "100%" },

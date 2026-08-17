@@ -40,12 +40,15 @@ assert.match(resume, /SQUAD_SYSTEM_RETURN_ROUTE = '\/\(tabs\)\/squad'/);
 assert.match(resume, /SYSTEM_ROUTE_RESUME_TTL_MS/);
 assert.match(resume, /value\.route !== SQUAD_SYSTEM_RETURN_ROUTE/);
 assert.match(resume, /AsyncStorage\.removeItem\(SYSTEM_ROUTE_RESUME_KEY\)/);
-const notificationIndex = rootIndex.indexOf('getPendingNotificationOpenTarget');
+const pickerReturnIndex = rootIndex.indexOf('readFriendChatImagePickerNavigationReturn(user.uid)');
+const notificationIndex = rootIndex.indexOf('getPendingNotificationOpenTarget({ activeMode })', pickerReturnIndex);
 const resumeIndex = rootIndex.indexOf('consumeSystemReturnRoute()', notificationIndex);
 const homeFallbackIndex = rootIndex.indexOf('router.replace("/(tabs)")', resumeIndex);
-assert.ok(notificationIndex >= 0 && resumeIndex > notificationIndex, 'notification opens retain first priority');
+assert.ok(pickerReturnIndex >= 0 && notificationIndex > pickerReturnIndex, 'an interrupted system picker is restored before unrelated initial navigation');
+assert.ok(resumeIndex > notificationIndex, 'notification opens retain priority over the general system return route');
 assert.ok(homeFallbackIndex > resumeIndex, 'the allowlisted system return route wins before the Home fallback');
 assert.match(rootIndex.slice(resumeIndex, homeFallbackIndex), /router\.replace\(systemReturnRoute/);
+assert.match(resume, /FRIEND_CHAT_IMAGE_PICKER_RETURN_KEY/);
 
 assert.equal((translations.match(/retryLocation:/g) ?? []).length, 2, 'Retry Location needs English and Spanish text');
 assert.equal((translations.match(/locationDisclosure:/g) ?? []).length, 2, 'the existing foreground-location privacy disclosure remains localized');

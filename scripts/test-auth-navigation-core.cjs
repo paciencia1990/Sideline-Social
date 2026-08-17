@@ -115,4 +115,24 @@ assert.ok(localSignOutIndex > cleanupIndex, "Shared local sign-out must follow n
 assert.ok(firebaseSignOutIndex > localSignOutIndex, "Shared sign-out must receive Firebase sign-out.");
 assert.ok(localStateCleanupIndex > localSignOutIndex, "Shared sign-out must receive local-state cleanup.");
 
+const rootIndex = read("app", "index.tsx");
+const pickerReturnIndex = rootIndex.indexOf("readFriendChatImagePickerNavigationReturn(user.uid)");
+const pickerAuthorizationIndex = rootIndex.indexOf("getFriendConversationAccess(imagePickerReturn.conversationId)", pickerReturnIndex);
+const notificationRouteIndex = rootIndex.indexOf("getPendingNotificationOpenTarget({ activeMode })", pickerReturnIndex);
+const homeFallbackIndex = rootIndex.indexOf('router.replace("/(tabs)")', notificationRouteIndex);
+assert.ok(pickerReturnIndex >= 0, "Root navigation must inspect a valid image-picker return after auth and mode hydration.");
+assert.ok(pickerAuthorizationIndex > pickerReturnIndex, "Picker restoration must revalidate conversation membership.");
+assert.ok(notificationRouteIndex > pickerAuthorizationIndex, "Picker restoration wins the lifecycle race before unrelated initial navigation.");
+assert.ok(homeFallbackIndex > notificationRouteIndex, "Home remains the final authenticated fallback only after resume routing.");
+assert.match(rootIndex.slice(pickerReturnIndex, notificationRouteIndex), /access\?\.member\.status === "active"/);
+assert.match(rootIndex.slice(pickerReturnIndex, notificationRouteIndex), /pathname: imagePickerReturn\.route/);
+assert.match(rootIndex.slice(pickerReturnIndex, notificationRouteIndex), /router\.replace\("\/\(social\)\/chat"/);
+assert.doesNotMatch(rootIndex.slice(pickerReturnIndex, notificationRouteIndex), /router\.replace\("\/\(tabs\)"/);
+
+const authenticatedRouteGate = read("components", "AuthenticatedRouteGate.tsx");
+assert.ok(
+  authenticatedRouteGate.indexOf("if (loading)") < authenticatedRouteGate.indexOf("if (!user"),
+  "Authenticated routes must wait for auth hydration before applying redirects.",
+);
+
 console.log("Declarative auth/onboarding protection, public routes, welcome buttons, and sign-out checks passed.");

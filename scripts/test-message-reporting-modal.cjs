@@ -46,7 +46,7 @@ assert.match(friendThread, /name: "more"/, "Friend Chat exposes More message act
 assert.match(friendThread, /setActionMessage\(selectedMessages\[0\]\)/, "Friend Chat selection overflow can report the selected incoming message");
 assert.doesNotMatch(friendThread, /style=\{styles\.messageMenu\}/, "Friend Chat no longer renders a permanent per-message overflow button");
 assert.doesNotMatch(parentThread, /reportButton/);
-assert.doesNotMatch(friendThread, /Alert\.alert/);
+assert.match(friendThread, /Alert\.alert\(t\("chat\.photoSavedTitle"\)/, "native alerts are limited to explicit Save Photo feedback, not report reason selection");
 assert.match(friendThread, /reportFriendChatMessage\(reportAction\.chatId, reportAction\.messageId, reason\)/);
 assert.match(privateThread, /report=\{!selectedMine/);
 assert.match(parentThread, /report=\{actionTarget && !actionTarget\.mine/);

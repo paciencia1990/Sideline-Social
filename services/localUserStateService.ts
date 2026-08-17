@@ -2,11 +2,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 
 import { clearFriendChatImageMemoryCache } from "@/services/friendChatImageCacheService";
+import { clearFriendChatImagePickerLocalState } from "@/services/friendChatImageService";
 import { clearVoicePlaybackUrlCache } from "@/utils/voicePlaybackCore";
 import { clearLocalUserStateWithDependencies } from "@/utils/localUserStateCore";
 
 export async function clearProtectedMediaMemoryState() {
   clearVoicePlaybackUrlCache();
+  await clearFriendChatImagePickerLocalState();
   await clearFriendChatImageMemoryCache();
 }
 

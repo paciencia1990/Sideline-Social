@@ -29,6 +29,7 @@ import {
   friendChatImageStoragePaths,
   friendChatMediaPreview,
   friendChatVoiceStoragePath,
+  forwardClientMessageIdFor,
   isAcceptedFriend,
   mediaReservationIdFor,
   messageIdFor,
@@ -1203,89 +1204,428 @@ export const setFriendChatMessagesStarred = communicationChatFunctions.https.onC
   return { updated };
 });
 
+type ForwardSourceImage = {
+  fullPath: string;
+  metadata: FriendChatImageMetadata;
+  stored: {
+    fullPath: string;
+    height: number;
+    mimeType: string;
+    sizeBytes: number;
+    sourceMimeType: string | null;
+    sourceSizeBytes: number;
+    thumbnailHeight: number;
+    thumbnailMimeType: string;
+    thumbnailPath: string;
+    thumbnailSizeBytes: number;
+    thumbnailWidth: number;
+    width: number;
+  };
+  thumbnailPath: string;
+};
+
+type ForwardSourceMessage = {
+  caption: string | null;
+  image: ForwardSourceImage | null;
+  messageId: string;
+  messageType: 'image' | 'text';
+  text: string;
+};
+
+type ForwardDestination = {
+  conversationId: string;
+  conversationType: 'direct' | 'group';
+  participantIds: string[];
+};
+
+type ForwardPlan = {
+  clientMessageId: string;
+  destination: ForwardDestination;
+  fullPath: string | null;
+  messageId: string;
+  reservationId: string | null;
+  source: ForwardSourceMessage;
+  thumbnailPath: string | null;
+};
+
+function readForwardSourceImage(
+  conversationId: string,
+  messageId: string,
+  message: admin.firestore.DocumentData,
+): ForwardSourceImage | null {
+  const image = message.image;
+  if (!image || typeof image !== 'object' || Array.isArray(image)) return null;
+  const fullPath = typeof image.fullPath === 'string' ? image.fullPath : '';
+  const thumbnailPath = typeof image.thumbnailPath === 'string' ? image.thumbnailPath : '';
+  const fullReference = parseFriendChatMediaStoragePath(fullPath);
+  const thumbnailReference = parseFriendChatMediaStoragePath(thumbnailPath);
+  if (
+    !fullReference ||
+    !thumbnailReference ||
+    fullReference.kind !== 'image' ||
+    thumbnailReference.kind !== 'thumbnail' ||
+    fullReference.conversationId !== conversationId ||
+    thumbnailReference.conversationId !== conversationId ||
+    fullReference.messageId !== messageId ||
+    thumbnailReference.messageId !== messageId ||
+    fullReference.reservationId !== thumbnailReference.reservationId
+  ) return null;
+  try {
+    const metadata = validateFriendChatImageMetadata({
+      main: {
+        height: image.height,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        width: image.width,
+      },
+      sourceMimeType: image.sourceMimeType,
+      sourceSizeBytes: image.sourceSizeBytes,
+      thumbnail: {
+        height: image.thumbnailHeight,
+        mimeType: image.thumbnailMimeType,
+        sizeBytes: image.thumbnailSizeBytes,
+        width: image.thumbnailWidth,
+      },
+    });
+    return {
+      fullPath,
+      metadata,
+      stored: {
+        fullPath,
+        height: metadata.main.height,
+        mimeType: metadata.main.mimeType,
+        sizeBytes: metadata.main.sizeBytes,
+        sourceMimeType: metadata.sourceMimeType,
+        sourceSizeBytes: metadata.sourceSizeBytes,
+        thumbnailHeight: metadata.thumbnail.height,
+        thumbnailMimeType: metadata.thumbnail.mimeType,
+        thumbnailPath,
+        thumbnailSizeBytes: metadata.thumbnail.sizeBytes,
+        thumbnailWidth: metadata.thumbnail.width,
+        width: metadata.main.width,
+      },
+      thumbnailPath,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function hasForwardBlock(userId: string, participantIds: string[]) {
+  const refs = participantIds
+    .filter((participantId) => participantId !== userId)
+    .flatMap((participantId) => [blockRef(userId, participantId), blockRef(participantId, userId)]);
+  const snapshots = await Promise.all(refs.map((ref) => ref.get()));
+  return snapshots.some((snapshot) => snapshot.exists);
+}
+
+async function loadForwardImageBytes(userId: string, source: ForwardSourceImage) {
+  const [fullAuthorized, thumbnailAuthorized] = await Promise.all([
+    canAccessFriendChatMedia(firestore(), userId, source.fullPath),
+    canAccessFriendChatMedia(firestore(), userId, source.thumbnailPath),
+  ]);
+  if (!fullAuthorized || !thumbnailAuthorized) denied('Media is unavailable.');
+  const bucket = admin.storage().bucket();
+  const fullFile = bucket.file(source.fullPath);
+  const thumbnailFile = bucket.file(source.thumbnailPath);
+  const [[fullMetadata], [thumbnailMetadata], [fullBytes], [thumbnailBytes]] = await Promise.all([
+    fullFile.getMetadata(),
+    thumbnailFile.getMetadata(),
+    fullFile.download(),
+    thumbnailFile.download(),
+  ]);
+  if (
+    Number(fullMetadata.size) !== source.metadata.main.sizeBytes ||
+    Number(thumbnailMetadata.size) !== source.metadata.thumbnail.sizeBytes ||
+    fullBytes.byteLength !== source.metadata.main.sizeBytes ||
+    thumbnailBytes.byteLength !== source.metadata.thumbnail.sizeBytes ||
+    fullMetadata.contentType !== source.metadata.main.mimeType ||
+    thumbnailMetadata.contentType !== source.metadata.thumbnail.mimeType
+  ) failed('Media is unavailable.');
+  return { fullBytes, thumbnailBytes };
+}
+
+async function cleanupUnreferencedForwardMedia(
+  copied: Array<{ messageRef: FirebaseFirestore.DocumentReference; storagePath: string }>,
+) {
+  await Promise.allSettled(copied.map(async ({ messageRef, storagePath }) => {
+    const message = await messageRef.get();
+    if (message.exists && readIds(message.data()?.mediaStoragePaths).includes(storagePath)) return;
+    await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+  }));
+}
+
 export const forwardFriendChatMessages = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
+  const requestedClientForwardId = normalizeClientMessageId(data?.clientForwardId);
+  const clientForwardId = requestedClientForwardId ?? `legacy_${randomUUID()}`;
   const sourceConversationId = normalizeConversationId(data?.conversationId);
   const messageIds = normalizeMessageIds(data?.messageIds, 5);
   const destinationConversationIds = normalizeMessageIds(data?.destinationConversationIds, FRIEND_CHAT_FORWARD_MAX_DESTINATIONS)
     .filter((conversationId) => conversationId !== sourceConversationId);
-  if (!sourceConversationId || messageIds.length === 0 || destinationConversationIds.length === 0) invalid('Forward destinations and messages are required.');
-  const pushTargets: Array<{ conversationId: string; conversationType: 'direct' | 'group' }> = [];
-  let forwarded = 0;
-  await firestore().runTransaction(async (transaction) => {
-    const now = Timestamp.now();
-    const rate = await transaction.get(forwardRateRef(uid));
-    const lastForwardAt = timestampMillis(rate.data()?.lastForwardAt);
-    if (lastForwardAt !== null && now.toMillis() - lastForwardAt < FRIEND_CHAT_FORWARD_COOLDOWN_MS) {
-      throw new functions.https.HttpsError('resource-exhausted', 'Please wait a moment before forwarding again.');
+  if (!sourceConversationId || messageIds.length === 0 || destinationConversationIds.length === 0) {
+    invalid('Forward destinations and messages are required.');
+  }
+
+  const sourceRef = conversationRef(sourceConversationId);
+  const [sourceConversation, sourceMember, sender, ...sourceSnapshots] = await Promise.all([
+    sourceRef.get(),
+    memberRef(sourceConversationId, uid).get(),
+    firestore().collection('users').doc(uid).get(),
+    ...messageIds.map((messageId) => sourceRef.collection('messages').doc(messageId).get()),
+  ]);
+  const sourceData = sourceConversation.data() as ConversationData | undefined;
+  if (!sourceConversation.exists || sourceData?.status !== 'active') failed('Conversation unavailable.');
+  if (!sourceMember.exists || sourceMember.data()?.status !== 'active') denied('Active membership required.');
+  if (!sender.exists) failed('Sender unavailable.');
+  const sourceParticipantIds = readIds(sourceData?.activeParticipantIds);
+  if (!sourceParticipantIds.includes(uid) || await hasForwardBlock(uid, sourceParticipantIds)) {
+    denied('Messaging is unavailable for this connection.');
+  }
+  if (sourceData?.conversationType !== 'group') {
+    const friendId = sourceParticipantIds.find((participantId) => participantId !== uid);
+    const friend = friendId ? await firestore().collection('users').doc(friendId).get() : null;
+    if (!friendId || !friend?.exists || !isAcceptedFriend(sender.data(), friend.data(), uid, friendId)) {
+      failed('You are no longer friends.');
     }
-    const [sourceConversation, sourceMember, sender, ...sourceMessages] = await Promise.all([
-      transaction.get(conversationRef(sourceConversationId)),
-      transaction.get(memberRef(sourceConversationId, uid)),
-      transaction.get(firestore().collection('users').doc(uid)),
-      ...messageIds.map((messageId) => transaction.get(conversationRef(sourceConversationId).collection('messages').doc(messageId))),
+  }
+
+  const unsupportedMediaMessageIds: string[] = [];
+  const sources: ForwardSourceMessage[] = [];
+  for (const snapshot of sourceSnapshots) {
+    const message = snapshot.data();
+    if (messageIsUnavailableForUser(message, uid)) denied('Message is unavailable.');
+    if (message?.messageType === 'voice' || message?.messageType === 'system') {
+      unsupportedMediaMessageIds.push(snapshot.id);
+      continue;
+    }
+    if (message?.messageType === 'image') {
+      const image = readForwardSourceImage(sourceConversationId, snapshot.id, message);
+      if (!image) failed('Media is unavailable.');
+      sources.push({
+        caption: sanitizeOptionalChatCaption(message.caption),
+        image,
+        messageId: snapshot.id,
+        messageType: 'image',
+        text: '',
+      });
+      continue;
+    }
+    const text = typeof message?.text === 'string' && message.text.trim()
+      ? sanitizeChatMessage(message.text)
+      : '';
+    if (!text) {
+      unsupportedMediaMessageIds.push(snapshot.id);
+      continue;
+    }
+    sources.push({ caption: null, image: null, messageId: snapshot.id, messageType: 'text', text });
+  }
+  if (sources.length === 0) failed('No supported messages are available to forward.');
+
+  const destinations: ForwardDestination[] = [];
+  for (const conversationId of destinationConversationIds) {
+    const [conversation, member] = await Promise.all([
+      conversationRef(conversationId).get(),
+      memberRef(conversationId, uid).get(),
     ]);
-    if (!sourceConversation.exists || sourceConversation.data()?.status !== 'active') failed('Conversation unavailable.');
-    if (!sourceMember.exists || sourceMember.data()?.status !== 'active') denied('Active membership required.');
-    if (!sender.exists) failed('Sender unavailable.');
-    const sendableMessages = sourceMessages.flatMap((message) => {
-      const messageData = message.data();
-      if (messageIsUnavailableForUser(messageData, uid)) return [];
-      if (messageData?.messageType === 'image' || messageData?.messageType === 'voice') return [];
-      const text = typeof messageData?.text === 'string' && messageData.text.trim()
-        ? sanitizeChatMessage(messageData.text)
-        : typeof messageData?.caption === 'string' && messageData.caption.trim()
-          ? sanitizeOptionalChatCaption(messageData.caption)
-          : '';
-      return text ? [{ originalId: message.id, text }] : [];
-    });
-    if (sendableMessages.length === 0) failed('Only text or caption messages can be forwarded right now.');
-    const senderDisplayName = safeName(sender.data());
-    const destinations: Array<{
-      conversation: admin.firestore.DocumentSnapshot;
-      conversationId: string;
-      conversationType: 'direct' | 'group';
-      participantIds: string[];
-    }> = [];
-    for (const destinationConversationId of destinationConversationIds) {
-      const [destination, destinationMember] = await Promise.all([
-        transaction.get(conversationRef(destinationConversationId)),
-        transaction.get(memberRef(destinationConversationId, uid)),
+    const conversationData = conversation.data() as ConversationData | undefined;
+    if (!conversation.exists || conversationData?.status !== 'active') denied('Destination unavailable.');
+    if (!member.exists || member.data()?.status !== 'active') denied('Destination membership required.');
+    const participantIds = readIds(conversationData?.activeParticipantIds);
+    const recipients = participantIds.filter((participantId) => participantId !== uid);
+    if (
+      !participantIds.includes(uid) ||
+      recipients.length === 0 ||
+      participantIds.length > MAX_CHAT_PARTICIPANTS ||
+      await hasForwardBlock(uid, participantIds)
+    ) denied('Destination membership required.');
+    const conversationType = conversationData?.conversationType === 'group' ? 'group' : 'direct';
+    if (conversationType === 'direct') {
+      const friend = await firestore().collection('users').doc(recipients[0]).get();
+      if (!friend.exists || !isAcceptedFriend(sender.data(), friend.data(), uid, recipients[0])) {
+        failed('You are no longer friends.');
+      }
+    }
+    destinations.push({ conversationId, conversationType, participantIds });
+  }
+
+  const plans: ForwardPlan[] = destinations.flatMap((destination) => sources.map((source) => {
+    const clientMessageId = forwardClientMessageIdFor(clientForwardId, source.messageId, destination.conversationId);
+    const messageId = messageIdFor(uid, clientMessageId);
+    const reservationId = source.image ? mediaReservationIdFor(uid, clientMessageId, 'image') : null;
+    const paths = reservationId
+      ? friendChatImageStoragePaths({ conversationId: destination.conversationId, messageId, reservationId })
+      : null;
+    return {
+      clientMessageId,
+      destination,
+      fullPath: paths?.fullPath ?? null,
+      messageId,
+      reservationId,
+      source,
+      thumbnailPath: paths?.thumbnailPath ?? null,
+    };
+  }));
+
+  const imageBytes = new Map<string, Awaited<ReturnType<typeof loadForwardImageBytes>>>();
+  for (const source of sources) {
+    if (source.image && !imageBytes.has(source.messageId)) {
+      imageBytes.set(source.messageId, await loadForwardImageBytes(uid, source.image));
+    }
+  }
+
+  const preexisting = await firestore().getAll(...plans.map((plan) =>
+    conversationRef(plan.destination.conversationId).collection('messages').doc(plan.messageId)));
+  const copied: Array<{ messageRef: FirebaseFirestore.DocumentReference; storagePath: string }> = [];
+  try {
+    for (let index = 0; index < plans.length; index += 1) {
+      const plan = plans[index];
+      if (!plan.source.image || preexisting[index]?.exists) continue;
+      const bytes = imageBytes.get(plan.source.messageId);
+      if (!bytes || !plan.fullPath || !plan.thumbnailPath) failed('Media is unavailable.');
+      const messageRef = conversationRef(plan.destination.conversationId).collection('messages').doc(plan.messageId);
+      await admin.storage().bucket().file(plan.fullPath).save(bytes.fullBytes, {
+        metadata: { cacheControl: 'private, max-age=0, no-store', contentType: plan.source.image.metadata.main.mimeType },
+        resumable: false,
+      });
+      copied.push({ messageRef, storagePath: plan.fullPath });
+      await admin.storage().bucket().file(plan.thumbnailPath).save(bytes.thumbnailBytes, {
+        metadata: { cacheControl: 'private, max-age=0, no-store', contentType: plan.source.image.metadata.thumbnail.mimeType },
+        resumable: false,
+      });
+      copied.push({ messageRef, storagePath: plan.thumbnailPath });
+    }
+
+    const transactionResult = await firestore().runTransaction(async (transaction) => {
+      const now = Timestamp.now();
+      const [rate, currentSourceConversation, currentSourceMember, currentSender, ...currentSourceMessages] = await Promise.all([
+        transaction.get(forwardRateRef(uid)),
+        transaction.get(sourceRef),
+        transaction.get(memberRef(sourceConversationId, uid)),
+        transaction.get(firestore().collection('users').doc(uid)),
+        ...messageIds.map((messageId) => transaction.get(sourceRef.collection('messages').doc(messageId))),
       ]);
-      const destinationData = destination.data() as ConversationData | undefined;
-      if (!destination.exists || destinationData?.status !== 'active') denied('Destination unavailable.');
-      if (!destinationMember.exists || destinationMember.data()?.status !== 'active') denied('Destination membership required.');
-      const participantIds = readIds(destinationData?.activeParticipantIds);
-      const recipients = participantIds.filter((id) => id !== uid);
-      if (!participantIds.includes(uid) || recipients.length === 0) denied('Destination membership required.');
-      if (await getBlockSnapshots(transaction, recipients.map((recipientId) => [uid, recipientId]))) {
+      const currentSourceData = currentSourceConversation.data() as ConversationData | undefined;
+      if (!currentSourceConversation.exists || currentSourceData?.status !== 'active') failed('Conversation unavailable.');
+      if (!currentSourceMember.exists || currentSourceMember.data()?.status !== 'active') denied('Active membership required.');
+      if (!currentSender.exists) failed('Sender unavailable.');
+      const currentSourceParticipants = readIds(currentSourceData?.activeParticipantIds);
+      if (!currentSourceParticipants.includes(uid) ||
+        await getBlockSnapshots(transaction, currentSourceParticipants.filter((id) => id !== uid).map((id) => [uid, id]))) {
         denied('Messaging is unavailable for this connection.');
       }
-      const conversationType = destinationData?.conversationType === 'group' ? 'group' : 'direct';
-      if (conversationType === 'direct') {
-        const friendId = recipients[0];
-        const friend = await transaction.get(firestore().collection('users').doc(friendId));
-        if (!friend.exists || !isAcceptedFriend(sender.data(), friend.data(), uid, friendId)) failed('You are no longer friends.');
+      for (const source of sources) {
+        const current = currentSourceMessages.find((snapshot) => snapshot.id === source.messageId);
+        const currentData = current?.data();
+        if (messageIsUnavailableForUser(currentData, uid) || currentData?.messageType !== source.messageType) {
+          denied('Message is unavailable.');
+        }
+        if (source.image &&
+          (currentData?.image?.fullPath !== source.image.fullPath || currentData?.image?.thumbnailPath !== source.image.thumbnailPath)) {
+          denied('Media is unavailable.');
+        }
       }
-      destinations.push({ conversation: destination, conversationId: destinationConversationId, conversationType, participantIds });
-    }
-    for (const destination of destinations) {
-      for (const sourceMessage of sendableMessages) {
-        const clientMessageId = `forward_${randomUUID()}`;
-        const messageId = messageIdFor(uid, clientMessageId);
-        const messageRef = conversationRef(destination.conversationId).collection('messages').doc(messageId);
+
+      const destinationSnapshots = await Promise.all(destinations.flatMap((destination) => [
+        transaction.get(conversationRef(destination.conversationId)),
+        transaction.get(memberRef(destination.conversationId, uid)),
+      ]));
+      for (let index = 0; index < destinations.length; index += 1) {
+        const destination = destinations[index];
+        const conversation = destinationSnapshots[index * 2];
+        const member = destinationSnapshots[(index * 2) + 1];
+        const participantIds = readIds(conversation.data()?.activeParticipantIds);
+        if (!conversation.exists || conversation.data()?.status !== 'active' ||
+          !member.exists || member.data()?.status !== 'active' ||
+          !participantIds.includes(uid) || participantIds.length > MAX_CHAT_PARTICIPANTS) {
+          denied('Destination membership required.');
+        }
+        if (await getBlockSnapshots(transaction, participantIds.filter((id) => id !== uid).map((id) => [uid, id]))) {
+          denied('Messaging is unavailable for this connection.');
+        }
+        if (destination.conversationType === 'direct') {
+          const friendId = participantIds.find((id) => id !== uid);
+          const friend = friendId ? await transaction.get(firestore().collection('users').doc(friendId)) : null;
+          if (!friendId || !friend?.exists || !isAcceptedFriend(currentSender.data(), friend.data(), uid, friendId)) {
+            failed('You are no longer friends.');
+          }
+        }
+      }
+
+      const existingMessages = await Promise.all(plans.map((plan) =>
+        transaction.get(conversationRef(plan.destination.conversationId).collection('messages').doc(plan.messageId))));
+      const existingReservations = await Promise.all(plans.map((plan) => plan.reservationId
+        ? transaction.get(uploadReservationRef(plan.reservationId))
+        : Promise.resolve(null)));
+      const newPlanIndexes = plans.flatMap((_, index) => existingMessages[index].exists ? [] : [index]);
+      if (newPlanIndexes.length > 0) {
+        const lastForwardAt = timestampMillis(rate.data()?.lastForwardAt);
+        if (lastForwardAt !== null && now.toMillis() - lastForwardAt < FRIEND_CHAT_FORWARD_COOLDOWN_MS) {
+          throw new functions.https.HttpsError('resource-exhausted', 'Please wait a moment before forwarding again.');
+        }
+        for (const destination of destinations) {
+          const member = destinationSnapshots[(destinations.indexOf(destination) * 2) + 1];
+          const lastSentAt = timestampMillis(member.data()?.lastSentAt);
+          if (lastSentAt !== null && now.toMillis() - lastSentAt < CHAT_SEND_COOLDOWN_MS) {
+            throw new functions.https.HttpsError('resource-exhausted', 'Please wait a moment before sending again.');
+          }
+        }
+      }
+
+      const senderDisplayName = safeName(currentSender.data());
+      const pushTargets = new Map<string, { conversationId: string; conversationType: 'direct' | 'group'; messageType: 'image' | 'text' }>();
+      for (let index = 0; index < plans.length; index += 1) {
+        const plan = plans[index];
+        const existingMessage = existingMessages[index];
+        if (existingMessage.exists) {
+          const existing = existingMessage.data();
+          if (existing?.senderUserId !== uid || existing?.clientMessageId !== plan.clientMessageId || existing?.forwarded !== true) {
+            failed('Forward operation unavailable.');
+          }
+          continue;
+        }
         const createdAt = Timestamp.now();
-        transaction.create(messageRef, {
-          caption: null,
-          clientMessageId,
-          conversationId: destination.conversationId,
+        const destinationImage = plan.source.image && plan.fullPath && plan.thumbnailPath
+          ? { ...plan.source.image.stored, fullPath: plan.fullPath, thumbnailPath: plan.thumbnailPath }
+          : null;
+        if (plan.source.image && plan.reservationId && plan.fullPath && plan.thumbnailPath) {
+          const reservationRef = uploadReservationRef(plan.reservationId);
+          const reservation = existingReservations[index];
+          const reservationData = reservation?.data() as FriendChatMediaUploadReservation | undefined;
+          if (reservation?.exists &&
+            (reservationData?.userId !== uid || reservationData?.conversationId !== plan.destination.conversationId ||
+              reservationData?.targetId !== plan.messageId || reservationData?.kind !== 'image')) {
+            failed('Forward operation unavailable.');
+          }
+          transaction.set(reservationRef, {
+            caption: plan.source.caption,
+            clientMessageId: plan.clientMessageId,
+            conversationId: plan.destination.conversationId,
+            createdAt,
+            expiresAt: Timestamp.fromMillis(createdAt.toMillis() + FRIEND_CHAT_MEDIA_UPLOAD_TTL_MS),
+            finalizedAt: createdAt,
+            fullPath: plan.fullPath,
+            image: plan.source.image.metadata,
+            kind: 'image',
+            reservationId: plan.reservationId,
+            status: 'finalized',
+            targetId: plan.messageId,
+            thumbnailPath: plan.thumbnailPath,
+            updatedAt: createdAt,
+            userId: uid,
+          }, { merge: true });
+        }
+        transaction.create(conversationRef(plan.destination.conversationId).collection('messages').doc(plan.messageId), {
+          caption: plan.source.caption,
+          clientMessageId: plan.clientMessageId,
+          conversationId: plan.destination.conversationId,
           createdAt,
           forwarded: true,
-          forwardedFrom: { messageType: 'text' },
-          image: null,
-          mediaStoragePaths: [],
-          messageId,
-          messageType: 'text',
+          forwardedFrom: { messageType: plan.source.messageType },
+          image: destinationImage,
+          mediaStoragePaths: destinationImage ? [destinationImage.fullPath, destinationImage.thumbnailPath] : [],
+          messageId: plan.messageId,
+          messageType: plan.source.messageType,
           reactionCounts: {},
           reactionTotalCount: 0,
           removedAt: null,
@@ -1294,31 +1634,43 @@ export const forwardFriendChatMessages = communicationChatFunctions.https.onCall
           senderDisplayName,
           senderUserId: uid,
           status: 'active',
-          text: sourceMessage.text,
-          visibleToUserIds: destination.participantIds,
+          text: plan.source.messageType === 'text' ? plan.source.text : plan.source.caption ?? '',
+          visibleToUserIds: plan.destination.participantIds,
           voiceMemo: null,
         });
-        transaction.update(destination.conversation.ref, {
+        transaction.update(conversationRef(plan.destination.conversationId), {
           lastMessageAt: createdAt,
-          lastMessageId: messageId,
-          lastMessagePreview: friendChatMediaPreview('text', sourceMessage.text),
+          lastMessageId: plan.messageId,
+          lastMessagePreview: friendChatMediaPreview(plan.source.messageType, plan.source.messageType === 'text' ? plan.source.text : plan.source.caption),
           lastMessageRemoved: false,
-          lastMessageType: 'text',
+          lastMessageType: plan.source.messageType,
           lastSenderId: uid,
           updatedAt: createdAt,
         });
-        forwarded += 1;
+        transaction.set(memberRef(plan.destination.conversationId, uid), { lastSentAt: createdAt, updatedAt: createdAt }, { merge: true });
+        pushTargets.set(plan.destination.conversationId, {
+          conversationId: plan.destination.conversationId,
+          conversationType: plan.destination.conversationType,
+          messageType: plan.source.messageType,
+        });
       }
-      pushTargets.push({ conversationId: destination.conversationId, conversationType: destination.conversationType });
-    }
-    transaction.set(forwardRateRef(uid), {
-      lastForwardAt: now,
-      updatedAt: FieldValue.serverTimestamp(),
-      userIdHash: hashId(uid),
-    }, { merge: true });
-  });
-  await Promise.allSettled(pushTargets.map((target) => sendMessagePushes(target.conversationId, uid, 'text', target.conversationType)));
-  return { forwarded, unsupportedMediaMessageIds: [] };
+      if (newPlanIndexes.length > 0) {
+        transaction.set(forwardRateRef(uid), {
+          lastForwardAt: now,
+          updatedAt: FieldValue.serverTimestamp(),
+          userIdHash: hashId(uid),
+        }, { merge: true });
+      }
+      return { pushTargets: Array.from(pushTargets.values()) };
+    });
+
+    await Promise.allSettled(transactionResult.pushTargets.map((target) =>
+      sendMessagePushes(target.conversationId, uid, target.messageType, target.conversationType)));
+    return { forwarded: plans.length, unsupportedMediaMessageIds };
+  } catch (error) {
+    await cleanupUnreferencedForwardMedia(copied);
+    throw error;
+  }
 });
 
 export const pinFriendChatMessage = communicationChatFunctions.https.onCall(async (data, context) => {

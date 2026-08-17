@@ -9,6 +9,11 @@ import { Colors } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 
+import { getFriendConversationAccess } from "@/services/chatService";
+import {
+  discardFriendChatImagePickerOperation,
+  readFriendChatImagePickerNavigationReturn,
+} from "@/services/friendChatImageService";
 import { getPendingNotificationOpenTarget } from "@/services/notificationService";
 import { consumeSystemReturnRoute } from "@/services/systemRouteResumeService";
 LogBox.ignoreAllLogs(false);
@@ -31,6 +36,42 @@ export default function Index() {
           router.replace(COMPLETE_ACCOUNT_ROUTE as never);
           return;
         }
+
+        let imagePickerReturn = null;
+        try {
+          imagePickerReturn = await readFriendChatImagePickerNavigationReturn(user.uid);
+        } catch {
+          if (__DEV__) console.info("[friend-chat-image-picker] resume-read-failed");
+          router.replace("/(social)/chat" as never);
+          return;
+        }
+        if (!mounted) return;
+        if (imagePickerReturn) {
+          try {
+            const access = await getFriendConversationAccess(imagePickerReturn.conversationId);
+            if (!mounted) return;
+            if (access?.member.status === "active" && access.member.joinedAt) {
+              if (__DEV__) console.info("[friend-chat-image-picker] restoring-authorized-chat");
+              router.replace({
+                pathname: imagePickerReturn.route,
+                params: { chatId: imagePickerReturn.conversationId },
+              } as never);
+              return;
+            }
+            await discardFriendChatImagePickerOperation({
+              conversationId: imagePickerReturn.conversationId,
+              uid: user.uid,
+            }, imagePickerReturn.operationId);
+            if (!mounted) return;
+            router.replace("/(social)/chat" as never);
+            return;
+          } catch {
+            if (__DEV__) console.info("[friend-chat-image-picker] authorization-deferred");
+            router.replace("/(social)/chat" as never);
+            return;
+          }
+        }
+
         try {
           const pendingTarget = await getPendingNotificationOpenTarget({ activeMode });
           if (!mounted) return;

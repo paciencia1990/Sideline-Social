@@ -4,6 +4,7 @@
     "NSLocationWhenInUseUsageDescription": "Sideline Social usa tu ubicación cuando eliges Buscar cerca para descubrir comunidades deportivas próximas a tu sede actual. Tu ubicación precisa no se muestra a otros usuarios.",
     "NSMicrophoneUsageDescription": "Sideline Social usa tu micrófono únicamente cuando eliges grabar un mensaje de voz en un chat o una conversación del equipo.",
     "NSMotionUsageDescription": "Sideline Social puede usar la actividad de movimiento para admitir las funciones de ubicación cuando eliges Buscar cerca. Los datos de movimiento no se muestran a otros usuarios.",
+    "NSPhotoLibraryAddUsageDescription": "Sideline Social guarda una foto en tu fototeca solo cuando eliges Guardar foto.",
     "NSPhotoLibraryUsageDescription": "Sideline Social te permite elegir una foto cuando envías un mensaje con imagen en un chat privado de amistades. Los metadatos de la foto se eliminan antes de subirla."
   },
   "android": {

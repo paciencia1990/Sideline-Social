@@ -13,8 +13,10 @@ const expectedLocationUsage = "Sideline Social uses your location when you choos
 const expectedMicrophoneUsage = "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.";
 const expectedMotionUsage = "Sideline Social may use motion activity to support location features when you choose Find Nearby. Motion data is not displayed to other users.";
 const expectedPhotoLibraryUsage = "Sideline Social lets you choose a photo when you send an image message in a private friend chat. Photo metadata is stripped before upload.";
+const expectedPhotoLibraryAddUsage = "Sideline Social saves a photo to your photo library only when you choose Save Photo.";
 const expectedSpanishMotionUsage = "Sideline Social puede usar la actividad de movimiento para admitir las funciones de ubicación cuando eliges Buscar cerca. Los datos de movimiento no se muestran a otros usuarios.";
 const expectedSpanishPhotoLibraryUsage = "Sideline Social te permite elegir una foto cuando envías un mensaje con imagen en un chat privado de amistades. Los metadatos de la foto se eliminan antes de subirla.";
+const expectedSpanishPhotoLibraryAddUsage = "Sideline Social guarda una foto en tu fototeca solo cuando eliges Guardar foto.";
 const failures = [];
 const warnings = [];
 
@@ -97,6 +99,9 @@ if (resolvedConfig) {
   if (infoPlist.NSPhotoLibraryUsageDescription !== expectedPhotoLibraryUsage) {
     failures.push("Resolved iOS Info.plist is missing the production photo-library usage description required for image messages.");
   }
+  if (infoPlist.NSPhotoLibraryAddUsageDescription !== expectedPhotoLibraryAddUsage) {
+    failures.push("Resolved iOS Info.plist is missing the add-only photo-library usage description required by Save Photo.");
+  }
   if (infoPlist.ITSAppUsesNonExemptEncryption !== false) {
     failures.push("Resolved iOS Info.plist must set ITSAppUsesNonExemptEncryption to false.");
   }
@@ -116,6 +121,12 @@ if (englishLocale.ios?.NSPhotoLibraryUsageDescription !== expectedPhotoLibraryUs
 }
 if (spanishLocale.ios?.NSPhotoLibraryUsageDescription !== expectedSpanishPhotoLibraryUsage) {
   failures.push("Spanish localized iOS resources must include NSPhotoLibraryUsageDescription.");
+}
+if (englishLocale.ios?.NSPhotoLibraryAddUsageDescription !== expectedPhotoLibraryAddUsage) {
+  failures.push("English localized iOS resources must include NSPhotoLibraryAddUsageDescription.");
+}
+if (spanishLocale.ios?.NSPhotoLibraryAddUsageDescription !== expectedSpanishPhotoLibraryAddUsage) {
+  failures.push("Spanish localized iOS resources must include NSPhotoLibraryAddUsageDescription.");
 }
 if (easConfig.cli?.appVersionSource !== "remote") {
   failures.push("EAS must use remote app-version management for iOS production builds.");

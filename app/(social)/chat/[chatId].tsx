@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   type AccessibilityActionEvent,
   ActivityIndicator,
+  Alert,
   BackHandler,
   FlatList,
   Image,
@@ -74,20 +75,37 @@ import {
   type FriendChatReplyContext,
 } from "@/services/chatService";
 import {
+  acknowledgeFriendChatImagePickerResult,
+  claimFriendChatImagePickerResult,
   deleteFriendChatImageDraft,
+  discardFriendChatImagePickerOperation,
   pickFriendChatImageDraft,
+  recoverFriendChatImageDraft,
+  releaseFriendChatImagePickerResult,
+  type FriendChatImageRecoveryResult,
   type LocalFriendChatImageDraft,
 } from "@/services/friendChatImageService";
+import { saveFriendChatPhoto } from "@/services/friendChatPhotoSaveService";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import { clearPersistedVoicePlaybackArtifacts } from "@/services/voicePlaybackCleanupService";
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
+import { FriendChatPhotoSaveError } from "@/utils/friendChatPhotoSaveCore";
+import {
+  friendChatSendStatusTranslationKey,
+  type FriendChatSendStatus,
+} from "@/utils/friendChatSendStatusCore";
 
-type SendPhase = "finalizing" | "uploading" | null;
 type ReactionTrayState = { anchor: FriendChatReactionTrayAnchor; messageId: string };
 type ReplyDraft = FriendChatReplyContext;
 
 function isFriendChatMessageInteractive(message: FriendChatMessage | null | undefined) {
   return Boolean(message && message.status === "active" && message.messageType !== "system" && !message.isModerated);
+}
+
+function isFriendChatMessageForwardable(message: FriendChatMessage | null | undefined) {
+  if (!isFriendChatMessageInteractive(message)) return false;
+  if (message?.messageType === "image") return Boolean(message.image);
+  return message?.messageType === "text";
 }
 
 export default function FriendConversationScreen() {
@@ -98,12 +116,21 @@ export default function FriendConversationScreen() {
   const listRef = useRef<FlatListType<FriendChatMessage>>(null);
   const keyboardVisibleRef = useRef(false);
   const imageDraftRef = useRef<LocalFriendChatImageDraft | null>(null);
+  const imagePickerInFlightRef = useRef(false);
+  const handledImagePickerOperationsRef = useRef(new Set<string>());
+  const recoveredImagePickerContextRef = useRef<string | null>(null);
+  const screenActiveRef = useRef(true);
+  const currentChatIdRef = useRef(chatId);
+  const currentUserIdRef = useRef(user?.uid);
   const overflowButtonRef = useRef<View>(null);
+  const forwardClientMessageIdRef = useRef<string | null>(null);
+  const photoSaveInFlightRef = useRef<string | null>(null);
   const reactionSubmittingRef = useRef(false);
   const uploadCancel = useRef<(() => unknown) | null>(null);
   const voiceDraftRef = useRef<LocalVoiceMemoDraft | null>(null);
   const sendInFlight = useRef(false);
   const [access, setAccess] = useState<ConversationAccess | null>(null);
+  const [accessResolvedChatId, setAccessResolvedChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<FriendChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [voiceMode, setVoiceMode] = useState(false);
@@ -111,9 +138,10 @@ export default function FriendConversationScreen() {
   const [voiceAutoStartKey, setVoiceAutoStartKey] = useState(0);
   const [voiceComposerKey, setVoiceComposerKey] = useState(0);
   const [imageDraft, setImageDraft] = useState<LocalFriendChatImageDraft | null>(null);
+  const [imagePickerBusy, setImagePickerBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [sendPhase, setSendPhase] = useState<SendPhase>(null);
+  const [sendStatus, setSendStatus] = useState<FriendChatSendStatus | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -122,6 +150,7 @@ export default function FriendConversationScreen() {
   const [deleteSelectionVisible, setDeleteSelectionVisible] = useState(false);
   const [forwardConversationIds, setForwardConversationIds] = useState<string[]>([]);
   const [forwardConversations, setForwardConversations] = useState<FriendConversationListItem[]>([]);
+  const [forwardMessageIds, setForwardMessageIds] = useState<string[]>([]);
   const [forwardVisible, setForwardVisible] = useState(false);
   const [overflowAnchor, setOverflowAnchor] = useState<FriendChatReactionTrayAnchor | null>(null);
   const [reactionPickerVisible, setReactionPickerVisible] = useState(false);
@@ -129,12 +158,15 @@ export default function FriendConversationScreen() {
   const [reactionTray, setReactionTray] = useState<ReactionTrayState | null>(null);
   const [replyDraft, setReplyDraft] = useState<ReplyDraft | null>(null);
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
+  const [savingPhotoMessageId, setSavingPhotoMessageId] = useState<string | null>(null);
+  const [unavailableImageMessageIds, setUnavailableImageMessageIds] = useState<string[]>([]);
 
   const scrollToLatest = useCallback((animated: boolean) => {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
   }, []);
   const dismissReactionTray = useCallback(() => setReactionTray(null), []);
   const clearSelection = useCallback(() => {
+    forwardClientMessageIdRef.current = null;
     setSelectedMessageIds([]);
     setOverflowAnchor(null);
     setReactionPickerVisible(false);
@@ -149,7 +181,16 @@ export default function FriendConversationScreen() {
 
   useEffect(() => { imageDraftRef.current = imageDraft; }, [imageDraft]);
   useEffect(() => { voiceDraftRef.current = voiceDraft; }, [voiceDraft]);
+  useEffect(() => { currentChatIdRef.current = chatId; }, [chatId]);
+  useEffect(() => { currentUserIdRef.current = user?.uid; }, [user?.uid]);
+  useEffect(() => {
+    const activeImageIds = new Set(messages
+      .filter((message) => message.status === "active" && message.messageType === "image")
+      .map((message) => message.messageId));
+    setUnavailableImageMessageIds((ids) => ids.filter((id) => activeImageIds.has(id)));
+  }, [messages]);
   useEffect(() => () => {
+    screenActiveRef.current = false;
     uploadCancel.current?.();
     void deleteFriendChatImageDraft(imageDraftRef.current);
     if (voiceDraftRef.current?.uri) void deleteLocalVoiceMemo(voiceDraftRef.current.uri);
@@ -203,6 +244,9 @@ export default function FriendConversationScreen() {
     if (!user?.uid || !chatId) { setLoading(false); setErrorKey("chat.noAccess"); return; }
     let active = true;
     let unsubscribe = () => {};
+    setAccess(null);
+    setAccessResolvedChatId(null);
+    setLoading(true);
     setActiveFriendConversation(chatId);
     void (async () => {
       try {
@@ -224,7 +268,10 @@ export default function FriendConversationScreen() {
       } catch (error) {
         if (active) { setErrorKey(errorTranslationKey(mapFriendChatError(error))); setLoading(false); }
       } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setAccessResolvedChatId(chatId);
+          setLoading(false);
+        }
       }
     })();
     return () => { active = false; unsubscribe(); setActiveFriendConversation(null); };
@@ -253,22 +300,121 @@ export default function FriendConversationScreen() {
     if (current?.uri) await deleteLocalVoiceMemo(current.uri);
   }, []);
 
-  const pickImage = useCallback(async () => {
-    if (!canSend || sending) return;
-    setErrorKey(null);
+  const applyImagePickerResult = useCallback(async (
+    result: FriendChatImageRecoveryResult,
+  ) => {
+    if (result.status === "none") return;
+    if (handledImagePickerOperationsRef.current.has(result.operationId)) return;
+
+    const isCurrentConversation = screenActiveRef.current &&
+      currentUserIdRef.current === result.uid &&
+      currentChatIdRef.current === result.conversationId;
+    if (result.status === "stale") {
+      if (isCurrentConversation) setErrorKey("chat.imagePickerError");
+      return;
+    }
+    if (!isCurrentConversation) return;
+
+    const context = { conversationId: result.conversationId, uid: result.uid };
+    const claimed = await claimFriendChatImagePickerResult(context, result.operationId);
+    if (!claimed) return;
+    handledImagePickerOperationsRef.current.add(result.operationId);
+    let acknowledged = false;
     try {
-      const result = await pickFriendChatImageDraft();
-      if (result.status === "cancelled") return;
+      if (
+        !screenActiveRef.current ||
+        currentUserIdRef.current !== result.uid ||
+        currentChatIdRef.current !== result.conversationId
+      ) return;
+      if (result.status === "cancelled") {
+        acknowledged = await acknowledgeFriendChatImagePickerResult(context, result.operationId);
+        return;
+      }
+      if (result.status === "failed") {
+        setErrorKey(mediaErrorTranslationKey(new Error(result.errorCode)));
+        acknowledged = await acknowledgeFriendChatImagePickerResult(context, result.operationId);
+        return;
+      }
+
       await removeImageDraft();
       await removeVoiceDraft();
+      if (
+        !screenActiveRef.current ||
+        currentUserIdRef.current !== result.uid ||
+        currentChatIdRef.current !== result.conversationId
+      ) return;
       imageDraftRef.current = result.draft;
       setImageDraft(result.draft);
       setVoiceMode(false);
       scrollToLatest(false);
-    } catch (error) {
-      setErrorKey(mediaErrorTranslationKey(error));
+      acknowledged = await acknowledgeFriendChatImagePickerResult(context, result.operationId);
+    } finally {
+      if (!acknowledged) {
+        releaseFriendChatImagePickerResult(result.operationId);
+        handledImagePickerOperationsRef.current.delete(result.operationId);
+      }
     }
-  }, [canSend, removeImageDraft, removeVoiceDraft, scrollToLatest, sending]);
+  }, [removeImageDraft, removeVoiceDraft, scrollToLatest]);
+
+  useEffect(() => {
+    if (
+      authLoading ||
+      loading ||
+      !user?.uid ||
+      !chatId ||
+      accessResolvedChatId !== chatId
+    ) return;
+    const context = { conversationId: chatId, uid: user.uid };
+    const recoveryKey = `${user.uid}:${chatId}`;
+    if (
+      !access ||
+      access.conversation.conversationId !== chatId ||
+      access.member.status !== "active" ||
+      !access.member.joinedAt ||
+      !canSend
+    ) {
+      void discardFriendChatImagePickerOperation(context);
+      return;
+    }
+    if (recoveredImagePickerContextRef.current === recoveryKey) return;
+    recoveredImagePickerContextRef.current = recoveryKey;
+    imagePickerInFlightRef.current = true;
+    setImagePickerBusy(true);
+    void recoverFriendChatImageDraft(context)
+      .then(applyImagePickerResult)
+      .catch((error) => {
+        if (
+          screenActiveRef.current &&
+          currentUserIdRef.current === context.uid &&
+          currentChatIdRef.current === context.conversationId
+        ) setErrorKey(mediaErrorTranslationKey(error));
+      })
+      .finally(() => {
+        imagePickerInFlightRef.current = false;
+        if (screenActiveRef.current) setImagePickerBusy(false);
+      });
+  }, [access, accessResolvedChatId, applyImagePickerResult, authLoading, canSend, chatId, loading, user?.uid]);
+
+  const pickImage = useCallback(async () => {
+    if (!canSend || sending || imagePickerInFlightRef.current || !chatId || !user?.uid) return;
+    const context = { conversationId: chatId, uid: user.uid };
+    imagePickerInFlightRef.current = true;
+    setImagePickerBusy(true);
+    setErrorKey(null);
+    try {
+      const result = await pickFriendChatImageDraft(context);
+      await applyImagePickerResult(result);
+    } catch (error) {
+      if (
+        screenActiveRef.current &&
+        currentUserIdRef.current === context.uid &&
+        currentChatIdRef.current === context.conversationId
+      ) setErrorKey(mediaErrorTranslationKey(error));
+    } finally {
+      imagePickerInFlightRef.current = false;
+      if (screenActiveRef.current) setImagePickerBusy(false);
+    }
+  }, [applyImagePickerResult, canSend, chatId, sending, user?.uid]);
 
   const send = useCallback(async () => {
     if (!chatId || !canSubmit || sendInFlight.current) return;
@@ -276,17 +422,17 @@ export default function FriendConversationScreen() {
     const clientMessageId = createChatClientMessageId();
     sendInFlight.current = true;
     setSending(true);
-    setSendPhase(null);
+    setSendStatus(null);
     setUploadProgress(null);
     setErrorKey(null);
     try {
       if (imageDraft) {
-        setSendPhase("uploading");
+        setSendStatus({ mediaType: "image", phase: "uploading" });
         const reservation = await reserveFriendChatImageUpload({ caption, clientMessageId, conversationId: chatId, image: imageDraft, replyToMessageId: replyDraft?.messageId ?? null });
         const upload = await uploadReservedFriendChatImage(reservation, imageDraft, setUploadProgress);
         uploadCancel.current = upload.cancel;
         await upload.completion;
-        setSendPhase("finalizing");
+        setSendStatus({ mediaType: "image", phase: "finalizing" });
         await finalizeFriendChatImageMessage(reservation.reservationId);
         await deleteFriendChatImageDraft(imageDraft);
         imageDraftRef.current = null;
@@ -298,12 +444,12 @@ export default function FriendConversationScreen() {
           setErrorKey("voiceMemo.previewRequired");
           return;
         }
-        setSendPhase("uploading");
+        setSendStatus({ mediaType: "voice", phase: "uploading" });
         const reservation = await reserveFriendChatVoiceUpload({ caption, clientMessageId, conversationId: chatId, replyToMessageId: replyDraft?.messageId ?? null, voiceMemo: voiceDraft });
         const upload = await uploadReservedFriendChatVoiceMemo(reservation, voiceDraft, setUploadProgress);
         uploadCancel.current = () => upload.task.cancel();
         await upload.completion;
-        setSendPhase("finalizing");
+        setSendStatus({ mediaType: "voice", phase: "finalizing" });
         await finalizeFriendChatVoiceMessage(reservation.reservationId);
         await deleteLocalVoiceMemo(voiceDraft.uri);
         voiceDraftRef.current = null;
@@ -322,7 +468,7 @@ export default function FriendConversationScreen() {
     } finally {
       uploadCancel.current = null;
       setUploadProgress(null);
-      setSendPhase(null);
+      setSendStatus(null);
       setSending(false);
       sendInFlight.current = false;
     }
@@ -433,26 +579,80 @@ export default function FriendConversationScreen() {
   }, [chatId, clearSelection, selectedMessages, user?.uid]);
 
   const openForwardSheet = useCallback(() => {
-    if (selectedMessages.some((message) => message.messageType === "image" || message.messageType === "voice")) {
+    if (selectedMessages.some((message) =>
+      !isFriendChatMessageForwardable(message) || unavailableImageMessageIds.includes(message.messageId))) {
       setErrorKey("chat.mediaForwardUnsupported");
       return;
     }
+    forwardClientMessageIdRef.current = forwardClientMessageIdRef.current ?? createChatClientMessageId();
+    setForwardMessageIds(selectedMessages.map((message) => message.messageId));
     setForwardConversationIds([]);
     setForwardVisible(true);
-  }, [selectedMessages]);
+  }, [selectedMessages, unavailableImageMessageIds]);
+
+  const openPhotoForwardSheet = useCallback((message: FriendChatMessage) => {
+    if (!isFriendChatMessageForwardable(message) || unavailableImageMessageIds.includes(message.messageId)) return;
+    forwardClientMessageIdRef.current = createChatClientMessageId();
+    setForwardMessageIds([message.messageId]);
+    setForwardConversationIds([]);
+    setForwardVisible(true);
+  }, [unavailableImageMessageIds]);
+
+  const markImageUnavailable = useCallback((messageId: string) => {
+    setUnavailableImageMessageIds((ids) => ids.includes(messageId) ? ids : [...ids, messageId]);
+  }, []);
+
+  const dismissForwardSheet = useCallback(() => {
+    forwardClientMessageIdRef.current = null;
+    setForwardConversationIds([]);
+    setForwardMessageIds([]);
+    setForwardVisible(false);
+  }, []);
 
   const runForward = useCallback(async () => {
-    if (!chatId || selectedMessages.length === 0 || forwardConversationIds.length === 0) return;
+    if (!chatId || forwardMessageIds.length === 0 || forwardConversationIds.length === 0) return;
     setErrorKey(null);
     try {
-      await forwardFriendChatMessages(chatId, selectedMessages.map((message) => message.messageId), forwardConversationIds);
-      setForwardVisible(false);
-      setForwardConversationIds([]);
+      const clientForwardId = forwardClientMessageIdRef.current ?? createChatClientMessageId();
+      forwardClientMessageIdRef.current = clientForwardId;
+      await forwardFriendChatMessages(
+        chatId,
+        forwardMessageIds,
+        forwardConversationIds,
+        clientForwardId,
+      );
+      dismissForwardSheet();
       clearSelection();
     } catch (error) {
       setErrorKey(errorTranslationKey(mapFriendChatError(error)));
     }
-  }, [chatId, clearSelection, forwardConversationIds, selectedMessages]);
+  }, [chatId, clearSelection, dismissForwardSheet, forwardConversationIds, forwardMessageIds]);
+
+  const savePhotoMessage = useCallback(async (message: FriendChatMessage) => {
+    if (
+      !chatId ||
+      !user?.uid ||
+      !message.image ||
+      !isFriendChatMessageInteractive(message) ||
+      photoSaveInFlightRef.current
+    ) return;
+    photoSaveInFlightRef.current = message.messageId;
+    setSavingPhotoMessageId(message.messageId);
+    try {
+      await saveFriendChatPhoto({
+        conversationId: chatId,
+        messageId: message.messageId,
+        storagePath: message.image.fullPath,
+        uid: user.uid,
+      });
+      Alert.alert(t("chat.photoSavedTitle"), t("chat.photoSavedBody"));
+    } catch (error) {
+      Alert.alert(t("chat.savePhotoErrorTitle"), t(photoSaveErrorTranslationKey(error)));
+    } finally {
+      photoSaveInFlightRef.current = null;
+      setSavingPhotoMessageId(null);
+    }
+  }, [chatId, t, user?.uid]);
 
   const runPinAction = useCallback(async () => {
     const message = selectedMessages[0];
@@ -514,21 +714,24 @@ export default function FriendConversationScreen() {
   const selectedCount = selectedMessages.length;
   const allSelectedStarred = selectedMessages.length > 0 && selectedMessages.every((message) => message.starredBySelf);
   const canReplyToSelection = selectedMessages.length === 1;
+  const canForwardSelection = selectedMessages.length > 0 && selectedMessages.every((message) =>
+    isFriendChatMessageForwardable(message) && !unavailableImageMessageIds.includes(message.messageId));
   const canPinSelection = Boolean(selectedMessages.length === 1 && access &&
     (access.conversation.conversationType === "direct" || access.member.role === "owner" || access.member.role === "admin"));
   const selectedPinned = selectedMessages.length === 1 && access?.conversation.pinnedMessage?.messageId === selectedMessages[0].messageId;
   const selectedIncoming = selectedMessages.length === 1 && selectedMessages[0].senderUserId !== user?.uid;
   const selectedGroupIncoming = selectedIncoming && access?.conversation.conversationType === "group";
+  const selectedText = selectedMessages.length === 1 && selectedMessages[0].messageType === "text";
   const overflowActions = useMemo<FriendChatOverflowAction[]>(() => {
     const actions: FriendChatOverflowAction[] = [];
-    if (canReplyToSelection) actions.push({ disabled: true, id: "copy", label: t("chat.copyUnavailable"), onPress: () => undefined });
+    if (selectedText) actions.push({ disabled: true, id: "copy", label: t("chat.copyUnavailable"), onPress: () => undefined });
     if (canReplyToSelection) actions.push({ id: "reply", label: t("chat.reply"), onPress: startReply });
     if (canPinSelection) actions.push({ id: "pin", label: selectedPinned ? t("chat.unpinMessage") : t("chat.pinForSevenDays"), onPress: runPinAction });
     if (selectedGroupIncoming) actions.push({ disabled: true, id: "reply-privately", label: t("chat.replyPrivatelyUnavailable"), onPress: () => undefined });
-    if (canReplyToSelection) actions.push({ disabled: true, id: "translate", label: t("chat.translateUnavailable"), onPress: () => undefined });
+    if (selectedText) actions.push({ disabled: true, id: "translate", label: t("chat.translateUnavailable"), onPress: () => undefined });
     if (selectedIncoming) actions.push({ id: "report", label: t("moderation.reportMessage"), onPress: () => { setActionMessage(selectedMessages[0]); clearSelection(); } });
     return actions;
-  }, [canPinSelection, canReplyToSelection, clearSelection, runPinAction, selectedGroupIncoming, selectedIncoming, selectedMessages, selectedPinned, startReply, t]);
+  }, [canPinSelection, canReplyToSelection, clearSelection, runPinAction, selectedGroupIncoming, selectedIncoming, selectedMessages, selectedPinned, selectedText, startReply, t]);
   const reactionCategories = useMemo(() => [
     { key: "quick", label: t("chat.reactionCategories.quick"), options: FRIEND_CHAT_QUICK_REACTIONS },
     { key: "support", label: t("chat.reactionCategories.support"), options: FRIEND_CHAT_REACTIONS.slice(8, 14) },
@@ -560,9 +763,11 @@ export default function FriendConversationScreen() {
             <TouchableOpacity accessibilityLabel={t("chat.delete")} accessibilityRole="button" onPress={() => setDeleteSelectionVisible(true)} style={styles.iconButton}>
               <Trash2 color={Colors.primary} size={21} />
             </TouchableOpacity>
-            <TouchableOpacity accessibilityLabel={t("chat.forward")} accessibilityRole="button" onPress={openForwardSheet} style={styles.iconButton}>
-              <Forward color={Colors.textHeading} size={21} />
-            </TouchableOpacity>
+            {canForwardSelection ? (
+              <TouchableOpacity accessibilityLabel={t("chat.forward")} accessibilityRole="button" onPress={openForwardSheet} style={styles.iconButton}>
+                <Forward color={Colors.textHeading} size={21} />
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity
               accessibilityLabel={t("chat.moreMessageActions")}
               accessibilityRole="button"
@@ -610,13 +815,17 @@ export default function FriendConversationScreen() {
               isMine={item.senderUserId === user?.uid}
               message={item}
               onActions={() => setActionMessage(item)}
+              onForwardImage={() => openPhotoForwardSheet(item)}
               onOpenReactions={beginSelection}
               onQuotePress={scrollToMessage}
               onReact={(emoji) => {
                 void toggleReaction(item.messageId, emoji);
               }}
+              onSaveImage={() => { void savePhotoMessage(item); }}
+              onImageUnavailable={() => markImageUnavailable(item.messageId)}
               onToggleSelection={toggleSelection}
               selected={selectedMessageIds.includes(item.messageId)}
+              savingPhoto={savingPhotoMessageId === item.messageId}
               selectionMode={selectionMode}
             />
           )}
@@ -670,8 +879,8 @@ export default function FriendConversationScreen() {
             </View>
           ) : null}
           <View style={styles.composerRow}>
-            <TouchableOpacity accessibilityLabel={t("chat.chooseImage")} accessibilityRole="button" accessibilityState={{ disabled: !canSend || sending }} disabled={!canSend || sending} onPress={() => { void pickImage(); }} style={[styles.iconComposerButton, (!canSend || sending) && styles.disabled]}>
-              <ImageIcon color={Colors.primary} size={20} />
+            <TouchableOpacity accessibilityLabel={t("chat.chooseImage")} accessibilityRole="button" accessibilityState={{ busy: imagePickerBusy, disabled: !canSend || sending || imagePickerBusy }} disabled={!canSend || sending || imagePickerBusy} onPress={() => { void pickImage(); }} style={[styles.iconComposerButton, (!canSend || sending || imagePickerBusy) && styles.disabled]}>
+              {imagePickerBusy ? <ActivityIndicator color={Colors.primary} size="small" /> : <ImageIcon color={Colors.primary} size={20} />}
             </TouchableOpacity>
             <View style={styles.inputWrap}>
               <TextInput editable={canSend && !sending} maxLength={CHAT_MESSAGE_LIMIT + 1} multiline onChangeText={(value) => { setDraft(value); if (errorKey) setErrorKey(null); }} onContentSizeChange={() => scrollToLatest(false)} onFocus={() => scrollToLatest(false)} placeholder={canSend ? (imageDraft || voiceDraft ? t("chat.captionPlaceholder") : t("chat.messagePlaceholder")) : t("chat.readOnlyPlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={draft} />
@@ -684,11 +893,15 @@ export default function FriendConversationScreen() {
             ) : null}
             <TouchableOpacity accessibilityLabel={sending ? t("chat.sending") : t("chat.send")} accessibilityRole="button" accessibilityState={{ busy: sending, disabled: !canSubmit }} disabled={!canSubmit} onPress={() => void send()} style={[styles.send, !canSubmit && styles.disabled]}>{sending ? <ActivityIndicator color={Colors.surface} /> : <Send color={Colors.surface} size={18} />}</TouchableOpacity>
           </View>
-          {sendPhase === "finalizing" ? <Text accessibilityLiveRegion="polite" style={styles.progressText}>{t("voiceMemo.finalizing")}</Text> : null}
-          {uploadProgress != null ? (
+          {sendStatus?.phase === "finalizing" ? (
+            <Text accessibilityLiveRegion="polite" style={styles.progressText}>
+              {t(friendChatSendStatusTranslationKey(sendStatus))}
+            </Text>
+          ) : null}
+          {sendStatus?.phase === "uploading" && uploadProgress != null ? (
             <View accessibilityLiveRegion="polite" style={styles.uploadRow}>
               <ActivityIndicator color={Colors.primary} size="small" />
-              <Text style={styles.progressText}>{t("chat.uploadingMedia", { percent: Math.round(uploadProgress * 100) })}</Text>
+              <Text style={styles.progressText}>{t(friendChatSendStatusTranslationKey(sendStatus), { percent: Math.round(uploadProgress * 100) })}</Text>
               <TouchableOpacity accessibilityRole="button" onPress={() => uploadCancel.current?.()}>
                 <Text style={styles.cancelUpload}>{t("voiceMemo.cancelUpload")}</Text>
               </TouchableOpacity>
@@ -764,7 +977,7 @@ export default function FriendConversationScreen() {
         conversations={forwardConversations}
         currentUserId={user?.uid ?? ""}
         maxDestinations={FRIEND_CHAT_FORWARD_MAX_DESTINATIONS}
-        onDismiss={() => setForwardVisible(false)}
+        onDismiss={dismissForwardSheet}
         onForward={() => void runForward()}
         onToggleConversation={(conversationId) => setForwardConversationIds((ids) => ids.includes(conversationId)
           ? ids.filter((id) => id !== conversationId)
@@ -780,20 +993,28 @@ function MessageBubble({
   message,
   isMine,
   onActions,
+  onForwardImage,
   onOpenReactions,
   onQuotePress,
   onReact,
+  onSaveImage,
+  onImageUnavailable,
   onToggleSelection,
+  savingPhoto,
   selected,
   selectionMode,
 }: {
   isMine: boolean;
   message: FriendChatMessage;
   onActions: () => void;
+  onForwardImage: () => void;
   onOpenReactions: (message: FriendChatMessage, anchor: FriendChatReactionTrayAnchor) => void;
   onQuotePress: (messageId: string) => void;
   onReact: (emoji: FriendChatReactionEmoji) => void;
+  onSaveImage: () => void;
+  onImageUnavailable: () => void;
   onToggleSelection: (message: FriendChatMessage) => void;
+  savingPhoto: boolean;
   selected: boolean;
   selectionMode: boolean;
 }) {
@@ -885,7 +1106,18 @@ function MessageBubble({
             ) : message.messageType === "voice" ? (
               <VoiceMemoUnavailable />
             ) : message.messageType === "image" && message.image ? (
-              <FriendChatImageMessage image={message.image} messageId={message.messageId} />
+              <FriendChatImageMessage
+                active={interactive}
+                image={message.image}
+                messageId={message.messageId}
+                onForward={onForwardImage}
+                onLongPress={openReactionTray}
+                onSave={onSaveImage}
+                onSelect={() => onToggleSelection(message)}
+                onUnavailable={onImageUnavailable}
+                saving={savingPhoto}
+                selectionMode={selectionMode}
+              />
             ) : message.messageType === "image" ? (
               <Text style={[styles.messageText, isMine && styles.mineText]}>{t("chat.imageUnavailable")}</Text>
             ) : (
@@ -1026,6 +1258,8 @@ function errorTranslationKey(error: ReturnType<typeof mapFriendChatError>) {
 function mediaErrorTranslationKey(error: unknown) {
   const message = error instanceof Error ? error.message : typeof error === "object" && error && "code" in error ? String(error.code) : "";
   if (message.includes("image_feature_build_required")) return "chat.imageBuildRequired";
+  if (message.includes("image_picker_in_progress")) return "chat.imagePickerInProgress";
+  if (message.includes("image_picker_failed")) return "chat.imagePickerError";
   if (message.includes("image_source_too_large")) return "chat.imageSourceTooLarge";
   if (message.includes("unsupported_image_type")) return "chat.unsupportedImageType";
   if (message.includes("image_processing") || message.includes("image_thumbnail")) return "chat.imageProcessingError";
@@ -1034,6 +1268,21 @@ function mediaErrorTranslationKey(error: unknown) {
   if (message.includes("media_upload_canceled") || message.includes("storage/canceled")) return "chat.mediaUploadCanceled";
   if (message.includes("media_upload") || message.includes("storage")) return "chat.mediaUploadError";
   return errorTranslationKey(mapFriendChatError(error));
+}
+
+function photoSaveErrorTranslationKey(error: unknown) {
+  const code = error instanceof FriendChatPhotoSaveError
+    ? error.code
+    : error instanceof Error
+      ? error.message
+      : "";
+  if (code === "photo_save_build_required") return "chat.savePhotoBuildRequired";
+  if (code === "photo_save_permission_denied") return "chat.savePhotoPermissionDenied";
+  if (code === "photo_save_permission_permanently_denied") return "chat.savePhotoPermissionPermanentlyDenied";
+  if (code === "photo_save_unavailable") return "chat.savePhotoUnavailable";
+  if (code === "photo_save_network") return "chat.savePhotoNetworkError";
+  if (code === "photo_save_in_progress") return "chat.savePhotoInProgress";
+  return "chat.savePhotoFailed";
 }
 
 const styles = StyleSheet.create({

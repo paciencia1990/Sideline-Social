@@ -917,11 +917,12 @@ export async function forwardFriendChatMessages(
   conversationId: string,
   messageIds: string[],
   destinationConversationIds: string[],
+  clientForwardId: string,
 ) {
   return call<
-    { conversationId: string; destinationConversationIds: string[]; messageIds: string[] },
+    { clientForwardId: string; conversationId: string; destinationConversationIds: string[]; messageIds: string[] },
     { forwarded: number; unsupportedMediaMessageIds: string[] }
-  >("forwardFriendChatMessages", { conversationId, destinationConversationIds, messageIds });
+  >("forwardFriendChatMessages", { clientForwardId, conversationId, destinationConversationIds, messageIds });
 }
 
 export async function pinFriendChatMessage(

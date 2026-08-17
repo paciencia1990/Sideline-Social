@@ -35,6 +35,7 @@ const IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION = "Sideline Social uses your lo
 const IOS_MICROPHONE_USAGE_DESCRIPTION = "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.";
 const IOS_MOTION_USAGE_DESCRIPTION = "Sideline Social may use motion activity to support location features when you choose Find Nearby. Motion data is not displayed to other users.";
 const IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION = "Sideline Social lets you choose a photo when you send an image message in a private friend chat. Photo metadata is stripped before upload.";
+const IOS_PHOTO_LIBRARY_ADD_USAGE_DESCRIPTION = "Sideline Social saves a photo to your photo library only when you choose Save Photo.";
 
 if (!IS_DEVELOPMENT && process.env.REQUIRE_PRODUCTION_LEGAL_CONFIG === "true") {
   assertProductionLegalConfig({
@@ -103,12 +104,21 @@ module.exports = ({ config }) => ({
       NSMicrophoneUsageDescription: IOS_MICROPHONE_USAGE_DESCRIPTION,
       NSMotionUsageDescription: IOS_MOTION_USAGE_DESCRIPTION,
       NSPhotoLibraryUsageDescription: IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION,
+      NSPhotoLibraryAddUsageDescription: IOS_PHOTO_LIBRARY_ADD_USAGE_DESCRIPTION,
     },
   },
 
   android: {
     package: ANDROID_PACKAGE,
     allowBackup: false,
+    blockedPermissions: [
+      "android.permission.ACCESS_MEDIA_LOCATION",
+      "android.permission.READ_EXTERNAL_STORAGE",
+      "android.permission.READ_MEDIA_AUDIO",
+      "android.permission.READ_MEDIA_IMAGES",
+      "android.permission.READ_MEDIA_VIDEO",
+      "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+    ],
     versionCode: 5,
     softwareKeyboardLayoutMode: "resize",
     ...(ANDROID_GOOGLE_SERVICES_FILE

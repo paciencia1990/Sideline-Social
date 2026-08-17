@@ -17,6 +17,79 @@ const root = process.cwd();
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), "utf8");
 const core = require(path.join(root, "utils", "federatedAuthCore.ts"));
 const availability = require(path.join(root, "utils", "authProviderAvailability.ts"));
+const runtimeConfig = require(path.join(root, "utils", "authProviderRuntimeConfig.ts"));
+
+const disabledRuntimeConfig = {
+  appleEnabled: false,
+  googleEnabled: false,
+  googleIosClientId: null,
+  googleWebClientId: "autoDetect",
+};
+
+assert.deepEqual(runtimeConfig.normalizeAuthProviderRuntimeConfig({
+  appleEnabled: true,
+  googleEnabled: true,
+  googleIosClientId: "  ios-client  ",
+  googleWebClientId: "  web-client  ",
+}), {
+  appleEnabled: true,
+  googleEnabled: true,
+  googleIosClientId: "ios-client",
+  googleWebClientId: "web-client",
+});
+for (const malformedConfig of [undefined, null, [], false, 42, "authProviders"]) {
+  assert.deepEqual(
+    runtimeConfig.normalizeAuthProviderRuntimeConfig(malformedConfig),
+    disabledRuntimeConfig,
+  );
+}
+const accessorConfig = Object.defineProperty({}, "googleIosClientId", {
+  get() { throw new Error("Malformed runtime accessor must not execute."); },
+});
+assert.deepEqual(
+  runtimeConfig.normalizeAuthProviderRuntimeConfig(accessorConfig),
+  disabledRuntimeConfig,
+);
+for (const malformedValue of [undefined, null, {}, [], false, 42]) {
+  assert.deepEqual(runtimeConfig.normalizeAuthProviderRuntimeConfig({
+    appleEnabled: "true",
+    googleEnabled: 1,
+    googleIosClientId: malformedValue,
+    googleWebClientId: malformedValue,
+  }), disabledRuntimeConfig);
+}
+for (const emptyValue of ["", "   "]) {
+  assert.deepEqual(runtimeConfig.normalizeAuthProviderRuntimeConfig({
+    googleEnabled: true,
+    googleIosClientId: emptyValue,
+    googleWebClientId: emptyValue,
+  }), {
+    ...disabledRuntimeConfig,
+    googleEnabled: true,
+  });
+}
+assert.deepEqual(runtimeConfig.normalizeAuthProviderRuntimeConfig({
+  googleEnabled: true,
+  googleWebClientId: "web-client",
+}), {
+  appleEnabled: false,
+  googleEnabled: true,
+  googleIosClientId: null,
+  googleWebClientId: "web-client",
+}, "Android startup must not require an optional iOS client ID.");
+for (const environment of ["development", "production"]) {
+  assert.deepEqual(runtimeConfig.normalizeAuthProviderRuntimeConfig({
+    appleEnabled: environment === "production",
+    googleEnabled: true,
+    googleIosClientId: `ios-${environment}-client`,
+    googleWebClientId: `web-${environment}-client`,
+  }), {
+    appleEnabled: environment === "production",
+    googleEnabled: true,
+    googleIosClientId: `ios-${environment}-client`,
+    googleWebClientId: `web-${environment}-client`,
+  });
+}
 
 assert.deepEqual(availability.resolveAuthProviderVisibility({
   appleAvailable: true,
@@ -139,11 +212,14 @@ assert.ok(
 );
 
 const appConfig = read("app.config.js");
+const authProviderConfig = read("config", "authProviders.ts");
 assert.match(appConfig, /usesAppleSignIn: true/u);
 assert.match(appConfig, /"expo-apple-authentication"/u);
 assert.match(appConfig, /GOOGLE_SIGN_IN_PLUGIN/u);
 assert.match(appConfig, /EXPO_PUBLIC_GOOGLE_AUTH_ENABLED/u);
 assert.match(appConfig, /EXPO_PUBLIC_APPLE_AUTH_ENABLED/u);
+assert.match(authProviderConfig, /normalizeAuthProviderRuntimeConfig/u);
+assert.doesNotMatch(authProviderConfig, /googleIosClientId\?\.trim/u);
 
 const translations = read("i18n", "index.ts");
 for (const key of ["continueWithEmail", "completeAccountTitle", "legalAcceptance", "adultEligibility", "providerErrors", "signInMethods", "deleteAppleRevocationError"]) {

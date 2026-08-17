@@ -51,7 +51,9 @@ assert.match(functionsSource, /export const deleteFriendChatMessagesForMe/);
 assert.match(functionsSource, /export const forwardFriendChatMessages/);
 assert.match(functionsSource, /export const pinFriendChatMessage/);
 assert.match(functionsSource, /export const unpinFriendChatMessage/);
-assert.match(functionsSource, /messageData\?\.messageType === 'image' \|\| messageData\?\.messageType === 'voice'/, "media forwarding remains blocked until a secure server path exists");
+assert.doesNotMatch(functionsSource, /messageData\?\.messageType === 'image' \|\| messageData\?\.messageType === 'voice'/, "secure image forwarding replaces the old blanket media rejection");
+assert.match(functionsSource, /message\?\.messageType === 'voice' \|\| message\?\.messageType === 'system'/, "voice forwarding remains disabled");
+assert.match(functionsSource, /loadForwardImageBytes/);
 assert.match(functionsSource, /forwarded: true/);
 assert.match(functionsSource, /replyTo/);
 
@@ -101,7 +103,7 @@ assert.doesNotMatch(chatScreen, /messageMenu:/);
 assert.match(chatScreen, /setFriendChatMessagesStarred\(chatId, selectedMessages\.map/);
 assert.match(chatScreen, /deleteFriendChatMessagesForMe\(chatId, otherMessages\.map/);
 assert.match(chatScreen, /removeOwnFriendChatMessage\(chatId, message\.messageId\)/);
-assert.match(chatScreen, /forwardFriendChatMessages\(chatId, selectedMessages\.map/);
+assert.match(chatScreen, /forwardFriendChatMessages\([\s\S]*clientForwardId/u);
 assert.match(chatScreen, /pinFriendChatMessage\(chatId, message\.messageId, "7d"\)/);
 assert.match(chatScreen, /unpinFriendChatMessage\(chatId, message\.messageId\)/);
 assert.match(chatScreen, /replyDraft\?\.messageId/);
@@ -126,7 +128,11 @@ assert.match(expandedPicker, /chat\.moreReactions/);
 assert.match(overflowMenu, /accessibilityState=\{\{ disabled: action\.disabled \}\}/);
 assert.match(overflowMenu, /action\.destructive/);
 
-assert.match(imageMessage, /onPress=\{openViewer\}/, "quick tapping an image still opens the image viewer");
+assert.match(imageMessage, /onPress=\{handlePress\}/, "quick tapping an image opens the explicit photo actions menu");
+assert.match(imageMessage, /onLongPress=\{handleLongPress\}/, "long pressing an image still opens reactions and selection");
+assert.match(imageMessage, /chat\.viewPhoto/);
+assert.match(imageMessage, /chat\.forwardPhoto/);
+assert.match(imageMessage, /chat\.savePhoto/);
 assert.match(voicePlayer, /onPress=\{toggle\}/, "voice playback keeps its existing quick-tap control");
 
 for (const expected of [

@@ -25,9 +25,20 @@ async function createClient(label) {
 function hasCode(code) { return (error) => String(error?.code).includes(code); }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function mediaRateDocId(uid) { return createHash("sha256").update(uid).digest("hex"); }
+function forwardRateDocId(uid) { return createHash("sha256").update(uid).digest("hex"); }
 async function ageMediaReservationRateLimit(uid) {
   await db.collection("friendChatMediaReservationRateLimits").doc(mediaRateDocId(uid)).set({
     lastReservationCreatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - 11_000),
+  }, { merge: true });
+}
+async function ageForwardRateLimit(uid) {
+  await db.collection("friendChatForwardRateLimits").doc(forwardRateDocId(uid)).set({
+    lastForwardAt: admin.firestore.Timestamp.fromMillis(Date.now() - 6_000),
+  }, { merge: true });
+}
+async function ageDestinationSendRateLimit(conversationId, uid) {
+  await db.collection("friendConversations").doc(conversationId).collection("members").doc(uid).set({
+    lastSentAt: admin.firestore.Timestamp.fromMillis(Date.now() - 2_000),
   }, { merge: true });
 }
 
@@ -87,12 +98,31 @@ async function run() {
   assert.equal((await groupDoc.get()).data().pinnedMessage.messageId, groupMessage.messageId);
   await b.call("unpinFriendChatMessage", { conversationId: group.conversationId, messageId: groupMessage.messageId });
   assert.equal((await groupDoc.get()).data().pinnedMessage, undefined);
-  assert.equal((await a.call("forwardFriendChatMessages", { conversationId: group.conversationId, messageIds: [groupMessage.messageId], destinationConversationIds: [direct.conversationId] })).forwarded, 1);
+  await ageDestinationSendRateLimit(direct.conversationId, a.uid);
+  const textForwardInput = {
+    clientForwardId: "forward_text_operation_001",
+    conversationId: group.conversationId,
+    destinationConversationIds: [direct.conversationId],
+    messageIds: [groupMessage.messageId],
+  };
+  assert.equal((await a.call("forwardFriendChatMessages", textForwardInput)).forwarded, 1);
   const forwardedMessages = await db.collection("friendConversations").doc(direct.conversationId).collection("messages").where("forwarded", "==", true).get();
   assert.equal(forwardedMessages.size, 1);
   assert.equal(forwardedMessages.docs[0].data().text, "Welcome to the group");
   assert.equal(forwardedMessages.docs[0].data().forwardedFrom.messageType, "text");
-  await assert.rejects(() => a.call("forwardFriendChatMessages", { conversationId: group.conversationId, messageIds: [groupMessage.messageId], destinationConversationIds: [direct.conversationId] }), hasCode("resource-exhausted"));
+  assert.equal((await a.call("forwardFriendChatMessages", textForwardInput)).forwarded, 1, "the same forward operation is idempotent");
+  assert.equal((await db.collection("friendConversations").doc(direct.conversationId).collection("messages").where("forwarded", "==", true).get()).size, 1, "an idempotent retry does not duplicate the message");
+  await assert.rejects(() => a.call("forwardFriendChatMessages", {
+    ...textForwardInput,
+    clientForwardId: "forward_text_operation_002",
+  }), hasCode("resource-exhausted"));
+  await ageForwardRateLimit(a.uid);
+  await ageDestinationSendRateLimit(direct.conversationId, a.uid);
+  assert.equal((await a.call("forwardFriendChatMessages", {
+    conversationId: group.conversationId,
+    destinationConversationIds: [direct.conversationId],
+    messageIds: [reply.messageId],
+  })).forwarded, 1, "installed clients without operation IDs retain legacy forwarding compatibility");
   const messageReport = await b.call("reportFriendChatMessage", {
     conversationId: group.conversationId,
     messageId: groupMessage.messageId,
@@ -182,6 +212,74 @@ async function run() {
   const imageReportData = (await db.collection("chatModerationReports").doc(imageReport.reportId).get()).data();
   assert.equal(imageReportData.contentSnapshot.messageType, "image");
   assert.equal(imageReportData.attachmentEvidence.image.fullPath, imageReservation.fullPath);
+  await assert.rejects(() => outsider.call("forwardFriendChatMessages", {
+    clientForwardId: "forward_outsider_image_001",
+    conversationId: group.conversationId,
+    destinationConversationIds: [direct.conversationId],
+    messageIds: [imageFinalize.messageId],
+  }), hasCode("permission-denied"), "a non-member cannot forward protected image media");
+
+  await ageForwardRateLimit(a.uid);
+  await ageDestinationSendRateLimit(direct.conversationId, a.uid);
+  const imageForwardInput = {
+    clientForwardId: "forward_image_operation_001",
+    conversationId: group.conversationId,
+    destinationConversationIds: [direct.conversationId],
+    messageIds: [imageFinalize.messageId],
+  };
+  assert.equal((await a.call("forwardFriendChatMessages", imageForwardInput)).forwarded, 1);
+  const directMessagesAfterImageForward = await db.collection("friendConversations").doc(direct.conversationId).collection("messages").get();
+  const forwardedImageDocuments = directMessagesAfterImageForward.docs.filter((document) => {
+    const data = document.data();
+    return data.forwarded === true && data.messageType === "image";
+  });
+  assert.equal(forwardedImageDocuments.length, 1);
+  const forwardedImageDocument = forwardedImageDocuments[0];
+  const forwardedImage = forwardedImageDocument.data();
+  assert.equal(forwardedImage.caption, "Post-game photo");
+  assert.deepEqual(forwardedImage.forwardedFrom, { messageType: "image" });
+  assert.equal("sourceConversationId" in forwardedImage.forwardedFrom, false);
+  assert.equal("originalSenderUserId" in forwardedImage, false);
+  assert.equal(forwardedImage.image.fullPath.includes(direct.conversationId), true);
+  assert.equal(forwardedImage.image.thumbnailPath.includes(direct.conversationId), true);
+  assert.notEqual(forwardedImage.image.fullPath, imageReservation.fullPath);
+  assert.notEqual(forwardedImage.image.thumbnailPath, imageReservation.thumbnailPath);
+  assert.deepEqual((await bucket.file(forwardedImage.image.fullPath).download())[0], Buffer.from(imageBytes));
+  assert.deepEqual((await bucket.file(forwardedImage.image.thumbnailPath).download())[0], Buffer.from(thumbnailBytes));
+  const forwardedReservationId = forwardedImage.image.fullPath.split("/")[3];
+  const forwardedReservation = (await db.collection("friendChatUploadReservations").doc(forwardedReservationId).get()).data();
+  assert.equal(forwardedReservation.status, "finalized");
+  assert.equal(forwardedReservation.conversationId, direct.conversationId);
+  assert.match((await b.call("getFriendChatMediaDownloadUrl", {
+    messageId: forwardedImageDocument.id,
+    storagePath: forwardedImage.image.fullPath,
+  })).url, /127\.0\.0\.1:9199|localhost:9199/u);
+  assert.equal((await a.call("forwardFriendChatMessages", imageForwardInput)).forwarded, 1, "image forward retries are idempotent");
+  const imageForwardRetrySnapshot = await db.collection("friendConversations").doc(direct.conversationId).collection("messages").get();
+  assert.equal(imageForwardRetrySnapshot.docs.filter((document) => document.data().forwarded === true && document.data().messageType === "image").length, 1);
+  await assert.rejects(() => a.call("forwardFriendChatMessages", {
+    ...imageForwardInput,
+    clientForwardId: "forward_image_operation_002",
+  }), hasCode("resource-exhausted"));
+
+  await a.call("removeOwnFriendChatMessage", { conversationId: direct.conversationId, messageId: forwardedImageDocument.id });
+  assert.equal((await bucket.file(forwardedImage.image.fullPath).exists())[0], false, "removing the destination message deletes only its full copy");
+  assert.equal((await bucket.file(forwardedImage.image.thumbnailPath).exists())[0], false, "removing the destination message deletes only its thumbnail copy");
+  assert.equal((await bucket.file(imageReservation.fullPath).exists())[0], true, "the source full image remains intact");
+  assert.equal((await bucket.file(imageReservation.thumbnailPath).exists())[0], true, "the source thumbnail remains intact");
+
+  await b.call("blockFriendChatUser", { blockedUserId: a.uid });
+  await ageForwardRateLimit(a.uid);
+  await assert.rejects(() => a.call("forwardFriendChatMessages", {
+    ...imageForwardInput,
+    clientForwardId: "forward_image_blocked_001",
+  }), hasCode("permission-denied"), "blocking either participant prevents forwarding protected source media");
+  await b.call("unblockFriendChatUser", { blockedUserId: a.uid });
+  await Promise.all([
+    db.collection("users").doc(a.uid).update({ friendIds: admin.firestore.FieldValue.arrayUnion(b.uid) }),
+    db.collection("users").doc(b.uid).update({ friendIds: admin.firestore.FieldValue.arrayUnion(a.uid) }),
+  ]);
+
   await a.call("removeOwnFriendChatMessage", { conversationId: group.conversationId, messageId: imageFinalize.messageId });
   assert.equal((await bucket.file(imageReservation.fullPath).exists())[0], false);
   assert.equal((await bucket.file(imageReservation.thumbnailPath).exists())[0], false);
@@ -202,6 +300,12 @@ async function run() {
   assert.equal(voiceMessage.caption, "Quick note");
   assert.equal(voiceMessage.voiceMemo.storagePath, voiceReservation.storagePath);
   assert.deepEqual(voiceMessage.mediaStoragePaths, [voiceReservation.storagePath]);
+  await assert.rejects(() => a.call("forwardFriendChatMessages", {
+    clientForwardId: "forward_voice_operation_001",
+    conversationId: group.conversationId,
+    destinationConversationIds: [direct.conversationId],
+    messageIds: [voiceFinalize.messageId],
+  }), hasCode("failed-precondition"), "voice forwarding remains disabled");
   await a.call("toggleFriendChatReaction", { conversationId: group.conversationId, messageId: voiceFinalize.messageId, emoji: "🙏" });
   assert.deepEqual((await groupDoc.collection("messages").doc(voiceFinalize.messageId).get()).data().reactionCounts, { "🙏": 1 });
   const voiceUrl = await a.call("getFriendChatMediaDownloadUrl", { messageId: voiceFinalize.messageId, storagePath: voiceReservation.storagePath });

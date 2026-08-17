@@ -35,6 +35,9 @@ const currentUserKeys = [
   "sidelineSocial.coachSavedHelp.v1.user-123",
   "@sideline-social/notification-dismissal-retry-ids-v1:user-123",
   "sideline:selectedSquad:user-123",
+  "sidelineSocial.systemRouteResume",
+  "sidelineSocial.friendChatImagePickerReturn.v1",
+  "sidelineSocial.friendChatImagePickerHandoff.v1",
   "@sideline-social/trivia/recent-question-ids/user-123",
   "future-user-specific-key",
 ];
@@ -145,6 +148,7 @@ async function run() {
   assert.match(service, /AsyncStorage\.multiRemove/);
   assert.match(service, /Notifications\.clearLastNotificationResponseAsync\(\)/);
   assert.match(service, /clearVoicePlaybackUrlCache/);
+  assert.match(service, /clearFriendChatImagePickerLocalState/);
 
   const authContext = fs.readFileSync(path.join(root, "context", "AuthContext.tsx"), "utf8");
   const implementationStart = authContext.lastIndexOf("signOut: async () => {");

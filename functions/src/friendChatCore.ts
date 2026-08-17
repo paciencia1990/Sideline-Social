@@ -103,6 +103,16 @@ export function mediaReservationIdFor(userId: string, clientMessageId: string, k
   return `media_${createHash('sha256').update(`${kind}:${userId}:${clientMessageId}`).digest('hex')}`;
 }
 
+export function forwardClientMessageIdFor(
+  clientForwardId: string,
+  sourceMessageId: string,
+  destinationConversationId: string,
+) {
+  return `forward_${createHash('sha256')
+    .update(JSON.stringify([clientForwardId, sourceMessageId, destinationConversationId]))
+    .digest('hex')}`;
+}
+
 export function friendChatVoiceStoragePath(input: { conversationId: string; messageId: string; reservationId: string }) {
   return `friendChatMedia/${input.conversationId}/${input.messageId}/${input.reservationId}/voice.m4a`;
 }
