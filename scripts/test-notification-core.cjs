@@ -34,6 +34,12 @@ assert.equal(core.getNotificationDestinationMode({ type: "teamPrivateMessage", t
 assert.equal(core.getNotificationDestinationMode({ type: "teamPrivateMessage", teamId: "team-1", conversationType: "parent", activeMode: "coach" }), "parent");
 assert.equal(core.getNotificationDestinationMode({ type: "teamPrivateMessage", teamId: "team-1", activeMode: "coach" }), "coach");
 assert.equal(core.getNotificationDestinationMode({ type: "teamPrivateMessage", teamId: "bad/path", activeMode: "coach" }), null);
+assert.equal(core.getNotificationDestination({ type: "teamScheduleEvent", teamId: "team-1", eventId: "event-1" }), "/teams/team-1/schedule/event-1");
+assert.equal(core.getNotificationDestination({ type: "teamScheduleEvent", teamId: "team-1" }), "/teams/team-1/schedule");
+assert.equal(core.getNotificationDestination({ type: "teamScheduleEvent", teamId: "bad/path", eventId: "event-1" }), null);
+assert.equal(core.getNotificationDestination({ type: "teamScheduleEvent", teamId: "team-1", eventId: "bad/path" }), "/teams/team-1/schedule");
+assert.equal(core.getNotificationDestinationMode({ type: "teamScheduleEvent", teamId: "team-1", activeMode: "parent" }), "parent");
+assert.equal(core.getNotificationDestinationMode({ type: "teamScheduleEvent", teamId: "team-1", activeMode: "coach" }), "coach");
 assert.equal(core.getNotificationDestination({ type: "friendRequest" }), "/(tabs)/friends");
 assert.equal(core.getNotificationDestination({ type: "friendRequestAccepted" }), "/(tabs)/friends");
 assert.equal(core.getNotificationDestination({ type: "chatGroupInvitation", conversationId: "group-1" }), "/(social)/chat/invitation/group-1");
@@ -86,6 +92,7 @@ const announcementDestination = read("app", "teams", "[teamId]", "announcements"
 const friendsDestination = read("app", "(tabs)", "friends.tsx");
 const parentTeamHub = read("app", "teams", "[teamId]", "index.tsx");
 const coachPrivateInbox = read("app", "coach", "team-messages", "index.tsx");
+const scheduleDestination = read("app", "teams", "[teamId]", "schedule", "[eventId].tsx");
 const translations = read("i18n", "index.ts");
 const indexes = JSON.parse(read("firestore.indexes.json"));
 
@@ -129,6 +136,8 @@ assert.ok(parentTeamHub.indexOf("setSummary(nextSummary)") < parentTeamHub.index
 assert.equal(coachPrivateInbox.includes("getTeamPrivateMessageInboxPage(\"coach\", selectedTeamId)"), true);
 assert.equal(coachPrivateInbox.includes("acknowledgeNotificationAfterOpen(notificationId)"), true);
 assert.ok(coachPrivateInbox.indexOf("setConversations(page.conversations)") < coachPrivateInbox.indexOf("acknowledgeNotificationAfterOpen(notificationId)"));
+assert.equal(scheduleDestination.includes("acknowledgeNotificationAfterOpen(notificationId)"), true);
+assert.ok(scheduleDestination.indexOf("setEvent(nextEvent)") < scheduleDestination.indexOf("acknowledgeNotificationAfterOpen(notificationId)"));
 assert.equal(dismissalFunctions.includes("functions.region('us-central1')"), true);
 assert.equal(dismissalFunctions.includes("acknowledgeNotificationOpened"), true);
 assert.equal(dismissalFunctions.includes("clearUserNotifications"), true);
@@ -203,6 +212,9 @@ for (const key of [
   "friendRequestFallbackBody", "chatGroupInvitationTitle", "chatGroupInvitationBody", "chatGroupInvitationUnnamedBody",
   "squadAdminInvitationTitle", "squadAdminInvitationBody", "squadAdminAcceptedTitle", "squadAdminAcceptedBody",
   "squadAdminRecoveryTitle", "squadAdminRecoveryBody",
+  "teamScheduleTitle", "teamScheduleNewBody", "teamScheduleTimeChangedBody",
+  "teamScheduleVenueChangedBody", "teamSchedulePostponedBody", "teamScheduleCancelledBody",
+  "teamScheduleUpdatedBody", "teamScheduleImportTitle", "teamScheduleImportBody",
 ]) {
   assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length, 2, `${key} needs English and Spanish copy.`);
 }

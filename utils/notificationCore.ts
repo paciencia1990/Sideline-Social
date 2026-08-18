@@ -1,6 +1,7 @@
 export const APP_NOTIFICATION_TYPES = [
   "coachAnnouncement",
   "teamPrivateMessage",
+  "teamScheduleEvent",
   "friendChatMessage",
   "friendRequest",
   "friendRequestAccepted",
@@ -18,6 +19,7 @@ export type NotificationNavigationData = {
   type?: unknown;
   teamId?: unknown;
   announcementId?: unknown;
+  eventId?: unknown;
   conversationId?: unknown;
   conversationType?: unknown;
   activeMode?: unknown;
@@ -67,6 +69,12 @@ export function getNotificationDestination(data: NotificationNavigationData): st
     return `/teams/${teamId}?focus=privateMessages`;
   }
 
+  if (data.type === "teamScheduleEvent") {
+    if (!isValidRouteId(data.teamId)) return null;
+    const base = `/teams/${encodeURIComponent(data.teamId)}/schedule`;
+    return isValidRouteId(data.eventId) ? `${base}/${encodeURIComponent(data.eventId)}` : base;
+  }
+
   if (
     data.type === "friendRequest" ||
     data.type === "friendRequestAccepted" ||
@@ -101,6 +109,9 @@ export function getNotificationDestination(data: NotificationNavigationData): st
 export function getNotificationDestinationMode(data: NotificationNavigationData): NotificationDestinationMode | null {
   if (data.type === "teamPrivateMessage" && isValidRouteId(data.teamId)) {
     return getPrivateMessageRecipientMode(data);
+  }
+  if (data.type === "teamScheduleEvent" && isValidRouteId(data.teamId)) {
+    return readNotificationMode(data.activeMode);
   }
   return null;
 }

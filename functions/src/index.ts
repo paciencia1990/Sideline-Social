@@ -239,6 +239,11 @@ export {
   transferFriendGroupOwnership,
   unblockFriendChatUser,
 } from './friendChat';
+export {
+  deleteTeamScheduleEvent,
+  importTeamScheduleEvents,
+  saveTeamScheduleEvent,
+} from './teamSchedule';
 
 admin.initializeApp();
 

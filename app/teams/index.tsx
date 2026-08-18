@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { AccessibilityInfo, ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
-import { Archive, ArrowLeft, ChevronDown, ChevronRight, ChevronUp, Shield, Trash2, Users } from "lucide-react-native";
+import { Archive, ArrowLeft, CalendarDays, ChevronDown, ChevronRight, ChevronUp, Shield, Trash2, Users } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -311,17 +311,28 @@ function PastTeamCard({
         {details ? <Text style={styles.teamDetails}>{details}</Text> : null}
         <Text style={styles.archivedMeta}>{t("myTeams.pastTeamsArchivedOn", { date: formatPastTeamDate(team.archivedAtDate, locale) })}</Text>
       </View>
-      <TouchableOpacity
-        accessibilityLabel={t("myTeams.pastTeamsRemoveAccessibility", { team: team.name })}
-        accessibilityRole="button"
-        accessibilityState={{ busy: removing, disabled: removing }}
-        disabled={removing}
-        onPress={onRemove}
-        style={[styles.removePastButton, removing && styles.disabledButton]}
-      >
-        {removing ? <ActivityIndicator color={Colors.primary} size="small" /> : <Trash2 color={Colors.primary} size={18} />}
-        <Text style={styles.removePastText}>{removing ? t("myTeams.pastTeamsRemoving") : t("myTeams.pastTeamsRemoveAction")}</Text>
-      </TouchableOpacity>
+      <View style={styles.pastTeamActions}>
+        <TouchableOpacity
+          accessibilityLabel={t("schedule.teamSchedule", { teamName: team.name })}
+          accessibilityRole="button"
+          onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId: team.teamId } } as never)}
+          style={styles.schedulePastButton}
+        >
+          <CalendarDays color={Colors.communicationLink} size={18} />
+          <Text style={styles.schedulePastText}>{t("schedule.title")}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          accessibilityLabel={t("myTeams.pastTeamsRemoveAccessibility", { team: team.name })}
+          accessibilityRole="button"
+          accessibilityState={{ busy: removing, disabled: removing }}
+          disabled={removing}
+          onPress={onRemove}
+          style={[styles.removePastButton, removing && styles.disabledButton]}
+        >
+          {removing ? <ActivityIndicator color={Colors.primary} size="small" /> : <Trash2 color={Colors.primary} size={18} />}
+          <Text style={styles.removePastText}>{removing ? t("myTeams.pastTeamsRemoving") : t("myTeams.pastTeamsRemoveAction")}</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -458,6 +469,9 @@ const styles = StyleSheet.create({
   pastTeamRow: { alignItems: "center", borderTopColor: Colors.secondary, borderTopWidth: 1, flexDirection: "row", gap: Spacing.sm, paddingTop: Spacing.md },
   pastTeamCopy: { flex: 1, gap: 3 },
   archivedMeta: { color: Colors.primary, fontFamily: Typography.bodyMedium, fontSize: 11 },
+  pastTeamActions: { gap: Spacing.xs },
+  schedulePastButton: { alignItems: "center", borderColor: Colors.communicationLink, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.xs, justifyContent: "center", minHeight: 42, paddingHorizontal: Spacing.sm },
+  schedulePastText: { color: Colors.communicationLink, fontFamily: Typography.bodySemiBold, fontSize: 12 },
   removePastButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.xs, justifyContent: "center", minHeight: 42, paddingHorizontal: Spacing.sm },
   removePastText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 12 },
   inlineState: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.sm },

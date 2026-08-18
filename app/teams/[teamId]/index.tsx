@@ -1,7 +1,7 @@
 import React, { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { ArrowLeft, ChevronRight, LockKeyhole, Mail, MoreVertical } from "lucide-react-native";
+import { ArrowLeft, CalendarDays, ChevronRight, LockKeyhole, Mail, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -253,6 +253,21 @@ export default function ParentTeamHubScreen() {
               </TouchableOpacity>
             </Card>
 
+            <TouchableOpacity
+              accessibilityLabel={t("schedule.teamSchedule", { teamName: summary.team.name })}
+              accessibilityRole="button"
+              onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId } } as never)}
+            >
+              <Card style={styles.scheduleCard}>
+                <CalendarDays color={Colors.communicationLink} size={24} />
+                <View style={styles.scheduleCopy}>
+                  <Text style={styles.scheduleTitle}>{t("schedule.title")}</Text>
+                  <Text style={styles.scheduleSubtitle}>{t("schedule.teamSchedule", { teamName: summary.team.name })}</Text>
+                </View>
+                <ChevronRight color={Colors.textPrimary} size={21} />
+              </Card>
+            </TouchableOpacity>
+
             {summary.needsChildMigration ? (
               <Card style={styles.assignChildCard}>
                 <Text style={styles.stateTitle}>{t("myTeams.confirmChildrenTitle")}</Text>
@@ -447,6 +462,10 @@ const styles = StyleSheet.create({
   childName: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 22 },
   teamName: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 20 },
   teamDetails: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13 },
+  scheduleCard: { alignItems: "center", borderColor: Colors.communicationLink, borderWidth: 1, flexDirection: "row", gap: Spacing.sm },
+  scheduleCopy: { flex: 1, gap: 2 },
+  scheduleTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17 },
+  scheduleSubtitle: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12 },
   factGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   fact: { backgroundColor: Colors.background, borderRadius: Radius.sm, minWidth: "46%", padding: Spacing.sm },
   factLabel: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 10, textTransform: "uppercase" },

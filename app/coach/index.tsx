@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
-import { Archive, ChevronDown, ChevronUp, MessageCircle, MessagesSquare, RotateCcw, Shield, Users, type LucideIcon } from "lucide-react-native";
+import { Archive, CalendarDays, ChevronDown, ChevronUp, MessageCircle, MessagesSquare, RotateCcw, Shield, Users, type LucideIcon } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -265,6 +265,7 @@ export default function CoachHomeScreen() {
                 <View style={styles.quickGrid}>
                   <QuickAction label={t("coach.home.viewTeam")} Icon={Users} onPress={() => router.push({ pathname: "/coach/team", params: { teamId: selectedTeam.id } } as never)} />
                   <QuickAction label={t("coach.home.sendMessage")} Icon={MessageCircle} onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: selectedTeam.id } } as never)} />
+                  <QuickAction label={t("schedule.title")} Icon={CalendarDays} onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId: selectedTeam.id } } as never)} />
                   {showPrivateMessages ? <QuickAction badge={privateInbox.unreadCount > 0 ? t("teamMessages.unread", { count: privateInbox.unreadCount }) : undefined} label={t("teamMessages.title")} Icon={MessagesSquare} onPress={() => router.push("/coach/team-messages" as never)} /> : null}
                   <QuickAction label={t("coach.home.resources")} Icon={Shield} onPress={() => router.push("/coach/resources" as never)} />
                 </View>
@@ -299,20 +300,26 @@ export default function CoachHomeScreen() {
                           <Text style={styles.cardText}>{membership.team?.sport}</Text>
                           <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>
                         </View>
-                        <TouchableOpacity
-                          accessibilityRole="button"
-                          accessibilityState={{ busy: restoringTeamId === membership.teamId, disabled: Boolean(restoringTeamId) }}
-                          disabled={Boolean(restoringTeamId)}
-                          onPress={() => confirmRestore(membership)}
-                          style={[styles.restoreButton, Boolean(restoringTeamId) && styles.disabledButton]}
-                        >
-                          {restoringTeamId === membership.teamId
-                            ? <ActivityIndicator color={Colors.surface} size="small" />
-                            : <RotateCcw color={Colors.surface} size={17} />}
-                          <Text style={styles.primaryButtonText}>
-                            {restoringTeamId === membership.teamId ? t("coach.team.restoring") : t("coach.team.restoreTeam")}
-                          </Text>
-                        </TouchableOpacity>
+                        <View style={styles.archivedActions}>
+                          <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId: membership.teamId } } as never)} style={styles.archivedScheduleButton}>
+                            <CalendarDays color={Colors.communicationLink} size={17} />
+                            <Text style={styles.archivedScheduleText}>{t("schedule.title")}</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            accessibilityState={{ busy: restoringTeamId === membership.teamId, disabled: Boolean(restoringTeamId) }}
+                            disabled={Boolean(restoringTeamId)}
+                            onPress={() => confirmRestore(membership)}
+                            style={[styles.restoreButton, Boolean(restoringTeamId) && styles.disabledButton]}
+                          >
+                            {restoringTeamId === membership.teamId
+                              ? <ActivityIndicator color={Colors.surface} size="small" />
+                              : <RotateCcw color={Colors.surface} size={17} />}
+                            <Text style={styles.primaryButtonText}>
+                              {restoringTeamId === membership.teamId ? t("coach.team.restoring") : t("coach.team.restoreTeam")}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
                       </View>
                     ))}
                     {archivedLoading ? (
@@ -395,6 +402,9 @@ const styles = StyleSheet.create({
   archivedCopy: { flex: 1, gap: 2 },
   archivedName: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 16 },
   archivedStatus: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 11, textTransform: "uppercase" },
+  archivedActions: { gap: Spacing.xs },
+  archivedScheduleButton: { alignItems: "center", borderColor: Colors.communicationLink, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.xs, justifyContent: "center", minHeight: 42, paddingHorizontal: Spacing.sm },
+  archivedScheduleText: { color: Colors.communicationLink, fontFamily: Typography.bodySemiBold, fontSize: 12 },
   modeCard: { gap: Spacing.md, borderLeftColor: Colors.accentGreen, borderLeftWidth: 4 },
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
   centerInline: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.sm },

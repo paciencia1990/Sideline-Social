@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { Archive, MoreVertical, RotateCcw } from "lucide-react-native";
+import { Archive, CalendarDays, ChevronRight, MoreVertical, RotateCcw } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -400,6 +400,21 @@ export default function CoachTeamScreen() {
               ) : <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>}
             </Card>
 
+            <TouchableOpacity
+              accessibilityLabel={t("schedule.teamSchedule", { teamName: selectedTeam.name })}
+              accessibilityRole="button"
+              onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId: selectedTeam.id } } as never)}
+            >
+              <Card style={styles.scheduleCard}>
+                <CalendarDays color={Colors.communicationLink} size={24} />
+                <View style={styles.scheduleCopy}>
+                  <Text style={styles.scheduleTitle}>{t("schedule.title")}</Text>
+                  <Text style={styles.scheduleSubtitle}>{t("schedule.teamSchedule", { teamName: selectedTeam.name })}</Text>
+                </View>
+                <ChevronRight color={Colors.textPrimary} size={21} />
+              </Card>
+            </TouchableOpacity>
+
             <Card style={styles.cardGap}>
               <Text accessibilityRole="header" style={styles.cardTitle}>{t("coach.team.members")}</Text>
 
@@ -624,6 +639,10 @@ const styles = StyleSheet.create({
   archivedStatus: { color: Colors.primary, fontFamily: Typography.bodyBold, textAlign: "center", textTransform: "uppercase" },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
+  scheduleCard: { alignItems: "center", borderColor: Colors.communicationLink, borderWidth: 1, flexDirection: "row", gap: Spacing.sm },
+  scheduleCopy: { flex: 1, gap: 2 },
+  scheduleTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17 },
+  scheduleSubtitle: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12 },
   invitePanel: { alignItems: "center", backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, padding: Spacing.md },
   inviteLabel: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, fontSize: 12, textTransform: "uppercase" },
   inviteCode: { ...TeamCodeTypography, color: Colors.textHeading, fontSize: 26 },

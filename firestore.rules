@@ -592,6 +592,14 @@ service cloud.firestore {
           allow delete: if false;
         }
       }
+
+      match /events/{eventId} {
+        // Active memberships retain read-only access when a Team is archived.
+        // Schedule mutations are callable-only so role, lifecycle, timestamps,
+        // recurrence limits, imports, and notifications remain server-authoritative.
+        allow get, list: if isTeamMember(teamId);
+        allow create, update, delete: if false;
+      }
     }
 
     match /teamPrivateConversations/{conversationId} {
@@ -697,6 +705,15 @@ service cloud.firestore {
           allow write: if false;
         }
       }
+
+    }
+
+    match /teamScheduleOperations/{operationId} {
+      allow read, write: if false;
+    }
+
+    match /teamScheduleAudit/{auditId} {
+      allow read, write: if false;
     }
 
     // Canonical standing and moderation records are server-only. The separate

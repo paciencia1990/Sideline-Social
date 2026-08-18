@@ -36,6 +36,7 @@ const IOS_MICROPHONE_USAGE_DESCRIPTION = "Sideline Social uses your microphone o
 const IOS_MOTION_USAGE_DESCRIPTION = "Sideline Social may use motion activity to support location features when you choose Find Nearby. Motion data is not displayed to other users.";
 const IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION = "Sideline Social lets you choose a photo when you send an image message in a private friend chat. Photo metadata is stripped before upload.";
 const IOS_PHOTO_LIBRARY_ADD_USAGE_DESCRIPTION = "Sideline Social saves a photo to your photo library only when you choose Save Photo.";
+const IOS_CALENDAR_USAGE_DESCRIPTION = "Sideline Social adds a Team event to your calendar only when you choose Add to Calendar. It does not read or upload your other calendar events.";
 
 if (!IS_DEVELOPMENT && process.env.REQUIRE_PRODUCTION_LEGAL_CONFIG === "true") {
   assertProductionLegalConfig({
@@ -105,6 +106,8 @@ module.exports = ({ config }) => ({
       NSMotionUsageDescription: IOS_MOTION_USAGE_DESCRIPTION,
       NSPhotoLibraryUsageDescription: IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION,
       NSPhotoLibraryAddUsageDescription: IOS_PHOTO_LIBRARY_ADD_USAGE_DESCRIPTION,
+      NSCalendarsUsageDescription: IOS_CALENDAR_USAGE_DESCRIPTION,
+      NSCalendarsWriteOnlyAccessUsageDescription: IOS_CALENDAR_USAGE_DESCRIPTION,
     },
   },
 
@@ -118,6 +121,8 @@ module.exports = ({ config }) => ({
       "android.permission.READ_MEDIA_IMAGES",
       "android.permission.READ_MEDIA_VIDEO",
       "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+      "android.permission.READ_CALENDAR",
+      "android.permission.WRITE_CALENDAR",
     ],
     versionCode: 5,
     softwareKeyboardLayoutMode: "resize",

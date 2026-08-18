@@ -5,7 +5,9 @@
     "NSMicrophoneUsageDescription": "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.",
     "NSMotionUsageDescription": "Sideline Social may use motion activity to support location features when you choose Find Nearby. Motion data is not displayed to other users.",
     "NSPhotoLibraryAddUsageDescription": "Sideline Social saves a photo to your photo library only when you choose Save Photo.",
-    "NSPhotoLibraryUsageDescription": "Sideline Social lets you choose a photo when you send an image message in a private friend chat. Photo metadata is stripped before upload."
+    "NSPhotoLibraryUsageDescription": "Sideline Social lets you choose a photo when you send an image message in a private friend chat. Photo metadata is stripped before upload.",
+    "NSCalendarsUsageDescription": "Sideline Social adds a Team event to your calendar only when you choose Add to Calendar. It does not read or upload your other calendar events.",
+    "NSCalendarsWriteOnlyAccessUsageDescription": "Sideline Social adds a Team event to your calendar only when you choose Add to Calendar. It does not read or upload your other calendar events."
   },
   "android": {
     "app_name": "Sideline Social"
