@@ -87,12 +87,69 @@ const row = "practice,Practice,2027-05-01,10:00,11:00,09:45,UTC,false,,,,,schedu
 const tooManyRows = `${client.TEAM_SCHEDULE_SAMPLE_CSV.split("\n")[0]}\n${Array.from({ length: 201 }, () => row).join("\n")}`;
 assert.ok(client.parseTeamScheduleCsv(tooManyRows).at(-1).errors.includes("rowLimit"));
 
-assert.equal(calendar.normalizeTeamScheduleCalendarError(new Error("Permission denied")), "calendar_permission_denied");
-assert.equal(calendar.normalizeTeamScheduleCalendarError(new Error("Permission denied; use Settings")), "calendar_permission_permanent");
+const calendarEvent = {
+  title: "  Home   Opener  ",
+  startAt: new Date("2027-03-14T14:00:00.000Z"),
+  endAt: new Date("2027-03-14T16:00:00.000Z"),
+  timezone: "America/New_York",
+  isAllDay: false,
+  venueName: " Community Field ",
+  field: "Field 2",
+  address: "100 Main St",
+  notes: " Bring both jerseys ",
+  status: "scheduled",
+};
+const calendarPayload = calendar.buildTeamScheduleCalendarPayload(calendarEvent, "Cancelled");
+assert.equal(calendarPayload.title, "Home Opener");
+assert.equal(calendarPayload.location, "Community Field · Field 2 · 100 Main St");
+assert.equal(calendarPayload.notes, "Bring both jerseys");
+assert.equal(calendarPayload.timeZone, "America/New_York");
+assert.equal(calendarPayload.startDate.getTime(), calendarEvent.startAt.getTime());
+assert.notEqual(calendarPayload.startDate, calendarEvent.startAt, "calendar payload dates are defensive copies");
+
+const calendarAllDay = calendar.buildTeamScheduleCalendarPayload({
+  ...calendarEvent,
+  startAt: new Date("2027-03-14T05:00:00.000Z"),
+  endAt: new Date("2027-03-15T04:00:00.000Z"),
+  isAllDay: true,
+  venueName: null,
+  field: "Field 2",
+  address: null,
+  notes: null,
+  status: "cancelled",
+}, "Cancelled");
+assert.equal(calendarAllDay.allDay, true);
+assert.equal(calendarAllDay.endDate.getTime() - calendarAllDay.startDate.getTime(), 23 * 60 * 60 * 1000, "all-day payload preserves DST calendar boundaries");
+assert.equal(new Intl.DateTimeFormat("en-CA", { timeZone: calendarAllDay.timeZone }).format(calendarAllDay.startDate), "2027-03-14");
+assert.equal(new Intl.DateTimeFormat("en-CA", { timeZone: calendarAllDay.timeZone }).format(calendarAllDay.endDate), "2027-03-15");
+assert.equal(calendarAllDay.title, "Cancelled: Home Opener");
+assert.equal(calendarAllDay.location, "Field 2");
+assert.equal("notes" in calendarAllDay, false);
+assert.throws(() => calendar.buildTeamScheduleCalendarPayload({ ...calendarEvent, startAt: new Date("bad") }, "Cancelled"), hasCode("calendar_invalid_event"));
+assert.throws(() => calendar.buildTeamScheduleCalendarPayload({ ...calendarEvent, endAt: calendarEvent.startAt }, "Cancelled"), hasCode("calendar_invalid_event"));
+assert.throws(() => calendar.buildTeamScheduleCalendarPayload({ ...calendarEvent, timezone: "Not/A_Timezone" }, "Cancelled"), hasCode("calendar_invalid_event"));
+
+const dialogActions = { saved: "saved", canceled: "canceled", deleted: "deleted", done: "done" };
+assert.equal(calendar.normalizeTeamScheduleCalendarDialogResult({ action: dialogActions.saved }, dialogActions), "saved");
+assert.equal(calendar.normalizeTeamScheduleCalendarDialogResult({ action: dialogActions.canceled }, dialogActions), "cancelled");
+assert.equal(calendar.normalizeTeamScheduleCalendarDialogResult({ action: dialogActions.deleted }, dialogActions), "cancelled");
+assert.equal(calendar.normalizeTeamScheduleCalendarDialogResult({ action: dialogActions.done }, dialogActions), "closed");
+assert.equal(calendar.normalizeTeamScheduleCalendarDialogResult({ action: "unknown" }, dialogActions), "unexpected");
+
+assert.equal(calendar.normalizeTeamScheduleCalendarError(codedError("E_MISSING_PERMISSIONS")), "calendar_permission_denied");
+assert.equal(calendar.normalizeTeamScheduleCalendarError(codedError("calendar_permission_permanent")), "calendar_permission_permanent");
+assert.equal(calendar.normalizeTeamScheduleCalendarError(codedError("ERR_UNAVAILABLE")), "calendar_editor_unavailable");
+assert.equal(calendar.normalizeTeamScheduleCalendarError(new Error("Permission denied; use Settings")), "calendar_unexpected", "arbitrary message text cannot infer permanent denial");
 assert.equal(calendar.shouldOfferCalendarSettings("calendar_permission_permanent"), true);
 assert.equal(calendar.shouldOfferCalendarSettings("calendar_permission_denied"), false);
-assert.equal(calendar.normalizeTeamScheduleCalendarError(new Error("Calendar unavailable")), "calendar_unavailable");
 assert.equal(calendar.normalizeTeamScheduleCalendarError({ code: "calendar_build_required" }), "calendar_build_required");
+assert.equal(calendar.normalizeTeamScheduleCalendarError(new Error("android.content.ActivityNotFoundException")), "calendar_no_destination");
+assert.equal(calendar.normalizeTeamScheduleCalendarError(new Error("Different calendar dialog is already being presented")), "calendar_editor_launch_failed");
+assert.equal(calendar.normalizeTeamScheduleCalendarError(new Error("something else")), "calendar_unexpected");
+assert.equal(calendar.isTeamScheduleCalendarNativeModuleMissing(new Error("Cannot find native module 'ExpoCalendar'")), true);
+assert.equal(calendar.isTeamScheduleCalendarNativeModuleMissing(new Error("unrelated module failure")), false);
+assert.equal(calendar.isTeamScheduleCalendarNativeBuildRequired(codedError("ERR_UNAVAILABLE", "Calendar.createEventInCalendarAsync is unavailable")), true);
+assert.equal(calendar.isTeamScheduleCalendarNativeBuildRequired(codedError("ERR_UNAVAILABLE", "unrelated capability is unavailable")), false);
 
 const fixture = read("constants", "teamSchedulePreview.ts");
 assert.match(fixture, /__DEV__ && process\.env\.EXPO_PUBLIC_TEAM_SCHEDULE_FIXTURE === "true"/);
@@ -119,12 +176,30 @@ assert.match(scheduleForm, /notificationReviewOpen/);
 assert.match(scheduleForm, /schedule\.form\.notifyConfirmTitle/);
 const calendarService = read("services", "teamScheduleCalendarService.ts");
 assert.match(calendarService, /require\("expo-calendar\/legacy"\)/);
-assert.doesNotMatch(calendarService, /getCalendarsAsync|requestCalendarPermissionsAsync|readCalendar/);
+assert.match(calendarService, /CalendarDialogResultActions/);
+assert.match(calendarService, /startNewActivityTask: false/);
+assert.match(calendarService, /Platform\.OS !== "ios" \|\| iosMajorVersion\(Platform\.Version\) >= 17/);
+assert.match(calendarService, /requestCalendarPermissionsAsync/);
+assert.match(calendarService, /response\.canAskAgain === false \? "calendar_permission_permanent" : "calendar_permission_denied"/);
+assert.match(calendarService, /isAvailableAsync/);
+assert.doesNotMatch(calendarService, /getCalendarsAsync|getEventsAsync|readCalendar|firebase|firestore/);
 const config = read("app.config.js");
+assert.match(config, /"expo-calendar"/);
+assert.match(config, /writeOnlyAccess: true/);
+assert.match(config, /remindersPermission: false/);
 assert.match(config, /NSCalendarsWriteOnlyAccessUsageDescription/);
 assert.match(config, /Sideline Social adds a Team event to your calendar only when you choose Add to Calendar/);
 assert.match(config, /android\.permission\.READ_CALENDAR/);
 assert.match(config, /android\.permission\.WRITE_CALENDAR/);
+const androidManifest = read("android", "app", "src", "main", "AndroidManifest.xml");
+assert.doesNotMatch(androidManifest, /android\.permission\.(READ|WRITE)_CALENDAR/);
+assert.match(scheduleDetail, /calendarBusyRef\.current/);
+assert.match(scheduleDetail, /finally[\s\S]*calendarBusyRef\.current = false[\s\S]*setBusy\(null\)/);
+assert.match(scheduleDetail, /accessibilityHint=\{t\("schedule\.calendar\.addHint"\)\}/);
+assert.match(scheduleDetail, /AccessibilityInfo\.announceForAccessibility\(t\("schedule\.calendar\.opening"\)\)/);
+assert.match(scheduleDetail, /AccessibilityInfo\.announceForAccessibility\(t\("schedule\.calendar\.savedTitle"\)\)/);
+assert.match(scheduleDetail, /AccessibilityInfo\.setAccessibilityFocus/);
+assert.match(scheduleDetail, /actionText: \{[^}]*flexShrink: 1/);
 for (const locale of ["en", "es"]) {
   const localeConfig = read("config", "locales", `${locale}.json`);
   assert.match(localeConfig, /NSCalendarsUsageDescription/);
@@ -134,6 +209,8 @@ for (const locale of ["en", "es"]) {
 const translations = read("i18n", "index.ts");
 for (const key of [
   "teamSchedule", "archivedTitle", "importUnauthorized", "calendar_permission_denied",
+  "calendar_permission_permanent", "calendar_build_required", "calendar_editor_unavailable",
+  "calendar_invalid_event", "calendar_no_destination", "calendar_editor_launch_failed", "calendar_unexpected",
   "teamScheduleImportTitle", "teamScheduleNewBody", "teamScheduleTimeChangedBody",
   "teamScheduleVenueChangedBody", "teamSchedulePostponedBody", "teamScheduleCancelledBody",
   "teamScheduleUpdatedBody", "notifyConfirmTitle", "notifyConfirmBody", "notifyConfirmAction",
@@ -147,4 +224,36 @@ const scheduleSources = [
 ].map((file) => read(file)).join("\n");
 assert.doesNotMatch(scheduleSources, /GameChanger|gamechanger/i);
 
-console.log("Team Schedule sorting, time-zone, recurrence, CSV, calendar, navigation, fixture, and localization tests passed.");
+function codedError(code, message = code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function hasCode(code) {
+  return (error) => error?.code === code;
+}
+
+async function verifyCalendarSingleFlight() {
+  const runSingleFlight = calendar.createTeamScheduleCalendarSingleFlight();
+  let release;
+  let launches = 0;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const first = runSingleFlight(() => { launches += 1; return pending; });
+  const duplicate = runSingleFlight(() => { launches += 1; return Promise.resolve("duplicate"); });
+  assert.equal(first, duplicate, "repeated taps share one native editor operation");
+  await Promise.resolve();
+  assert.equal(launches, 1);
+  release("saved");
+  assert.equal(await first, "saved");
+  assert.equal(await runSingleFlight(async () => { launches += 1; return "cancelled"; }), "cancelled");
+  await assert.rejects(runSingleFlight(async () => { throw codedError("calendar_unexpected"); }), hasCode("calendar_unexpected"));
+  assert.equal(await runSingleFlight(async () => "recovered"), "recovered", "single-flight state clears after errors");
+}
+
+verifyCalendarSingleFlight()
+  .then(() => console.log("Team Schedule sorting, time-zone, recurrence, calendar editor, navigation, fixture, and localization tests passed."))
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });

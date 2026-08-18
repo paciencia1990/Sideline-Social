@@ -12,6 +12,8 @@ const IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION = "Sideline Social lets you choose a p
 const IOS_PHOTO_LIBRARY_ADD_USAGE_DESCRIPTION = "Sideline Social saves a photo to your photo library only when you choose Save Photo.";
 const IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION_ES = "Sideline Social te permite elegir una foto cuando envías un mensaje con imagen en un chat privado de amistades. Los metadatos de la foto se eliminan antes de subirla.";
 const IOS_PHOTO_LIBRARY_ADD_USAGE_DESCRIPTION_ES = "Sideline Social guarda una foto en tu fototeca solo cuando eliges Guardar foto.";
+const IOS_CALENDAR_USAGE_DESCRIPTION = "Sideline Social adds a Team event to your calendar only when you choose Add to Calendar. It does not read or upload your other calendar events.";
+const IOS_CALENDAR_USAGE_DESCRIPTION_ES = "Sideline Social agrega un evento del equipo a tu calendario solo cuando eliges Agregar al calendario. No lee ni sube los demás eventos de tu calendario.";
 
 function resolveProductionExpoConfig() {
   const expoCli = path.join(process.cwd(), "node_modules", "expo", "bin", "cli");
@@ -53,6 +55,10 @@ const spanishLocale = JSON.parse(read("config", "locales", "es.json"));
 const eas = JSON.parse(read("eas.json"));
 const resolvedConfig = resolveProductionExpoConfig();
 const resolvedInfoPlist = resolvedConfig.ios?.infoPlist ?? {};
+const resolvedAndroidPermissions = resolvedConfig._internal?.modResults?.android?.manifest?.manifest?.["uses-permission"] ?? [];
+const resolvedAndroidCalendarPermissions = resolvedAndroidPermissions.filter(
+  (permission) => permission?.$?.["android:name"]?.includes("CALENDAR"),
+);
 
 assert.equal(config.includes('bundleIdentifier: IOS_BUNDLE_IDENTIFIER'), true);
 assert.equal(config.includes('supportsTablet: false'), true);
@@ -107,6 +113,7 @@ assert.match(config, /locationAlwaysPermission:\s*false/);
 assert.equal(config.includes("motionUsagePermission: IOS_MOTION_USAGE_DESCRIPTION"), true);
 assert.equal(config.includes("motionUsagePermission: false"), false);
 assert.match(config, /record a voice message in a chat or team conversation/);
+assert.match(config, /"expo-calendar"[\s\S]*writeOnlyCalendarPermission: IOS_CALENDAR_USAGE_DESCRIPTION[\s\S]*remindersPermission: false[\s\S]*writeOnlyAccess: true/);
 assert.equal(resolvedConfig.version, "1.0.0");
 assert.equal(resolvedConfig.ios?.bundleIdentifier, "com.sidelinesocial.app");
 assert.equal(resolvedConfig.ios?.usesAppleSignIn, true);
@@ -120,6 +127,20 @@ assert.equal(resolvedInfoPlist.NSMicrophoneUsageDescription, IOS_MICROPHONE_USAG
 assert.equal(resolvedInfoPlist.NSMotionUsageDescription, IOS_MOTION_USAGE_DESCRIPTION);
 assert.equal(resolvedInfoPlist.NSPhotoLibraryUsageDescription, IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION);
 assert.equal(resolvedInfoPlist.NSPhotoLibraryAddUsageDescription, IOS_PHOTO_LIBRARY_ADD_USAGE_DESCRIPTION);
+assert.equal(resolvedInfoPlist.NSCalendarsUsageDescription, IOS_CALENDAR_USAGE_DESCRIPTION);
+assert.equal(resolvedInfoPlist.NSCalendarsWriteOnlyAccessUsageDescription, IOS_CALENDAR_USAGE_DESCRIPTION);
+assert.equal(resolvedInfoPlist.NSCalendarsFullAccessUsageDescription, undefined);
+assert.equal(resolvedInfoPlist.NSRemindersUsageDescription, undefined);
+assert.equal(resolvedInfoPlist.NSRemindersFullAccessUsageDescription, undefined);
+assert.deepEqual(
+  resolvedAndroidCalendarPermissions.map((permission) => permission.$["android:name"]).sort(),
+  ["android.permission.READ_CALENDAR", "android.permission.WRITE_CALENDAR"],
+);
+assert.equal(
+  resolvedAndroidCalendarPermissions.every((permission) => permission.$["tools:node"] === "remove"),
+  true,
+  "resolved Android config must block rather than grant calendar permissions",
+);
 assert.equal(resolvedInfoPlist.ITSAppUsesNonExemptEncryption, false);
 assert.equal(
   englishLocale.ios.NSMicrophoneUsageDescription,
@@ -137,6 +158,8 @@ assert.equal(
   englishLocale.ios.NSPhotoLibraryAddUsageDescription,
   IOS_PHOTO_LIBRARY_ADD_USAGE_DESCRIPTION,
 );
+assert.equal(englishLocale.ios.NSCalendarsUsageDescription, IOS_CALENDAR_USAGE_DESCRIPTION);
+assert.equal(englishLocale.ios.NSCalendarsWriteOnlyAccessUsageDescription, IOS_CALENDAR_USAGE_DESCRIPTION);
 assert.equal(
   spanishLocale.ios.NSMicrophoneUsageDescription,
   "Sideline Social usa tu micrófono únicamente cuando eliges grabar un mensaje de voz en un chat o una conversación del equipo.",
@@ -153,5 +176,7 @@ assert.equal(
   spanishLocale.ios.NSPhotoLibraryAddUsageDescription,
   IOS_PHOTO_LIBRARY_ADD_USAGE_DESCRIPTION_ES,
 );
+assert.equal(spanishLocale.ios.NSCalendarsUsageDescription, IOS_CALENDAR_USAGE_DESCRIPTION_ES);
+assert.equal(spanishLocale.ios.NSCalendarsWriteOnlyAccessUsageDescription, IOS_CALENDAR_USAGE_DESCRIPTION_ES);
 
 console.log("iOS config, contextual permissions, account deletion, and legal/settings discoverability checks passed.");

@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  AccessibilityInfo,
+  ActivityIndicator,
+  Alert,
+  findNodeHandle,
+  Linking,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { ArrowLeft, CalendarPlus, Clock3, MapPin, Pencil, Trash2, type LucideIcon } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -16,7 +27,11 @@ import {
   type TeamScheduleAccess,
   type TeamScheduleEvent,
 } from "@/services/teamScheduleService";
-import { shouldOfferCalendarSettings, type TeamScheduleCalendarErrorCode } from "@/utils/teamScheduleCalendarCore";
+import {
+  isTeamScheduleCalendarErrorCode,
+  shouldOfferCalendarSettings,
+  type TeamScheduleCalendarErrorCode,
+} from "@/utils/teamScheduleCalendarCore";
 
 export default function TeamScheduleEventDetailScreen() {
   const { i18n, t } = useTranslation();
@@ -25,6 +40,8 @@ export default function TeamScheduleEventDetailScreen() {
   const eventId = normalizeParam(params.eventId);
   const notificationId = normalizeParam(params.notificationId);
   const acknowledged = useRef(false);
+  const calendarActionRef = useRef<React.ElementRef<typeof TouchableOpacity>>(null);
+  const calendarBusyRef = useRef(false);
   const [access, setAccess] = useState<TeamScheduleAccess | null>(null);
   const [event, setEvent] = useState<TeamScheduleEvent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,26 +75,33 @@ export default function TeamScheduleEventDetailScreen() {
   useEffect(() => { void load(); }, [load]);
 
   const addToCalendar = useCallback(async () => {
-    if (!event || busy) return;
+    if (!event || busy || calendarBusyRef.current) return;
+    calendarBusyRef.current = true;
     setBusy("calendar");
+    AccessibilityInfo.announceForAccessibility(t("schedule.calendar.opening"));
     try {
-      const result = await addTeamEventToPersonalCalendar(event);
-      if (result === "saved") Alert.alert(t("schedule.calendar.savedTitle"), t("schedule.calendar.savedBody"));
+      const result = await addTeamEventToPersonalCalendar(event, t("schedule.calendar.cancelledTitlePrefix"));
+      if (result === "saved") {
+        AccessibilityInfo.announceForAccessibility(t("schedule.calendar.savedTitle"));
+        Alert.alert(t("schedule.calendar.savedTitle"), t("schedule.calendar.savedBody"));
+      }
     } catch (nextError) {
       const code = errorCode(nextError);
-      if (shouldOfferCalendarSettings(code as TeamScheduleCalendarErrorCode)) {
+      if (shouldOfferCalendarSettings(code)) {
         Alert.alert(t("schedule.calendar.permissionTitle"), t("schedule.calendar.permissionPermanent"), [
           { text: t("common.cancel"), style: "cancel" },
           { text: t("schedule.calendar.openSettings"), onPress: () => { void openCalendarSettings(); } },
         ]);
       } else {
-        const key = ["calendar_permission_denied", "calendar_unavailable", "calendar_build_required"].includes(code)
-          ? code
-          : "calendar_failed";
-        Alert.alert(t("schedule.calendar.errorTitle"), t(`schedule.calendar.${key}`));
+        Alert.alert(t("schedule.calendar.errorTitle"), t(`schedule.calendar.${code}`));
       }
     } finally {
+      calendarBusyRef.current = false;
       setBusy(null);
+      setTimeout(() => {
+        const node = findNodeHandle(calendarActionRef.current);
+        if (node) AccessibilityInfo.setAccessibilityFocus(node);
+      }, 100);
     }
   }, [busy, event, t]);
 
@@ -150,7 +174,15 @@ export default function TeamScheduleEventDetailScreen() {
 
             <View style={styles.actions}>
               {event.address ? <Action label={t("schedule.map.open")} Icon={MapPin} onPress={() => { void openMap(); }} /> : null}
-              <Action busy={busy === "calendar"} label={t("schedule.calendar.add")} Icon={CalendarPlus} onPress={() => { void addToCalendar(); }} />
+              <Action
+                accessibilityHint={t("schedule.calendar.addHint")}
+                buttonRef={calendarActionRef}
+                busy={busy === "calendar"}
+                disabled={Boolean(busy)}
+                label={t("schedule.calendar.add")}
+                Icon={CalendarPlus}
+                onPress={() => { void addToCalendar(); }}
+              />
               {canManage ? <Action label={t("schedule.editEvent")} Icon={Pencil} onPress={() => router.push({ pathname: "/teams/[teamId]/schedule/edit", params: { teamId, eventId: event.id } } as never)} /> : null}
             </View>
 
@@ -171,8 +203,16 @@ function Detail({ icon, label, value }: { icon?: React.ReactNode; label: string;
   return <View style={styles.detailRow}>{icon}<View style={styles.detailCopy}><Text style={styles.detailLabel}>{label}</Text><Text style={styles.detailValue}>{value}</Text></View></View>;
 }
 
-function Action({ busy, Icon, label, onPress }: { busy?: boolean; Icon: LucideIcon; label: string; onPress: () => void }) {
-  return <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy }} disabled={busy} onPress={onPress} style={styles.action}>{busy ? <ActivityIndicator color={Colors.communicationLink} /> : <Icon color={Colors.communicationLink} size={20} />}<Text style={styles.actionText}>{label}</Text></TouchableOpacity>;
+function Action({ accessibilityHint, buttonRef, busy, disabled, Icon, label, onPress }: {
+  accessibilityHint?: string;
+  buttonRef?: React.Ref<React.ElementRef<typeof TouchableOpacity>>;
+  busy?: boolean;
+  disabled?: boolean;
+  Icon: LucideIcon;
+  label: string;
+  onPress: () => void;
+}) {
+  return <TouchableOpacity ref={buttonRef} accessibilityHint={accessibilityHint} accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ busy, disabled: disabled || busy }} disabled={disabled || busy} onPress={onPress} style={styles.action}>{busy ? <ActivityIndicator color={Colors.communicationLink} /> : <Icon color={Colors.communicationLink} size={20} />}<Text style={styles.actionText}>{label}</Text></TouchableOpacity>;
 }
 
 function formatEventDate(event: TeamScheduleEvent, locale: string, allDayLabel: string) {
@@ -189,8 +229,9 @@ function normalizeParam(value?: string | string[]) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
-function errorCode(error: unknown) {
-  return typeof error === "object" && error && "code" in error ? String(error.code) : "calendar_failed";
+function errorCode(error: unknown): TeamScheduleCalendarErrorCode {
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : null;
+  return isTeamScheduleCalendarErrorCode(code) ? code : "calendar_unexpected";
 }
 
 const styles = StyleSheet.create({
@@ -216,7 +257,7 @@ const styles = StyleSheet.create({
   detailValue: { color: Colors.textHeading, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21 },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   action: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.communicationLink, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.xs, minHeight: 46, paddingHorizontal: Spacing.md },
-  actionText: { color: Colors.communicationLink, fontFamily: Typography.bodySemiBold, fontSize: 13 },
+  actionText: { color: Colors.communicationLink, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   deleteButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.xs, justifyContent: "center", minHeight: 46 },
   deleteText: { color: Colors.primary, fontFamily: Typography.bodySemiBold },
 });

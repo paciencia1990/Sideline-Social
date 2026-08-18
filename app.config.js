@@ -155,6 +155,15 @@ module.exports = ({ config }) => ({
     "@react-native-community/datetimepicker",
     "expo-web-browser",
     "expo-asset",
+    [
+      "expo-calendar",
+      {
+        calendarPermission: IOS_CALENDAR_USAGE_DESCRIPTION,
+        writeOnlyCalendarPermission: IOS_CALENDAR_USAGE_DESCRIPTION,
+        remindersPermission: false,
+        writeOnlyAccess: true,
+      },
+    ],
     "expo-image",
     [
       "expo-image-picker",
