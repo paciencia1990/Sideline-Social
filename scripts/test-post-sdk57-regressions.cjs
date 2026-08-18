@@ -216,6 +216,7 @@ for (let index = 1; index <= 21; index += 1) {
 
 const passwordInput = read("components", "PasswordInput.tsx");
 const emailLogin = read("app", "(auth)", "email-login.tsx");
+const signIn = read("app", "(auth)", "sign-in.tsx");
 const signUp = read("app", "(auth)", "sign-up.tsx");
 const translations = read("i18n", "index.ts");
 assert.match(passwordInput, /useState\(false\)/, "Password visibility must default to hidden.");
@@ -223,7 +224,8 @@ assert.match(passwordInput, /secureTextEntry=!\{?passwordVisible\}?|secureTextEn
 assert.match(passwordInput, /accessibilityRole="button"/, "The eye toggle must expose a button role.");
 assert.match(passwordInput, /height: 44[\s\S]*width: 44/, "The eye toggle must meet the 44x44 touch target.");
 assert.match(passwordInput, /inputRef\.current\?\.focus\(\)/, "Toggling must preserve input focus.");
-assert.match(emailLogin, /<PasswordInput/, "Email Sign In must use the shared password input.");
+assert.match(emailLogin, /export \{ default \} from ["']\.\/sign-in["']/, "Email Login must remain an alias of Sign In.");
+assert.match(signIn, /<PasswordInput/, "Email Sign In must use the shared password input.");
 assert.match(signUp, /<PasswordInput/, "Create Account must use the shared password input.");
 assert.equal((translations.match(/showPassword:/g) ?? []).length, 2, "Show-password text must resolve in English and Spanish.");
 assert.equal((translations.match(/hidePassword:/g) ?? []).length, 2, "Hide-password text must resolve in English and Spanish.");

@@ -210,15 +210,18 @@ async function loadParentTeamSummary(
     .map((announcementDoc) => normalizeAnnouncement(announcementDoc.id, announcementDoc.data()))
     .filter((announcement) => announcement.audience !== "staff");
 
-  const authorProfiles = new Map((await getPublicUserProfiles(
-    visibleAnnouncements.map((announcement) => announcement.createdBy).filter(Boolean),
-  ).catch(() => [])).map((profile) => [profile.userId, profile]));
-
-  const readStates = await Promise.all(
-    visibleAnnouncements.map((announcement) =>
-      getDoc(doc(db, "teams", team.id, "announcements", announcement.id, "reads", user.uid)),
+  const [profileResults, readStates, coachIdentity] = await Promise.all([
+    getPublicUserProfiles(
+      visibleAnnouncements.map((announcement) => announcement.createdBy).filter(Boolean),
+    ).catch(() => []),
+    Promise.all(
+      visibleAnnouncements.map((announcement) =>
+        getDoc(doc(db, "teams", team.id, "announcements", announcement.id, "reads", user.uid)),
+      ),
     ),
-  );
+    resolveCoachName(team),
+  ]);
+  const authorProfiles = new Map(profileResults.map((profile) => [profile.userId, profile]));
   const announcements = visibleAnnouncements.map((announcement, index) => ({
     ...announcement,
     createdByName: authorProfiles.get(announcement.createdBy)?.displayName
@@ -226,8 +229,6 @@ async function loadParentTeamSummary(
     authorProfileState: authorProfiles.get(announcement.createdBy)?.profileState,
     isRead: readStates[index]?.exists() ?? false,
   }));
-  const coachIdentity = await resolveCoachName(team);
-
   return {
     teamId: team.id,
     team,

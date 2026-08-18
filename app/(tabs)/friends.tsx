@@ -42,6 +42,7 @@ import { createOrOpenDirectConversation } from "@/services/chatService";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import { formatPublicUserName, getFriendNameInitials } from "@/utils/friendPrivacy";
 import { getSentAge, reconcilePendingFriendRequests } from "@/utils/friendRequestState";
+import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 
 function SectionTitle({ title, count }: { title: string; count?: number }) {
   return (
@@ -411,12 +412,15 @@ export default function FriendsScreen() {
 
     setLoadError(null);
     try {
-      const [profile, nextFriends, nextRequestGroups, nextSuggested] = await Promise.all([
-        getCurrentUserProfile(),
-        getFriends(user.uid),
-        getFriendRequestGroups(user.uid),
-        searchUsers(""),
-      ]);
+      const [profile, nextFriends, nextRequestGroups, nextSuggested] = await measureDevelopmentPerformance(
+        "friends.overview",
+        () => Promise.all([
+          getCurrentUserProfile(),
+          getFriends(user.uid),
+          getFriendRequestGroups(user.uid),
+          searchUsers(""),
+        ]),
+      );
       if (friendsLoadSequence.current !== requestSequence) return;
       const reconciledRequests = reconcilePendingFriendRequests(
         nextRequestGroups.incoming,

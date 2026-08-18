@@ -86,6 +86,23 @@ function hasIdentifierAttribute(node, attributeName, identifierName) {
   return Boolean(expression && ts.isIdentifier(expression) && expression.text === identifierName);
 }
 
+function attributeReferencesIdentifier(node, attributeName, identifierName) {
+  const attribute = getJsxAttribute(node, attributeName);
+  const expression = attribute?.initializer && ts.isJsxExpression(attribute.initializer)
+    ? attribute.initializer.expression
+    : null;
+  let found = false;
+  const visit = (current) => {
+    if (ts.isIdentifier(current) && current.text === identifierName) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(current, visit);
+  };
+  if (expression) visit(expression);
+  return found;
+}
+
 function collectJsx(sourceNode, predicate) {
   const matches = [];
   const visit = (node) => {
@@ -262,7 +279,7 @@ function assertProtectedTypingSurface(parts, inputBindings, submitControl) {
     sourceFile,
     (node) =>
       getJsxTagName(node) === submitControl.tagName &&
-      hasIdentifierAttribute(node, "onPress", submitControl.handler),
+      attributeReferencesIdentifier(node, "onPress", submitControl.handler),
   );
   assert.equal(
     submitControls.length,
@@ -307,12 +324,12 @@ assertProtectedTypingSurface(
   { tagName: "TouchableOpacity", handler: "handleReset" },
 );
 assertProtectedTypingSurface(
-  ["app", "(auth)", "email-login.tsx"],
+  ["app", "(auth)", "sign-in.tsx"],
   [
     { tagName: "TextInput", valueBinding: "email", changeHandler: "setEmail" },
     { tagName: "PasswordInput", valueBinding: "password", changeHandler: "setPassword" },
   ],
-  { tagName: "TouchableOpacity", handler: "handleSignIn" },
+  { tagName: "PrimaryButton", handler: "handleEmailSignIn" },
 );
 assertProtectedTypingSurface(
   ["app", "(auth)", "sign-up.tsx"],
@@ -324,7 +341,7 @@ assertProtectedTypingSurface(
     { tagName: "TextInput", valueBinding: "zipCode", changeHandler: "setZipCode" },
     { tagName: "TextInput", valueBinding: "sport", changeHandler: "setSport" },
   ],
-  { tagName: "TouchableOpacity", handler: "handleCreate" },
+  { tagName: "PrimaryButton", handler: "handleCreate" },
 );
 assertProtectedTypingSurface(
   ["app", "(tabs)", "profile.tsx"],

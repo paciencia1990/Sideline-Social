@@ -23,6 +23,7 @@
     "test:android-variants": "node scripts/test-android-variants-core.cjs",
     "audit:app-size": "node scripts/audit-app-size.cjs",
     "test:app-size-audit": "node scripts/test-app-size-audit.cjs",
+    "test:performance-core": "node scripts/test-performance-core.cjs",
     "test:auth-navigation": "node scripts/test-auth-navigation-core.cjs",
     "test:federated-auth": "node scripts/test-federated-auth-core.cjs",
     "test:apple-authorization-revocation": "npm --prefix functions run build && node scripts/test-apple-authorization-revocation.cjs",

@@ -1,8 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import i18n from "@/i18n";
 import { useAuth } from "@/context/AuthContext";
 import { resolveInitialMode, type AppMode } from "@/utils/onboardingMode";
+import { startDevelopmentPerformanceTrace } from "@/utils/performanceDiagnostics";
 
 type SupportedLanguage = "en" | "es";
 
@@ -46,20 +47,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let isMounted = true;
 
     async function hydrateMode() {
-      if (!userId) {
-        setActiveModeState("parent");
-        await AsyncStorage.removeItem(MODE_STORAGE_KEY).catch(() => undefined);
-        if (isMounted) setHydratedUserId(null);
-        return;
+      const completeTrace = startDevelopmentPerformanceTrace("startup.mode-hydration");
+      try {
+        if (!userId) {
+          setActiveModeState("parent");
+          await AsyncStorage.removeItem(MODE_STORAGE_KEY).catch(() => undefined);
+          if (isMounted) setHydratedUserId(null);
+          return;
+        }
+
+        const storedMode = await AsyncStorage.getItem(MODE_STORAGE_KEY).catch(() => null);
+        if (!isMounted) return;
+
+        const nextMode = resolveInitialMode(user, storedMode);
+        setActiveModeState(nextMode);
+        await AsyncStorage.setItem(MODE_STORAGE_KEY, nextMode).catch(() => undefined);
+        if (isMounted) setHydratedUserId(userId);
+      } finally {
+        completeTrace();
       }
-
-      const storedMode = await AsyncStorage.getItem(MODE_STORAGE_KEY).catch(() => null);
-      if (!isMounted) return;
-
-      const nextMode = resolveInitialMode(user, storedMode);
-      setActiveModeState(nextMode);
-      await AsyncStorage.setItem(MODE_STORAGE_KEY, nextMode).catch(() => undefined);
-      if (isMounted) setHydratedUserId(userId);
     }
 
     void hydrateMode();
@@ -91,8 +97,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     AsyncStorage.setItem(MODE_STORAGE_KEY, nextMode).catch(() => undefined);
   }, []);
 
+  const value = useMemo<AppContextType>(() => ({
+    language,
+    setLanguage,
+    theme: "light",
+    activeMode,
+    modeHydrated,
+    setActiveMode,
+  }), [activeMode, language, modeHydrated, setActiveMode, setLanguage]);
+
   return (
-    <AppContext.Provider value={{ language, setLanguage, theme: "light", activeMode, modeHydrated, setActiveMode }}>
+    <AppContext.Provider value={value}>
       {children}
     </AppContext.Provider>
   );

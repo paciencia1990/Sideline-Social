@@ -51,7 +51,6 @@ export default function RootLayout() {
   const navigationTheme = useMemo(() => createNavigationTheme(), []);
 
   const [fontsLoaded, fontError] = useFonts({
-    SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
     PlayfairDisplay_700Bold,
     PlayfairDisplay_700Bold_Italic,
     Montserrat_400Regular,

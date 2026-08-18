@@ -2,6 +2,8 @@ import {
   arrayUnion,
   collection,
   doc,
+  type DocumentData,
+  type DocumentSnapshot,
   getDoc,
   getDocs,
   serverTimestamp,
@@ -89,6 +91,20 @@ export type TeamInput = {
 
 const COACH_ROLES: TeamRole[] = ["coach", "assistantCoach", "teamParent"];
 const INVITE_CHARACTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+let userTeamIndexRequest: {
+  promise: Promise<DocumentSnapshot<DocumentData>>;
+  userId: string;
+} | null = null;
+
+function getUserTeamIndex(userId: string) {
+  if (userTeamIndexRequest?.userId === userId) return userTeamIndexRequest.promise;
+  const request = getDoc(doc(db, "users", userId));
+  const trackedRequest = request.finally(() => {
+    if (userTeamIndexRequest?.promise === trackedRequest) userTeamIndexRequest = null;
+  });
+  userTeamIndexRequest = { promise: trackedRequest, userId };
+  return trackedRequest;
+}
 
 export function isCoachRole(role?: string | null) {
   return COACH_ROLES.includes(role as TeamRole);
@@ -143,7 +159,7 @@ export async function getCurrentUserTeamMemberships(options: TeamLookupOptions =
   if (!user) return [];
 
   try {
-    const userSnapshot = await getDoc(doc(db, "users", user.uid));
+    const userSnapshot = await getUserTeamIndex(user.uid);
     if (!userSnapshot.exists()) {
       return [];
     }
@@ -210,7 +226,7 @@ function readIndexedTeamIds(data: Record<string, unknown>) {
 async function getIndexedTeamCount(field: "archivedCoachTeamIds" | "archivedParentTeamIds") {
   const user = auth.currentUser;
   if (!user) return 0;
-  const userSnapshot = await getDoc(doc(db, "users", user.uid));
+  const userSnapshot = await getUserTeamIndex(user.uid);
   if (!userSnapshot.exists()) return 0;
   return uniqueStrings(readStringArray(userSnapshot.data()[field])).length;
 }
@@ -228,7 +244,7 @@ async function getIndexedTeamMembershipsPage(
   const safePageSize = Number.isInteger(pageSize) ? Math.min(Math.max(pageSize, 1), 25) : 10;
 
   try {
-    const userSnapshot = await getDoc(doc(db, "users", user.uid));
+    const userSnapshot = await getUserTeamIndex(user.uid);
     if (!userSnapshot.exists()) return { memberships: [], totalCount: 0, hasMore: false, nextOffset: 0 };
 
     const teamIds = uniqueStrings(readStringArray(userSnapshot.data()[field]));

@@ -43,7 +43,7 @@ for (const route of [
 }
 
 for (const route of [
-  ["app", "(auth)", "email-login.tsx"],
+  ["app", "(auth)", "sign-in.tsx"],
   ["app", "(auth)", "forgot-password.tsx"],
   ["app", "(auth)", "sign-up.tsx"],
   ["app", "(tabs)", "friends.tsx"],
@@ -63,6 +63,13 @@ for (const route of [
   const source = read(...route);
   assert.match(source, /KeyboardAwareScrollView/, `${route.join("/")} uses shared keyboard protection`);
 }
+
+const emailLoginAlias = read("app", "(auth)", "email-login.tsx");
+assert.match(
+  emailLoginAlias,
+  /export \{ default \} from ["']\.\/sign-in["']/,
+  "email-login remains an alias of the keyboard-protected sign-in route",
+);
 
 const friendConversation = read("app", "(social)", "chat", "[chatId].tsx");
 assert.match(friendConversation, /KeyboardAvoidingView/);

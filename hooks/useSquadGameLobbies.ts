@@ -8,6 +8,7 @@ import {
   type GameJoinCodeFailureReason,
   type GameLobbySummary,
 } from "@/services/gameJoinCodeService";
+import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 
 type LobbyDirectoryState = "idle" | "loading" | "ready" | "permission-error" | "network-error";
 
@@ -36,7 +37,10 @@ export function useSquadGameLobbies({ enabled, squadId }: UseSquadGameLobbiesInp
     const requestVersion = ++requestVersionRef.current;
     if (!background) setState("loading");
     try {
-      const result = await listGameLobbies({ squadId });
+      const result = await measureDevelopmentPerformance(
+        "games.lobby-directory",
+        () => listGameLobbies({ squadId }),
+      );
       if (requestVersion !== requestVersionRef.current) return;
       setLobbies(result.lobbies);
       setFailureReason(null);

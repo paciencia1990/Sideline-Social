@@ -291,10 +291,12 @@ export async function fetchAppConfig(): Promise<AppConfig> {
 export async function fetchUserSquadState(userId: string): Promise<UserSquadState> {
   if (!userId) return { squadIds: [], selectedSquadId: null };
   try {
-    const snapshot = await getDoc(doc(db, "users", userId));
+    const [snapshot, localSelected] = await Promise.all([
+      getDoc(doc(db, "users", userId)),
+      AsyncStorage.getItem(selectedSquadStorageKey(userId)),
+    ]);
     const squadIds = readStringArray(snapshot.data()?.squadIds);
     const serverSelected = readString(snapshot.data()?.selectedSquadId) || null;
-    const localSelected = await AsyncStorage.getItem(selectedSquadStorageKey(userId));
     const selectedSquadId = serverSelected || localSelected || null;
     return { squadIds, selectedSquadId };
   } catch (error) {

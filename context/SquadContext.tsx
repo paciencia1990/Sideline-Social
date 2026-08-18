@@ -26,6 +26,7 @@ import {
   searchVenueSquads,
   updateMemberLastActive,
 } from "@/services/squadService";
+import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 
 interface SquadContextType {
   nearbySquads: Squad[];
@@ -86,61 +87,71 @@ export function SquadProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const activeUserId = useRef(user?.uid);
+  const membershipLoad = useRef<{ userId: string | null; promise: Promise<void> } | null>(null);
   const membershipRequestId = useRef(0);
   const squadSearchRequestId = useRef(0);
 
-  const reloadMemberships = useCallback(async () => {
-    const requestUserId = user?.uid;
-    const requestId = ++membershipRequestId.current;
-    if (!requestUserId) {
-      setMySquadIds([]);
-      setMySquads([]);
-      setSelectedSquadId(null);
-      setMembershipError(null);
-      setSelectionWasStale(false);
-      setMembershipLoading(false);
-      return;
-    }
+  const reloadMemberships = useCallback(() => {
+    const requestUserId = user?.uid ?? null;
+    if (membershipLoad.current?.userId === requestUserId) return membershipLoad.current.promise;
 
-    setMembershipLoading(true);
-    setMembershipError(null);
-    try {
-      const state = await fetchUserSquadState(requestUserId);
-      const squads = await fetchSquadsByIds(state.squadIds);
-      if (activeUserId.current !== requestUserId || requestId !== membershipRequestId.current) return;
-
-      const validIds = squads.map((squad) => squad.squadId);
-      const hadStaleSelection = Boolean(state.selectedSquadId && !validIds.includes(state.selectedSquadId));
-      const nextSelected = state.selectedSquadId && validIds.includes(state.selectedSquadId)
-        ? state.selectedSquadId
-        : null;
-
-      setMySquadIds(validIds);
-      setMySquads(squads);
-      setSelectedSquadId(nextSelected);
-      setSelectionWasStale(hadStaleSelection && validIds.length > 0);
-
-      if (nextSelected !== state.selectedSquadId) {
-        try {
-          await persistSelectedSquad(requestUserId, nextSelected);
-        } catch (selectionError) {
-          logContextDiagnostic("repair-selection", selectionError);
-        }
-      }
-    } catch (nextError) {
-      if (activeUserId.current === requestUserId && requestId === membershipRequestId.current) {
-        logContextDiagnostic("load-memberships", nextError);
+    const request = measureDevelopmentPerformance("squads.membership-hydration", async () => {
+      const requestId = ++membershipRequestId.current;
+      if (!requestUserId) {
         setMySquadIds([]);
         setMySquads([]);
         setSelectedSquadId(null);
-        setMembershipError("membership_load_failed");
+        setMembershipError(null);
         setSelectionWasStale(false);
-      }
-    } finally {
-      if (activeUserId.current === requestUserId && requestId === membershipRequestId.current) {
         setMembershipLoading(false);
+        return;
       }
-    }
+
+      setMembershipLoading(true);
+      setMembershipError(null);
+      try {
+        const state = await fetchUserSquadState(requestUserId);
+        const squads = await fetchSquadsByIds(state.squadIds);
+        if (activeUserId.current !== requestUserId || requestId !== membershipRequestId.current) return;
+
+        const validIds = squads.map((squad) => squad.squadId);
+        const hadStaleSelection = Boolean(state.selectedSquadId && !validIds.includes(state.selectedSquadId));
+        const nextSelected = state.selectedSquadId && validIds.includes(state.selectedSquadId)
+          ? state.selectedSquadId
+          : null;
+
+        setMySquadIds(validIds);
+        setMySquads(squads);
+        setSelectedSquadId(nextSelected);
+        setSelectionWasStale(hadStaleSelection && validIds.length > 0);
+
+        if (nextSelected !== state.selectedSquadId) {
+          try {
+            await persistSelectedSquad(requestUserId, nextSelected);
+          } catch (selectionError) {
+            logContextDiagnostic("repair-selection", selectionError);
+          }
+        }
+      } catch (nextError) {
+        if (activeUserId.current === requestUserId && requestId === membershipRequestId.current) {
+          logContextDiagnostic("load-memberships", nextError);
+          setMySquadIds([]);
+          setMySquads([]);
+          setSelectedSquadId(null);
+          setMembershipError("membership_load_failed");
+          setSelectionWasStale(false);
+        }
+      } finally {
+        if (activeUserId.current === requestUserId && requestId === membershipRequestId.current) {
+          setMembershipLoading(false);
+        }
+      }
+    });
+    const trackedRequest = request.finally(() => {
+      if (membershipLoad.current?.promise === trackedRequest) membershipLoad.current = null;
+    });
+    membershipLoad.current = { userId: requestUserId, promise: trackedRequest };
+    return trackedRequest;
   }, [user?.uid]);
 
   useEffect(() => {
@@ -236,28 +247,50 @@ export function SquadProvider({ children }: { children: ReactNode }) {
     [mySquads, selectedSquadId],
   );
 
+  const value = useMemo<SquadContextType>(() => ({
+    nearbySquads,
+    mySquadIds,
+    mySquads,
+    selectedSquadId,
+    currentSquad,
+    loading,
+    membershipLoading,
+    membershipError,
+    selectionWasStale,
+    error,
+    appConfig,
+    fetchSquads,
+    searchSquads,
+    joinSquad,
+    createSquad,
+    leaveSquad,
+    selectSquad,
+    reloadMemberships,
+    refreshLastActive,
+  }), [
+    appConfig,
+    createSquad,
+    currentSquad,
+    error,
+    fetchSquads,
+    joinSquad,
+    leaveSquad,
+    loading,
+    membershipError,
+    membershipLoading,
+    mySquadIds,
+    mySquads,
+    nearbySquads,
+    refreshLastActive,
+    reloadMemberships,
+    searchSquads,
+    selectSquad,
+    selectedSquadId,
+    selectionWasStale,
+  ]);
+
   return (
-    <SquadContext.Provider value={{
-      nearbySquads,
-      mySquadIds,
-      mySquads,
-      selectedSquadId,
-      currentSquad,
-      loading,
-      membershipLoading,
-      membershipError,
-      selectionWasStale,
-      error,
-      appConfig,
-      fetchSquads,
-      searchSquads,
-      joinSquad,
-      createSquad,
-      leaveSquad,
-      selectSquad,
-      reloadMemberships,
-      refreshLastActive,
-    }}>
+    <SquadContext.Provider value={value}>
       {children}
     </SquadContext.Provider>
   );

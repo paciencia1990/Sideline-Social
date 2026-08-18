@@ -44,6 +44,7 @@ import { completeLocalSignOut } from "@/utils/localUserStateCore";
 import { readModeOnboardingState, type AppMode } from "@/utils/onboardingMode";
 import { resolveDisplayName } from "@/utils/profileName";
 import { setVoicePlaybackAuthorizationContext } from "@/utils/voicePlaybackCore";
+import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 
 export type AppUser = {
   uid: string;
@@ -169,7 +170,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setVoicePlaybackAuthorizationContext(nextUser.uid);
       setFirebaseUser(nextUser);
       setLoading(true);
-      void getDoc(doc(db, "users", nextUser.uid))
+      void measureDevelopmentPerformance(
+        "startup.auth-profile",
+        () => getDoc(doc(db, "users", nextUser.uid)),
+      )
         .then((profileDoc) => ({ exists: profileDoc.exists(), profile: profileDoc.data() }))
         .catch((error: unknown) => {
           console.warn("[Auth] profile hydration unavailable:", getErrorCode(error));

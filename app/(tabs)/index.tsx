@@ -31,6 +31,7 @@ import {
 } from "@/services/notificationService";
 import { formatUnreadBadgeCount } from "@/utils/notificationCore";
 import { subscribeToUnreadFriendConversationCount } from "@/services/chatService";
+import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 import type { GameJoinCodeType } from "@/services/gameJoinCodeService";
 import {
   getParentTeamsOverview,
@@ -55,7 +56,7 @@ function gameTitleKey(gameType: GameJoinCodeType) {
 }
 
 export default function HomeScreen() {
-  const { i18n, t } = useTranslation();
+  const { t } = useTranslation();
   const { user } = useAuth();
   const {
     currentSquad,
@@ -99,16 +100,6 @@ export default function HomeScreen() {
   const unreadBadge = formatUnreadBadgeCount(safeUnreadCount);
   const localPerkPreviewOffer = LOCAL_PERK_AD_PREVIEW_ENABLED ? getLocalPerkPreviewOffer(t) : null;
 
-  useEffect(() => {
-    if (__DEV__) {
-      console.log("[WeeklyChallenge:HomeMounted]", {
-        route: "/(tabs)/index",
-        userId: user?.uid ?? null,
-        language: i18n.language,
-      });
-    }
-  }, [i18n.language, user?.uid]);
-
   const loadMyTeams = useCallback(async () => {
     if (!user?.uid) {
       setMyTeamsOverview(null);
@@ -118,7 +109,10 @@ export default function HomeScreen() {
     setMyTeamsLoading(true);
     setMyTeamsError(null);
     try {
-      setMyTeamsOverview(await getParentTeamsOverview());
+      setMyTeamsOverview(await measureDevelopmentPerformance(
+        "home.parent-teams",
+        getParentTeamsOverview,
+      ));
     } catch (nextError) {
       console.warn("[HomeScreen] My Teams load error:", nextError);
       setMyTeamsError(t("myTeams.loadError"));
@@ -134,7 +128,7 @@ export default function HomeScreen() {
     try {
       const challengeResult = await (
         userId
-          ? getCurrentWeeklyChallenge()
+          ? measureDevelopmentPerformance("home.weekly-challenge", getCurrentWeeklyChallenge)
               .then((challenge) => ({ challenge, failed: false }))
               .catch((challengeLoadError) => {
                 console.warn("[HomeScreen] weekly challenge load error:", challengeLoadError);
