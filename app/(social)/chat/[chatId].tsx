@@ -28,6 +28,7 @@ import type { TFunction } from "i18next";
 import { Card } from "@/components/Card";
 import { FriendChatExpandedReactionPicker } from "@/components/FriendChatExpandedReactionPicker";
 import { FriendChatImageMessage } from "@/components/FriendChatImageMessage";
+import { FriendChatImageViewer } from "@/components/FriendChatImageViewer";
 import { FriendChatReactionTray, type FriendChatReactionTrayAnchor } from "@/components/FriendChatReactionTray";
 import { FriendChatSelectionOverflowMenu, type FriendChatOverflowAction } from "@/components/FriendChatSelectionOverflowMenu";
 import { MessageActionsModal, type MessageModalAction } from "@/components/MessageActionsModal";
@@ -45,6 +46,7 @@ import {
   FRIEND_CHAT_VOICE_LIMIT_MS,
   FRIEND_CHAT_VOICE_SIZE_LIMIT_BYTES,
   createChatClientMessageId,
+  deleteFriendChatMessageForEveryone,
   deleteFriendChatMessagesForMe,
   finalizeFriendChatImageMessage,
   finalizeFriendChatVoiceMessage,
@@ -56,7 +58,6 @@ import {
   mapFriendChatError,
   markFriendConversationRead,
   pinFriendChatMessage,
-  removeOwnFriendChatMessage,
   reportFriendChatMessage,
   reserveFriendChatImageUpload,
   reserveFriendChatVoiceUpload,
@@ -74,6 +75,7 @@ import {
   type FriendChatReactionEmoji,
   type FriendChatReplyContext,
 } from "@/services/chatService";
+import { clearFriendChatImageMemoryCache } from "@/services/friendChatImageCacheService";
 import {
   acknowledgeFriendChatImagePickerResult,
   claimFriendChatImagePickerResult,
@@ -90,6 +92,17 @@ import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import { clearPersistedVoicePlaybackArtifacts } from "@/services/voicePlaybackCleanupService";
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
 import { FriendChatPhotoSaveError } from "@/utils/friendChatPhotoSaveCore";
+import {
+  createFriendChatDateSeparator,
+  millisecondsUntilNextLocalDay,
+  shouldShowFriendChatDateSeparator,
+} from "@/utils/friendChatDateSeparatorCore";
+import {
+  deletionOperationKey,
+  reconcileFriendChatDeletionState,
+  type FriendChatDeletionMode,
+  type FriendChatDeletionTarget,
+} from "@/utils/friendChatDeletionCore";
 import {
   friendChatSendStatusTranslationKey,
   type FriendChatSendStatus,
@@ -109,11 +122,14 @@ function isFriendChatMessageForwardable(message: FriendChatMessage | null | unde
 }
 
 export default function FriendConversationScreen() {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
   const { user, loading: authLoading } = useAuth();
   const { chatId: rawChatId } = useLocalSearchParams<{ chatId?: string | string[] }>();
   const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
   const listRef = useRef<FlatListType<FriendChatMessage>>(null);
+  const deletionOperationsRef = useRef(new Set<string>());
+  const pendingDeletionsRef = useRef(new Map<string, FriendChatDeletionTarget<FriendChatMessage>>());
+  const serverMessagesRef = useRef<FriendChatMessage[]>([]);
   const keyboardVisibleRef = useRef(false);
   const imageDraftRef = useRef<LocalFriendChatImageDraft | null>(null);
   const imagePickerInFlightRef = useRef(false);
@@ -160,6 +176,8 @@ export default function FriendConversationScreen() {
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const [savingPhotoMessageId, setSavingPhotoMessageId] = useState<string | null>(null);
   const [unavailableImageMessageIds, setUnavailableImageMessageIds] = useState<string[]>([]);
+  const [viewerMessageId, setViewerMessageId] = useState<string | null>(null);
+  const [dateLabelNow, setDateLabelNow] = useState(() => new Date());
 
   const scrollToLatest = useCallback((animated: boolean) => {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
@@ -178,11 +196,21 @@ export default function FriendConversationScreen() {
     return messages.filter((message) => selected.has(message.messageId));
   }, [messages, selectedMessageIds]);
   const selectionMode = selectedMessageIds.length > 0;
+  const viewerMessage = useMemo(() => viewerMessageId
+    ? messages.find((message) => message.messageId === viewerMessageId && isFriendChatMessageInteractive(message)) ?? null
+    : null, [messages, viewerMessageId]);
 
   useEffect(() => { imageDraftRef.current = imageDraft; }, [imageDraft]);
   useEffect(() => { voiceDraftRef.current = voiceDraft; }, [voiceDraft]);
   useEffect(() => { currentChatIdRef.current = chatId; }, [chatId]);
   useEffect(() => { currentUserIdRef.current = user?.uid; }, [user?.uid]);
+  useEffect(() => {
+    const timeout = setTimeout(() => setDateLabelNow(new Date()), millisecondsUntilNextLocalDay(dateLabelNow));
+    return () => clearTimeout(timeout);
+  }, [dateLabelNow]);
+  useEffect(() => {
+    if (viewerMessageId && !viewerMessage) setViewerMessageId(null);
+  }, [viewerMessage, viewerMessageId]);
   useEffect(() => {
     const activeImageIds = new Set(messages
       .filter((message) => message.status === "active" && message.messageType === "image")
@@ -244,6 +272,8 @@ export default function FriendConversationScreen() {
     if (!user?.uid || !chatId) { setLoading(false); setErrorKey("chat.noAccess"); return; }
     let active = true;
     let unsubscribe = () => {};
+    const deletionOperations = deletionOperationsRef.current;
+    const pendingDeletions = pendingDeletionsRef.current;
     setAccess(null);
     setAccessResolvedChatId(null);
     setLoading(true);
@@ -260,7 +290,13 @@ export default function FriendConversationScreen() {
         if (nextAccess.member.status !== "active" || !nextAccess.member.joinedAt) { setErrorKey("chat.membershipEnded"); return; }
         setAccess(nextAccess);
         unsubscribe = listenToFriendChatMessages(chatId, user.uid, nextAccess.blockedUserIds, (items) => {
-          setMessages(items);
+          serverMessagesRef.current = items;
+          for (const [messageId, pending] of pendingDeletionsRef.current) {
+            if (pending.mode === "forEveryone" && items.some((item) => item.messageId === messageId && item.status === "removed")) {
+              pendingDeletionsRef.current.delete(messageId);
+            }
+          }
+          setMessages(reconcileFriendChatDeletionState(items, pendingDeletionsRef.current));
           setHasMore(items.length >= 50);
           setLoading(false);
           void markFriendConversationRead(chatId).catch(() => undefined);
@@ -274,7 +310,14 @@ export default function FriendConversationScreen() {
         }
       }
     })();
-    return () => { active = false; unsubscribe(); setActiveFriendConversation(null); };
+    return () => {
+      active = false;
+      unsubscribe();
+      pendingDeletions.clear();
+      deletionOperations.clear();
+      serverMessagesRef.current = [];
+      setActiveFriendConversation(null);
+    };
   }, [authLoading, chatId, user?.uid]);
 
   const title = useMemo(() => access && user?.uid
@@ -480,7 +523,12 @@ export default function FriendConversationScreen() {
     setLoadingEarlier(true);
     try {
       const page = await loadEarlierFriendChatMessages(chatId, user.uid, first.createdAtTimestamp, access.blockedUserIds);
-      setMessages((current) => [...page.messages.filter((item) => !current.some((existing) => existing.messageId === item.messageId)), ...current]);
+      const mergedServerMessages = [
+        ...page.messages.filter((item) => !serverMessagesRef.current.some((existing) => existing.messageId === item.messageId)),
+        ...serverMessagesRef.current,
+      ];
+      serverMessagesRef.current = mergedServerMessages;
+      setMessages(reconcileFriendChatDeletionState(mergedServerMessages, pendingDeletionsRef.current));
       setHasMore(page.hasMore);
     } catch (error) { setErrorKey(errorTranslationKey(mapFriendChatError(error))); }
     finally { setLoadingEarlier(false); }
@@ -561,22 +609,56 @@ export default function FriendConversationScreen() {
     }
   }, [chatId, clearSelection, selectedMessages]);
 
-  const runDeleteSelection = useCallback(async () => {
-    if (!chatId || selectedMessages.length === 0) return;
+  const runDeleteMessages = useCallback(async (
+    mode: FriendChatDeletionMode,
+    targetMessages: FriendChatMessage[],
+  ) => {
+    if (!chatId || !user?.uid || targetMessages.length === 0) return;
+    if (mode === "forEveryone" && targetMessages.some((message) => message.senderUserId !== user.uid)) {
+      throw new Error("chat/delete-not-authorized");
+    }
+    const messageIds = targetMessages.map((message) => message.messageId);
+    const operationKey = deletionOperationKey(mode, messageIds);
+    if (deletionOperationsRef.current.has(operationKey)) return;
+    const operationId = createChatClientMessageId();
+    deletionOperationsRef.current.add(operationKey);
+    targetMessages.forEach((message) => {
+      pendingDeletionsRef.current.set(message.messageId, { message, mode, operationId });
+    });
+    setMessages(reconcileFriendChatDeletionState(serverMessagesRef.current, pendingDeletionsRef.current));
+    if (viewerMessageId && messageIds.includes(viewerMessageId)) setViewerMessageId(null);
     setErrorKey(null);
     try {
-      const ownMessages = selectedMessages.filter((message) => message.senderUserId === user?.uid);
-      const otherMessages = selectedMessages.filter((message) => message.senderUserId !== user?.uid);
-      await Promise.all([
-        ...ownMessages.map((message) => removeOwnFriendChatMessage(chatId, message.messageId)),
-        otherMessages.length ? deleteFriendChatMessagesForMe(chatId, otherMessages.map((message) => message.messageId)) : Promise.resolve(null),
-      ]);
+      await Promise.all(targetMessages.flatMap((message) => message.voiceMemo
+        ? [clearPersistedVoicePlaybackArtifacts({
+          kind: "persisted-message",
+          messageId: message.messageId,
+          messageKind: "friendChatMessage",
+          storagePath: message.voiceMemo.storagePath,
+        })]
+        : []));
+      if (mode === "forMe") {
+        await deleteFriendChatMessagesForMe(chatId, messageIds);
+      } else {
+        await Promise.all(messageIds.map((messageId) => deleteFriendChatMessageForEveryone(chatId, messageId)));
+      }
+      if (targetMessages.some((message) => message.messageType === "image")) {
+        await clearFriendChatImageMemoryCache();
+      }
       setDeleteSelectionVisible(false);
       clearSelection();
     } catch (error) {
-      setErrorKey(errorTranslationKey(mapFriendChatError(error)));
+      targetMessages.forEach((message) => {
+        const pending = pendingDeletionsRef.current.get(message.messageId);
+        if (pending?.operationId === operationId) pendingDeletionsRef.current.delete(message.messageId);
+      });
+      setMessages(reconcileFriendChatDeletionState(serverMessagesRef.current, pendingDeletionsRef.current));
+      setErrorKey("chat.deleteFailedRetry");
+      throw error;
+    } finally {
+      deletionOperationsRef.current.delete(operationKey);
     }
-  }, [chatId, clearSelection, selectedMessages, user?.uid]);
+  }, [chatId, clearSelection, user?.uid, viewerMessageId]);
 
   const openForwardSheet = useCallback(() => {
     if (selectedMessages.some((message) =>
@@ -682,30 +764,47 @@ export default function FriendConversationScreen() {
   const selectedMine = actionMessage?.senderUserId === user?.uid;
   const selectedActive = isFriendChatMessageInteractive(actionMessage);
   const selectedActions = useMemo<MessageModalAction[]>(() => {
-    if (!chatId || !actionMessage || !selectedMine || !selectedActive) return [];
-    return [{
+    if (!chatId || !actionMessage || !selectedActive) return [];
+    const actions: MessageModalAction[] = [{
+      errorMessage: t("chat.messageActionFailed"),
+      id: actionMessage.starredBySelf ? "unstar" : "star",
+      label: actionMessage.starredBySelf ? t("chat.unstar") : t("chat.star"),
+      onPress: async () => {
+        const starred = !actionMessage.starredBySelf;
+        await setFriendChatMessagesStarred(chatId, [actionMessage.messageId], starred);
+        serverMessagesRef.current = serverMessagesRef.current.map((message) => message.messageId === actionMessage.messageId
+          ? { ...message, starredBySelf: starred }
+          : message);
+        setMessages(reconcileFriendChatDeletionState(serverMessagesRef.current, pendingDeletionsRef.current));
+      },
+    }, {
       confirmation: {
-        body: t("teamMessages.deleteForEveryoneBody"),
-        confirmLabel: t("common.delete"),
-        title: t("teamMessages.deleteForEveryoneTitle"),
+        body: t("chat.deleteForMeBody"),
+        confirmLabel: t("chat.deleteForMe"),
+        title: t("chat.deleteForMeTitle"),
       },
       destructive: true,
-      errorMessage: t("teamMessages.deleteError"),
-      id: "delete-for-everyone",
-      label: t("teamMessages.deleteForEveryone"),
-      onPress: async () => {
-        if (actionMessage.voiceMemo) {
-          await clearPersistedVoicePlaybackArtifacts({
-            kind: "persisted-message",
-            messageId: actionMessage.messageId,
-            messageKind: "friendChatMessage",
-            storagePath: actionMessage.voiceMemo.storagePath,
-          });
-        }
-        await removeOwnFriendChatMessage(chatId, actionMessage.messageId);
-      },
+      errorMessage: t("chat.deleteFailedRetry"),
+      id: "delete-for-me",
+      label: t("chat.deleteForMe"),
+      onPress: () => runDeleteMessages("forMe", [actionMessage]),
     }];
-  }, [actionMessage, chatId, selectedActive, selectedMine, t]);
+    if (selectedMine) {
+      actions.push({
+        confirmation: {
+          body: t("chat.deleteForEveryoneBody"),
+          confirmLabel: t("chat.deleteForEveryone"),
+          title: t("chat.deleteForEveryoneTitle"),
+        },
+        destructive: true,
+        errorMessage: t("chat.deleteFailedRetry"),
+        id: "delete-for-everyone",
+        label: t("chat.deleteForEveryone"),
+        onPress: () => runDeleteMessages("forEveryone", [actionMessage]),
+      });
+    }
+    return actions;
+  }, [actionMessage, chatId, runDeleteMessages, selectedActive, selectedMine, t]);
 
   const selectedReaction = reactionMessage?.reactions.find((reaction) => reaction.reactedBySelf)?.emoji ?? null;
   const reportAction = actionMessage && !selectedMine && selectedActive && chatId
@@ -739,6 +838,39 @@ export default function FriendConversationScreen() {
     { key: "sports", label: t("chat.reactionCategories.sports"), options: FRIEND_CHAT_REACTIONS.slice(22) },
     { key: "more", label: t("chat.reactionCategories.more"), options: FRIEND_CHAT_REACTIONS.slice(14, 18) },
   ], [t]);
+  const deleteSelectionActions = useMemo<MessageModalAction[]>(() => {
+    if (selectedMessages.length === 0) return [];
+    const actions: MessageModalAction[] = [{
+      confirmation: {
+        body: t("chat.deleteSelectionForMeBody", { count: selectedMessages.length }),
+        confirmLabel: t("chat.deleteForMe"),
+        title: t("chat.deleteForMeTitle"),
+      },
+      destructive: true,
+      errorMessage: t("chat.deleteFailedRetry"),
+      id: "delete-selection-for-me",
+      label: t("chat.deleteForMe"),
+      onPress: () => runDeleteMessages("forMe", selectedMessages),
+    }];
+    if (selectedMessages.every((message) => message.senderUserId === user?.uid)) {
+      actions.push({
+        confirmation: {
+          body: t("chat.deleteSelectionForEveryoneBody", { count: selectedMessages.length }),
+          confirmLabel: t("chat.deleteForEveryone"),
+          title: t("chat.deleteForEveryoneTitle"),
+        },
+        destructive: true,
+        errorMessage: t("chat.deleteFailedRetry"),
+        id: "delete-selection-for-everyone",
+        label: t("chat.deleteForEveryone"),
+        onPress: () => runDeleteMessages("forEveryone", selectedMessages),
+      });
+    }
+    return actions;
+  }, [runDeleteMessages, selectedMessages, t, user?.uid]);
+  const viewerSenderName = viewerMessage?.senderUserId === user?.uid
+    ? t("chat.you")
+    : viewerMessage?.senderDisplayName || t(viewerMessage?.senderProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember");
 
   if (authLoading || loading) return <ScreenWrapper><View style={styles.center}><ActivityIndicator color={Colors.primary} /><Text style={styles.body}>{t("chat.loadingConversation")}</Text></View></ScreenWrapper>;
   if (!access) return <ScreenWrapper><View style={styles.center}><Text style={styles.title}>{t("chat.cannotOpenTitle")}</Text><Text style={styles.body}>{t(errorKey ?? "chat.noAccess")}</Text><TouchableOpacity accessibilityRole="button" onPress={() => router.replace("/(social)/chat")} style={styles.primary}><Text style={styles.primaryText}>{t("chat.backToChats")}</Text></TouchableOpacity></View></ScreenWrapper>;
@@ -810,25 +942,39 @@ export default function FriendConversationScreen() {
             if (keyboardVisibleRef.current) scrollToLatest(false);
           }}
           onScrollBeginDrag={dismissReactionTray}
-          renderItem={({ item }) => (
-            <MessageBubble
-              isMine={item.senderUserId === user?.uid}
-              message={item}
-              onActions={() => setActionMessage(item)}
-              onForwardImage={() => openPhotoForwardSheet(item)}
-              onOpenReactions={beginSelection}
-              onQuotePress={scrollToMessage}
-              onReact={(emoji) => {
-                void toggleReaction(item.messageId, emoji);
-              }}
-              onSaveImage={() => { void savePhotoMessage(item); }}
-              onImageUnavailable={() => markImageUnavailable(item.messageId)}
-              onToggleSelection={toggleSelection}
-              selected={selectedMessageIds.includes(item.messageId)}
-              savingPhoto={savingPhotoMessageId === item.messageId}
-              selectionMode={selectionMode}
-            />
-          )}
+          renderItem={({ index, item }) => {
+            const showDate = shouldShowFriendChatDateSeparator(
+              item.createdAt,
+              index > 0 ? messages[index - 1]?.createdAt : null,
+              dateLabelNow,
+            );
+            const separator = showDate
+              ? createFriendChatDateSeparator(item.createdAt, i18n.resolvedLanguage ?? i18n.language, {
+                today: t("chat.today"),
+                yesterday: t("chat.yesterday"),
+              }, dateLabelNow)
+              : null;
+            return (
+              <View>
+                {separator ? <ChatDateSeparator accessibilityLabel={separator.accessibilityLabel} label={separator.label} /> : null}
+                <MessageBubble
+                  isMine={item.senderUserId === user?.uid}
+                  message={item}
+                  onActions={() => setActionMessage(item)}
+                  onOpenImage={() => setViewerMessageId(item.messageId)}
+                  onOpenReactions={beginSelection}
+                  onQuotePress={scrollToMessage}
+                  onReact={(emoji) => {
+                    void toggleReaction(item.messageId, emoji);
+                  }}
+                  onImageUnavailable={() => markImageUnavailable(item.messageId)}
+                  onToggleSelection={toggleSelection}
+                  selected={selectedMessageIds.includes(item.messageId)}
+                  selectionMode={selectionMode}
+                />
+              </View>
+            );
+          }}
           style={styles.messageList}
         />
         <View style={styles.composer}>
@@ -909,6 +1055,27 @@ export default function FriendConversationScreen() {
           ) : null}
         </View>
       </KeyboardAvoidingView>
+      <FriendChatImageViewer
+        message={viewerMessage}
+        onBack={() => setViewerMessageId(null)}
+        onForward={() => {
+          if (!viewerMessage) return;
+          setViewerMessageId(null);
+          openPhotoForwardSheet(viewerMessage);
+        }}
+        onMore={() => {
+          if (viewerMessage) setActionMessage(viewerMessage);
+        }}
+        onSave={() => {
+          if (viewerMessage) void savePhotoMessage(viewerMessage);
+        }}
+        onUnavailable={() => {
+          if (viewerMessage) markImageUnavailable(viewerMessage.messageId);
+        }}
+        saving={savingPhotoMessageId === viewerMessage?.messageId}
+        senderName={viewerSenderName}
+        visible={Boolean(viewerMessage)}
+      />
       <MessageActionsModal
         actions={selectedActions}
         onDismiss={() => setActionMessage(null)}
@@ -956,20 +1123,7 @@ export default function FriendConversationScreen() {
         visible={Boolean(overflowAnchor && overflowActions.length)}
       />
       <MessageActionsModal
-        actions={[{
-          confirmation: {
-            body: selectedMessages.some((message) => message.senderUserId !== user?.uid)
-              ? t("chat.deleteSelectionMixedBody")
-              : t("teamMessages.deleteForEveryoneBody"),
-            confirmLabel: t("common.delete"),
-            title: t("chat.deleteSelectedMessages"),
-          },
-          destructive: true,
-          errorMessage: t("teamMessages.deleteError"),
-          id: "delete-selection",
-          label: t("chat.deleteSelectedMessages"),
-          onPress: runDeleteSelection,
-        }]}
+        actions={deleteSelectionActions}
         onDismiss={() => setDeleteSelectionVisible(false)}
         visible={deleteSelectionVisible}
       />
@@ -993,28 +1147,24 @@ function MessageBubble({
   message,
   isMine,
   onActions,
-  onForwardImage,
+  onOpenImage,
   onOpenReactions,
   onQuotePress,
   onReact,
-  onSaveImage,
   onImageUnavailable,
   onToggleSelection,
-  savingPhoto,
   selected,
   selectionMode,
 }: {
   isMine: boolean;
   message: FriendChatMessage;
   onActions: () => void;
-  onForwardImage: () => void;
+  onOpenImage: () => void;
   onOpenReactions: (message: FriendChatMessage, anchor: FriendChatReactionTrayAnchor) => void;
   onQuotePress: (messageId: string) => void;
   onReact: (emoji: FriendChatReactionEmoji) => void;
-  onSaveImage: () => void;
   onImageUnavailable: () => void;
   onToggleSelection: (message: FriendChatMessage) => void;
-  savingPhoto: boolean;
   selected: boolean;
   selectionMode: boolean;
 }) {
@@ -1029,7 +1179,7 @@ function MessageBubble({
   const text = message.isModerated
     ? t("teamMessages.contentRemoved")
     : message.status === "removed"
-      ? t("chat.messageRemoved")
+      ? t(isMine ? "chat.youDeletedMessage" : "chat.messageDeleted")
       : message.messageType === "image"
         ? message.caption || t("chat.photoPreview")
         : message.messageType === "voice"
@@ -1110,12 +1260,10 @@ function MessageBubble({
                 active={interactive}
                 image={message.image}
                 messageId={message.messageId}
-                onForward={onForwardImage}
                 onLongPress={openReactionTray}
-                onSave={onSaveImage}
+                onOpen={onOpenImage}
                 onSelect={() => onToggleSelection(message)}
                 onUnavailable={onImageUnavailable}
-                saving={savingPhoto}
                 selectionMode={selectionMode}
               />
             ) : message.messageType === "image" ? (
@@ -1145,6 +1293,22 @@ function MessageBubble({
           ))}
         </View>
       ) : null}
+    </View>
+  );
+}
+
+function ChatDateSeparator({ accessibilityLabel, label }: { accessibilityLabel: string; label: string }) {
+  const { t } = useTranslation();
+  return (
+    <View
+      accessible
+      accessibilityLabel={t("chat.dateSeparatorAccessibility", { date: accessibilityLabel })}
+      accessibilityRole="header"
+      style={styles.dateSeparator}
+    >
+      <View style={styles.dateSeparatorLine} />
+      <Text style={styles.dateSeparatorText}>{label}</Text>
+      <View style={styles.dateSeparatorLine} />
     </View>
   );
 }
@@ -1297,6 +1461,9 @@ const styles = StyleSheet.create({
   errorCard: { borderColor: Colors.primary, borderWidth: 1, margin: Spacing.sm, marginBottom: 0 }, error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center" },
   notice: { backgroundColor: Colors.secondary, padding: Spacing.sm }, noticeText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center" },
   messageList: { flex: 1 }, messages: { gap: Spacing.sm, padding: Spacing.md }, emptyMessages: { flexGrow: 1 }, loadEarlier: { alignItems: "center", minHeight: 40, justifyContent: "center" }, loadEarlierText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
+  dateSeparator: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, marginBottom: Spacing.sm, marginTop: Spacing.xs },
+  dateSeparatorLine: { backgroundColor: Colors.secondary, flex: 1, height: StyleSheet.hairlineWidth },
+  dateSeparatorText: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, fontSize: 12, textAlign: "center" },
   emptyTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17 }, messageRow: { alignItems: "flex-start" }, mineRow: { alignItems: "flex-end" },
   dimmedMessage: { opacity: 0.48 },
   bubble: { backgroundColor: Colors.surface, borderRadius: Radius.button, maxWidth: "84%", paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, ...Shadow.card }, mineBubble: { backgroundColor: Colors.primary },

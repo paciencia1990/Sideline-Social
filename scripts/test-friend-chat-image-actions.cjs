@@ -121,6 +121,7 @@ async function run() {
   assert.equal(deferred.calls.save, 1, "duplicate taps cannot create duplicate library saves");
 
   const imageMessage = read("components", "FriendChatImageMessage.tsx");
+  const imageViewer = read("components", "FriendChatImageViewer.tsx");
   const chatScreen = read("app", "(social)", "chat", "[chatId].tsx");
   const saveService = read("services", "friendChatPhotoSaveService.ts");
   const functionsSource = read("functions", "src", "friendChat.ts");
@@ -130,13 +131,17 @@ async function run() {
   assert.match(imageMessage, /onPress=\{handlePress\}/);
   assert.match(imageMessage, /onLongPress=\{handleLongPress\}/);
   assert.match(imageMessage, /lastLongPressAtRef/);
-  assert.match(imageMessage, /onUnavailableRef\.current\(\)/, "failed protected-media access must disable parent forwarding actions");
-  assert.doesNotMatch(imageMessage, /if \(fullUrl\) return true/, "each explicit photo action must reauthorize protected media");
+  assert.match(imageMessage, /onUnavailableRef\.current\(\)/, "failed protected-thumbnail access must disable parent forwarding actions");
+  assert.doesNotMatch(imageMessage, /styles\.actionSheet|function PhotoAction|actionMenuVisible/, "single-tap image handling must not open the removed photo-actions bottom sheet");
   assert.match(imageMessage, /chat\.viewPhoto/);
-  assert.match(imageMessage, /chat\.forwardPhoto/);
-  assert.match(imageMessage, /chat\.savePhoto/);
   assert.match(imageMessage, /name: "reactToPhoto"/);
   assert.match(imageMessage, /name: "morePhotoActions"/);
+  assert.match(imageViewer, /getFriendChatMediaDownloadUrl/);
+  assert.match(imageViewer, /chat\.forwardPhoto/);
+  assert.match(imageViewer, /chat\.savePhoto/);
+  assert.match(imageViewer, /chat\.morePhotoActions/);
+  assert.match(imageViewer, /Gesture\.Pinch\(\)/);
+  assert.match(imageViewer, /Gesture\.Pan\(\)/);
   assert.match(chatScreen, /onLongPress=\{openReactionTray\}/);
   assert.match(chatScreen, /FriendChatExpandedReactionPicker/);
   assert.match(chatScreen, /MessageActionsModal/);
@@ -161,7 +166,7 @@ async function run() {
   assert.match(appConfig, /blockedPermissions/);
 
   for (const key of [
-    "uploadingPhoto", "finalizingPhoto", "photoActionsTitle", "viewPhoto", "forwardPhoto",
+    "uploadingPhoto", "finalizingPhoto", "closePhotoViewer", "viewPhoto", "forwardPhoto",
     "savePhoto", "savingPhoto", "photoSavedTitle", "savePhotoBuildRequired",
     "savePhotoPermissionDenied", "savePhotoUnavailable", "savePhotoNetworkError",
   ]) {

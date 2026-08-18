@@ -411,7 +411,7 @@ export function getConversationDisplayTitle(
 
 export function isConversationUnread(conversation: FriendConversation, member: FriendConversationMember, uid: string) {
   return Boolean(
-    conversation.lastMessageAt && conversation.lastSenderId !== uid &&
+    !conversation.lastMessageRemoved && conversation.lastMessageAt && conversation.lastSenderId !== uid &&
     (!member.lastReadAt || conversation.lastMessageAt.getTime() > member.lastReadAt.getTime()),
   );
 }
@@ -439,12 +439,15 @@ export function subscribeToFriendConversations(
       const currentGeneration = ++generation;
       try {
         const conversations = snapshot.docs.map((item) => toConversation({ id: item.id, data: () => item.data() }));
-        const [members, profiles] = await Promise.all([
+        const [members, profiles, lastMessageStates] = await Promise.all([
           Promise.all(conversations.map((item) => loadOwnMember(item.conversationId, uid))),
           loadCurrentChatProfiles(conversations.flatMap((item) => [...item.activeParticipantIds, ...item.invitedParticipantIds])),
+          Promise.all(conversations.map((item) => loadOwnConversationLastMessageState(item, uid))),
         ]);
         if (currentGeneration !== generation) return;
-        onNext(conversations.map((conversation) => hydrateConversationNames(conversation, profiles)).flatMap((conversation, index) => {
+        onNext(conversations.map((conversation, index) => lastMessageStates[index]?.hiddenForMe
+          ? { ...conversation, lastMessagePreview: null, lastMessageRemoved: true, lastMessageType: "deleted" as const }
+          : conversation).map((conversation) => hydrateConversationNames(conversation, profiles)).flatMap((conversation, index) => {
           const ownMember = members[index];
           return ownMember?.status === "active"
             ? [{ ...conversation, ownMember, unread: isConversationUnread(conversation, ownMember, uid) }]
@@ -535,6 +538,7 @@ export function listenToFriendChatMessages(
   onError: (error: unknown) => void,
 ) {
   const blocked = new Set(blockedUserIds);
+  let hydrationGeneration = 0;
   return onSnapshot(
     query(
       collection(db, "friendConversations", conversationId, "messages"),
@@ -543,8 +547,15 @@ export function listenToFriendChatMessages(
       limit(CHAT_INITIAL_MESSAGE_LIMIT),
     ),
     (snapshot) => {
+      const currentGeneration = ++hydrationGeneration;
       const messages = snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse();
-      void hydrateChatMessages(messages, uid).then(onNext).catch(onError);
+      void hydrateChatMessages(messages, uid)
+        .then((hydrated) => {
+          if (currentGeneration === hydrationGeneration) onNext(hydrated);
+        })
+        .catch((error) => {
+          if (currentGeneration === hydrationGeneration) onError(error);
+        });
     },
     onError,
   );
@@ -568,6 +579,21 @@ export async function loadEarlierFriendChatMessages(
     messages: await hydrateChatMessages(snapshot.docs.map(toMessage).filter((message) => !message.senderUserId || !blocked.has(message.senderUserId)).reverse(), uid),
     hasMore: snapshot.size === CHAT_EARLIER_PAGE_SIZE,
   };
+}
+
+async function loadOwnConversationLastMessageState(conversation: FriendConversation, uid: string) {
+  if (!conversation.lastMessageId) return null;
+  const snapshot = await getDoc(doc(
+    db,
+    "friendConversations",
+    conversation.conversationId,
+    "userMessageStates",
+    uid,
+    "messages",
+    conversation.lastMessageId,
+  )).catch(() => null);
+  if (!snapshot?.exists()) return null;
+  return { hiddenForMe: snapshot.data().hiddenForMe === true };
 }
 
 export function subscribeToStarredFriendChatMessages(
@@ -954,9 +980,11 @@ export async function getFriendChatMediaDownloadUrl(input: {
   return normalizeVoicePlaybackUrlResponse(result, { allowLocalHttp: __DEV__ });
 }
 
-export async function removeOwnFriendChatMessage(conversationId: string, messageId: string) {
+export async function deleteFriendChatMessageForEveryone(conversationId: string, messageId: string) {
   return call("removeOwnFriendChatMessage", { conversationId, messageId });
 }
+
+export const removeOwnFriendChatMessage = deleteFriendChatMessageForEveryone;
 
 export async function blockFriendChatUser(blockedUserId: string) {
   return call("blockFriendChatUser", { blockedUserId });

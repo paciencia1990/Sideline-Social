@@ -66,7 +66,7 @@
     "test:firestore:team-messages": "firebase.cmd emulators:exec --only firestore \"node scripts/test-team-messages-firestore-rules.cjs\"",
     "test:storage:team-voice": "firebase.cmd emulators:exec --project sideline-team-voice-storage-rules-test --only firestore,storage \"node scripts/test-team-voice-storage-rules.cjs\"",
     "test:emulator:team-messages": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-team-messages-functions-test --only auth,firestore,storage,functions \"node scripts/test-team-messages-functions-emulator.cjs\"",
-    "test:friend-chat": "npm --prefix functions run build && node scripts/test-friend-chat-core.cjs",
+    "test:friend-chat": "npm --prefix functions run build && node scripts/test-friend-chat-core.cjs && node scripts/test-friend-chat-viewer-deletion-dates.cjs",
     "test:friend-chat-image-actions": "node scripts/test-friend-chat-image-actions.cjs",
     "test:friend-chat-image-picker": "node scripts/test-friend-chat-image-picker-resume.cjs",
     "test:firestore:friend-chat-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-friend-chat-firestore-rules.cjs\"",

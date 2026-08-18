@@ -133,9 +133,17 @@ async function run() {
   assert.equal((await b.call("deleteFriendChatMessagesForMe", { conversationId: group.conversationId, messageIds: [groupMessage.messageId] })).hidden, 1);
   assert.equal((await groupDoc.collection("userMessageStates").doc(b.uid).collection("messages").doc(groupMessage.messageId).get()).data().hiddenForMe, true);
   await assert.rejects(() => outsider.call("deleteFriendChatMessagesForMe", { conversationId: group.conversationId, messageIds: [groupMessage.messageId] }), hasCode("permission-denied"));
+  await a.call("pinFriendChatMessage", { conversationId: group.conversationId, messageId: groupMessage.messageId, duration: "7d" });
+  await b.call("toggleFriendChatReaction", { conversationId: group.conversationId, messageId: groupMessage.messageId, emoji: "👍" });
+  await assert.rejects(() => a.call("removeOwnFriendChatMessage", { conversationId: direct.conversationId, messageId: groupMessage.messageId }), hasCode("permission-denied"), "a sender cannot remove a message through another conversation path");
   await a.call("removeOwnFriendChatMessage", { conversationId: group.conversationId, messageId: groupMessage.messageId });
   const removed = (await groupDoc.collection("messages").doc(groupMessage.messageId).get()).data();
   assert.equal(removed.status, "removed"); assert.equal(removed.text, "");
+  assert.equal(removed.moderationEvidenceRetained, true, "a reported message records its retention requirement before deletion");
+  assert.equal((await groupDoc.get()).data().pinnedMessage, undefined, "deleting a pinned message clears the shared pin");
+  assert.equal((await groupDoc.collection("messages").doc(groupMessage.messageId).collection("reactions").get()).empty, true, "deleting for everyone clears reaction documents");
+  assert.equal((await groupDoc.collection("userMessageStates").doc(b.uid).collection("messages").doc(groupMessage.messageId).get()).exists, false, "deleting for everyone clears private stars and hidden state");
+  assert.equal((await groupDoc.collection("messages").doc(reply.messageId).get()).data().replyTo.textExcerpt, null, "reply previews cannot retain deleted content");
   await assert.rejects(() => b.call("removeOwnFriendChatMessage", { conversationId: group.conversationId, messageId: groupMessage.messageId }), hasCode("permission-denied"));
   await assert.rejects(() => b.call("toggleFriendChatReaction", { conversationId: group.conversationId, messageId: groupMessage.messageId, emoji: "👍" }), hasCode("permission-denied"));
 
@@ -212,6 +220,7 @@ async function run() {
   const imageReportData = (await db.collection("chatModerationReports").doc(imageReport.reportId).get()).data();
   assert.equal(imageReportData.contentSnapshot.messageType, "image");
   assert.equal(imageReportData.attachmentEvidence.image.fullPath, imageReservation.fullPath);
+  assert.equal((await groupDoc.collection("messages").doc(imageFinalize.messageId).get()).data().moderationEvidenceRetained, true);
   await assert.rejects(() => outsider.call("forwardFriendChatMessages", {
     clientForwardId: "forward_outsider_image_001",
     conversationId: group.conversationId,
@@ -281,8 +290,9 @@ async function run() {
   ]);
 
   await a.call("removeOwnFriendChatMessage", { conversationId: group.conversationId, messageId: imageFinalize.messageId });
-  assert.equal((await bucket.file(imageReservation.fullPath).exists())[0], false);
-  assert.equal((await bucket.file(imageReservation.thumbnailPath).exists())[0], false);
+  assert.equal((await bucket.file(imageReservation.fullPath).exists())[0], true, "reported full media remains available only as moderation evidence");
+  assert.equal((await bucket.file(imageReservation.thumbnailPath).exists())[0], true, "reported thumbnails remain available only as moderation evidence");
+  await assert.rejects(() => b.call("getFriendChatMediaDownloadUrl", { messageId: imageFinalize.messageId, storagePath: imageReservation.fullPath }), hasCode("permission-denied"), "participants cannot request new grants after deletion");
 
   await ageMediaReservationRateLimit(b.uid);
   const voiceBytes = new Uint8Array(2048);
@@ -317,7 +327,7 @@ async function run() {
   });
   assert.equal((await db.collection("chatModerationReports").doc(voiceReport.reportId).get()).data().attachmentEvidence.voiceMemo.storagePath, voiceReservation.storagePath);
   await b.call("removeOwnFriendChatMessage", { conversationId: group.conversationId, messageId: voiceFinalize.messageId });
-  assert.equal((await bucket.file(voiceReservation.storagePath).exists())[0], false);
+  assert.equal((await bucket.file(voiceReservation.storagePath).exists())[0], true, "reported voice evidence is retained while normal playback is revoked");
 
   await db.collection("users").doc(a.uid).update({ friendIds: admin.firestore.FieldValue.arrayRemove(b.uid) });
   await db.collection("users").doc(b.uid).update({ friendIds: admin.firestore.FieldValue.arrayRemove(a.uid) });

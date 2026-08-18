@@ -1106,15 +1106,21 @@ export const removeOwnFriendChatMessage = chatFunctions.https.onCall(async (data
   const messageId = normalizeConversationId(data?.messageId);
   if (!conversationId || !messageId) invalid('Conversation and message required.');
   let mediaStoragePaths: string[] = [];
+  let retainMediaForModeration = false;
   await firestore().runTransaction(async (transaction) => {
     const ref = conversationRef(conversationId);
     const ownMember = await transaction.get(memberRef(conversationId, uid));
     const message = await transaction.get(ref.collection('messages').doc(messageId));
     const conversation = await transaction.get(ref);
     if (ownMember.data()?.status !== 'active') denied('Active membership required.');
-    if (!message.exists || message.data()?.senderUserId !== uid) denied('You may remove only your own message.');
+    if (
+      !message.exists ||
+      message.data()?.conversationId !== conversationId ||
+      message.data()?.senderUserId !== uid
+    ) denied('You may remove only your own message.');
     if (message.data()?.status === 'removed') return;
     const now = Timestamp.now();
+    retainMediaForModeration = message.data()?.moderationEvidenceRetained === true;
     mediaStoragePaths = readIds(message.data()?.mediaStoragePaths);
     const voicePath = typeof message.data()?.voiceMemo?.storagePath === 'string' ? message.data()?.voiceMemo?.storagePath : '';
     const imageFullPath = typeof message.data()?.image?.fullPath === 'string' ? message.data()?.image?.fullPath : '';
@@ -1133,13 +1139,82 @@ export const removeOwnFriendChatMessage = chatFunctions.https.onCall(async (data
       removedBy: uid,
       voiceMemo: null,
     });
+    readIds(conversation.data()?.activeParticipantIds).forEach((participantId) => {
+      transaction.delete(userMessageStateRef(conversationId, participantId, messageId));
+    });
     if (conversation.data()?.lastMessageId === messageId) {
-      transaction.update(ref, { lastMessagePreview: null, lastMessageRemoved: true, lastMessageType: 'deleted', updatedAt: now });
+      transaction.update(ref, {
+        lastMessagePreview: null,
+        lastMessageRemoved: true,
+        lastMessageType: 'deleted',
+        pinnedMessage: conversation.data()?.pinnedMessage?.messageId === messageId ? FieldValue.delete() : conversation.data()?.pinnedMessage ?? FieldValue.delete(),
+        updatedAt: now,
+      });
+    } else if (conversation.data()?.pinnedMessage?.messageId === messageId) {
+      transaction.update(ref, { pinnedMessage: FieldValue.delete(), updatedAt: now });
     }
   });
-  const storageCleanup = await deleteFriendChatStorageObjects(mediaStoragePaths);
+  const [legacyReportRetainsMedia] = await Promise.all([
+    friendChatMessageHasModerationReport(conversationId, messageId),
+    revokeFriendChatMediaGrants(conversationId, messageId),
+    removeFriendChatMessageReactions(conversationId, messageId),
+    redactFriendChatReplyPreviews(conversationId, messageId),
+  ]);
+  const storageCleanup = retainMediaForModeration || legacyReportRetainsMedia
+    ? 'retainedForModeration' as const
+    : await deleteFriendChatStorageObjects(mediaStoragePaths);
   return { removed: true, storageCleanup };
 });
+
+async function friendChatMessageHasModerationReport(conversationId: string, messageId: string) {
+  const reports = await firestore().collection('chatModerationReports')
+    .where('messageId', '==', messageId)
+    .limit(10)
+    .get();
+  return reports.docs.some((report) => report.data()?.conversationId === conversationId);
+}
+
+async function revokeFriendChatMediaGrants(conversationId: string, messageId: string) {
+  const grants = await firestore().collection('friendChatMediaPlaybackGrants')
+    .where('messageId', '==', messageId)
+    .limit(100)
+    .get();
+  const matching = grants.docs.filter((grant) => grant.data()?.conversationId === conversationId);
+  if (matching.length === 0) return;
+  const writer = firestore().bulkWriter();
+  matching.forEach((grant) => writer.delete(grant.ref));
+  await writer.close();
+}
+
+async function removeFriendChatMessageReactions(conversationId: string, messageId: string) {
+  const reactions = await conversationRef(conversationId).collection('messages').doc(messageId)
+    .collection('reactions').limit(MAX_CHAT_PARTICIPANTS).get();
+  if (reactions.empty) return;
+  const writer = firestore().bulkWriter();
+  reactions.docs.forEach((reaction) => writer.delete(reaction.ref));
+  await writer.close();
+}
+
+async function redactFriendChatReplyPreviews(conversationId: string, messageId: string) {
+  const replies = await conversationRef(conversationId).collection('messages')
+    .where('replyTo.messageId', '==', messageId)
+    .limit(100)
+    .get();
+  if (replies.empty) return;
+  const writer = firestore().bulkWriter();
+  replies.docs.forEach((reply) => writer.update(reply.ref, {
+    replyTo: {
+      createdAt: null,
+      messageId,
+      messageType: 'text',
+      senderDisplayName: null,
+      senderUserId: null,
+      textExcerpt: null,
+    },
+    updatedAt: FieldValue.serverTimestamp(),
+  }));
+  await writer.close();
+}
 
 export const deleteFriendChatMessagesForMe = communicationChatFunctions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
@@ -1811,39 +1886,46 @@ export const reportFriendChatMessage = safetyChatFunctions.https.onCall(async (d
       : null;
   if (!conversationId || !messageId || !reason) invalid('Report references are required.');
   await assertActiveMember(conversationId, uid);
-  const message = await conversationRef(conversationId).collection('messages').doc(messageId).get();
-  if (!message.exists) failed('Message unavailable.');
-  if (!readIds(message.data()?.visibleToUserIds).includes(uid)) denied('Message is not visible to this member.');
-  const messageData = message.data() ?? {};
-  const messageType = messageData.messageType === 'voice'
-    ? 'voice'
-    : messageData.messageType === 'image'
-      ? 'image'
-      : 'text';
   const ref = firestore().collection('chatModerationReports').doc();
-  await ref.set({
-    attachmentEvidence: {
-      image: messageType === 'image' ? {
-        fullPath: typeof messageData.image?.fullPath === 'string' ? messageData.image.fullPath : null,
-        height: Number.isInteger(messageData.image?.height) ? messageData.image.height : null,
-        mimeType: typeof messageData.image?.mimeType === 'string' ? messageData.image.mimeType : null,
-        thumbnailPath: typeof messageData.image?.thumbnailPath === 'string' ? messageData.image.thumbnailPath : null,
-        width: Number.isInteger(messageData.image?.width) ? messageData.image.width : null,
-      } : null,
-      voiceMemo: messageType === 'voice' ? {
-        durationMilliseconds: Number.isInteger(messageData.voiceMemo?.durationMilliseconds) ? messageData.voiceMemo.durationMilliseconds : null,
-        mimeType: typeof messageData.voiceMemo?.mimeType === 'string' ? messageData.voiceMemo.mimeType : null,
-        sizeBytes: Number.isInteger(messageData.voiceMemo?.sizeBytes) ? messageData.voiceMemo.sizeBytes : null,
-        storagePath: typeof messageData.voiceMemo?.storagePath === 'string' ? messageData.voiceMemo.storagePath : null,
-      } : null,
-    },
-    contentSnapshot: {
-      caption: typeof messageData.caption === 'string' ? sanitizeMessagePreview(messageData.caption) : null,
-      messageType,
-      text: typeof messageData.text === 'string' ? sanitizeMessagePreview(messageData.text) : null,
-    },
-    reportId: ref.id, reporterUserId: uid, reportedUserId: messageData.senderUserId ?? null,
-    conversationId, messageId, reason, reportType: 'message', status: 'open', createdAt: Timestamp.now(),
+  await firestore().runTransaction(async (transaction) => {
+    const messageRef = conversationRef(conversationId).collection('messages').doc(messageId);
+    const message = await transaction.get(messageRef);
+    const messageData = message.data() ?? {};
+    if (!message.exists || messageData.status === 'removed' || contentIsModerated(messageData)) failed('Message unavailable.');
+    if (!readIds(messageData.visibleToUserIds).includes(uid)) denied('Message is not visible to this member.');
+    const messageType = messageData.messageType === 'voice'
+      ? 'voice'
+      : messageData.messageType === 'image'
+        ? 'image'
+        : 'text';
+    transaction.create(ref, {
+      attachmentEvidence: {
+        image: messageType === 'image' ? {
+          fullPath: typeof messageData.image?.fullPath === 'string' ? messageData.image.fullPath : null,
+          height: Number.isInteger(messageData.image?.height) ? messageData.image.height : null,
+          mimeType: typeof messageData.image?.mimeType === 'string' ? messageData.image.mimeType : null,
+          thumbnailPath: typeof messageData.image?.thumbnailPath === 'string' ? messageData.image.thumbnailPath : null,
+          width: Number.isInteger(messageData.image?.width) ? messageData.image.width : null,
+        } : null,
+        voiceMemo: messageType === 'voice' ? {
+          durationMilliseconds: Number.isInteger(messageData.voiceMemo?.durationMilliseconds) ? messageData.voiceMemo.durationMilliseconds : null,
+          mimeType: typeof messageData.voiceMemo?.mimeType === 'string' ? messageData.voiceMemo.mimeType : null,
+          sizeBytes: Number.isInteger(messageData.voiceMemo?.sizeBytes) ? messageData.voiceMemo.sizeBytes : null,
+          storagePath: typeof messageData.voiceMemo?.storagePath === 'string' ? messageData.voiceMemo.storagePath : null,
+        } : null,
+      },
+      contentSnapshot: {
+        caption: typeof messageData.caption === 'string' ? sanitizeMessagePreview(messageData.caption) : null,
+        messageType,
+        text: typeof messageData.text === 'string' ? sanitizeMessagePreview(messageData.text) : null,
+      },
+      reportId: ref.id, reporterUserId: uid, reportedUserId: messageData.senderUserId ?? null,
+      conversationId, messageId, reason, reportType: 'message', status: 'open', createdAt: Timestamp.now(),
+    });
+    transaction.update(messageRef, {
+      moderationEvidenceRetained: true,
+      moderationEvidenceRetainedAt: FieldValue.serverTimestamp(),
+    });
   });
   return { reportId: ref.id, reported: true };
 });
