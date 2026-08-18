@@ -184,7 +184,14 @@ assert.match(signUp, /FederatedAuthButtons/u, "Provider-based account creation m
 assert.match(providerButtons, /if \(!showApple && !showGoogle\) return null/u, "Disabled providers must reserve no layout space.");
 assert.match(providerButtons, /showApple \?/u);
 assert.match(providerButtons, /showGoogle \?/u);
-assert.match(providerButtons, /AppleAuthenticationButton/u);
+assert.match(providerButtons, /google-sign-in-light\.png/u, "Google must use the checked-in official button artwork.");
+assert.match(providerButtons, /apple-sign-in-black\.png/u, "Apple must use the checked-in official logo-only button artwork.");
+assert.match(providerButtons, /accessibilityLabel=\{t\("auth\.continueWithGoogle"\)\}/u);
+assert.match(providerButtons, /accessibilityLabel=\{t\("auth\.continueWithApple"\)\}/u);
+assert.match(providerButtons, /height: 48/u);
+assert.match(providerButtons, /width: 48/u);
+assert.match(providerButtons, /justifyContent: "center"/u, "One or two providers must remain centered.");
+assert.doesNotMatch(providerButtons, /AppleAuthenticationButton/u, "The compact provider row uses official local logo-button artwork.");
 assert.equal(providerButtons.includes("numberOfLines"), false, "Provider labels must remain readable with large text.");
 assert.match(availabilityHook, /AppleAuthentication\.isAvailableAsync\(\)/u);
 assert.match(availabilityHook, /\.catch\(\(\) =>/u, "Runtime Apple availability failures must hide the action safely.");
@@ -222,7 +229,7 @@ assert.match(authProviderConfig, /normalizeAuthProviderRuntimeConfig/u);
 assert.doesNotMatch(authProviderConfig, /googleIosClientId\?\.trim/u);
 
 const translations = read("i18n", "index.ts");
-for (const key of ["continueWithEmail", "completeAccountTitle", "legalAcceptance", "adultEligibility", "providerErrors", "signInMethods", "deleteAppleRevocationError"]) {
+for (const key of ["continueWithEmail", "continueWithGoogleHint", "continueWithAppleHint", "orContinueWith", "signUpSubtitle", "completeAccountTitle", "legalAcceptance", "adultEligibility", "providerErrors", "signInMethods", "deleteAppleRevocationError"]) {
   assert.equal((translations.match(new RegExp(`\\b${key}:`, "gu")) ?? []).length, 2, `${key} must have English and Spanish translations.`);
 }
 

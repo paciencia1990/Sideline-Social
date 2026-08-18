@@ -672,6 +672,25 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Start timing is server-authored. Frozen participants can read only the
+    // public phase/timeline record; acknowledgements and snapshots stay behind
+    // authenticated callable functions.
+    match /gameStartStates/{stateId} {
+      allow get: if signedIn() &&
+        (
+          !exists(/databases/$(database)/documents/gameStartStates/$(stateId)) ||
+          (
+            resource.data.participantUserIds is list &&
+            request.auth.uid in resource.data.participantUserIds
+          )
+        );
+      allow list, create, update, delete: if false;
+
+      match /participants/{userId} {
+        allow read, write: if false;
+      }
+    }
+
     match /triviaGameSecrets/{sessionId} {
       allow read, write: if false;
     }

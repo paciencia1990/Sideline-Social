@@ -83,7 +83,8 @@ assert.match(appleRevocation, /APPLE_NATIVE_CLIENT_ID = 'com\.sidelinesocial\.ap
 for (const secretName of ["APPLE_TEAM_ID", "APPLE_KEY_ID", "APPLE_CLIENT_ID", "APPLE_PRIVATE_KEY"]) {
   assert.equal(appleRevocation.includes(`'${secretName}'`), true);
 }
-assert.equal(providerButtons.includes("AppleAuthenticationButton"), true);
+assert.equal(providerButtons.includes("apple-sign-in-black.png"), true);
+assert.equal(providerButtons.includes('accessibilityLabel={t("auth.continueWithApple")}'), true);
 assert.equal(providerAvailability.includes("AppleAuthentication.isAvailableAsync()"), true);
 assert.equal(notifications.includes("Notifications.requestPermissionsAsync()"), false, "root coordinator must not prompt automatically");
 assert.equal(pushService.includes("getExpoPushTokenAsync"), true);

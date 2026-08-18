@@ -13,11 +13,14 @@ import {
   leaveGameLobby,
   readGameJoinCodeFailureReason,
   setRealtimeGamePlayerReady,
-  updateGameJoinCodeStatus,
   type GameJoinCodeFailureReason,
   type GameJoinCodeType,
 } from '@/services/gameJoinCodeService';
-import { startGameSession as startTriviaSession, togglePlayerReady } from '@/src/game/triviaBlitz/gameState';
+import {
+  prepareSynchronizedGameStart,
+  subscribeToSynchronizedGameStart,
+} from '@/services/gameStartSynchronizationService';
+import { togglePlayerReady } from '@/src/game/triviaBlitz/gameState';
 import { getTriviaParentSessionRef, getTriviaPlayersRef } from '@/src/game/triviaBlitz/firebaseUtils';
 
 type LobbyGameId = 'bomb-defusal' | 'trivia-blitz' | 'spot-the-difference';
@@ -58,6 +61,7 @@ type GameLobbyState = {
   lifecycleError: GameJoinCodeFailureReason | null;
   toggleReady: () => void;
   startGame: () => void;
+  startPending: boolean;
   showCountdown: boolean;
   setShowCountdown: (value: boolean) => void;
 };
@@ -106,6 +110,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const [playerList, setPlayerList] = useState<LobbyPlayer[]>([]);
   const [hostUserId, setHostUserId] = useState('');
   const [showCountdown, setShowCountdown] = useState(false);
+  const [startPending, setStartPending] = useState(false);
   const [lifecycleAction, setLifecycleAction] = useState<'leaving' | 'closing' | null>(null);
   const [lifecycleError, setLifecycleError] = useState<GameJoinCodeFailureReason | null>(null);
   const [setupAttempt, setSetupAttempt] = useState(0);
@@ -118,6 +123,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const remoteClosureHandledRef = useRef(false);
   const lastLifecycleActionRef = useRef<'leaving' | 'closing'>('leaving');
   const lifecycleInFlightRef = useRef(false);
+  const navigatedStartAttemptRef = useRef('');
 
   const clearLocalLobbyState = useCallback(() => {
     setSessionId('');
@@ -231,7 +237,6 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
           return;
         }
         setHostUserId(typeof data?.hostPlayerId === 'string' ? data.hostPlayerId : '');
-        if (data?.status === 'playing') setShowCountdown(true);
       });
       const playersQuery = query(getTriviaPlayersRef(sessionId), orderBy('playerIndex', 'asc'));
       const unsubscribePlayers = onSnapshot(playersQuery, (snapshot) => {
@@ -257,9 +262,29 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
       }
       setHostUserId(session?.hostUserId ?? '');
       setPlayerList(normalizeRealtimePlayers(session?.players, fallbackPlayerName));
-      if (session?.status === 'active' || session?.status === 'countdown') setShowCountdown(true);
     });
   }, [fallbackPlayerName, gameType, handleRemoteClosure, isLocal, sessionId]);
+
+  useEffect(() => {
+    if (isLocal || !sessionId) return;
+    return subscribeToSynchronizedGameStart(gameType, sessionId, (state) => {
+      if (
+        !state ||
+        state.sessionId !== sessionId ||
+        navigatedStartAttemptRef.current === state.startAttemptId
+      ) return;
+      navigatedStartAttemptRef.current = state.startAttemptId;
+      setStartPending(true);
+      router.replace({
+        pathname: playPathForGame(gameId),
+        params: {
+          sessionId,
+          startAttemptId: state.startAttemptId,
+          ...(lobbyId ? { lobbyId } : {}),
+        },
+      } as never);
+    });
+  }, [gameId, gameType, isLocal, lobbyId, sessionId]);
 
   const activePlayerList = isLocal ? localPlayers : playerList;
   const effectiveUserId = currentUserId || 'local-player';
@@ -300,17 +325,16 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   }, [currentUserId, effectiveUserId, gameType, isLocal, self.ready, sessionId]);
 
   const startGame = useCallback(() => {
-    if (!players.isHost) return;
-    setShowCountdown(true);
-    if (isLocal || !sessionId) return;
-    void (async () => {
-      if (gameType === 'triviaBlitz') {
-        await startTriviaSession(sessionId);
-        return;
-      }
-      await updateGameJoinCodeStatus({ gameType, sessionId, status: 'started' });
-    })().catch(() => setShowCountdown(false));
-  }, [gameType, isLocal, players.isHost, sessionId]);
+    if (!players.isHost || startPending) return;
+    if (isLocal) {
+      setShowCountdown(true);
+      return;
+    }
+    if (!sessionId) return;
+    setStartPending(true);
+    void prepareSynchronizedGameStart({ gameType, sessionId })
+      .catch(() => setStartPending(false));
+  }, [gameType, isLocal, players.isHost, sessionId, startPending]);
 
   const performLifecycleAction = useCallback(async (action: 'leaving' | 'closing') => {
     if (lifecycleInFlightRef.current) return;
@@ -363,9 +387,16 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     lifecycleError,
     toggleReady,
     startGame,
+    startPending,
     showCountdown,
     setShowCountdown,
   };
+}
+
+function playPathForGame(gameId: LobbyGameId) {
+  if (gameId === 'bomb-defusal') return '/games/bomb-defusal/play' as const;
+  if (gameId === 'spot-the-difference') return '/games/spot-the-difference/play' as const;
+  return '/games/trivia-blitz/play' as const;
 }
 
 export type { GameCodeState, GameLobbyState, LobbyGameId, LobbyPlayer, LobbyPlayers };

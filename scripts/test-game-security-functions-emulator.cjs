@@ -91,6 +91,33 @@ async function assertDenied(operation, label) {
   );
 }
 
+async function scheduleSynchronizedStart(gameType, sessionId, hostClient, participantClients) {
+  const prepared = await hostClient.call("prepareSynchronizedGameStart", { gameType, sessionId });
+  for (const client of participantClients) {
+    await client.call("acknowledgeSynchronizedGameStart", {
+      gameType,
+      sessionId,
+      startAttemptId: prepared.startAttemptId,
+    });
+  }
+  return prepared;
+}
+
+async function moveTriviaGameplayWindowToNow(sessionId) {
+  const now = Date.now();
+  const timestamp = admin.firestore.Timestamp;
+  await Promise.all([
+    adminFirestore.collection("sessions").doc(sessionId).update({
+      gameplayStartsAt: timestamp.fromMillis(now - 100),
+    }),
+    adminFirestore.collection("sessions").doc(sessionId).collection("games").doc("triviaBlitz").update({
+      gameplayStartsAt: timestamp.fromMillis(now - 100),
+      questionStartedAt: timestamp.fromMillis(now - 100),
+      questionEndsAt: timestamp.fromMillis(now + 15_000),
+    }),
+  ]);
+}
+
 function isPermissionDenied(error) {
   return /permission[-_ ]?denied|unauthenticated/i.test(
     `${String(error?.code)} ${String(error?.message)}`,
@@ -269,7 +296,8 @@ async function run() {
     ready: true,
   });
   await assert.rejects(
-    () => unrelated.call("startTriviaGameSession", {
+    () => unrelated.call("prepareSynchronizedGameStart", {
+      gameType: "triviaBlitz",
       sessionId: soloTrivia.sessionId,
     }),
     rejectsCode("failed-precondition", "minimum_players_required"),
@@ -305,10 +333,20 @@ async function run() {
   await participant.call("setTriviaPlayerReady", { sessionId, ready: true });
   await host.call("setTriviaPlayerReady", { sessionId, ready: true });
   await assert.rejects(
-    () => participant.call("startTriviaGameSession", { sessionId }),
-    rejectsCode("permission-denied", "host_required"),
+    () => participant.call("prepareSynchronizedGameStart", { gameType: "triviaBlitz", sessionId }),
+    rejectsCode("permission-denied", "not_authorized"),
   );
-  await host.call("startTriviaGameSession", { sessionId });
+  await scheduleSynchronizedStart("triviaBlitz", sessionId, host, [participant, host]);
+  await assert.rejects(
+    () => host.call("submitTriviaAnswer", {
+      sessionId,
+      questionIndex: 0,
+      answerIndex: 0,
+      submissionId: "pre-gameplay-window-0001",
+    }),
+    rejectsCode("failed-precondition", "game_not_started"),
+  );
+  await moveTriviaGameplayWindowToNow(sessionId);
   assert.equal(
     (await adminFirestore.collection("gameJoinCodes").doc(code.joinCode).get()).data().status,
     "started",
@@ -420,7 +458,8 @@ async function run() {
   const rematchQuestions = (await rematchSecretPath.get()).data().selectedQuestions;
   await participant.call("setTriviaPlayerReady", { sessionId: rematchSessionId, ready: true });
   await host.call("setTriviaPlayerReady", { sessionId: rematchSessionId, ready: true });
-  await host.call("startTriviaGameSession", { sessionId: rematchSessionId });
+  await scheduleSynchronizedStart("triviaBlitz", rematchSessionId, host, [participant, host]);
+  await moveTriviaGameplayWindowToNow(rematchSessionId);
   const rematchAnswer = await host.call("submitTriviaAnswer", {
     sessionId: rematchSessionId,
     questionIndex: 0,
@@ -456,10 +495,6 @@ async function run() {
     [
       "ready",
       () => host.call("setTriviaPlayerReady", { sessionId: rematchSessionId, ready: true }),
-    ],
-    [
-      "start",
-      () => host.call("startTriviaGameSession", { sessionId: rematchSessionId }),
     ],
     [
       "end",

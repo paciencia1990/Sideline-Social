@@ -27,6 +27,7 @@ export default function SpotTheDifferenceLobby() {
     lifecycleError,
     toggleReady,
     startGame,
+    startPending,
     showCountdown,
     setShowCountdown,
   } =
@@ -48,7 +49,7 @@ export default function SpotTheDifferenceLobby() {
     setShowCountdown(false);
     router.replace({
       pathname: "/games/spot-the-difference/play",
-      params: sessionId ? { sessionId, ...(lobbyId ? { lobbyId } : {}) } : {},
+      params: sessionId ? { sessionId, ...(lobbyId ? { lobbyId } : {}) } : { local: "1" },
     } as never);
   }, [lobbyId, sessionId, setShowCountdown]);
 
@@ -70,6 +71,7 @@ export default function SpotTheDifferenceLobby() {
         lifecycleError={lifecycleError}
         onReadyToggle={toggleReady}
         onStart={startGame}
+        startPending={startPending}
       />
       {showCountdown && <CountdownOverlay onComplete={handleComplete} onCancel={() => setShowCountdown(false)} />}
     </View>

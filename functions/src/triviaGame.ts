@@ -281,11 +281,15 @@ export const setTriviaPlayerReady = onTriviaCall(
   },
 );
 
-export const startTriviaGameSession = onTriviaCall(
-  'startTriviaGameSession',
-  async (data, context) => {
-    const uid = requirePermanentUid(context);
-    const sessionId = readSessionId(data.sessionId);
+export async function activateTriviaGameSessionAt(input: {
+  sessionId: string;
+  hostUserId: string;
+  participantUserIds: string[];
+  startAttemptId: string;
+  countdownStartsAtMs: number;
+  gameplayStartsAtMs: number;
+}) {
+    const sessionId = readSessionId(input.sessionId);
     const joinLink = firestore()
       .collection('gameJoinSessionLinks')
       .doc(hashIdentifier(`triviaBlitz:${sessionId}`));
@@ -302,21 +306,22 @@ export const startTriviaGameSession = onTriviaCall(
       }
       const mappingRef = firestore().collection('gameJoinCodes').doc(joinCode);
       const mapping = await transaction.get(mappingRef);
-      assertHost(parent, game, uid);
+      assertHost(parent, game, input.hostUserId);
       assertSessionNotExpired(parent.data());
+      if (
+        parent.data()?.status === 'playing' &&
+        game.data()?.status === 'playing' &&
+        game.data()?.startAttemptId === input.startAttemptId
+      ) {
+        return { status: 'playing' as const };
+      }
       assertTriviaJoinCodeState({
         link,
         mapping,
         sessionId,
-        uid,
-        expectedStatus:
-          game.data()?.status === 'playing' && parent.data()?.status === 'playing'
-            ? 'started'
-            : 'lobby',
+        uid: input.hostUserId,
+        expectedStatus: 'lobby',
       });
-      if (game.data()?.status === 'playing' && parent.data()?.status === 'playing') {
-        return { status: 'playing' as const };
-      }
       if (game.data()?.status !== 'lobby' || parent.data()?.status !== 'lobby') {
         throw safeError('failed-precondition', 'session_closed');
       }
@@ -329,6 +334,11 @@ export const startTriviaGameSession = onTriviaCall(
       if (playerSnapshots.docs.some((player) => player.data().ready !== true)) {
         throw safeError('failed-precondition', 'participants_not_ready');
       }
+      const currentParticipantIds = playerSnapshots.docs.map((player) => player.id).sort();
+      const expectedParticipantIds = [...new Set(input.participantUserIds)].sort();
+      if (JSON.stringify(currentParticipantIds) !== JSON.stringify(expectedParticipantIds)) {
+        throw safeError('failed-precondition', 'participants_changed');
+      }
       const questions = readStoredQuestions(secret.data()?.selectedQuestions);
       const firstQuestion = questions[0];
       if (!secret.exists || !firstQuestion) {
@@ -336,16 +346,22 @@ export const startTriviaGameSession = onTriviaCall(
       }
 
       const now = Timestamp.now();
-      const endsAt = Timestamp.fromMillis(now.toMillis() + QUESTION_DURATION_MS);
+      const gameplayStartsAt = Timestamp.fromMillis(input.gameplayStartsAtMs);
+      const countdownStartsAt = Timestamp.fromMillis(input.countdownStartsAtMs);
+      const endsAt = Timestamp.fromMillis(input.gameplayStartsAtMs + QUESTION_DURATION_MS);
       transaction.update(parent.ref, {
         status: 'playing',
+        startAttemptId: input.startAttemptId,
         completedAt: null,
+        countdownStartsAt,
+        gameplayStartsAt,
         updatedAt: now,
       });
       transaction.update(link.ref, { status: 'started', updatedAt: now });
       transaction.update(mappingRef, { status: 'started', updatedAt: now });
       transaction.update(game.ref, {
         status: 'playing',
+        startAttemptId: input.startAttemptId,
         turnIndex: 0,
         questionIndex: 0,
         questionCount: questions.length,
@@ -353,7 +369,9 @@ export const startTriviaGameSession = onTriviaCall(
         currentQuestion: toPublicQuestion(firstQuestion),
         currentSelection: null,
         answerResult: null,
-        questionStartedAt: now,
+        countdownStartsAt,
+        gameplayStartsAt,
+        questionStartedAt: gameplayStartsAt,
         questionEndsAt: endsAt,
         updatedAt: now,
       });
@@ -361,6 +379,12 @@ export const startTriviaGameSession = onTriviaCall(
     });
     await setGameLobbyLifecycleForSession('triviaBlitz', sessionId, 'inProgress');
     return result;
+}
+
+export const startTriviaGameSession = onTriviaCall(
+  'startTriviaGameSession',
+  async () => {
+    throw safeError('failed-precondition', 'client_update_required');
   },
 );
 
@@ -400,8 +424,13 @@ export const submitTriviaAnswer = onTriviaCall(
       }
 
       const gameData = game.data() ?? {};
+      const now = Timestamp.now();
+      const gameplayStartsAt = readTimestamp(gameData.gameplayStartsAt);
       if (parent.data()?.status !== 'playing' || gameData.status !== 'playing') {
         throw safeError('failed-precondition', 'session_closed');
+      }
+      if (!gameplayStartsAt || now.toMillis() < gameplayStartsAt.toMillis()) {
+        throw safeError('failed-precondition', 'game_not_started');
       }
       if (gameData.questionIndex !== questionIndex) {
         throw safeError('failed-precondition', 'stale_question');
@@ -422,7 +451,6 @@ export const submitTriviaAnswer = onTriviaCall(
         throw safeError('invalid-argument', 'answer_out_of_range');
       }
 
-      const now = Timestamp.now();
       const endsAt = readTimestamp(gameData.questionEndsAt);
       if (!endsAt || now.toMillis() > endsAt.toMillis()) {
         throw safeError('deadline-exceeded', 'answer_window_closed');

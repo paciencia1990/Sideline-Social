@@ -25,6 +25,7 @@ export default function TriviaBlitzLobby() {
     lifecycleError,
     toggleReady,
     startGame,
+    startPending,
     showCountdown,
     setShowCountdown,
   } =
@@ -55,6 +56,7 @@ export default function TriviaBlitzLobby() {
         lifecycleError={lifecycleError}
         onReadyToggle={toggleReady}
         onStart={startGame}
+        startPending={startPending}
       />
       {showCountdown && <CountdownOverlay onComplete={handleComplete} onCancel={() => setShowCountdown(false)} />}
     </View>

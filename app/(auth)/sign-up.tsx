@@ -1,17 +1,19 @@
-import React, { useCallback, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
+import React, { useCallback, useState } from "react";
+import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useTranslation } from "react-i18next";
+
 import { FederatedAuthButtons } from "@/components/FederatedAuthButtons";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { LegalAssentControls } from "@/components/LegalAssentControls";
 import { PasswordInput } from "@/components/PasswordInput";
+import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { CHOOSE_START_MODE_ROUTE } from "@/constants/routes";
-import { useAuth } from "@/context/AuthContext";
+import { CHOOSE_START_MODE_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { useAuth } from "@/context/AuthContext";
 import type { FederatedAuthProvider } from "@/utils/federatedAuthCore";
 
 export default function SignUpScreen() {
@@ -46,13 +48,13 @@ export default function SignUpScreen() {
     }
   }, [busy, signInWithApple, signInWithGoogle, t]);
 
-  const handleCreate = async () => {
+  const handleCreate = useCallback(async () => {
+    if (busy) return;
     setError("");
     if (!firstName.trim() || !lastName.trim() || !email.trim() || password.length < 8 || !policiesAccepted || !adultConfirmed) {
       setError(t("auth.errors.signupRequired"));
       return;
     }
-
     setLoading(true);
     try {
       await signUp(email, password, {
@@ -71,25 +73,22 @@ export default function SignUpScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [adultConfirmed, busy, email, firstName, lastName, password, policiesAccepted, signUp, sport, t, zipCode]);
 
   return (
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content}>
-          <TouchableOpacity accessibilityLabel={t("common.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
-            <ChevronLeft accessibilityElementsHidden importantForAccessibility="no-hide-descendants" size={24} color={Colors.textHeading} />
-          </TouchableOpacity>
-          <Text style={styles.title}>{t("auth.createAccount")}</Text>
-          <FederatedAuthButtons
-            disabled={loading}
-            loadingProvider={providerLoading}
-            onProviderPress={(provider) => void handleProvider(provider)}
-          />
-          <View style={styles.row}>
-            <TextInput style={[styles.input, styles.half]} placeholder={t("auth.firstName")} value={firstName} onChangeText={setFirstName} />
-            <TextInput style={[styles.input, styles.half]} placeholder={t("auth.lastName")} value={lastName} onChangeText={setLastName} />
-          </View>
-          <TextInput style={styles.input} placeholder={t("auth.email")} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+        <TouchableOpacity accessibilityLabel={t("common.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
+          <ChevronLeft accessibilityElementsHidden importantForAccessibility="no-hide-descendants" size={24} color={Colors.textHeading} />
+        </TouchableOpacity>
+        <View style={styles.headingBlock}>
+          <Text accessibilityRole="header" style={styles.title}>{t("auth.createAccount")}</Text>
+          <Text style={styles.subtitle}>{t("auth.signUpSubtitle")}</Text>
+        </View>
+        <View style={styles.form}>
+          <TextInput autoComplete="given-name" style={styles.input} placeholder={t("auth.firstName")} value={firstName} onChangeText={setFirstName} />
+          <TextInput autoComplete="family-name" style={styles.input} placeholder={t("auth.lastName")} value={lastName} onChangeText={setLastName} />
+          <TextInput autoCapitalize="none" autoComplete="email" keyboardType="email-address" onChangeText={setEmail} placeholder={t("auth.email")} style={styles.input} textContentType="emailAddress" value={email} />
           <PasswordInput
             autoCapitalize="none"
             autoComplete="new-password"
@@ -99,7 +98,7 @@ export default function SignUpScreen() {
             textContentType="newPassword"
             value={password}
           />
-          <TextInput style={styles.input} placeholder={t("auth.zipCode")} value={zipCode} onChangeText={setZipCode} keyboardType="number-pad" />
+          <TextInput autoComplete="postal-code" style={styles.input} placeholder={t("auth.zipCode")} value={zipCode} onChangeText={setZipCode} keyboardType="number-pad" />
           <TextInput style={styles.input} placeholder={t("auth.selectSportOptional")} value={sport} onChangeText={setSport} />
           <LegalAssentControls
             adultConfirmed={adultConfirmed}
@@ -107,10 +106,20 @@ export default function SignUpScreen() {
             onPoliciesAcceptedChange={setPoliciesAccepted}
             policiesAccepted={policiesAccepted}
           />
-          {!!error && <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text>}
-          <TouchableOpacity style={styles.button} onPress={handleCreate} disabled={busy}>
-            {loading ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.buttonText}>{t("auth.createAccountButton")}</Text>}
+        </View>
+        {error ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
+        <PrimaryButton disabled={busy} loading={loading} onPress={() => void handleCreate()} title={t("auth.createAccountButton")} />
+        <FederatedAuthButtons
+          disabled={loading}
+          loadingProvider={providerLoading}
+          onProviderPress={(provider) => void handleProvider(provider)}
+        />
+        <View style={styles.switchRow}>
+          <Text style={styles.switchCopy}>{t("auth.alreadyHaveAccount")}</Text>
+          <TouchableOpacity disabled={busy} onPress={() => router.replace(SIGN_IN_ROUTE as never)}>
+            <Text style={styles.switchLink}>{t("auth.signIn")}</Text>
           </TouchableOpacity>
+        </View>
       </KeyboardAwareScrollView>
     </ScreenWrapper>
   );
@@ -131,14 +140,15 @@ function getErrorCode(error: unknown) {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  content: { flexGrow: 1, justifyContent: "center", padding: Spacing.lg, gap: Spacing.md },
-  backButton: { position: "absolute", top: Spacing.lg, left: Spacing.lg, width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  title: { fontFamily: Typography.heading, fontSize: 32, color: Colors.textHeading, textAlign: "center" },
-  row: { flexDirection: "row", gap: Spacing.sm },
-  half: { flex: 1 },
-  input: { height: 52, borderWidth: 1, borderColor: Colors.secondary, borderRadius: Radius.button, paddingHorizontal: Spacing.md, backgroundColor: Colors.surface, fontFamily: Typography.bodyRegular, ...Shadow.card },
-  button: { height: 52, borderRadius: Radius.button, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },
-  buttonText: { fontFamily: Typography.bodySemiBold, color: Colors.surface, fontSize: 16 },
-  error: { fontFamily: Typography.bodyRegular, color: Colors.primary, textAlign: "center" },
+  backButton: { alignItems: "center", height: 44, justifyContent: "center", left: Spacing.lg, position: "absolute", top: Spacing.lg, width: 44, zIndex: 1 },
+  content: { flexGrow: 1, gap: Spacing.md, justifyContent: "center", padding: Spacing.lg, paddingVertical: Spacing.xl, paddingTop: 76 },
+  error: { color: Colors.primary, fontFamily: Typography.bodyRegular, lineHeight: 20, textAlign: "center" },
+  form: { gap: Spacing.sm },
+  headingBlock: { gap: Spacing.xs, marginBottom: Spacing.sm },
+  input: { backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, fontFamily: Typography.bodyRegular, height: 52, paddingHorizontal: Spacing.md, ...Shadow.card },
+  subtitle: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 22, textAlign: "center" },
+  switchCopy: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14 },
+  switchLink: { color: Colors.primary, fontFamily: Typography.bodyBold, fontSize: 14 },
+  switchRow: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: Spacing.xs, justifyContent: "center", marginTop: Spacing.sm, minHeight: 44 },
+  title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 32, textAlign: "center" },
 });

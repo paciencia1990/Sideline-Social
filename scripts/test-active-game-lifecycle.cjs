@@ -95,8 +95,8 @@ assert.match(functionSource, /expireRealtimeGameSession/);
 assert.match(functionSource, /status: 'expired'/);
 assert.match(
   functionSource,
-  /startRealtimeGameSession[\s\S]*reference\.transaction[\s\S]*startedAt: typeof session\.startedAt === 'number' \? session\.startedAt : serverNowMs/,
-  "game start time is normalized inside the trusted RTDB transaction",
+  /startRealtimeGameSession[\s\S]*reference\.transaction[\s\S]*startedAt: options\.gameplayStartsAtMs[\s\S]*endsAt: options\.gameplayStartsAtMs \+/,
+  "game start and end times use the server-authoritative scheduled gameplay timestamp",
 );
 assert.match(
   functionSource,

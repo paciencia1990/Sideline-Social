@@ -189,6 +189,8 @@ export {
   listGameLobbies,
   recordSpotDifferenceFound,
   reconnectGameLobby,
+  acknowledgeSynchronizedGameStart,
+  prepareSynchronizedGameStart,
   releaseGameJoinCode,
   resolveAndJoinGameByCode,
   setRealtimeGamePlayerReady,

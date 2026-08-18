@@ -38,6 +38,10 @@ export interface GameSession {
   players: Record<string, GamePlayer>;
   status: SessionStatus;
   startedAt: number | null;
+  countdownStartsAt?: number | null;
+  gameplayStartsAt?: number | null;
+  endsAt?: number | null;
+  startAttemptId?: string | null;
   completedAt: number | null;
   updatedAt?: number;
   gameState: Record<string, unknown>;

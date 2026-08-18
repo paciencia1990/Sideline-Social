@@ -63,6 +63,8 @@ export type TriviaSession = {
   hostPlayerId: string;
   questionStartedAt: unknown | null;
   questionEndsAt: unknown | null;
+  gameplayStartsAt?: unknown | null;
+  startAttemptId?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 };

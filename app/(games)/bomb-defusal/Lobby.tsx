@@ -25,6 +25,7 @@ export default function BombDefusalLobby() {
     lifecycleError,
     toggleReady,
     startGame,
+    startPending,
     showCountdown,
     setShowCountdown,
   } =
@@ -34,7 +35,7 @@ export default function BombDefusalLobby() {
     setShowCountdown(false);
     router.replace({
       pathname: "/games/bomb-defusal/play",
-      params: sessionId ? { sessionId, ...(lobbyId ? { lobbyId } : {}) } : {},
+      params: sessionId ? { sessionId, ...(lobbyId ? { lobbyId } : {}) } : { local: "1" },
     } as never);
   }, [lobbyId, sessionId, setShowCountdown]);
 
@@ -55,6 +56,7 @@ export default function BombDefusalLobby() {
         lifecycleError={lifecycleError}
         onReadyToggle={toggleReady}
         onStart={startGame}
+        startPending={startPending}
       />
       {showCountdown && <CountdownOverlay onComplete={handleComplete} onCancel={() => setShowCountdown(false)} />}
     </View>

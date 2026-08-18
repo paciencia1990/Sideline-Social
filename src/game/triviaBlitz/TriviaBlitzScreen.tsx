@@ -19,6 +19,7 @@ import { GameRewardSummary } from "@/components/GameRewardSummary";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
+import { useFirebaseServerClock } from "@/hooks/useFirebaseServerClock";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 import {
   advanceTriviaGameSession,
@@ -76,6 +77,7 @@ export default function TriviaBlitzScreen() {
   const { i18n, t } = useTranslation();
   const { user, firebaseUser, loading: authLoading } = useAuth();
   const { selectedSquadId } = useSquad();
+  const { offsetMs } = useFirebaseServerClock();
   const params = useLocalSearchParams<{
     sessionId?: string | string[];
     joinCode?: string | string[];
@@ -310,13 +312,13 @@ export default function TriviaBlitzScreen() {
     const questionEndsAtMs = readTimestampMillis(session.questionEndsAt);
     setSecondsRemaining(
       questionEndsAtMs
-        ? Math.max(Math.ceil((questionEndsAtMs - Date.now()) / 1000), 0)
+        ? Math.max(Math.ceil((questionEndsAtMs - (Date.now() + offsetMs)) / 1000), 0)
         : QUESTION_SECONDS,
     );
     setLastResult(null);
     advancedQuestionRef.current = null;
     announcedFeedbackRef.current = null;
-  }, [session?.questionEndsAt, session?.questionIndex, session?.status]);
+  }, [offsetMs, session?.questionEndsAt, session?.questionIndex, session?.status]);
 
   useEffect(() => {
     if (session?.status !== "playing") {
@@ -327,7 +329,7 @@ export default function TriviaBlitzScreen() {
       const questionEndsAtMs = readTimestampMillis(session.questionEndsAt);
       setSecondsRemaining(
         questionEndsAtMs
-          ? Math.max(Math.ceil((questionEndsAtMs - Date.now()) / 1000), 0)
+          ? Math.max(Math.ceil((questionEndsAtMs - (Date.now() + offsetMs)) / 1000), 0)
           : 0,
       );
     };
@@ -337,7 +339,7 @@ export default function TriviaBlitzScreen() {
     }, 250);
 
     return () => clearInterval(timer);
-  }, [session?.questionEndsAt, session?.status]);
+  }, [offsetMs, session?.questionEndsAt, session?.status]);
 
   useEffect(() => {
     if (
@@ -367,7 +369,7 @@ export default function TriviaBlitzScreen() {
     const questionEndsAtMs = readTimestampMillis(session.questionEndsAt);
     const delayMs = currentResult
       ? 1400
-      : Math.max((questionEndsAtMs || Date.now()) - Date.now() + 100, 0);
+      : Math.max((questionEndsAtMs || (Date.now() + offsetMs)) - (Date.now() + offsetMs) + 100, 0);
     const timer = setTimeout(() => {
       if (
         advanceInFlightRef.current ||
@@ -401,6 +403,7 @@ export default function TriviaBlitzScreen() {
     currentQuestionKey,
     currentResult,
     isHost,
+    offsetMs,
     session?.questionEndsAt,
     session?.questionIndex,
     session?.status,

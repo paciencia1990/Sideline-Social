@@ -42,6 +42,27 @@ function hasReason(reason) {
     String(error?.message).includes(reason);
 }
 
+async function acknowledgeSynchronizedStart(gameType, sessionId, hostClient, participantClients) {
+  const prepared = await hostClient.call('prepareSynchronizedGameStart', { gameType, sessionId });
+  for (const client of participantClients) {
+    await client.call('acknowledgeSynchronizedGameStart', {
+      gameType,
+      sessionId,
+      startAttemptId: prepared.startAttemptId,
+    });
+  }
+  return prepared;
+}
+
+async function openRealtimeGameplayWindow(sessionId) {
+  const now = Date.now();
+  await database.ref(`gameSessions/${sessionId}`).update({
+    countdownStartsAt: now - 3_900,
+    gameplayStartsAt: now - 100,
+    startedAt: now - 100,
+  });
+}
+
 async function seedMember(client, squadId) {
   await Promise.all([
     firestore.collection('users').doc(client.uid).set({ firstName: client.label, lastName: 'Tester' }),
@@ -407,9 +428,8 @@ async function run() {
   });
   await Promise.all([activeHost, activeLeaver].map((client) =>
     client.call('setRealtimeGamePlayerReady', { sessionId: activeLobby.sessionId, ready: true })));
-  await activeHost.call('updateGameJoinCodeStatus', {
-    gameType: 'bombDefusal', sessionId: activeLobby.sessionId, status: 'started',
-  });
+  await acknowledgeSynchronizedStart('bombDefusal', activeLobby.sessionId, activeHost, [activeHost, activeLeaver]);
+  await openRealtimeGameplayWindow(activeLobby.sessionId);
   await activeLeaver.call('leaveGameLobby', { lobbyId: activeLobby.lobbyId });
   const abandonedSession = (await database.ref(`gameSessions/${activeLobby.sessionId}`).get()).val();
   assert.equal(abandonedSession.status, 'completed');
@@ -447,9 +467,17 @@ async function run() {
   );
   await Promise.all([bombHost, bombSecond, bombThird, bombFourth].map((client) =>
     client.call('setRealtimeGamePlayerReady', { sessionId: roleLobby.sessionId, ready: true })));
-  await bombHost.call('updateGameJoinCodeStatus', {
-    gameType: 'bombDefusal', sessionId: roleLobby.sessionId, status: 'started',
-  });
+  await acknowledgeSynchronizedStart(
+    'bombDefusal',
+    roleLobby.sessionId,
+    bombHost,
+    [bombHost, bombSecond, bombThird, bombFourth],
+  );
+  await assert.rejects(
+    () => bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
+    hasReason('game_not_started'),
+  );
+  await openRealtimeGameplayWindow(roleLobby.sessionId);
   const [hostView, secondView, thirdView, fourthView] = await Promise.all([
     bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
     bombSecond.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
@@ -603,9 +631,8 @@ async function run() {
   assert.notDeepEqual(rematchSecret.challengeIds, initialBombSecret.challengeIds, 'the complete challenge sequence changes on rematch');
   await Promise.all([bombHost, bombFourth].map((client) =>
     client.call('setRealtimeGamePlayerReady', { sessionId: bombRematch.sessionId, ready: true })));
-  await bombHost.call('updateGameJoinCodeStatus', {
-    gameType: 'bombDefusal', sessionId: bombRematch.sessionId, status: 'started',
-  });
+  await acknowledgeSynchronizedStart('bombDefusal', bombRematch.sessionId, bombHost, [bombHost, bombFourth]);
+  await openRealtimeGameplayWindow(bombRematch.sessionId);
   for (let commandIndex = 0; commandIndex < 6; commandIndex += 1) {
     const [hostCommandView, fourthCommandView] = await Promise.all([
       bombHost.call('getBombDefusalPlayerView', { sessionId: bombRematch.sessionId }),
@@ -638,9 +665,8 @@ async function run() {
   });
   await Promise.all([bombHost, bombThird].map((client) =>
     client.call('setRealtimeGamePlayerReady', { sessionId: timeoutLobby.sessionId, ready: true })));
-  await bombHost.call('updateGameJoinCodeStatus', {
-    gameType: 'bombDefusal', sessionId: timeoutLobby.sessionId, status: 'started',
-  });
+  await acknowledgeSynchronizedStart('bombDefusal', timeoutLobby.sessionId, bombHost, [bombHost, bombThird]);
+  await openRealtimeGameplayWindow(timeoutLobby.sessionId);
   await bombSecond.call('joinGameLobbyNextRound', {
     gameType: 'bombDefusal', squadId: squadA, lobbyId: timeoutLobby.lobbyId,
   });

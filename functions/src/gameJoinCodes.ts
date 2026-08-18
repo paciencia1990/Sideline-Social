@@ -74,8 +74,17 @@ import {
 } from './spotDifferenceCore';
 import {
   provisionTriviaLobbySession,
+  activateTriviaGameSessionAt,
   type TriviaLobbyParticipant,
 } from './triviaGame';
+import {
+  GAME_START_READY_TIMEOUT_MS,
+  GAME_START_SCHEMA_VERSION,
+  appendReadinessAcknowledgement,
+  nextSharedGameTimeline,
+  participantSnapshotMatches,
+  type FrozenGameStartParticipant,
+} from './gameStartSynchronizationCore';
 
 const functions = permanentAccountFunctions(firebaseFunctions, "communication");
 const JOIN_CODE_TTL_MS = 2 * 60 * 60 * 1000;
@@ -91,6 +100,7 @@ const LOBBY_CREATE_BLOCK_MS = 10 * 60 * 1000;
 const PROVISIONING_TIMEOUT_MS = 60 * 1000;
 const LOBBY_DEPARTURE_STALE_MS = 30 * 1000;
 const FIRESTORE_CONTENTION_RETRY_LIMIT = 4;
+const gameStartStates = () => admin.firestore().collection('gameStartStates');
 
 function isRetryableFirestoreContention(error: unknown) {
   if (!error || typeof error !== 'object') return false;
@@ -311,6 +321,226 @@ export const startGameLobbyRematch = functions.https.onCall(async (data, context
   const uid = requireUid(context);
   const lobbyId = readLobbyId(data?.lobbyId);
   return createNextLobbyRound(uid, lobbyId);
+});
+
+export const prepareSynchronizedGameStart = functions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const gameType = requireGameType(data?.gameType);
+  const sessionId = readSessionId(data?.sessionId);
+  await assertHostOwnsCanonicalSession(uid, gameType, sessionId, true);
+  const nowMs = Date.now();
+  const stateRef = gameStartStates().doc(gameStartStateId(gameType, sessionId));
+  const currentState = await stateRef.get();
+  const currentData = currentState.data();
+  if (
+    currentState.exists &&
+    currentData?.schemaVersion === GAME_START_SCHEMA_VERSION &&
+    currentData?.gameType === gameType &&
+    currentData?.sessionId === sessionId &&
+    currentData?.hostUserId === uid &&
+    (currentData?.phase === 'scheduled' ||
+      ((currentData?.phase === 'preparing' || currentData?.phase === 'activating') &&
+        Number(currentData?.readinessDeadlineAtMs) > nowMs))
+  ) return publicGameStartState(currentData);
+  const snapshot = await readCanonicalGameStartSnapshot(gameType, sessionId);
+  if (snapshot.hostUserId !== uid) throw safeError('permission-denied', 'not_authorized');
+  assertGameStartSnapshotReady(snapshot);
+  const standings = await Promise.all(snapshot.participants.map((participant) => accountCanCommunicate(participant.uid)));
+  if (standings.some((allowed) => !allowed)) {
+    throw safeError('failed-precondition', 'participant_unavailable');
+  }
+
+  const state = await admin.firestore().runTransaction(async (transaction) => {
+    const existing = await transaction.get(stateRef);
+    const existingData = existing.data();
+    const existingStillUsable = existing.exists &&
+      existingData?.sessionId === sessionId &&
+      existingData?.gameType === gameType &&
+      existingData?.schemaVersion === GAME_START_SCHEMA_VERSION &&
+      existingData?.hostUserId === uid &&
+      (existingData?.phase === 'scheduled' ||
+        ((existingData?.phase === 'preparing' || existingData?.phase === 'activating') &&
+          Number(existingData?.readinessDeadlineAtMs) > nowMs));
+    if (existingStillUsable) return publicGameStartState(existingData);
+
+    const startAttemptId = randomBytes(18).toString('base64url');
+    const participantUserIds = snapshot.participants.map((participant) => participant.uid);
+    const nextState = {
+      schemaVersion: GAME_START_SCHEMA_VERSION,
+      gameType,
+      sessionId,
+      lobbyId: snapshot.lobbyId,
+      hostUserId: uid,
+      startAttemptId,
+      phase: 'preparing' as const,
+      participantUserIds,
+      participantCount: participantUserIds.length,
+      acknowledgedUserIds: [],
+      acknowledgedCount: 0,
+      readinessDeadlineAtMs: nowMs + GAME_START_READY_TIMEOUT_MS,
+      countdownStartsAtMs: null,
+      gameplayStartsAtMs: null,
+      failureReason: null,
+      createdAt: Timestamp.fromMillis(nowMs),
+      updatedAt: Timestamp.fromMillis(nowMs),
+      expiresAt: Timestamp.fromMillis(snapshot.expiresAtMs),
+    };
+    transaction.set(stateRef, nextState);
+    snapshot.participants.forEach((participant) => {
+      transaction.set(stateRef.collection('participants').doc(participant.uid), {
+        startAttemptId,
+        uid: participant.uid,
+        joinOrder: participant.joinOrder,
+        teamId: participant.teamId,
+        role: participant.role,
+        acknowledgedAt: null,
+        expiresAt: Timestamp.fromMillis(snapshot.expiresAtMs),
+      });
+    });
+    return publicGameStartState(nextState);
+  });
+  await setGameLobbyLifecycleForSession(gameType, sessionId, 'starting');
+  return state;
+});
+
+export const acknowledgeSynchronizedGameStart = functions.https.onCall(async (data, context) => {
+  const uid = requireUid(context);
+  const gameType = requireGameType(data?.gameType);
+  const sessionId = readSessionId(data?.sessionId);
+  const startAttemptId = readStartAttemptId(data?.startAttemptId);
+  const stateRef = gameStartStates().doc(gameStartStateId(gameType, sessionId));
+  const nowMs = Date.now();
+  const acknowledgement = await admin.firestore().runTransaction(async (transaction) => {
+    const [stateSnapshot, participantSnapshot] = await Promise.all([
+      transaction.get(stateRef),
+      transaction.get(stateRef.collection('participants').doc(uid)),
+    ]);
+    const state = stateSnapshot.data();
+    if (
+      !stateSnapshot.exists ||
+      state?.schemaVersion !== GAME_START_SCHEMA_VERSION ||
+      state?.gameType !== gameType ||
+      state?.sessionId !== sessionId ||
+      state?.startAttemptId !== startAttemptId ||
+      !participantSnapshot.exists ||
+      participantSnapshot.data()?.startAttemptId !== startAttemptId
+    ) throw safeError('failed-precondition', 'stale_start_attempt');
+    if (state.phase === 'scheduled') return { shouldActivate: false, timedOut: false, state: publicGameStartState(state) };
+    if (state.phase === 'activating') return { shouldActivate: true, timedOut: false, state: publicGameStartState(state) };
+    if (state.phase !== 'preparing') {
+      throw safeError('failed-precondition', state.failureReason === 'ready_timeout' ? 'preparation_timeout' : 'stale_start_attempt');
+    }
+    if (Number(state.readinessDeadlineAtMs) <= nowMs) {
+      transaction.update(stateRef, {
+        phase: 'failed',
+        failureReason: 'ready_timeout',
+        updatedAt: Timestamp.fromMillis(nowMs),
+      });
+      return { shouldActivate: false, timedOut: true, state: publicGameStartState({ ...state, phase: 'failed', failureReason: 'ready_timeout' }) };
+    }
+    const participantUserIds = readStringArray(state.participantUserIds);
+    const next = appendReadinessAcknowledgement(state.acknowledgedUserIds, uid, participantUserIds);
+    if (!next) throw safeError('permission-denied', 'not_authorized');
+    const timeline = next.allReady ? nextSharedGameTimeline(nowMs) : null;
+    transaction.update(stateRef.collection('participants').doc(uid), {
+      acknowledgedAt: Timestamp.fromMillis(nowMs),
+    });
+    transaction.update(stateRef, {
+      acknowledgedUserIds: next.acknowledgedUserIds,
+      acknowledgedCount: next.acknowledgedCount,
+      phase: next.allReady ? 'activating' : 'preparing',
+      ...(timeline ?? {}),
+      updatedAt: Timestamp.fromMillis(nowMs),
+    });
+    return {
+      shouldActivate: next.allReady,
+      timedOut: false,
+      state: publicGameStartState({
+        ...state,
+        acknowledgedCount: next.acknowledgedCount,
+        phase: next.allReady ? 'activating' : 'preparing',
+        ...(timeline ?? {}),
+      }),
+    };
+  });
+
+  if (acknowledgement.timedOut) {
+    await setGameLobbyLifecycleForSession(gameType, sessionId, 'waiting');
+    throw safeError('deadline-exceeded', 'preparation_timeout');
+  }
+  if (!acknowledgement.shouldActivate) return acknowledgement.state;
+
+  try {
+    const stateSnapshot = await stateRef.get();
+    const state = stateSnapshot.data() ?? {};
+    if (state.startAttemptId !== startAttemptId || state.phase !== 'activating') {
+      return publicGameStartState(state);
+    }
+    const frozenParticipantSnapshots = await stateRef.collection('participants').get();
+    const frozenParticipants = readFrozenGameStartParticipants(
+      frozenParticipantSnapshots.docs.map((participant) => participant.data()),
+    );
+    const current = await readCanonicalGameStartSnapshot(gameType, sessionId);
+    if (
+      current.hostUserId !== state.hostUserId ||
+      !participantSnapshotMatches(frozenParticipants, current.participants)
+    ) throw safeError('failed-precondition', 'participants_changed');
+    assertGameStartSnapshotReady(current);
+
+    const countdownStartsAtMs = Number(state.countdownStartsAtMs);
+    const gameplayStartsAtMs = Number(state.gameplayStartsAtMs);
+    if (!Number.isFinite(countdownStartsAtMs) || !Number.isFinite(gameplayStartsAtMs)) {
+      throw safeError('failed-precondition', 'start_failed');
+    }
+    const timeline = { countdownStartsAtMs, gameplayStartsAtMs };
+    if (gameType === 'triviaBlitz') {
+      await activateTriviaGameSessionAt({
+        sessionId,
+        hostUserId: state.hostUserId,
+        participantUserIds: frozenParticipants.map((participant) => participant.uid),
+        startAttemptId,
+        countdownStartsAtMs: timeline.countdownStartsAtMs,
+        gameplayStartsAtMs: timeline.gameplayStartsAtMs,
+      });
+    } else {
+      await startRealtimeGameSession(sessionId, {
+        startAttemptId,
+        participants: frozenParticipants,
+        ...timeline,
+      });
+      await setJoinCodeStatus(gameType, sessionId, state.hostUserId, 'started');
+      await setGameLobbyLifecycleForSession(gameType, sessionId, 'inProgress');
+    }
+    const scheduled = await admin.firestore().runTransaction(async (transaction) => {
+      const latest = await transaction.get(stateRef);
+      if (latest.data()?.startAttemptId !== startAttemptId) {
+        throw safeError('failed-precondition', 'stale_start_attempt');
+      }
+      if (latest.data()?.phase === 'scheduled') return publicGameStartState(latest.data());
+      transaction.update(stateRef, {
+        phase: 'scheduled',
+        countdownStartsAtMs: timeline.countdownStartsAtMs,
+        gameplayStartsAtMs: timeline.gameplayStartsAtMs,
+        failureReason: null,
+        updatedAt: Timestamp.now(),
+      });
+      return publicGameStartState({
+        ...latest.data(),
+        phase: 'scheduled',
+        countdownStartsAtMs: timeline.countdownStartsAtMs,
+        gameplayStartsAtMs: timeline.gameplayStartsAtMs,
+      });
+    });
+    return scheduled;
+  } catch (error) {
+    await stateRef.update({
+      phase: 'failed',
+      failureReason: readGameStartFailureReason(error),
+      updatedAt: Timestamp.now(),
+    }).catch(() => undefined);
+    await setGameLobbyLifecycleForSession(gameType, sessionId, 'waiting').catch(() => undefined);
+    throw error;
+  }
 });
 
 export const createGameJoinCode = functions.https.onCall(async (data, context): Promise<ReservationResult> => {
@@ -663,45 +893,21 @@ export const updateGameJoinCodeStatus = functions.https.onCall(async (data, cont
   const status = readLifecycleStatus(data?.status);
   await assertHostOwnsCanonicalSession(uid, gameType, sessionId, true);
   if (status === 'started') {
-    await assertCanonicalSessionCanStart(gameType, sessionId);
-    if (gameType === 'triviaBlitz') {
-      await assertPlayersReadyForStart(gameType, sessionId);
-    }
+    throw safeError('failed-precondition', 'client_update_required');
   }
-  let realtimeStart: { startedNow: boolean; startedAtMs: number } | null = null;
-  if (gameType !== 'triviaBlitz' && status === 'started') {
-    realtimeStart = await startRealtimeGameSession(sessionId);
-  }
-  try {
-    await setJoinCodeStatus(gameType, sessionId, uid, status);
-  } catch (error) {
-    if (
-      gameType !== 'triviaBlitz' &&
-      status === 'started' &&
-      realtimeStart?.startedNow
-    ) {
-      const mappingStarted = await isGameJoinCodeStatusStarted(gameType, sessionId);
-      if (mappingStarted) {
-        return { status };
-      }
-      await rollbackRealtimeGameSessionStart(sessionId, realtimeStart.startedAtMs);
-    }
-    throw error;
-  }
+  await setJoinCodeStatus(gameType, sessionId, uid, status);
   if (gameType !== 'triviaBlitz') {
-    if (status !== 'started') {
-      const serverNowMs = Date.now();
-      await admin.database().ref(`/gameSessions/${sessionId}`).update({
-        status: status === 'ended' ? 'completed' : 'failed',
-        completedAt: serverNowMs,
-        updatedAt: serverNowMs,
-      });
-    }
+    const serverNowMs = Date.now();
+    await admin.database().ref(`/gameSessions/${sessionId}`).update({
+      status: status === 'ended' ? 'completed' : 'failed',
+      completedAt: serverNowMs,
+      updatedAt: serverNowMs,
+    });
   }
   await setGameLobbyLifecycleForSession(
     gameType,
     sessionId,
-    status === 'started' ? 'inProgress' : status === 'ended' ? 'waitingForRematch' : 'closed',
+    status === 'ended' ? 'waitingForRematch' : 'closed',
   );
   return { status };
 });
@@ -893,6 +1099,7 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
     ? player.displayName.trim()
     : await resolvePlayerDisplayName(uid, context.auth?.token);
   const gameState = readRecord(initialSession.gameState);
+  const gameplayStartsAt = readPositiveNumber(initialSession.gameplayStartsAt);
   const sceneId = typeof gameState.sceneId === 'string' ? gameState.sceneId : '';
   const scene = getCanonicalSpotScene(sceneId);
   const match = findCanonicalSpotDifference(sceneId, tap);
@@ -901,7 +1108,9 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
     !scene ||
     scene.differences.length !== EXPECTED_SPOT_DIFFERENCES ||
     gameState.teamAssignmentsFrozen !== true ||
-    initialSession.status !== 'active'
+    initialSession.status !== 'active' ||
+    gameplayStartsAt == null ||
+    gameplayStartsAt > Date.now()
   ) {
     throw safeError('failed-precondition', 'game_already_started');
   }
@@ -1007,6 +1216,16 @@ export const getBombDefusalPlayerView = functions.https.onCall(async (data, cont
   }
   if (session.status === 'canceled' || session.status === 'expired') {
     throw safeError('failed-precondition', 'lobby_closed_or_expired');
+  }
+  const gameplayStartsAt = readPositiveNumber(session.gameplayStartsAt);
+  if (
+    gameplayStartsAt == null ||
+    (session.status !== 'active' && session.status !== 'completed')
+  ) {
+    throw safeError('failed-precondition', 'client_update_required');
+  }
+  if (gameplayStartsAt > Date.now()) {
+    throw safeError('failed-precondition', 'game_not_started');
   }
 
   const commandIndex = Number.isInteger(gameState.currentCommandIndex)
@@ -1140,6 +1359,8 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
   }
   if (
     initialSession.status !== 'active' ||
+    typeof initialSession.gameplayStartsAt !== 'number' ||
+    initialSession.gameplayStartsAt > Date.now() ||
     typeof initialSession.endsAt !== 'number' ||
     initialSession.endsAt <= Date.now()
   ) {
@@ -1186,6 +1407,8 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
     }
     if (
       session.status !== 'active' ||
+      typeof session.gameplayStartsAt !== 'number' ||
+      session.gameplayStartsAt > Date.now() ||
       typeof session.endsAt !== 'number' ||
       session.endsAt <= Date.now()
     ) {
@@ -3051,6 +3274,153 @@ export const cleanupExpiredGameJoinCodes = functions.pubsub.schedule('every 30 m
   return null;
 });
 
+type CanonicalGameStartSnapshot = {
+  lobbyId: string;
+  hostUserId: string;
+  participants: FrozenGameStartParticipant[];
+  minimumPlayers: number;
+  allPlayersReady: boolean;
+  expiresAtMs: number;
+};
+
+async function readCanonicalGameStartSnapshot(
+  gameType: GameJoinCodeType,
+  sessionId: string,
+): Promise<CanonicalGameStartSnapshot> {
+  if (gameType === 'triviaBlitz') {
+    const parentRef = admin.firestore().collection('sessions').doc(sessionId);
+    const gameRef = parentRef.collection('games').doc('triviaBlitz');
+    const [parent, game, players] = await Promise.all([
+      parentRef.get(),
+      gameRef.get(),
+      gameRef.collection('players').get(),
+    ]);
+    const expiresAtMs = readTimestampMillis(parent.data()?.expiresAt);
+    if (
+      !parent.exists ||
+      !game.exists ||
+      parent.data()?.status !== 'lobby' ||
+      game.data()?.status !== 'lobby' ||
+      expiresAtMs <= Date.now()
+    ) throw safeError('failed-precondition', 'game_already_started');
+    return {
+      lobbyId: readStoredSessionId(parent.data()?.lobbyId) ?? sessionId,
+      hostUserId: readStoredSessionId(parent.data()?.hostPlayerId) ?? '',
+      participants: players.docs.map((player, index) => ({
+        uid: player.id,
+        joinOrder: readPositiveNumber(player.data()?.joinOrder) ??
+          readPositiveNumber(player.data()?.playerIndex) ?? index + 1,
+        teamId: null,
+        role: null,
+      })).sort((left, right) => left.joinOrder - right.joinOrder || left.uid.localeCompare(right.uid)),
+      minimumPlayers: TRIVIA_MIN_PLAYERS,
+      allPlayersReady: !players.empty && players.docs.every((player) => player.data()?.ready === true),
+      expiresAtMs,
+    };
+  }
+
+  const sessionSnapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+  const session = readRecord(sessionSnapshot.val());
+  const expiresAtMs = readPositiveNumber(session.expiresAt) ?? 0;
+  if (
+    !sessionSnapshot.exists() ||
+    session.gameType !== legacyRealtimeGameType(gameType) ||
+    session.status !== 'lobby' ||
+    expiresAtMs <= Date.now()
+  ) throw safeError('failed-precondition', 'game_already_started');
+  const players = readRecord(session.players);
+  const orderedPlayers = Object.entries(players).map(([uid, value], index) => {
+    const player = readRecord(value);
+    return {
+      uid,
+      joinOrder: readPositiveNumber(player.joinOrder) ?? index + 1,
+      teamId: normalizeSpotTeamId(player.teamId),
+      ready: player.isReady === true,
+    };
+  }).sort((left, right) => left.joinOrder - right.joinOrder || left.uid.localeCompare(right.uid));
+  const bombAssignment = gameType === 'bombDefusal'
+    ? assignBombRoles(orderedPlayers.map(({ uid, joinOrder }) => ({ uid, joinOrder })), 0)
+    : null;
+  return {
+    lobbyId: readStoredSessionId(session.lobbyId) ?? sessionId,
+    hostUserId: readStoredSessionId(session.hostUserId) ?? '',
+    participants: orderedPlayers.map((player) => ({
+      uid: player.uid,
+      joinOrder: player.joinOrder,
+      teamId: gameType === 'spotTheDifferences' ? player.teamId : null,
+      role: bombAssignment ? roleForBombPlayer(player.uid, bombAssignment) : null,
+    })),
+    minimumPlayers: readPositiveNumber(session.minPlayers) ?? (gameType === 'bombDefusal' ? 2 : 4),
+    allPlayersReady: orderedPlayers.length > 0 && orderedPlayers.every((player) => player.ready),
+    expiresAtMs,
+  };
+}
+
+function assertGameStartSnapshotReady(snapshot: CanonicalGameStartSnapshot) {
+  if (snapshot.participants.length < snapshot.minimumPlayers) {
+    throw safeError('failed-precondition', 'minimum_players_required');
+  }
+  if (!snapshot.allPlayersReady) {
+    throw safeError('failed-precondition', 'participants_not_ready');
+  }
+  if (!snapshot.hostUserId || !snapshot.participants.some((participant) => participant.uid === snapshot.hostUserId)) {
+    throw safeError('permission-denied', 'not_authorized');
+  }
+}
+
+function gameStartStateId(gameType: GameJoinCodeType, sessionId: string) {
+  return `${gameType}__${sessionId}`;
+}
+
+function readStartAttemptId(value: unknown) {
+  const startAttemptId = typeof value === 'string' ? value.trim() : '';
+  if (!/^[A-Za-z0-9_-]{10,200}$/.test(startAttemptId)) {
+    throw safeError('invalid-argument', 'stale_start_attempt');
+  }
+  return startAttemptId;
+}
+
+function readFrozenGameStartParticipants(value: unknown): FrozenGameStartParticipant[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const participant = readRecord(item);
+    const uid = readStoredSessionId(participant.uid);
+    const joinOrder = readPositiveNumber(participant.joinOrder);
+    const teamId = normalizeSpotTeamId(participant.teamId);
+    const role = participant.role === 'defuser' || participant.role === 'expert' || participant.role === 'support'
+      ? participant.role
+      : null;
+    return uid && joinOrder ? [{ uid, joinOrder, teamId, role }] : [];
+  });
+}
+
+function publicGameStartState(value: FirebaseFirestore.DocumentData | undefined) {
+  const state = value ?? {};
+  return {
+    schemaVersion: Number(state.schemaVersion) || 0,
+    gameType: state.gameType ?? null,
+    sessionId: state.sessionId ?? '',
+    lobbyId: state.lobbyId ?? '',
+    hostUserId: state.hostUserId ?? '',
+    startAttemptId: state.startAttemptId ?? '',
+    phase: state.phase ?? 'failed',
+    participantCount: Number(state.participantCount) || 0,
+    acknowledgedCount: Number(state.acknowledgedCount) || 0,
+    readinessDeadlineAtMs: Number(state.readinessDeadlineAtMs) || 0,
+    countdownStartsAtMs: typeof state.countdownStartsAtMs === 'number' ? state.countdownStartsAtMs : null,
+    gameplayStartsAtMs: typeof state.gameplayStartsAtMs === 'number' ? state.gameplayStartsAtMs : null,
+    failureReason: typeof state.failureReason === 'string' ? state.failureReason : null,
+  };
+}
+
+function readGameStartFailureReason(error: unknown) {
+  if (error && typeof error === 'object' && 'details' in error) {
+    const details = readRecord((error as { details?: unknown }).details);
+    if (typeof details.reason === 'string') return details.reason;
+  }
+  return 'start_failed';
+}
+
 async function createRealtimeSession(input: {
   gameType: Exclude<GameJoinCodeType, 'triviaBlitz'>;
   sessionId?: string;
@@ -3547,7 +3917,12 @@ async function assertCanonicalSessionCanStart(
   }
 }
 
-async function startRealtimeGameSession(sessionId: string) {
+async function startRealtimeGameSession(sessionId: string, options: {
+  startAttemptId: string;
+  participants: FrozenGameStartParticipant[];
+  countdownStartsAtMs: number;
+  gameplayStartsAtMs: number;
+}) {
   let reason:
     | 'game_not_found'
     | 'game_already_started'
@@ -3603,7 +3978,7 @@ async function startRealtimeGameSession(sessionId: string) {
       reason = 'participants_not_ready';
       return;
     }
-    if (session.status === 'active') {
+    if (session.status === 'active' && session.gameState?.startAttemptId === options.startAttemptId) {
       startedAtMs = typeof session.startedAt === 'number' ? session.startedAt : 0;
       return session;
     }
@@ -3613,20 +3988,45 @@ async function startRealtimeGameSession(sessionId: string) {
     }
     const serverNowMs = Date.now();
     startedNow = true;
-    startedAtMs = serverNowMs;
+    startedAtMs = options.gameplayStartsAtMs;
     const isSpotGame = session.gameType === legacyRealtimeGameType('spotTheDifferences');
     const isBombGame = session.gameType === legacyRealtimeGameType('bombDefusal');
-    const rebalanced = isSpotGame
-      ? rebalanceSpotLobbyPlayers(players, serverNowMs)
-      : null;
-    const frozenPlayers = rebalanced?.players ?? players;
+    const currentParticipants = Object.entries(players).map(([uid, value], index) => {
+      const player = readRecord(value);
+      const joinOrder = readPositiveNumber(player.joinOrder) ?? index + 1;
+      const bombAssignment = isBombGame
+        ? assignBombRoles(bombOrderedPlayersFromRecord(players), 0)
+        : null;
+      return {
+        uid,
+        joinOrder,
+        teamId: isSpotGame ? normalizeSpotTeamId(player.teamId) : null,
+        role: bombAssignment ? roleForBombPlayer(uid, bombAssignment) : null,
+      } as FrozenGameStartParticipant;
+    });
+    if (!participantSnapshotMatches(options.participants, currentParticipants)) {
+      reason = 'game_already_started';
+      return;
+    }
+    const participantById = new Map(options.participants.map((participant) => [participant.uid, participant]));
+    const frozenPlayers = Object.fromEntries(Object.entries(players).map(([uid, playerValue]) => {
+      const participant = participantById.get(uid);
+      const player = readRecord(playerValue);
+      return [uid, {
+        ...player,
+        ...(isSpotGame ? { teamId: participant?.teamId ?? player.teamId } : {}),
+      }];
+    }));
     const teamAssignments = isSpotGame
       ? createFrozenSpotAssignments(frozenPlayers)
       : undefined;
     const bombAssignment = isBombGame
-      ? assignBombRoles(bombOrderedPlayersFromRecord(frozenPlayers), 0)
+      ? {
+        defuserUserId: options.participants.find((participant) => participant.role === 'defuser')?.uid ?? '',
+        expertUserId: options.participants.find((participant) => participant.role === 'expert')?.uid ?? '',
+      }
       : null;
-    if (isBombGame && (!bombAssignment || !bombCommands[0])) {
+    if (isBombGame && (!bombAssignment?.defuserUserId || !bombAssignment.expertUserId || !bombCommands[0])) {
       reason = 'minimum_players_required';
       return;
     }
@@ -3634,16 +4034,17 @@ async function startRealtimeGameSession(sessionId: string) {
       ...session,
       players: frozenPlayers,
       status: 'active',
-      startedAt: typeof session.startedAt === 'number' ? session.startedAt : serverNowMs,
-      endsAt: typeof session.endsAt === 'number'
-        ? session.endsAt
-        : serverNowMs + Math.max(1, readRealtimeDurationSeconds(session.gameType, session.settings) ?? 90) * 1000,
+      startAttemptId: options.startAttemptId,
+      countdownStartsAt: options.countdownStartsAtMs,
+      gameplayStartsAt: options.gameplayStartsAtMs,
+      startedAt: options.gameplayStartsAtMs,
+      endsAt: options.gameplayStartsAtMs + Math.max(1, readRealtimeDurationSeconds(session.gameType, session.settings) ?? 90) * 1000,
       gameState: isSpotGame
         ? {
           ...session.gameState,
+          startAttemptId: options.startAttemptId,
           expectedDifferences: EXPECTED_SPOT_DIFFERENCES,
           teamAssignmentsFrozen: true,
-          teamAssignmentVersion: rebalanced?.assignmentVersion,
           teamAssignments,
           result: readRecord(session.gameState).result ?? null,
           version: 2,
@@ -3651,6 +4052,7 @@ async function startRealtimeGameSession(sessionId: string) {
         : isBombGame
           ? {
             roleSchemaVersion: BOMB_ROLE_SCHEMA_VERSION,
+            startAttemptId: options.startAttemptId,
             currentCommandId: 'command-1',
             currentCommandIndex: 0,
             publicCommand: createBombPublicCommand(bombCommands[0], 0),

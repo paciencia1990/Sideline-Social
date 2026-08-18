@@ -30,6 +30,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
+import { useFirebaseServerClock } from "@/hooks/useFirebaseServerClock";
 import {
   createGameRewardSession,
   finalizeGameReward,
@@ -117,6 +118,7 @@ export default function SpotDifferenceScreen() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const { currentSquad, selectedSquadId } = useSquad();
+  const { offsetMs } = useFirebaseServerClock();
   const params = useLocalSearchParams<{ sessionId?: string | string[]; lobbyId?: string | string[] }>();
   const requestedSessionId = normalizeRouteParam(params.sessionId);
   const lobbyId = normalizeRouteParam(params.lobbyId);
@@ -125,6 +127,7 @@ export default function SpotDifferenceScreen() {
   const [foundIds, setFoundIds] = useState<string[]>([]);
   const [roundInstance, setRoundInstance] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(ROUND_SECONDS);
+  const [serverEndsAtMs, setServerEndsAtMs] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<SpotFeedback>({ kind: "instructions" });
   const [rewardSessionId, setRewardSessionId] = useState("");
   const [rewardSetupAttempt, setRewardSetupAttempt] = useState(0);
@@ -192,12 +195,20 @@ export default function SpotDifferenceScreen() {
       const player = user?.uid ? session.players?.[user.uid] : null;
       setSelfTeamId(player?.teamId === "A" || player?.teamId === "B" ? player.teamId : null);
       setSpotResult(normalizeSpotRoundResult(session.gameState?.result));
-      if (typeof session.startedAt === "number") {
-        const remaining = Math.max(0, ROUND_SECONDS - Math.floor((Date.now() - session.startedAt) / 1000));
-        setSecondsLeft((current) => Math.min(current, remaining));
-      }
+      setServerEndsAtMs(typeof session.endsAt === "number" ? session.endsAt : null);
     });
   }, [requestedSessionId, user?.uid]);
+
+  useEffect(() => {
+    if (!requestedSessionId || !serverEndsAtMs) return;
+    const update = () => {
+      const serverNowMs = Date.now() + offsetMs;
+      setSecondsLeft(Math.max(0, Math.ceil((serverEndsAtMs - serverNowMs) / 1000)));
+    };
+    update();
+    const timer = setInterval(update, 250);
+    return () => clearInterval(timer);
+  }, [offsetMs, requestedSessionId, serverEndsAtMs]);
 
   useEffect(() => {
     if (!requestedSessionId || !selfTeamId) return;
@@ -245,13 +256,13 @@ export default function SpotDifferenceScreen() {
   }, [currentSquad?.squadId, requestedSessionId, rewardSetupAttempt, roundInstance, t]);
 
   useEffect(() => {
-    if (roundHasServerResult || isComplete || secondsLeft <= 0 || !currentScene) {
+    if (requestedSessionId || roundHasServerResult || isComplete || secondsLeft <= 0 || !currentScene) {
       return;
     }
 
     const timer = setTimeout(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
     return () => clearTimeout(timer);
-  }, [currentScene, isComplete, roundHasServerResult, secondsLeft]);
+  }, [currentScene, isComplete, requestedSessionId, roundHasServerResult, secondsLeft]);
 
   const resetGame = useCallback(() => {
     const nextUsedIds = currentScene ? [...usedSceneIds, currentScene.id] : usedSceneIds;

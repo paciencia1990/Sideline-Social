@@ -7,11 +7,12 @@ import { useTranslation } from "react-i18next";
 import { Colors, Typography } from "@/constants/theme";
 
 type CountdownOverlayProps = {
-  onComplete: () => void;
+  phase?: "3" | "2" | "1" | "go";
+  onComplete?: () => void;
   onCancel?: () => void;
 };
 
-function CountdownOverlay({ onComplete, onCancel }: CountdownOverlayProps) {
+function CountdownOverlay({ phase, onComplete, onCancel }: CountdownOverlayProps) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const [count, setCount] = useState(3);
@@ -20,6 +21,7 @@ function CountdownOverlay({ onComplete, onCancel }: CountdownOverlayProps) {
   const opacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    if (phase) return;
     const timer = setInterval(() => {
       setCount((previousCount) => {
         if (previousCount <= 1) {
@@ -32,10 +34,10 @@ function CountdownOverlay({ onComplete, onCancel }: CountdownOverlayProps) {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, []);
+  }, [phase]);
 
   useEffect(() => {
-    if (count > 0 || completedRef.current) {
+    if (phase || !onComplete || count > 0 || completedRef.current) {
       return;
     }
 
@@ -43,13 +45,15 @@ function CountdownOverlay({ onComplete, onCancel }: CountdownOverlayProps) {
     const timeout = setTimeout(onComplete, 800);
 
     return () => clearTimeout(timeout);
-  }, [count, onComplete]);
+  }, [count, onComplete, phase]);
+
+  const displayedValue = phase ?? (count <= 0 ? "go" : count.toString());
 
   useEffect(() => {
     scale.setValue(1.5);
     opacity.setValue(0);
 
-    if (count <= 0) {
+    if (displayedValue === "go") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     } else {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -75,7 +79,7 @@ function CountdownOverlay({ onComplete, onCancel }: CountdownOverlayProps) {
         }),
       ]),
     ]).start();
-  }, [count, opacity, scale]);
+  }, [displayedValue, opacity, scale]);
 
   return (
     <View style={styles.overlay} pointerEvents="auto">
@@ -89,11 +93,11 @@ function CountdownOverlay({ onComplete, onCancel }: CountdownOverlayProps) {
         </Pressable>
       )}
       <Animated.Text
-        accessibilityLabel={count <= 0 ? t("games.countdown.go") : count.toString()}
+        accessibilityLabel={displayedValue === "go" ? t("games.countdown.go") : displayedValue}
         accessibilityLiveRegion="assertive"
         style={[styles.countdownText, { opacity, transform: [{ scale }] }]}
       >
-        {count <= 0 ? t("games.countdown.go") : count.toString()}
+        {displayedValue === "go" ? t("games.countdown.go") : displayedValue}
       </Animated.Text>
     </View>
   );

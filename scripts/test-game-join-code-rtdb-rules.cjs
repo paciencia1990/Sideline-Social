@@ -43,6 +43,7 @@ async function run() {
         sessionId: 'session-legacy-sequence', gameType: 'bomb_defusal', hostUserId: 'host',
         players: { host: { displayName: 'Host' }, player: { displayName: 'Player' } },
         status: 'active',
+        gameplayStartsAt: now - 1000,
         expiresAt: now + 600_000,
         gameState: { bombSteps: [{ type: 'cut_wire', color: 'blue' }] },
       }),
@@ -76,6 +77,7 @@ async function run() {
           player: { displayName: 'Player', isReady: true, teamId: 'B' },
         },
         status: 'active',
+        gameplayStartsAt: now - 1000,
         expiresAt: now + 600_000,
       }),
       admin.database().ref('gameSessionTeamState/spot-team-session/A').set({

@@ -50,6 +50,7 @@ type LobbyBaseProps = {
   lifecycleError: GameJoinCodeFailureReason | null;
   onReadyToggle: () => void;
   onStart: () => void;
+  startPending?: boolean;
 };
 
 export default function LobbyBase({
@@ -68,6 +69,7 @@ export default function LobbyBase({
   lifecycleError,
   onReadyToggle,
   onStart,
+  startPending = false,
 }: LobbyBaseProps) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -258,7 +260,7 @@ export default function LobbyBase({
         <View style={styles.actions}>
           <Pressable
             accessibilityRole="button"
-            disabled={lifecycleAction !== null}
+            disabled={lifecycleAction !== null || startPending}
             style={[
               styles.button,
               players.self.ready ? styles.secondaryButton : styles.primaryButton,
@@ -277,13 +279,17 @@ export default function LobbyBase({
 
           {players.isHost && (
             <Pressable
-              accessibilityState={{ disabled: !canStart }}
+              accessibilityState={{ busy: startPending, disabled: !canStart || startPending }}
               accessibilityRole="button"
-              disabled={!canStart || lifecycleAction !== null}
-              style={[styles.button, styles.primaryButton, !canStart && styles.disabledButton]}
+              disabled={!canStart || startPending || lifecycleAction !== null}
+              style={[styles.button, styles.primaryButton, (!canStart || startPending) && styles.disabledButton]}
               onPress={onStart}
             >
-              <Text style={[styles.buttonText, styles.primaryButtonText]}>{t("games.joinCode.startGame")}</Text>
+              {startPending ? (
+                <ActivityIndicator color={Colors.surface} size="small" />
+              ) : (
+                <Text style={[styles.buttonText, styles.primaryButtonText]}>{t("games.joinCode.startGame")}</Text>
+              )}
             </Pressable>
           )}
         </View>

@@ -136,13 +136,13 @@ assert.match(
 );
 assert.match(
   gameLobby,
-  /if \(gameType === ['"]triviaBlitz['"]\) \{\s*await startTriviaSession\(sessionId\);\s*return;\s*\}\s*await updateGameJoinCodeStatus/,
-  "Trivia uses its atomic Firestore start callable, while RTDB games use the server-controlled status transition.",
+  /prepareSynchronizedGameStart\(\{ gameType, sessionId \}\)/,
+  "Every released game must enter the same server-authoritative preparation handshake.",
 );
 assert.match(
   triviaFunctions,
-  /gameJoinSessionLinks[\s\S]*gameJoinCodes[\s\S]*status: 'started'/,
-  "Trivia start must commit canonical gameplay and JOIN-code routing state in one Firestore transaction.",
+  /activateTriviaGameSessionAt[\s\S]*gameJoinSessionLinks[\s\S]*gameJoinCodes[\s\S]*status: 'started'/,
+  "Trivia activation must commit canonical gameplay and JOIN-code routing state after readiness acknowledgement.",
 );
 assert.match(
   triviaFunctions,

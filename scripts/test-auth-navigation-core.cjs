@@ -79,11 +79,13 @@ assert.ok(coachLayout.includes("<Redirect href={PARENT_PROFILE_ROUTE"), "Parent 
 assert.equal(coachLayout.includes("useEffect"), false, "Coach route protection must not use an Effect.");
 assert.equal(coachLayout.includes("router.replace"), false, "Coach route protection must not imperatively redirect.");
 
-const welcome = read("app", "(auth)", "sign-in.tsx");
-assert.ok(welcome.includes("router.push(EMAIL_SIGN_IN_ROUTE"), "The email button must open the existing email sign-in route.");
-assert.ok(welcome.includes("router.push(SIGN_UP_ROUTE"), "The create-account button must open registration.");
-assert.ok(welcome.includes("onPress={handleEmailSignIn}"), "The email handler must reach the shared button.");
-assert.ok(welcome.includes("onPress={handleCreateAccount}"), "The registration handler must reach the shared button.");
+const signIn = read("app", "(auth)", "sign-in.tsx");
+const emailCompatibilityRoute = read("app", "(auth)", "email-login.tsx");
+assert.ok(signIn.includes('autoComplete="email"'), "Sign In must render the email field directly.");
+assert.ok(signIn.includes('autoComplete="current-password"'), "Sign In must render the password field directly.");
+assert.ok(signIn.includes("handleEmailSignIn"), "The primary action must retain email sign-in behavior.");
+assert.ok(signIn.includes("router.push(SIGN_UP_ROUTE"), "The bottom create-account link must open registration.");
+assert.ok(emailCompatibilityRoute.includes('export { default } from "./sign-in"'), "Legacy email-login links must resolve to the simplified Sign In screen.");
 
 for (const componentName of ["PrimaryButton.tsx", "OutlineButton.tsx"]) {
   const button = read("components", componentName);
