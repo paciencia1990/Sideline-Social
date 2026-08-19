@@ -26,6 +26,15 @@ function hasCode(code) { return (error) => String(error?.code).includes(code); }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function mediaRateDocId(uid) { return createHash("sha256").update(uid).digest("hex"); }
 function forwardRateDocId(uid) { return createHash("sha256").update(uid).digest("hex"); }
+function syntheticJpeg(width, height) {
+  return Uint8Array.from([
+    0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08,
+    (height >> 8) & 0xff, height & 0xff, (width >> 8) & 0xff, width & 0xff, 0x03,
+    0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+    0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00,
+    0x00, 0xff, 0xd9,
+  ]);
+}
 async function ageMediaReservationRateLimit(uid) {
   await db.collection("friendChatMediaReservationRateLimits").doc(mediaRateDocId(uid)).set({
     lastReservationCreatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - 11_000),
@@ -209,6 +218,82 @@ async function run() {
   assert.equal(imageMessage.image.fullPath, imageReservation.fullPath);
   assert.equal(imageMessage.image.thumbnailPath, imageReservation.thumbnailPath);
   assert.deepEqual(imageMessage.mediaStoragePaths, [imageReservation.fullPath, imageReservation.thumbnailPath]);
+  await assert.rejects(() => a.call("createFriendChatImageUpload", {
+    clientMessageId: "group_image_unknown_profile",
+    conversationId: group.conversationId,
+    image: {
+      main: { height: 1080, mimeType: "image/jpeg", sizeBytes: 1000, width: 1440 },
+      mediaProfileVersion: 99,
+      sourceMimeType: "image/jpeg",
+      sourceSizeBytes: 2000,
+      thumbnail: { height: 360, mimeType: "image/jpeg", sizeBytes: 500, width: 480 },
+    },
+  }), hasCode("invalid-argument"), "unknown image profiles are rejected before reservation");
+  await ageMediaReservationRateLimit(a.uid);
+  const v2FullBytes = syntheticJpeg(1440, 1080);
+  const v2ThumbnailBytes = syntheticJpeg(480, 360);
+  const v2Reservation = await a.call("createFriendChatImageUpload", {
+    caption: "Version two photo",
+    clientMessageId: "group_image_v2_001",
+    conversationId: group.conversationId,
+    image: {
+      main: { height: 1080, mimeType: "image/jpeg", sizeBytes: v2FullBytes.byteLength, width: 1440 },
+      mediaProfileVersion: 2,
+      sourceMimeType: "image/heic",
+      sourceSizeBytes: 4096,
+      thumbnail: { height: 360, mimeType: "image/jpeg", sizeBytes: v2ThumbnailBytes.byteLength, width: 480 },
+    },
+  });
+  await uploadBytes(ref(a.storage, v2Reservation.fullPath), v2FullBytes, { contentType: "image/jpeg" });
+  await uploadBytes(ref(a.storage, v2Reservation.thumbnailPath), v2ThumbnailBytes, { contentType: "image/jpeg" });
+  await wait(800);
+  const v2Finalize = await a.call("finalizeFriendChatImageMessage", { reservationId: v2Reservation.reservationId });
+  assert.equal(v2Finalize.status, "sent");
+  const v2Message = (await groupDoc.collection("messages").doc(v2Finalize.messageId).get()).data();
+  assert.equal(v2Message.image.mediaProfileVersion, 2);
+  assert.equal(v2Message.image.width, 1440);
+
+  await ageMediaReservationRateLimit(a.uid);
+  const spoofedFullBytes = syntheticJpeg(1, 1);
+  const spoofedReservation = await a.call("createFriendChatImageUpload", {
+    clientMessageId: "group_image_v2_spoofed_dimensions",
+    conversationId: group.conversationId,
+    image: {
+      main: { height: 1080, mimeType: "image/jpeg", sizeBytes: spoofedFullBytes.byteLength, width: 1440 },
+      mediaProfileVersion: 2,
+      sourceMimeType: "image/jpeg",
+      sourceSizeBytes: 4096,
+      thumbnail: { height: 360, mimeType: "image/jpeg", sizeBytes: v2ThumbnailBytes.byteLength, width: 480 },
+    },
+  });
+  await uploadBytes(ref(a.storage, spoofedReservation.fullPath), spoofedFullBytes, { contentType: "image/jpeg" });
+  await uploadBytes(ref(a.storage, spoofedReservation.thumbnailPath), v2ThumbnailBytes, { contentType: "image/jpeg" });
+  await wait(800);
+  await assert.rejects(
+    () => a.call("finalizeFriendChatImageMessage", { reservationId: spoofedReservation.reservationId }),
+    hasCode("failed-precondition"),
+    "v2 finalization rejects uploaded JPEG dimensions that do not match the reservation",
+  );
+
+  await ageMediaReservationRateLimit(a.uid);
+  const missingObjectReservation = await a.call("createFriendChatImageUpload", {
+    clientMessageId: "group_image_v2_missing_thumbnail",
+    conversationId: group.conversationId,
+    image: {
+      main: { height: 1080, mimeType: "image/jpeg", sizeBytes: v2FullBytes.byteLength, width: 1440 },
+      mediaProfileVersion: 2,
+      sourceMimeType: "image/jpeg",
+      sourceSizeBytes: 4096,
+      thumbnail: { height: 360, mimeType: "image/jpeg", sizeBytes: v2ThumbnailBytes.byteLength, width: 480 },
+    },
+  });
+  await uploadBytes(ref(a.storage, missingObjectReservation.fullPath), v2FullBytes, { contentType: "image/jpeg" });
+  await wait(800);
+  await assert.rejects(
+    () => a.call("finalizeFriendChatImageMessage", { reservationId: missingObjectReservation.reservationId }),
+    undefined,
+    "finalization rejects an upload when either reserved Storage object is missing",
+  );
   const imageUrl = await b.call("getFriendChatMediaDownloadUrl", { messageId: imageFinalize.messageId, storagePath: imageReservation.thumbnailPath });
   assert.match(imageUrl.url, /127\.0\.0\.1:9199|localhost:9199/u);
   await assert.rejects(() => outsider.call("getFriendChatMediaDownloadUrl", { messageId: imageFinalize.messageId, storagePath: imageReservation.thumbnailPath }), hasCode("permission-denied"));

@@ -122,6 +122,7 @@ async function run() {
 
   const imageMessage = read("components", "FriendChatImageMessage.tsx");
   const imageViewer = read("components", "FriendChatImageViewer.tsx");
+  const imageCacheService = read("services", "friendChatImageCacheService.ts");
   const chatScreen = read("app", "(social)", "chat", "[chatId].tsx");
   const saveService = read("services", "friendChatPhotoSaveService.ts");
   const functionsSource = read("functions", "src", "friendChat.ts");
@@ -136,7 +137,9 @@ async function run() {
   assert.match(imageMessage, /chat\.viewPhoto/);
   assert.match(imageMessage, /name: "reactToPhoto"/);
   assert.match(imageMessage, /name: "morePhotoActions"/);
-  assert.match(imageViewer, /getFriendChatMediaDownloadUrl/);
+  assert.match(imageViewer, /loadFriendChatImageMedia/);
+  assert.doesNotMatch(imageViewer, /getFriendChatMediaDownloadUrl/, "the viewer must not bypass the protected cache and grant-deduplication layer");
+  assert.match(imageCacheService, /getFriendChatMediaDownloadUrl/, "cache misses retain secure server-authorized media grants");
   assert.match(imageViewer, /chat\.forwardPhoto/);
   assert.match(imageViewer, /chat\.savePhoto/);
   assert.match(imageViewer, /chat\.morePhotoActions/);

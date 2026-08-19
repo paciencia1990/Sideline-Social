@@ -70,6 +70,7 @@
     "test:friend-chat": "npm --prefix functions run build && node scripts/test-friend-chat-core.cjs && node scripts/test-friend-chat-viewer-deletion-dates.cjs",
     "test:friend-chat-image-actions": "node scripts/test-friend-chat-image-actions.cjs",
     "test:friend-chat-image-picker": "node scripts/test-friend-chat-image-picker-resume.cjs",
+    "test:friend-chat-image-performance": "node scripts/test-friend-chat-image-performance.cjs",
     "test:firestore:friend-chat-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-friend-chat-firestore-rules.cjs\"",
     "test:storage:friend-chat-media": "firebase.cmd emulators:exec --project sideline-friend-chat-media-storage-rules-test --only firestore,storage \"node scripts/test-friend-chat-media-storage-rules.cjs\"",
     "test:emulator:friend-chat": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-friend-chat-functions-test --only auth,firestore,storage,functions \"node scripts/test-friend-chat-functions-emulator.cjs\"",

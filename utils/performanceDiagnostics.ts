@@ -1,4 +1,13 @@
 export type PerformanceTraceName =
+  | "friend-chat.image-compression"
+  | "friend-chat.image-finalization"
+  | "friend-chat.image-full-download"
+  | "friend-chat.image-full-visible"
+  | "friend-chat.image-grant"
+  | "friend-chat.image-thumbnail"
+  | "friend-chat.image-thumbnail-download"
+  | "friend-chat.image-thumbnail-visible"
+  | "friend-chat.image-upload"
   | "friends.overview"
   | "games.lobby-directory"
   | "home.parent-teams"

@@ -9,6 +9,7 @@ const storageRules = fs.readFileSync(path.join(process.cwd(), "storage.rules"), 
 const voiceBytes = new Uint8Array(2048);
 const imageBytes = new Uint8Array(4096);
 const thumbnailBytes = new Uint8Array(1024);
+const oversizedV2ImageBytes = new Uint8Array((1024 * 1024) + 1);
 const messageId = "message_" + "a".repeat(64);
 const imageMessageId = "message_" + "b".repeat(64);
 const expiredMessageId = "message_" + "c".repeat(64);
@@ -17,6 +18,12 @@ const voiceReservationId = "media_" + "1".repeat(64);
 const imageReservationId = "media_" + "2".repeat(64);
 const expiredReservationId = "media_" + "3".repeat(64);
 const restrictedReservationId = "media_" + "4".repeat(64);
+const version2ReservationId = "media_" + "5".repeat(64);
+const unknownProfileReservationId = "media_" + "6".repeat(64);
+const oversizedV2ReservationId = "media_" + "7".repeat(64);
+const version2MessageId = "message_" + "e".repeat(64);
+const unknownProfileMessageId = "message_" + "f".repeat(64);
+const oversizedV2MessageId = "message_" + "0".repeat(64);
 
 function friendPath(targetMessageId, reservationId, fileName) {
   return `friendChatMedia/conversation-1/${targetMessageId}/${reservationId}/${fileName}`;
@@ -80,6 +87,30 @@ async function seed(testEnv) {
       userId: "restricted",
       voiceMemo: { durationMilliseconds: 1000, mimeType: "audio/mp4", sizeBytes: voiceBytes.byteLength },
     });
+    for (const [reservationId, targetId, mediaProfileVersion, fullSize] of [
+      [version2ReservationId, version2MessageId, 2, imageBytes.byteLength],
+      [unknownProfileReservationId, unknownProfileMessageId, 3, imageBytes.byteLength],
+      [oversizedV2ReservationId, oversizedV2MessageId, 2, oversizedV2ImageBytes.byteLength],
+    ]) {
+      await setDoc(doc(db, "friendChatUploadReservations", reservationId), {
+        conversationId: "conversation-1",
+        expiresAt: Timestamp.fromMillis(Date.now() + 60_000),
+        fullPath: friendPath(targetId, reservationId, "image.jpg"),
+        image: {
+          main: { height: 900, mimeType: "image/jpeg", sizeBytes: fullSize, width: 1440 },
+          mediaProfileVersion,
+          sourceMimeType: "image/jpeg",
+          sourceSizeBytes: Math.min(fullSize, 5 * 1024 * 1024),
+          thumbnail: { height: 300, mimeType: "image/jpeg", sizeBytes: thumbnailBytes.byteLength, width: 480 },
+        },
+        kind: "image",
+        reservationId,
+        status: "pending",
+        targetId,
+        thumbnailPath: friendPath(targetId, reservationId, "thumbnail.jpg"),
+        userId: "active-a",
+      });
+    }
   });
 }
 
@@ -104,6 +135,11 @@ async function run() {
     await assertSucceeds(activeStorage.ref(voicePath).put(voiceBytes, { contentType: "audio/mp4" }));
     await assertSucceeds(activeStorage.ref(imagePath).put(imageBytes, { contentType: "image/jpeg" }));
     await assertSucceeds(activeStorage.ref(thumbnailPath).put(thumbnailBytes, { contentType: "image/jpeg" }));
+    await assertSucceeds(activeStorage.ref(friendPath(version2MessageId, version2ReservationId, "image.jpg")).put(imageBytes, { contentType: "image/jpeg" }));
+    await assertSucceeds(activeStorage.ref(friendPath(version2MessageId, version2ReservationId, "thumbnail.jpg")).put(thumbnailBytes, { contentType: "image/jpeg" }));
+    await assertFails(activeStorage.ref(friendPath(version2MessageId, version2ReservationId, "image.jpg")).put(imageBytes, { contentType: "image/webp" }));
+    await assertFails(activeStorage.ref(friendPath(unknownProfileMessageId, unknownProfileReservationId, "image.jpg")).put(imageBytes, { contentType: "image/jpeg" }));
+    await assertFails(activeStorage.ref(friendPath(oversizedV2MessageId, oversizedV2ReservationId, "image.jpg")).put(oversizedV2ImageBytes, { contentType: "image/jpeg" }));
     await assertFails(activeStorage.ref(voicePath).getDownloadURL());
     await assertFails(activeStorage.ref(imagePath).getDownloadURL());
     await assertFails(otherStorage.ref(voicePath).put(voiceBytes, { contentType: "audio/mp4" }));

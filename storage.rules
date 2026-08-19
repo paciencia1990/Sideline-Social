@@ -51,6 +51,58 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/friendChatUploadReservations/$(reservationId)).data;
     }
 
+    function legacyFriendImage(image) {
+      return !("mediaProfileVersion" in image) || image.mediaProfileVersion == 1;
+    }
+
+    function validFriendImageMain(image) {
+      return image.main is map &&
+        image.main.width is int &&
+        image.main.height is int &&
+        image.main.width > 0 &&
+        image.main.height > 0 &&
+        (
+          (
+            legacyFriendImage(image) &&
+            image.main.mimeType in ["image/jpeg", "image/webp"] &&
+            image.main.width <= 1600 &&
+            image.main.height <= 1600 &&
+            image.main.sizeBytes <= 3 * 1024 * 1024
+          ) ||
+          (
+            image.mediaProfileVersion == 2 &&
+            image.main.mimeType == "image/jpeg" &&
+            image.main.width <= 1440 &&
+            image.main.height <= 1440 &&
+            image.main.sizeBytes <= 1024 * 1024
+          )
+        );
+    }
+
+    function validFriendImageThumbnail(image) {
+      return image.thumbnail is map &&
+        image.thumbnail.width is int &&
+        image.thumbnail.height is int &&
+        image.thumbnail.width > 0 &&
+        image.thumbnail.height > 0 &&
+        (
+          (
+            legacyFriendImage(image) &&
+            image.thumbnail.mimeType in ["image/jpeg", "image/webp"] &&
+            image.thumbnail.width <= 512 &&
+            image.thumbnail.height <= 512 &&
+            image.thumbnail.sizeBytes <= 512 * 1024
+          ) ||
+          (
+            image.mediaProfileVersion == 2 &&
+            image.thumbnail.mimeType == "image/jpeg" &&
+            image.thumbnail.width <= 480 &&
+            image.thumbnail.height <= 480 &&
+            image.thumbnail.sizeBytes <= 120 * 1024
+          )
+        );
+    }
+
     function validVoiceUpload(reservationId, teamId, kind, targetId) {
       let upload = reservation(reservationId);
       return canCommunicate() &&
@@ -115,11 +167,9 @@ service firebase.storage {
         friendReservation(reservationId).fullPath == "friendChatMedia/" + conversationId + "/" + messageId + "/" + reservationId + "/image.jpg" &&
         friendReservation(reservationId).expiresAt > request.time &&
         friendReservation(reservationId).image is map &&
-        friendReservation(reservationId).image.main is map &&
-        friendReservation(reservationId).image.main.mimeType in ["image/jpeg", "image/webp"] &&
+        validFriendImageMain(friendReservation(reservationId).image) &&
         friendReservation(reservationId).image.main.sizeBytes is int &&
         friendReservation(reservationId).image.main.sizeBytes > 0 &&
-        friendReservation(reservationId).image.main.sizeBytes <= 3 * 1024 * 1024 &&
         request.resource.size == friendReservation(reservationId).image.main.sizeBytes &&
         request.resource.contentType == friendReservation(reservationId).image.main.mimeType;
       allow read, update, delete: if false;
@@ -135,11 +185,9 @@ service firebase.storage {
         friendReservation(reservationId).thumbnailPath == "friendChatMedia/" + conversationId + "/" + messageId + "/" + reservationId + "/thumbnail.jpg" &&
         friendReservation(reservationId).expiresAt > request.time &&
         friendReservation(reservationId).image is map &&
-        friendReservation(reservationId).image.thumbnail is map &&
-        friendReservation(reservationId).image.thumbnail.mimeType in ["image/jpeg", "image/webp"] &&
+        validFriendImageThumbnail(friendReservation(reservationId).image) &&
         friendReservation(reservationId).image.thumbnail.sizeBytes is int &&
         friendReservation(reservationId).image.thumbnail.sizeBytes > 0 &&
-        friendReservation(reservationId).image.thumbnail.sizeBytes <= 512 * 1024 &&
         request.resource.size == friendReservation(reservationId).image.thumbnail.sizeBytes &&
         request.resource.contentType == friendReservation(reservationId).image.thumbnail.mimeType;
       allow read, update, delete: if false;

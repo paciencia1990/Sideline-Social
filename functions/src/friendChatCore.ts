@@ -13,6 +13,11 @@ export const FRIEND_CHAT_IMAGE_MAX_SIZE_BYTES = 3 * 1024 * 1024;
 export const FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_SIZE_BYTES = 512 * 1024;
 export const FRIEND_CHAT_IMAGE_MAX_EDGE = 1600;
 export const FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_EDGE = 512;
+export const FRIEND_CHAT_IMAGE_PROFILE_V2 = 2 as const;
+export const FRIEND_CHAT_IMAGE_V2_MAX_SIZE_BYTES = 1024 * 1024;
+export const FRIEND_CHAT_IMAGE_V2_THUMBNAIL_MAX_SIZE_BYTES = 120 * 1024;
+export const FRIEND_CHAT_IMAGE_V2_MAX_EDGE = 1440;
+export const FRIEND_CHAT_IMAGE_V2_THUMBNAIL_MAX_EDGE = 480;
 export const FRIEND_CHAT_QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const;
 export const FRIEND_CHAT_REACTIONS = [
   ...FRIEND_CHAT_QUICK_REACTIONS,
@@ -57,6 +62,7 @@ export type FriendChatImageVariantMetadata = {
 
 export type FriendChatImageMetadata = {
   main: FriendChatImageVariantMetadata;
+  mediaProfileVersion: 1 | typeof FRIEND_CHAT_IMAGE_PROFILE_V2;
   sourceMimeType: string | null;
   sourceSizeBytes: number;
   thumbnail: FriendChatImageVariantMetadata;
@@ -194,16 +200,66 @@ export function validateFriendChatImageMetadata(value: unknown): FriendChatImage
   }
   const sourceMimeType = typeof data.sourceMimeType === 'string' ? data.sourceMimeType.trim().toLowerCase() : null;
   if (sourceMimeType && !FRIEND_CHAT_IMAGE_MIME_TYPES.has(sourceMimeType)) throw new Error('unsupported_image_type');
+  const mediaProfileVersion = data.mediaProfileVersion == null
+    ? 1
+    : finiteInteger(data.mediaProfileVersion);
+  if (mediaProfileVersion !== 1 && mediaProfileVersion !== FRIEND_CHAT_IMAGE_PROFILE_V2) {
+    throw new Error('unsupported_image_profile');
+  }
+  const isVersion2 = mediaProfileVersion === FRIEND_CHAT_IMAGE_PROFILE_V2;
   return {
-    main: validateImageVariant((data as { main?: unknown }).main, FRIEND_CHAT_IMAGE_MAX_SIZE_BYTES, FRIEND_CHAT_IMAGE_MAX_EDGE),
+    main: validateImageVariant(
+      (data as { main?: unknown }).main,
+      isVersion2 ? FRIEND_CHAT_IMAGE_V2_MAX_SIZE_BYTES : FRIEND_CHAT_IMAGE_MAX_SIZE_BYTES,
+      isVersion2 ? FRIEND_CHAT_IMAGE_V2_MAX_EDGE : FRIEND_CHAT_IMAGE_MAX_EDGE,
+      isVersion2,
+    ),
+    mediaProfileVersion,
     sourceMimeType,
     sourceSizeBytes,
     thumbnail: validateImageVariant(
       (data as { thumbnail?: unknown }).thumbnail,
-      FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_SIZE_BYTES,
-      FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_EDGE,
+      isVersion2 ? FRIEND_CHAT_IMAGE_V2_THUMBNAIL_MAX_SIZE_BYTES : FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_SIZE_BYTES,
+      isVersion2 ? FRIEND_CHAT_IMAGE_V2_THUMBNAIL_MAX_EDGE : FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_EDGE,
+      isVersion2,
     ),
   };
+}
+
+export function readJpegDimensions(bytes: Uint8Array): { height: number; width: number } | null {
+  if (
+    bytes.byteLength < 12 ||
+    bytes[0] !== 0xff ||
+    bytes[1] !== 0xd8 ||
+    bytes[bytes.byteLength - 2] !== 0xff ||
+    bytes[bytes.byteLength - 1] !== 0xd9
+  ) return null;
+
+  const startOfFrameMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+  let dimensions: { height: number; width: number } | null = null;
+  let offset = 2;
+  while (offset + 3 < bytes.byteLength) {
+    while (offset < bytes.byteLength && bytes[offset] !== 0xff) offset += 1;
+    while (offset < bytes.byteLength && bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.byteLength) return null;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xd9) return null;
+    if (marker === 0xda) return dimensions;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue;
+    if (offset + 1 >= bytes.byteLength) return null;
+    const segmentLength = (bytes[offset] << 8) | bytes[offset + 1];
+    if (segmentLength < 2 || offset + segmentLength > bytes.byteLength) return null;
+    if (startOfFrameMarkers.has(marker)) {
+      if (segmentLength < 7) return null;
+      const height = (bytes[offset + 3] << 8) | bytes[offset + 4];
+      const width = (bytes[offset + 5] << 8) | bytes[offset + 6];
+      if (width < 1 || height < 1) return null;
+      dimensions = { height, width };
+    }
+    offset += segmentLength;
+  }
+  return null;
 }
 
 export function parseFriendChatMediaStoragePath(storagePath: unknown): FriendChatMediaStorageReference | null {
@@ -248,7 +304,12 @@ function containsUnsupportedControls(value: string) {
   });
 }
 
-function validateImageVariant(value: unknown, maxSizeBytes: number, maxEdge: number): FriendChatImageVariantMetadata {
+function validateImageVariant(
+  value: unknown,
+  maxSizeBytes: number,
+  maxEdge: number,
+  jpegOnly: boolean,
+): FriendChatImageVariantMetadata {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_image_metadata');
   const data = value as Record<string, unknown>;
   const width = finiteInteger(data.width);
@@ -257,7 +318,9 @@ function validateImageVariant(value: unknown, maxSizeBytes: number, maxEdge: num
   const mimeType = typeof data.mimeType === 'string' ? data.mimeType.trim().toLowerCase() : '';
   if (!width || !height || width < 1 || height < 1 || Math.max(width, height) > maxEdge) throw new Error('invalid_image_dimensions');
   if (!sizeBytes || sizeBytes < 1 || sizeBytes > maxSizeBytes) throw new Error('image_file_too_large');
-  if (!PROCESSED_IMAGE_MIME_TYPES.has(mimeType)) throw new Error('unsupported_image_type');
+  if (jpegOnly ? mimeType !== 'image/jpeg' : !PROCESSED_IMAGE_MIME_TYPES.has(mimeType)) {
+    throw new Error('unsupported_image_type');
+  }
   return { height, mimeType: mimeType as FriendChatImageVariantMetadata['mimeType'], sizeBytes, width };
 }
 

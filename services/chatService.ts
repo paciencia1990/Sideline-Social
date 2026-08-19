@@ -25,6 +25,10 @@ import {
   type FriendChatImageUploadCancelResult,
 } from "@/utils/friendChatUploadCancellation";
 import { normalizeVoicePlaybackUrlResponse } from "@/utils/voicePlaybackCore";
+import {
+  measureDevelopmentPerformance,
+  startDevelopmentPerformanceTrace,
+} from "@/utils/performanceDiagnostics";
 import type { LocalVoiceMemoDraft, StoredVoiceMemo } from "@/types/teamVoiceMessaging";
 export { mapFriendChatError, type FriendChatUiError } from "@/utils/friendChatError";
 
@@ -110,6 +114,7 @@ export type FriendChatReplyContext = {
 export type StoredFriendChatImage = {
   fullPath: string;
   height: number;
+  mediaProfileVersion: 1 | 2;
   mimeType: "image/jpeg" | "image/webp";
   sizeBytes: number;
   sourceMimeType: string | null;
@@ -347,6 +352,7 @@ function normalizeStoredFriendImage(value: unknown): StoredFriendChatImage | nul
   const thumbnailSizeBytes = Number(data.thumbnailSizeBytes);
   const mimeType = typeof data.mimeType === "string" ? data.mimeType.trim() : "image/jpeg";
   const thumbnailMimeType = typeof data.thumbnailMimeType === "string" ? data.thumbnailMimeType.trim() : "image/jpeg";
+  const mediaProfileVersion = data.mediaProfileVersion == null ? 1 : Number(data.mediaProfileVersion);
   if (
     !/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/image\.jpg$/u.test(fullPath) ||
     !/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/thumbnail\.jpg$/u.test(thumbnailPath) ||
@@ -356,12 +362,14 @@ function normalizeStoredFriendImage(value: unknown): StoredFriendChatImage | nul
     !Number.isInteger(thumbnailHeight) ||
     !Number.isInteger(sizeBytes) ||
     !Number.isInteger(thumbnailSizeBytes) ||
+    (mediaProfileVersion !== 1 && mediaProfileVersion !== 2) ||
     !["image/jpeg", "image/webp"].includes(mimeType) ||
     !["image/jpeg", "image/webp"].includes(thumbnailMimeType)
   ) return null;
   return {
     fullPath,
     height,
+    mediaProfileVersion,
     mimeType: mimeType as StoredFriendChatImage["mimeType"],
     sizeBytes,
     sourceMimeType: typeof data.sourceMimeType === "string" ? data.sourceMimeType : null,
@@ -837,6 +845,7 @@ export async function reserveFriendChatImageUpload(input: {
       conversationId: string;
       image: {
         main: Omit<LocalFriendChatImageDraft["full"], "uri">;
+        mediaProfileVersion: 2;
         sourceMimeType: string | null;
         sourceSizeBytes: number;
         thumbnail: Omit<LocalFriendChatImageDraft["thumbnail"], "uri">;
@@ -850,6 +859,7 @@ export async function reserveFriendChatImageUpload(input: {
     conversationId: input.conversationId,
     image: {
       main: stripImageDraftUri(input.image.full),
+      mediaProfileVersion: input.image.mediaProfileVersion,
       sourceMimeType: input.image.sourceMimeType,
       sourceSizeBytes: input.image.sourceSizeBytes,
       thumbnail: stripImageDraftUri(input.image.thumbnail),
@@ -867,12 +877,19 @@ export async function uploadReservedFriendChatImage(
     !/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/thumbnail\.jpg$/u.test(reservation.thumbnailPath)) {
     throw new Error("invalid_image_storage_path");
   }
+  const completeUploadTrace = startDevelopmentPerformanceTrace("friend-chat.image-upload");
   const progressState = { full: 0, thumbnail: 0 };
   let canceled = false;
-  const full = await uploadBlobToReservedPath(reservation.fullPath, draft.full.uri, draft.full.sizeBytes, draft.full.mimeType, (progress) => {
-    progressState.full = progress;
-    onProgress?.((progressState.full * 0.8) + (progressState.thumbnail * 0.2));
-  });
+  let full: Awaited<ReturnType<typeof uploadBlobToReservedPath>>;
+  try {
+    full = await uploadBlobToReservedPath(reservation.fullPath, draft.full.uri, draft.full.sizeBytes, draft.full.mimeType, (progress) => {
+      progressState.full = progress;
+      onProgress?.((progressState.full * 0.8) + (progressState.thumbnail * 0.2));
+    });
+  } catch (error) {
+    completeUploadTrace();
+    throw error;
+  }
   let thumbnail: Awaited<ReturnType<typeof uploadBlobToReservedPath>>;
   try {
     thumbnail = await uploadBlobToReservedPath(
@@ -888,6 +905,7 @@ export async function uploadReservedFriendChatImage(
   } catch (error) {
     cancelFriendChatImageUploadTasks(full.task, null);
     void full.completion.catch(() => undefined);
+    completeUploadTrace();
     throw error;
   }
   return {
@@ -902,14 +920,18 @@ export async function uploadReservedFriendChatImage(
       .catch((error) => {
         if (canceled) throw new Error("media_upload_canceled");
         throw error;
-      }),
+      })
+      .finally(completeUploadTrace),
   };
 }
 
 export async function finalizeFriendChatImageMessage(reservationId: string) {
-  return call<{ reservationId: string }, { messageId: string; status: "alreadyFinalized" | "sent" }>(
-    "finalizeFriendChatImageMessage",
-    { reservationId },
+  return measureDevelopmentPerformance(
+    "friend-chat.image-finalization",
+    () => call<{ reservationId: string }, { messageId: string; status: "alreadyFinalized" | "sent" }>(
+      "finalizeFriendChatImageMessage",
+      { reservationId },
+    ),
   );
 }
 
@@ -973,11 +995,48 @@ export async function getFriendChatMediaDownloadUrl(input: {
   messageId: string;
   storagePath: string;
 }) {
-  const result = await call<typeof input, { expiresAtMillis: number; url: string }>(
-    "getFriendChatMediaDownloadUrl",
-    input,
-  );
-  return normalizeVoicePlaybackUrlResponse(result, { allowLocalHttp: __DEV__ });
+  const uid = currentUserId();
+  const key = mediaGrantCacheKey(uid, input);
+  const cached = friendChatMediaGrantCache.get(key);
+  if (cached && cached.expiresAtMillis - MEDIA_GRANT_EXPIRY_BUFFER_MS > Date.now()) return cached;
+  const existing = friendChatMediaGrantRequests.get(key);
+  if (existing) return existing;
+  const request = measureDevelopmentPerformance("friend-chat.image-grant", async () => {
+    const result = await call<typeof input, { expiresAtMillis: number; url: string }>(
+      "getFriendChatMediaDownloadUrl",
+      input,
+    );
+    const normalized = normalizeVoicePlaybackUrlResponse(result, { allowLocalHttp: __DEV__ });
+    friendChatMediaGrantCache.set(key, normalized);
+    return normalized;
+  }).finally(() => friendChatMediaGrantRequests.delete(key));
+  friendChatMediaGrantRequests.set(key, request);
+  return request;
+}
+
+const MEDIA_GRANT_EXPIRY_BUFFER_MS = 30_000;
+const friendChatMediaGrantCache = new Map<string, { expiresAtMillis: number; url: string }>();
+const friendChatMediaGrantRequests = new Map<string, Promise<{ expiresAtMillis: number; url: string }>>();
+
+function mediaGrantCacheKey(uid: string, input: { messageId: string; storagePath: string }) {
+  return `${uid}\u001f${input.messageId}\u001f${input.storagePath}`;
+}
+
+export function clearFriendChatMediaGrantCache(messageIds?: readonly string[]) {
+  if (!messageIds?.length) {
+    friendChatMediaGrantCache.clear();
+    friendChatMediaGrantRequests.clear();
+    return;
+  }
+  const targets = new Set(messageIds);
+  for (const key of friendChatMediaGrantCache.keys()) {
+    const [, messageId] = key.split("\u001f");
+    if (targets.has(messageId)) friendChatMediaGrantCache.delete(key);
+  }
+  for (const key of friendChatMediaGrantRequests.keys()) {
+    const [, messageId] = key.split("\u001f");
+    if (targets.has(messageId)) friendChatMediaGrantRequests.delete(key);
+  }
 }
 
 export async function deleteFriendChatMessageForEveryone(conversationId: string, messageId: string) {

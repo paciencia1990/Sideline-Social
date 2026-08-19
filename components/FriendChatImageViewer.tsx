@@ -20,10 +20,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 
 import { Colors, Spacing, Typography } from "@/constants/theme";
+import { type FriendChatMessage } from "@/services/chatService";
 import {
-  getFriendChatMediaDownloadUrl,
-  type FriendChatMessage,
-} from "@/services/chatService";
+  clearFriendChatImageCacheForMessages,
+  loadFriendChatImageMedia,
+} from "@/services/friendChatImageCacheService";
+import { startDevelopmentPerformanceTrace } from "@/utils/performanceDiagnostics";
 
 type Props = {
   message: FriendChatMessage | null;
@@ -52,8 +54,10 @@ export function FriendChatImageViewer({
 }: Props) {
   const { i18n, t } = useTranslation();
   const insets = useSafeAreaInsets();
-  const [fullUrl, setFullUrl] = useState<string | null>(null);
+  const [fullUri, setFullUri] = useState<string | null>(null);
+  const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  const displayTraceRef = useRef<(() => number) | null>(null);
   const onUnavailableRef = useRef(onUnavailable);
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
@@ -63,6 +67,14 @@ export function FriendChatImageViewer({
   const savedTranslateY = useSharedValue(0);
   const viewportWidth = useSharedValue(0);
   const viewportHeight = useSharedValue(0);
+  const imageFullPath = message?.image?.fullPath;
+  const imageMediaProfileVersion = message?.image?.mediaProfileVersion;
+  const imageSizeBytes = message?.image?.sizeBytes;
+  const imageThumbnailPath = message?.image?.thumbnailPath;
+  const imageThumbnailSizeBytes = message?.image?.thumbnailSizeBytes;
+  const messageConversationId = message?.conversationId;
+  const messageId = message?.messageId;
+  const messageStatus = message?.status;
 
   useEffect(() => { onUnavailableRef.current = onUnavailable; }, [onUnavailable]);
 
@@ -76,27 +88,72 @@ export function FriendChatImageViewer({
   }, [savedScale, savedTranslateX, savedTranslateY, scale, translateX, translateY]);
 
   useEffect(() => {
-    if (!visible || !message?.image || message.status !== "active") {
-      setFullUrl(null);
+    if (
+      !visible ||
+      !messageConversationId ||
+      !messageId ||
+      !imageFullPath ||
+      !imageMediaProfileVersion ||
+      !imageSizeBytes ||
+      !imageThumbnailPath ||
+      !imageThumbnailSizeBytes ||
+      messageStatus !== "active"
+    ) {
+      setFullUri(null);
+      setThumbnailUri(null);
       setUnavailable(false);
       resetView();
       return;
     }
-    let mounted = true;
-    setFullUrl(null);
+    const controller = new AbortController();
+    setFullUri(null);
+    setThumbnailUri(null);
     setUnavailable(false);
     resetView();
-    void getFriendChatMediaDownloadUrl({ messageId: message.messageId, storagePath: message.image.fullPath })
-      .then((result) => {
-        if (mounted) setFullUrl(result.url);
+    const mediaRequest = {
+      conversationId: messageConversationId,
+      mediaProfileVersion: imageMediaProfileVersion,
+      messageId,
+      signal: controller.signal,
+    } as const;
+    void loadFriendChatImageMedia({
+      ...mediaRequest,
+      expectedSizeBytes: imageThumbnailSizeBytes,
+      storagePath: imageThumbnailPath,
+      variant: "thumbnail",
+    }).then((uri) => {
+      if (!controller.signal.aborted) setThumbnailUri(uri);
+    }).catch(() => undefined);
+    void loadFriendChatImageMedia({
+      ...mediaRequest,
+      expectedSizeBytes: imageSizeBytes,
+      storagePath: imageFullPath,
+      variant: "display",
+    })
+      .then((uri) => {
+        if (controller.signal.aborted) return;
+        displayTraceRef.current = startDevelopmentPerformanceTrace("friend-chat.image-full-visible");
+        setFullUri(uri);
       })
-      .catch(() => {
-        if (!mounted) return;
+      .catch((loadError: unknown) => {
+        if (controller.signal.aborted || (loadError instanceof Error && loadError.name === "AbortError")) return;
         setUnavailable(true);
+        void clearFriendChatImageCacheForMessages([messageId]);
         onUnavailableRef.current();
       });
-    return () => { mounted = false; };
-  }, [message?.image, message?.messageId, message?.status, resetView, visible]);
+    return () => controller.abort();
+  }, [
+    messageConversationId,
+    imageFullPath,
+    imageMediaProfileVersion,
+    imageSizeBytes,
+    imageThumbnailPath,
+    imageThumbnailSizeBytes,
+    messageId,
+    messageStatus,
+    resetView,
+    visible,
+  ]);
 
   const timestamp = useMemo(() => message?.createdAt
     ? new Intl.DateTimeFormat(i18n.resolvedLanguage ?? i18n.language, {
@@ -204,7 +261,7 @@ export function FriendChatImageViewer({
                 <Text style={styles.unavailableButtonText}>{t("common.back")}</Text>
               </TouchableOpacity>
             </View>
-          ) : fullUrl && message?.image ? (
+          ) : (fullUri || thumbnailUri) && message?.image ? (
             <GestureDetector gesture={Gesture.Simultaneous(pinch, pan)}>
               <Animated.View style={[styles.imageFrame, imageStyle]}>
                 <Image
@@ -212,13 +269,21 @@ export function FriendChatImageViewer({
                   accessibilityLabel={t("chat.fullScreenPhotoAccessibility", { sender: senderName, timestamp })}
                   cachePolicy="memory"
                   contentFit="contain"
+                  onDisplay={() => {
+                    if (!fullUri) return;
+                    displayTraceRef.current?.();
+                    displayTraceRef.current = null;
+                  }}
                   onError={() => {
                     setUnavailable(true);
+                    void clearFriendChatImageCacheForMessages([message.messageId]);
                     onUnavailableRef.current();
                   }}
-                  source={{ uri: fullUrl }}
+                  source={{ uri: fullUri ?? thumbnailUri! }}
                   style={styles.image}
+                  transition={180}
                 />
+                {!fullUri ? <ActivityIndicator color={Colors.surface} size="small" style={styles.fullLoading} /> : null}
               </Animated.View>
             </GestureDetector>
           ) : (
@@ -243,6 +308,7 @@ const styles = StyleSheet.create({
   headerCopy: { flex: 1, minWidth: 0, paddingHorizontal: Spacing.xs },
   image: { height: "100%", width: "100%" },
   imageFrame: { height: "100%", width: "100%" },
+  fullLoading: { bottom: Spacing.lg, position: "absolute", right: Spacing.lg },
   sender: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 15 },
   timestamp: { color: Colors.surface, fontFamily: Typography.bodyRegular, fontSize: 11, lineHeight: 15, opacity: 0.8 },
   unavailableButton: { alignItems: "center", borderColor: Colors.surface, borderRadius: 6, borderWidth: 1, minHeight: 44, justifyContent: "center", paddingHorizontal: Spacing.lg },

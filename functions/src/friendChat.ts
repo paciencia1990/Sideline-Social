@@ -19,7 +19,10 @@ import {
   FRIEND_CHAT_FORWARD_COOLDOWN_MS,
   FRIEND_CHAT_FORWARD_MAX_DESTINATIONS,
   FRIEND_CHAT_IMAGE_MAX_SIZE_BYTES,
+  FRIEND_CHAT_IMAGE_PROFILE_V2,
   FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_SIZE_BYTES,
+  FRIEND_CHAT_IMAGE_V2_MAX_SIZE_BYTES,
+  FRIEND_CHAT_IMAGE_V2_THUMBNAIL_MAX_SIZE_BYTES,
   FRIEND_CHAT_MEDIA_RESERVATION_COOLDOWN_MS,
   FRIEND_CHAT_REACTIONS,
   FRIEND_CHAT_PIN_DURATIONS,
@@ -39,6 +42,7 @@ import {
   normalizeFriendIds,
   normalizeFriendChatReaction,
   parseFriendChatMediaStoragePath,
+  readJpegDimensions,
   sanitizeChatMessage,
   sanitizeGroupName,
   sanitizeMessagePreview,
@@ -1285,6 +1289,7 @@ type ForwardSourceImage = {
   stored: {
     fullPath: string;
     height: number;
+    mediaProfileVersion: 1 | 2;
     mimeType: string;
     sizeBytes: number;
     sourceMimeType: string | null;
@@ -1353,6 +1358,7 @@ function readForwardSourceImage(
         sizeBytes: image.sizeBytes,
         width: image.width,
       },
+      mediaProfileVersion: image.mediaProfileVersion,
       sourceMimeType: image.sourceMimeType,
       sourceSizeBytes: image.sourceSizeBytes,
       thumbnail: {
@@ -1368,6 +1374,7 @@ function readForwardSourceImage(
       stored: {
         fullPath,
         height: metadata.main.height,
+        mediaProfileVersion: metadata.mediaProfileVersion,
         mimeType: metadata.main.mimeType,
         sizeBytes: metadata.main.sizeBytes,
         sourceMimeType: metadata.sourceMimeType,
@@ -2200,12 +2207,19 @@ async function verifyUploadedFriendImage(reservation: FriendChatMediaUploadReser
     thumbnailReference.messageId !== reservation.targetId
   ) failed('Upload expired.');
   if ((timestampMillis(reservation.expiresAt) ?? 0) <= Date.now()) failed('Upload expired.');
+  const fullFile = admin.storage().bucket().file(fullPath);
+  const thumbnailFile = admin.storage().bucket().file(thumbnailPath);
   const [fullMetadata, thumbnailMetadata] = await Promise.all([
-    admin.storage().bucket().file(fullPath).getMetadata().then(([metadata]) => metadata),
-    admin.storage().bucket().file(thumbnailPath).getMetadata().then(([metadata]) => metadata),
+    fullFile.getMetadata().then(([metadata]) => metadata),
+    thumbnailFile.getMetadata().then(([metadata]) => metadata),
   ]);
   const fullSize = Number(fullMetadata.size);
   const thumbnailSize = Number(thumbnailMetadata.size);
+  const isVersion2 = image.mediaProfileVersion === FRIEND_CHAT_IMAGE_PROFILE_V2;
+  const fullMaxBytes = isVersion2 ? FRIEND_CHAT_IMAGE_V2_MAX_SIZE_BYTES : FRIEND_CHAT_IMAGE_MAX_SIZE_BYTES;
+  const thumbnailMaxBytes = isVersion2
+    ? FRIEND_CHAT_IMAGE_V2_THUMBNAIL_MAX_SIZE_BYTES
+    : FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_SIZE_BYTES;
   if (
     fullSize !== image.main.sizeBytes ||
     thumbnailSize !== image.thumbnail.sizeBytes ||
@@ -2213,12 +2227,31 @@ async function verifyUploadedFriendImage(reservation: FriendChatMediaUploadReser
     thumbnailMetadata.contentType !== image.thumbnail.mimeType ||
     fullSize < 1 ||
     thumbnailSize < 1 ||
-    fullSize > FRIEND_CHAT_IMAGE_MAX_SIZE_BYTES ||
-    thumbnailSize > FRIEND_CHAT_IMAGE_THUMBNAIL_MAX_SIZE_BYTES
+    fullSize > fullMaxBytes ||
+    thumbnailSize > thumbnailMaxBytes
   ) failed('Uploaded image could not be verified.');
+  if (isVersion2) {
+    const [fullBytes, thumbnailBytes] = await Promise.all([
+      fullFile.download().then(([bytes]) => bytes),
+      thumbnailFile.download().then(([bytes]) => bytes),
+    ]);
+    const fullDimensions = readJpegDimensions(fullBytes);
+    const thumbnailDimensions = readJpegDimensions(thumbnailBytes);
+    if (
+      fullBytes.byteLength !== image.main.sizeBytes ||
+      thumbnailBytes.byteLength !== image.thumbnail.sizeBytes ||
+      !fullDimensions ||
+      !thumbnailDimensions ||
+      fullDimensions.width !== image.main.width ||
+      fullDimensions.height !== image.main.height ||
+      thumbnailDimensions.width !== image.thumbnail.width ||
+      thumbnailDimensions.height !== image.thumbnail.height
+    ) failed('Uploaded image could not be verified.');
+  }
   return {
     fullPath,
     height: image.main.height,
+    mediaProfileVersion: image.mediaProfileVersion,
     mimeType: image.main.mimeType,
     sizeBytes: image.main.sizeBytes,
     sourceMimeType: image.sourceMimeType,

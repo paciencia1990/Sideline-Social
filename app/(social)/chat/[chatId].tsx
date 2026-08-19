@@ -18,6 +18,7 @@ import {
   TouchableOpacity,
   View,
   type FlatList as FlatListType,
+  type ViewToken,
 } from "react-native";
 import * as Haptics from "expo-haptics";
 import { ArrowLeft, Check, Forward, Image as ImageIcon, Mic, MoreHorizontal, Pin, Reply, Send, Star, StarOff, Trash2, X } from "lucide-react-native";
@@ -75,7 +76,10 @@ import {
   type FriendChatReactionEmoji,
   type FriendChatReplyContext,
 } from "@/services/chatService";
-import { clearFriendChatImageMemoryCache } from "@/services/friendChatImageCacheService";
+import {
+  clearFriendChatImageCacheForMessages,
+  primeFriendChatImageCache,
+} from "@/services/friendChatImageCacheService";
 import {
   acknowledgeFriendChatImagePickerResult,
   claimFriendChatImagePickerResult,
@@ -130,6 +134,8 @@ export default function FriendConversationScreen() {
   const deletionOperationsRef = useRef(new Set<string>());
   const pendingDeletionsRef = useRef(new Map<string, FriendChatDeletionTarget<FriendChatMessage>>());
   const serverMessagesRef = useRef<FriendChatMessage[]>([]);
+  const messagesRef = useRef<FriendChatMessage[]>([]);
+  const activeImageMessageIdsRef = useRef(new Set<string>());
   const keyboardVisibleRef = useRef(false);
   const imageDraftRef = useRef<LocalFriendChatImageDraft | null>(null);
   const imagePickerInFlightRef = useRef(false);
@@ -148,6 +154,7 @@ export default function FriendConversationScreen() {
   const [access, setAccess] = useState<ConversationAccess | null>(null);
   const [accessResolvedChatId, setAccessResolvedChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<FriendChatMessage[]>([]);
+  const [mediaLoadMessageIds, setMediaLoadMessageIds] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState<LocalVoiceMemoDraft | null>(null);
@@ -178,6 +185,20 @@ export default function FriendConversationScreen() {
   const [unavailableImageMessageIds, setUnavailableImageMessageIds] = useState<string[]>([]);
   const [viewerMessageId, setViewerMessageId] = useState<string | null>(null);
   const [dateLabelNow, setDateLabelNow] = useState(() => new Date());
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 10, minimumViewTime: 80 }).current;
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<FriendChatMessage>[] }) => {
+    const currentMessages = messagesRef.current;
+    const next = new Set<string>();
+    viewableItems.forEach((token) => {
+      if (token.index == null) return;
+      for (let index = Math.max(0, token.index - 2); index <= Math.min(currentMessages.length - 1, token.index + 2); index += 1) {
+        const message = currentMessages[index];
+        if (message?.messageType === "image" && message.image && message.status === "active") next.add(message.messageId);
+      }
+    });
+    const nextIds = [...next];
+    setMediaLoadMessageIds((current) => current.length === nextIds.length && current.every((id) => next.has(id)) ? current : nextIds);
+  }).current;
 
   const scrollToLatest = useCallback((animated: boolean) => {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
@@ -201,6 +222,7 @@ export default function FriendConversationScreen() {
     : null, [messages, viewerMessageId]);
 
   useEffect(() => { imageDraftRef.current = imageDraft; }, [imageDraft]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { voiceDraftRef.current = voiceDraft; }, [voiceDraft]);
   useEffect(() => { currentChatIdRef.current = chatId; }, [chatId]);
   useEffect(() => { currentUserIdRef.current = user?.uid; }, [user?.uid]);
@@ -213,8 +235,11 @@ export default function FriendConversationScreen() {
   }, [viewerMessage, viewerMessageId]);
   useEffect(() => {
     const activeImageIds = new Set(messages
-      .filter((message) => message.status === "active" && message.messageType === "image")
+      .filter((message) => message.status === "active" && !message.isModerated && message.messageType === "image" && message.image)
       .map((message) => message.messageId));
+    const removedImageIds = [...activeImageMessageIdsRef.current].filter((messageId) => !activeImageIds.has(messageId));
+    if (removedImageIds.length) void clearFriendChatImageCacheForMessages(removedImageIds);
+    activeImageMessageIdsRef.current = activeImageIds;
     setUnavailableImageMessageIds((ids) => ids.filter((id) => activeImageIds.has(id)));
   }, [messages]);
   useEffect(() => () => {
@@ -300,7 +325,15 @@ export default function FriendConversationScreen() {
           setHasMore(items.length >= 50);
           setLoading(false);
           void markFriendConversationRead(chatId).catch(() => undefined);
-        }, (error) => { if (active) { setErrorKey(errorTranslationKey(mapFriendChatError(error))); setLoading(false); } });
+        }, (error) => {
+          if (!active) return;
+          const mappedError = mapFriendChatError(error);
+          if (["blocked", "friendshipEnded", "permission", "removed"].includes(mappedError)) {
+            void clearFriendChatImageCacheForMessages([...activeImageMessageIdsRef.current]);
+          }
+          setErrorKey(errorTranslationKey(mappedError));
+          setLoading(false);
+        });
       } catch (error) {
         if (active) { setErrorKey(errorTranslationKey(mapFriendChatError(error))); setLoading(false); }
       } finally {
@@ -476,7 +509,25 @@ export default function FriendConversationScreen() {
         uploadCancel.current = upload.cancel;
         await upload.completion;
         setSendStatus({ mediaType: "image", phase: "finalizing" });
-        await finalizeFriendChatImageMessage(reservation.reservationId);
+        const finalized = await finalizeFriendChatImageMessage(reservation.reservationId);
+        await Promise.allSettled([
+          primeFriendChatImageCache({
+            conversationId: chatId,
+            expectedSizeBytes: imageDraft.full.sizeBytes,
+            localUri: imageDraft.full.uri,
+            mediaProfileVersion: imageDraft.mediaProfileVersion,
+            messageId: finalized.messageId,
+            variant: "display",
+          }),
+          primeFriendChatImageCache({
+            conversationId: chatId,
+            expectedSizeBytes: imageDraft.thumbnail.sizeBytes,
+            localUri: imageDraft.thumbnail.uri,
+            mediaProfileVersion: imageDraft.mediaProfileVersion,
+            messageId: finalized.messageId,
+            variant: "thumbnail",
+          }),
+        ]);
         await deleteFriendChatImageDraft(imageDraft);
         imageDraftRef.current = null;
         setImageDraft(null);
@@ -642,9 +693,10 @@ export default function FriendConversationScreen() {
       } else {
         await Promise.all(messageIds.map((messageId) => deleteFriendChatMessageForEveryone(chatId, messageId)));
       }
-      if (targetMessages.some((message) => message.messageType === "image")) {
-        await clearFriendChatImageMemoryCache();
-      }
+      const imageMessageIds = targetMessages
+        .filter((message) => message.messageType === "image")
+        .map((message) => message.messageId);
+      if (imageMessageIds.length) await clearFriendChatImageCacheForMessages(imageMessageIds);
       setDeleteSelectionVisible(false);
       clearSelection();
     } catch (error) {
@@ -932,6 +984,7 @@ export default function FriendConversationScreen() {
           ref={listRef}
           contentContainerStyle={messages.length ? styles.messages : styles.emptyMessages}
           data={messages}
+          extraData={mediaLoadMessageIds}
           keyExtractor={(item) => item.messageId}
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           keyboardShouldPersistTaps="handled"
@@ -942,6 +995,7 @@ export default function FriendConversationScreen() {
             if (keyboardVisibleRef.current) scrollToLatest(false);
           }}
           onScrollBeginDrag={dismissReactionTray}
+          onViewableItemsChanged={onViewableItemsChanged}
           renderItem={({ index, item }) => {
             const showDate = shouldShowFriendChatDateSeparator(
               item.createdAt,
@@ -959,7 +1013,8 @@ export default function FriendConversationScreen() {
                 {separator ? <ChatDateSeparator accessibilityLabel={separator.accessibilityLabel} label={separator.label} /> : null}
                 <MessageBubble
                   isMine={item.senderUserId === user?.uid}
-                  message={item}
+                   message={item}
+                   loadMedia={mediaLoadMessageIds.includes(item.messageId)}
                   onActions={() => setActionMessage(item)}
                   onOpenImage={() => setViewerMessageId(item.messageId)}
                   onOpenReactions={beginSelection}
@@ -976,6 +1031,7 @@ export default function FriendConversationScreen() {
             );
           }}
           style={styles.messageList}
+          viewabilityConfig={viewabilityConfig}
         />
         <View style={styles.composer}>
           {replyDraft ? (
@@ -1146,6 +1202,7 @@ export default function FriendConversationScreen() {
 function MessageBubble({
   message,
   isMine,
+  loadMedia,
   onActions,
   onOpenImage,
   onOpenReactions,
@@ -1157,6 +1214,7 @@ function MessageBubble({
   selectionMode,
 }: {
   isMine: boolean;
+  loadMedia: boolean;
   message: FriendChatMessage;
   onActions: () => void;
   onOpenImage: () => void;
@@ -1258,7 +1316,9 @@ function MessageBubble({
             ) : message.messageType === "image" && message.image ? (
               <FriendChatImageMessage
                 active={interactive}
+                conversationId={message.conversationId}
                 image={message.image}
+                loadMedia={loadMedia}
                 messageId={message.messageId}
                 onLongPress={openReactionTray}
                 onOpen={onOpenImage}

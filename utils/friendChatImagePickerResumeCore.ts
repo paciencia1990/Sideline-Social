@@ -31,6 +31,7 @@ export type FriendChatImagePickerHandoffVariant = {
 
 export type FriendChatImagePickerHandoffDraft = {
   full: FriendChatImagePickerHandoffVariant;
+  mediaProfileVersion: 2;
   sourceMimeType: string | null;
   sourceSizeBytes: number;
   thumbnail: FriendChatImagePickerHandoffVariant;
@@ -236,6 +237,7 @@ function isHandoffDraft(value: unknown): value is FriendChatImagePickerHandoffDr
   if (!value || typeof value !== "object") return false;
   const draft = value as Partial<FriendChatImagePickerHandoffDraft>;
   return isHandoffVariant(draft.full) &&
+    draft.mediaProfileVersion === 2 &&
     isHandoffVariant(draft.thumbnail) &&
     (draft.sourceMimeType === null || (
       typeof draft.sourceMimeType === "string" &&

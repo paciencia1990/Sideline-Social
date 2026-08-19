@@ -29,6 +29,7 @@ function loadTypeScript(relativePath, requireModule = require) {
 }
 
 const resumeCore = loadTypeScript("utils/friendChatImagePickerResumeCore.ts");
+const imageProfile = loadTypeScript("constants/friendChatImageProfile.ts");
 const storage = new Map();
 const asyncStorage = {
   getItem: async (key) => storage.get(key) ?? null,
@@ -87,6 +88,7 @@ let processingPromise = null;
 let launchCalls = 0;
 let pendingCalls = 0;
 let processedCount = 0;
+let processedSizeQueue = [];
 const deletedUris = [];
 const imagePicker = {
   getPendingResultAsync: async () => {
@@ -104,16 +106,18 @@ const imageManipulator = {
     if (processingPromise) await processingPromise;
     processedCount += 1;
     const resize = actions[0]?.resize ?? {};
+    const width = resize.width ?? (resize.height ? Math.round(resize.height * (4 / 3)) : 1200);
+    const height = resize.height ?? (resize.width ? Math.round(resize.width * (3 / 4)) : 800);
     return {
-      height: resize.height ?? 800,
+      height,
       uri: `file:///cache/processed-${processedCount}.jpg`,
-      width: resize.width ?? 1200,
+      width,
     };
   },
 };
 const fileSystem = {
   deleteAsync: async (uri) => { deletedUris.push(uri); },
-  getInfoAsync: async () => ({ exists: true, size: 128_000 }),
+  getInfoAsync: async () => ({ exists: true, size: processedSizeQueue.length ? processedSizeQueue.shift() : 64_000 }),
 };
 const imageService = loadTypeScript("services/friendChatImageService.ts", (name) => {
   if (name === "@react-native-async-storage/async-storage") return asyncStorage;
@@ -121,6 +125,8 @@ const imageService = loadTypeScript("services/friendChatImageService.ts", (name)
   if (name === "expo-file-system/legacy") return fileSystem;
   if (name === "@/services/systemRouteResumeService") return resumeService;
   if (name === "@/utils/friendChatImagePickerResumeCore") return resumeCore;
+  if (name === "@/constants/friendChatImageProfile") return imageProfile;
+  if (name === "@/utils/performanceDiagnostics") return { measureDevelopmentPerformance: (_name, operation) => operation() };
   if (name === "expo-image-picker") return imagePicker;
   if (name === "expo-image-manipulator") return imageManipulator;
   throw new Error(`Unexpected image-service import: ${name}`);
@@ -154,6 +160,7 @@ async function resetPickerState() {
   launchCalls = 0;
   pendingCalls = 0;
   processedCount = 0;
+  processedSizeQueue = [];
   deletedUris.length = 0;
 }
 
@@ -177,6 +184,7 @@ async function run() {
   const selected = await imageService.pickFriendChatImageDraft(directContext);
   assert.equal(selected.status, "selected");
   assert.equal(selected.draft.sourceSizeBytes, 256_000);
+  assert.equal(selected.draft.mediaProfileVersion, 2);
   assert.equal(processedCount, 2, "The existing full and thumbnail processing path remains intact.");
   assert.equal((await resumeService.readFriendChatImagePickerReturn(directContext.uid)).phase, "draft-ready");
   assert.equal(storage.has(pickerHandoffKey), true, "Draft-ready does not clear the return intent or handoff.");
@@ -196,6 +204,26 @@ async function run() {
   assert.equal(mountedChatResult.status, "selected");
   assert.equal(pendingCalls, 0);
   await acknowledge(directContext, mountedChatResult);
+
+  // Oversized outputs step through quality in a bounded order and delete rejected candidates.
+  await resetPickerState();
+  launchResult = selectedAsset("content://iterative-photo");
+  processedSizeQueue = [1_200_000, 900_000, 130_000, 100_000];
+  const iterativeResult = await imageService.pickFriendChatImageDraft(directContext);
+  assert.equal(iterativeResult.status, "selected");
+  assert.equal(processedCount, 4);
+  assert.equal(deletedUris.length, 2, "each rejected encoded candidate is removed immediately");
+  await acknowledge(directContext, iterativeResult);
+
+  await resetPickerState();
+  launchResult = selectedAsset("content://uncompressible-photo");
+  processedSizeQueue = Array(12).fill(1_200_000);
+  const uncompressibleResult = await imageService.pickFriendChatImageDraft(directContext);
+  assert.equal(uncompressibleResult.status, "failed");
+  assert.equal(uncompressibleResult.errorCode, "image_processing_too_large");
+  assert.equal(processedCount, 12, "compression cannot loop beyond the centralized attempt schedule");
+  assert.equal(deletedUris.length, 12, "all unsuccessful temporary encodes are removed");
+  await acknowledge(directContext, uncompressibleResult);
 
   // The restored chat can mount while image processing is still running and joins the active operation.
   await resetPickerState();
@@ -310,6 +338,7 @@ async function run() {
   const expiredHandoff = resumeCore.createFriendChatImagePickerHandoff(expiredIntent, {
     draft: {
       full: { height: 800, mimeType: "image/jpeg", sizeBytes: 128_000, uri: "file:///cache/expired-full.jpg", width: 1200 },
+      mediaProfileVersion: 2,
       sourceMimeType: "image/jpeg",
       sourceSizeBytes: 256_000,
       thumbnail: { height: 400, mimeType: "image/jpeg", sizeBytes: 64_000, uri: "file:///cache/expired-thumb.jpg", width: 512 },

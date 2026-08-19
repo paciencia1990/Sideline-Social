@@ -3,6 +3,13 @@ import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 
 import {
+  createFriendChatImageCompressionAttempts,
+  FRIEND_CHAT_IMAGE_MEDIA_PROFILE_VERSION,
+  FRIEND_CHAT_IMAGE_PROFILE_V2,
+  FRIEND_CHAT_IMAGE_SOURCE_LIMIT_BYTES,
+  type FriendChatImageVariantProfile,
+} from "@/constants/friendChatImageProfile";
+import {
   clearAllFriendChatImagePickerReturns,
   clearFriendChatImagePickerReturn,
   readFriendChatImagePickerReturn,
@@ -20,12 +27,9 @@ import {
   type FriendChatImagePickerHandoffVariant,
   type FriendChatImagePickerReturnIntent,
 } from "@/utils/friendChatImagePickerResumeCore";
+import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 
-export const FRIEND_CHAT_IMAGE_SOURCE_LIMIT_BYTES = 5 * 1024 * 1024;
-export const FRIEND_CHAT_IMAGE_PROCESSED_LIMIT_BYTES = 3 * 1024 * 1024;
-export const FRIEND_CHAT_IMAGE_THUMBNAIL_LIMIT_BYTES = 512 * 1024;
-export const FRIEND_CHAT_IMAGE_MAX_EDGE = 1600;
-export const FRIEND_CHAT_IMAGE_THUMBNAIL_EDGE = 512;
+export { FRIEND_CHAT_IMAGE_SOURCE_LIMIT_BYTES } from "@/constants/friendChatImageProfile";
 
 const FRIEND_CHAT_IMAGE_PICKER_HANDOFF_KEY = "sidelineSocial.friendChatImagePickerHandoff.v1";
 const SUPPORTED_SOURCE_MIME_TYPES = new Set([
@@ -471,40 +475,46 @@ async function processPickedImage(
   if (sourceSizeBytes < 1 || sourceSizeBytes > FRIEND_CHAT_IMAGE_SOURCE_LIMIT_BYTES) {
     throw new Error("image_source_too_large");
   }
-  const sourceWidth = Number.isFinite(asset?.width)
-    ? Number(asset?.width)
-    : FRIEND_CHAT_IMAGE_MAX_EDGE;
-  const sourceHeight = Number.isFinite(asset?.height)
-    ? Number(asset?.height)
-    : FRIEND_CHAT_IMAGE_MAX_EDGE;
-  const full = await manipulateImageVariant(
-    imageManipulator,
-    uri,
-    sourceWidth,
-    sourceHeight,
-    FRIEND_CHAT_IMAGE_MAX_EDGE,
-    0.82,
-  );
-  if (full.sizeBytes > FRIEND_CHAT_IMAGE_PROCESSED_LIMIT_BYTES) {
-    throw new Error("image_processing_too_large");
+  const sourceWidth = Number(asset?.width);
+  const sourceHeight = Number(asset?.height);
+  if (!Number.isFinite(sourceWidth) || sourceWidth < 1 || !Number.isFinite(sourceHeight) || sourceHeight < 1) {
+    throw new Error("image_picker_failed");
   }
-  const thumbnail = await manipulateImageVariant(
-    imageManipulator,
-    uri,
-    sourceWidth,
-    sourceHeight,
-    FRIEND_CHAT_IMAGE_THUMBNAIL_EDGE,
-    0.72,
+
+  const full = await measureDevelopmentPerformance(
+    "friend-chat.image-compression",
+    () => createCompressedImageVariant(
+      imageManipulator,
+      uri,
+      sourceWidth,
+      sourceHeight,
+      FRIEND_CHAT_IMAGE_PROFILE_V2.display,
+      "image_processing_too_large",
+    ),
   );
-  if (thumbnail.sizeBytes > FRIEND_CHAT_IMAGE_THUMBNAIL_LIMIT_BYTES) {
-    throw new Error("image_thumbnail_too_large");
+  try {
+    const thumbnail = await measureDevelopmentPerformance(
+      "friend-chat.image-thumbnail",
+      () => createCompressedImageVariant(
+        imageManipulator,
+        uri,
+        sourceWidth,
+        sourceHeight,
+        FRIEND_CHAT_IMAGE_PROFILE_V2.thumbnail,
+        "image_thumbnail_too_large",
+      ),
+    );
+    return {
+      full,
+      mediaProfileVersion: FRIEND_CHAT_IMAGE_MEDIA_PROFILE_VERSION,
+      sourceMimeType,
+      sourceSizeBytes,
+      thumbnail,
+    } satisfies LocalFriendChatImageDraft;
+  } catch (error) {
+    await deleteTemporaryImage(full.uri);
+    throw error;
   }
-  return {
-    full,
-    sourceMimeType,
-    sourceSizeBytes,
-    thumbnail,
-  } satisfies LocalFriendChatImageDraft;
 }
 
 function resultForIntent<TStatus extends FriendChatImagePickResult["status"]>(
@@ -585,27 +595,44 @@ function loadImageManipulator(): ExpoImageManipulatorModule {
   }
 }
 
-async function manipulateImageVariant(
+async function createCompressedImageVariant(
   imageManipulator: ExpoImageManipulatorModule,
   uri: string,
   sourceWidth: number,
   sourceHeight: number,
-  maxEdge: number,
-  compress: number,
+  profile: FriendChatImageVariantProfile,
+  failureCode: "image_processing_too_large" | "image_thumbnail_too_large",
 ): Promise<FriendChatImageVariantDraft> {
-  const resize = resizeAction(sourceWidth, sourceHeight, maxEdge);
-  const result = await imageManipulator.manipulateAsync(uri, resize ? [resize] : [], {
-    compress,
-    format: imageManipulator.SaveFormat?.JPEG ?? "jpeg",
-  });
-  const sizeBytes = await fileSize(result.uri);
-  return {
-    height: result.height,
-    mimeType: "image/jpeg",
-    sizeBytes,
-    uri: result.uri,
-    width: result.width,
-  };
+  const attempts = createFriendChatImageCompressionAttempts(profile);
+  for (const attempt of attempts) {
+    const resize = resizeAction(sourceWidth, sourceHeight, attempt.maxEdge);
+    const result = await imageManipulator.manipulateAsync(uri, resize ? [resize] : [], {
+      compress: attempt.quality,
+      format: imageManipulator.SaveFormat?.JPEG ?? "jpeg",
+    });
+    const sizeBytes = await fileSize(result.uri);
+    const validDimensions = Number.isInteger(result.width) &&
+      Number.isInteger(result.height) &&
+      result.width > 0 &&
+      result.height > 0 &&
+      Math.max(result.width, result.height) <= attempt.maxEdge;
+    if (sizeBytes > 0 && sizeBytes <= profile.maxBytes && validDimensions) {
+      return {
+        height: result.height,
+        mimeType: "image/jpeg",
+        sizeBytes,
+        uri: result.uri,
+        width: result.width,
+      };
+    }
+    await deleteTemporaryImage(result.uri);
+  }
+  throw new Error(failureCode);
+}
+
+async function deleteTemporaryImage(uri: string) {
+  if (!uri) return;
+  await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined);
 }
 
 function resizeAction(width: number, height: number, maxEdge: number) {
