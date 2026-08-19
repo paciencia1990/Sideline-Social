@@ -15,13 +15,15 @@ import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import {
   deleteAnnouncementReply,
   deleteTeamAnnouncement,
+  getOlderAnnouncementRepliesPage,
   getTeamAnnouncement,
-  listenToAnnouncementReplies,
+  listenToNewestAnnouncementRepliesPage,
   listenToTeamAnnouncement,
   replyToAnnouncement,
   type AnnouncementReply,
   type TeamAnnouncement,
 } from "@/services/teamMessageService";
+import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import {
   canManageTeamAnnouncements,
   getCurrentUserTeamMemberships,
@@ -41,6 +43,9 @@ export default function AnnouncementThreadScreen() {
   const announcementId = normalizeParam(params.announcementId);
   const [announcement, setAnnouncement] = useState<TeamAnnouncement | null>(null);
   const [replies, setReplies] = useState<AnnouncementReply[]>([]);
+  const [replyCursor, setReplyCursor] = useState<TeamHistoryCursor | null>(null);
+  const [hasOlderReplies, setHasOlderReplies] = useState(false);
+  const [loadingOlderReplies, setLoadingOlderReplies] = useState(false);
   const [replyBody, setReplyBody] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -51,6 +56,7 @@ export default function AnnouncementThreadScreen() {
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
   const replyDeletionInFlight = useRef(false);
+  const replyPageInFlight = useRef(false);
   const announcementDeletionInFlight = useRef(false);
 
   useEffect(() => {
@@ -102,13 +108,37 @@ export default function AnnouncementThreadScreen() {
       setReplies([]);
       return () => {};
     }
-    return listenToAnnouncementReplies(
+    setReplies([]);
+    setReplyCursor(null);
+    return listenToNewestAnnouncementRepliesPage(
       teamId,
       announcementId,
-      setReplies,
+      "all",
+      (page) => {
+        setReplies((current) => mergeReplies(current, page.items));
+        setReplyCursor((current) => current ?? page.nextCursor);
+        setHasOlderReplies(page.hasMore);
+      },
       () => setError(t("coach.messages.replyError")),
     );
   }, [announcement?.id, announcementId, teamId, t]);
+
+  const loadOlderReplies = useCallback(async () => {
+    if (!replyCursor || !hasOlderReplies || replyPageInFlight.current) return;
+    replyPageInFlight.current = true;
+    setLoadingOlderReplies(true);
+    try {
+      const page = await getOlderAnnouncementRepliesPage(teamId, announcementId, "all", replyCursor);
+      setReplies((current) => mergeReplies(page.items, current));
+      setReplyCursor(page.nextCursor);
+      setHasOlderReplies(page.hasMore);
+    } catch {
+      setError(t("coach.messages.replyError"));
+    } finally {
+      replyPageInFlight.current = false;
+      setLoadingOlderReplies(false);
+    }
+  }, [announcementId, hasOlderReplies, replyCursor, t, teamId]);
 
   const submitReply = useCallback(
     async (body: string, quickReplyId?: QuickReplyId) => {
@@ -318,6 +348,11 @@ export default function AnnouncementThreadScreen() {
                 </Text>
               </View>
             ))}
+            {hasOlderReplies ? (
+              <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: loadingOlderReplies }} disabled={loadingOlderReplies} onPress={() => { void loadOlderReplies(); }} style={styles.outlineButton}>
+                {loadingOlderReplies ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.outlineButtonText}>{t("coach.messages.loadOlderReplies")}</Text>}
+              </TouchableOpacity>
+            ) : null}
           </Card>
         ) : null}
 
@@ -382,7 +417,22 @@ function normalizeParam(value?: string | string[]) {
 }
 
 function appendReply(replies: AnnouncementReply[], reply: AnnouncementReply) {
-  return replies.some((item) => item.id === reply.id) ? replies : [...replies, reply];
+  return mergeReplies(replies, [reply]);
+}
+
+function mergeReplies(...groups: AnnouncementReply[][]) {
+  const byId = new Map<string, AnnouncementReply>();
+  groups.flat().forEach((reply) => byId.set(reply.id, reply));
+  return Array.from(byId.values()).sort((first, second) => {
+    const time = replyMillis(first.createdAt) - replyMillis(second.createdAt);
+    return time || first.id.localeCompare(second.id);
+  });
+}
+
+function replyMillis(value: unknown) {
+  if (value instanceof Date) return value.getTime();
+  if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") return value.toMillis();
+  return 0;
 }
 
 function logOperationError(operation: string, error: unknown) {
@@ -409,6 +459,8 @@ function logAnnouncementDeleteError(
 }
 
 const styles = StyleSheet.create({
+  outlineButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, minHeight: 44, justifyContent: "center", paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm },
+  outlineButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold },
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
   header: { alignItems: "center", gap: Spacing.xs },
   title: { color: Colors.textHeading, fontFamily: Typography.heading, fontSize: 31, textAlign: "center" },

@@ -21,6 +21,7 @@ export type NotificationNavigationData = {
   announcementId?: unknown;
   eventId?: unknown;
   conversationId?: unknown;
+  messageId?: unknown;
   conversationType?: unknown;
   activeMode?: unknown;
   squadId?: unknown;
@@ -61,12 +62,14 @@ export function getNotificationDestination(data: NotificationNavigationData): st
   }
 
   if (data.type === "teamPrivateMessage") {
-    if (!isValidRouteId(data.teamId)) return null;
+    if (!isValidRouteId(data.teamId) || !isValidRouteId(data.conversationId)) return null;
     const teamId = encodeURIComponent(data.teamId);
+    const conversationId = encodeURIComponent(data.conversationId);
+    const messageQuery = isValidRouteId(data.messageId) ? `?messageId=${encodeURIComponent(data.messageId)}` : "";
     if (getPrivateMessageRecipientMode(data) === "coach") {
-      return `/coach/team-messages?teamId=${teamId}&focus=privateMessages`;
+      return `/coach/team-messages/${conversationId}${messageQuery}`;
     }
-    return `/teams/${teamId}?focus=privateMessages`;
+    return `/teams/${teamId}/messages/${conversationId}${messageQuery}`;
   }
 
   if (data.type === "teamScheduleEvent") {

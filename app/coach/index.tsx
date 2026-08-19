@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { PARENT_PROFILE_ROUTE } from "@/constants/routes";
+import { TEAM_HISTORY_PAGE_SIZES } from "@/constants/teamHistoryPagination";
 import { Colors, Radius, Shadow, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import {
@@ -82,7 +83,7 @@ export default function CoachHomeScreen() {
     setArchivedLoading(true);
     setArchivedError(null);
     try {
-      const page = await getArchivedCoachTeamMembershipsPage(reset ? 0 : archivedNextOffset, 8, { throwOnError: true });
+      const page = await getArchivedCoachTeamMembershipsPage(reset ? 0 : archivedNextOffset, TEAM_HISTORY_PAGE_SIZES.archivedTeams, { throwOnError: true });
       setArchivedTeams((current) => reset ? page.memberships : [...current, ...page.memberships]);
       setArchivedCount(page.totalCount);
       setArchivedHasMore(page.hasMore);
@@ -109,7 +110,7 @@ export default function CoachHomeScreen() {
     useCallback(() => {
       let active = true;
       setPrivateInbox((current) => ({ ...current, loadState: "loading" }));
-      void getTeamPrivateMessageInboxPage("coach", undefined, 0, 50).then((page) => {
+      void getTeamPrivateMessageInboxPage("coach", undefined, null, 50).then((page) => {
         if (!active) return;
         setPrivateInbox({
           conversationCount: page.conversations.length,
@@ -301,6 +302,14 @@ export default function CoachHomeScreen() {
                           <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>
                         </View>
                         <View style={styles.archivedActions}>
+                          <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: membership.teamId } } as never)} style={styles.archivedScheduleButton}>
+                            <MessageCircle color={Colors.communicationLink} size={17} />
+                            <Text style={styles.archivedScheduleText}>{t("coach.messages.threadList")}</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/coach/team-messages", params: { teamId: membership.teamId } } as never)} style={styles.archivedScheduleButton}>
+                            <MessagesSquare color={Colors.communicationLink} size={17} />
+                            <Text style={styles.archivedScheduleText}>{t("teamMessages.title")}</Text>
+                          </TouchableOpacity>
                           <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId: membership.teamId } } as never)} style={styles.archivedScheduleButton}>
                             <CalendarDays color={Colors.communicationLink} size={17} />
                             <Text style={styles.archivedScheduleText}>{t("schedule.title")}</Text>

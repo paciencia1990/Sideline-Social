@@ -86,13 +86,23 @@ export default function TeamScheduleImportScreen() {
       const text = await fileSystem.readAsStringAsync(asset.uri, { encoding: fileSystem.EncodingType.UTF8 });
       if (new TextEncoder().encode(text).length > TEAM_SCHEDULE_MAX_CSV_BYTES) throw importError("file_too_large");
       const parsed = parseTeamScheduleCsv(text);
-      const existing = await getTeamScheduleImportFingerprints(teamId);
+      const parsedWithFingerprints = [];
+      for (const row of parsed) {
+        parsedWithFingerprints.push({
+          ...row,
+          fingerprint: row.fingerprint
+            ? await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, row.fingerprint)
+            : null,
+        });
+      }
+      const existing = await getTeamScheduleImportFingerprints(
+        teamId,
+        parsedWithFingerprints.flatMap((row) => row.fingerprint ? [row.fingerprint] : []),
+      );
       const seen = new Set<string>();
       const preview: PreviewRow[] = [];
-      for (const row of parsed) {
-        const hashedFingerprint = row.fingerprint
-          ? await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, row.fingerprint)
-          : null;
+      for (const row of parsedWithFingerprints) {
+        const hashedFingerprint = row.fingerprint;
         const duplicate = Boolean(hashedFingerprint && seen.has(hashedFingerprint));
         if (hashedFingerprint) seen.add(hashedFingerprint);
         const unchanged = Boolean(hashedFingerprint && existing.has(hashedFingerprint));

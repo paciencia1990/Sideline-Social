@@ -416,7 +416,9 @@ function MyTeamsCard({
             ) : overview?.totalTeams ? (
               <Text style={styles.myTeamsSummary}>
                 {t("myTeams.teamCount", { count: overview.totalTeams })}
-                {overview.unreadCount > 0 ? " · " + t("myTeams.unreadUpdates", { count: overview.unreadCount }) : ""}
+                {overview.unreadCountKnown
+                  ? overview.unreadCount > 0 ? " · " + t("myTeams.unreadUpdates", { count: overview.unreadCount }) : ""
+                  : " · " + t("myTeams.unreadUnknown")}
                 {overview.privateUnreadCount > 0 ? " · " + t("teamMessages.unread", { count: overview.privateUnreadCount }) : ""}
               </Text>
             ) : (

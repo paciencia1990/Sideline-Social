@@ -2,11 +2,16 @@ import * as Crypto from "expo-crypto";
 import {
   collection,
   doc,
+  documentId,
   getDoc,
   getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
+  startAfter,
+  Timestamp,
+  where,
   type DocumentData,
   type QueryDocumentSnapshot,
   type Unsubscribe,
@@ -14,6 +19,7 @@ import {
 import { httpsCallable } from "firebase/functions";
 
 import { auth, db, functions } from "@/config/firebase";
+import { TEAM_HISTORY_PAGE_SIZES, type TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import {
   buildScheduleFingerprint,
   type TeamScheduleDraft,
@@ -84,6 +90,12 @@ export type ImportScheduleResult = {
   eventIds: string[];
 };
 
+export type TeamSchedulePage = {
+  events: TeamScheduleEvent[];
+  hasMore: boolean;
+  nextCursor: TeamHistoryCursor | null;
+};
+
 export async function getTeamScheduleAccess(teamIdValue: string): Promise<TeamScheduleAccess> {
   const user = auth.currentUser;
   const teamId = normalizeId(teamIdValue);
@@ -115,16 +127,85 @@ export function subscribeToTeamSchedule(
   onNext: (events: TeamScheduleEvent[], fromCache: boolean) => void,
   onError: (error: unknown) => void,
 ): Unsubscribe {
+  return subscribeToUpcomingTeamSchedule(teamIdValue, (page, fromCache) => onNext(page.events, fromCache), onError);
+}
+
+export function subscribeToUpcomingTeamSchedule(
+  teamIdValue: string,
+  onNext: (page: TeamSchedulePage, fromCache: boolean) => void,
+  onError: (error: unknown) => void,
+  fromDate = new Date(),
+): Unsubscribe {
   const teamId = normalizeId(teamIdValue);
   if (!teamId) {
     onError(scheduleError("invalid-team"));
     return () => undefined;
   }
+  const pageSize = TEAM_HISTORY_PAGE_SIZES.upcomingSchedule;
   return onSnapshot(
-    query(collection(db, "teams", teamId, "events"), orderBy("startAt", "asc")),
-    (snapshot) => onNext(snapshot.docs.map((item) => normalizeEvent(teamId, item)), snapshot.metadata.fromCache),
+    query(
+      collection(db, "teams", teamId, "events"),
+      where("startAt", ">=", Timestamp.fromDate(fromDate)),
+      orderBy("startAt", "asc"),
+      orderBy(documentId(), "asc"),
+      limit(pageSize + 1),
+    ),
+    (snapshot) => {
+      const events = snapshot.docs.slice(0, pageSize).map((item) => normalizeEvent(teamId, item));
+      onNext({
+        events,
+        hasMore: snapshot.size > pageSize,
+        nextCursor: cursorForEvent(events.at(-1)),
+      }, snapshot.metadata.fromCache);
+    },
     onError,
   );
+}
+
+export async function getMoreUpcomingTeamSchedule(
+  teamIdValue: string,
+  cursor: TeamHistoryCursor,
+): Promise<TeamSchedulePage> {
+  const teamId = normalizeId(teamIdValue);
+  if (!teamId) throw scheduleError("invalid-team");
+  const pageSize = TEAM_HISTORY_PAGE_SIZES.upcomingSchedule;
+  const snapshot = await getDocs(query(
+    collection(db, "teams", teamId, "events"),
+    orderBy("startAt", "asc"),
+    orderBy(documentId(), "asc"),
+    startAfter(Timestamp.fromMillis(cursor.timestampMillis), cursor.id),
+    limit(pageSize + 1),
+  ));
+  const events = snapshot.docs.slice(0, pageSize).map((item) => normalizeEvent(teamId, item));
+  return {
+    events,
+    hasMore: snapshot.size > pageSize,
+    nextCursor: cursorForEvent(events.at(-1)),
+  };
+}
+
+export async function getPastTeamSchedulePage(
+  teamIdValue: string,
+  cursor: TeamHistoryCursor | null = null,
+  beforeDate = new Date(),
+): Promise<TeamSchedulePage> {
+  const teamId = normalizeId(teamIdValue);
+  if (!teamId) throw scheduleError("invalid-team");
+  const pageSize = TEAM_HISTORY_PAGE_SIZES.pastSchedule;
+  const constraints = [
+    where("startAt", "<", Timestamp.fromDate(beforeDate)),
+    orderBy("startAt", "desc"),
+    orderBy(documentId(), "desc"),
+    ...(cursor ? [startAfter(Timestamp.fromMillis(cursor.timestampMillis), cursor.id)] : []),
+    limit(pageSize + 1),
+  ];
+  const snapshot = await getDocs(query(collection(db, "teams", teamId, "events"), ...constraints));
+  const events = snapshot.docs.slice(0, pageSize).map((item) => normalizeEvent(teamId, item));
+  return {
+    events,
+    hasMore: snapshot.size > pageSize,
+    nextCursor: cursorForEvent(events.at(-1)),
+  };
 }
 
 export async function getTeamScheduleEvent(teamIdValue: string, eventIdValue: string) {
@@ -135,13 +216,22 @@ export async function getTeamScheduleEvent(teamIdValue: string, eventIdValue: st
   return snapshot.exists() ? normalizeEvent(teamId, snapshot) : null;
 }
 
-export async function getTeamScheduleImportFingerprints(teamIdValue: string) {
+export async function getTeamScheduleImportFingerprints(teamIdValue: string, requestedFingerprints: string[]) {
   const teamId = normalizeId(teamIdValue);
-  if (!teamId) return new Set<string>();
-  const snapshot = await getDocs(collection(db, "teams", teamId, "events"));
-  return new Set(snapshot.docs
-    .map((item) => item.data().importFingerprint)
-    .filter((value): value is string => typeof value === "string" && Boolean(value)));
+  const fingerprints = Array.from(new Set(requestedFingerprints.filter((value) => /^[a-f0-9]{64}$/u.test(value))));
+  if (!teamId || fingerprints.length === 0) return new Set<string>();
+  const existing = new Set<string>();
+  for (let start = 0; start < fingerprints.length; start += 30) {
+    const snapshot = await getDocs(query(
+      collection(db, "teams", teamId, "events"),
+      where("importFingerprint", "in", fingerprints.slice(start, start + 30)),
+    ));
+    snapshot.docs.forEach((item) => {
+      const value = item.data().importFingerprint;
+      if (typeof value === "string") existing.add(value);
+    });
+  }
+  return existing;
 }
 
 export async function saveTeamScheduleEvent(input: SaveScheduleEventInput) {
@@ -279,6 +369,11 @@ function readNullableString(value: unknown) {
 
 function readScore(value: unknown) {
   return Number.isInteger(value) && Number(value) >= 0 ? Number(value) : null;
+}
+
+function cursorForEvent(event: TeamScheduleEvent | undefined): TeamHistoryCursor | null {
+  if (!event || event.startAt.getTime() <= 0) return null;
+  return { id: event.id, timestampMillis: event.startAt.getTime() };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

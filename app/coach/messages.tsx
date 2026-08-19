@@ -12,14 +12,16 @@ import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useCoachBackNavigation } from "@/hooks/useCoachBackNavigation";
 import {
   createTeamAnnouncement,
+  getOlderTeamAnnouncementsPage,
   getTeamAnnouncementRecipientCounts,
-  listenToTeamAnnouncements,
+  listenToNewestTeamAnnouncementsPage,
   type AnnouncementAudience,
   type TeamAnnouncement,
   type TeamAnnouncementRecipientCounts,
 } from "@/services/teamMessageService";
+import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import { finalizeVoiceAnnouncement, reserveVoiceUpload, uploadReservedVoiceMemo } from "@/services/teamPrivateMessageService";
-import { getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive, type TeamMembership } from "@/services/teamService";
+import { getCurrentUserTeamMembershipById, getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive, type TeamMembership } from "@/services/teamService";
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
@@ -42,6 +44,10 @@ export default function CoachMessagesScreen() {
   const hasDraft = Boolean(draftBody || draftTitle);
   const [memberships, setMemberships] = useState<TeamMembership[]>([]);
   const [announcements, setAnnouncements] = useState<TeamAnnouncement[]>([]);
+  const [announcementCursor, setAnnouncementCursor] = useState<TeamHistoryCursor | null>(null);
+  const [hasOlderAnnouncements, setHasOlderAnnouncements] = useState(false);
+  const [loadingOlderAnnouncements, setLoadingOlderAnnouncements] = useState(false);
+  const olderAnnouncementsInFlight = useRef(false);
   const [selectedTeamId, setSelectedTeamId] = useState(requestedTeamId);
   const [title, setTitle] = useState(draftTitle);
   const [body, setBody] = useState(draftBody);
@@ -69,9 +75,11 @@ export default function CoachMessagesScreen() {
       setError(null);
       try {
         const nextMemberships = await getCurrentUserTeamMemberships();
-        if (isMounted) setMemberships(nextMemberships.filter((membership) =>
-          hasCoachAccess(membership) && isTeamActive(membership.team),
-        ));
+        const requestedMembership = requestedTeamId && !nextMemberships.some((membership) => membership.teamId === requestedTeamId)
+          ? await getCurrentUserTeamMembershipById(requestedTeamId)
+          : null;
+        if (isMounted) setMemberships([...nextMemberships, ...(requestedMembership ? [requestedMembership] : [])]
+          .filter((membership) => hasCoachAccess(membership) && (isTeamActive(membership.team) || membership.teamId === requestedTeamId)));
       } catch (nextError) {
         console.warn("[CoachMessages] memberships error:", nextError);
         if (isMounted) setError(t("coach.messages.error"));
@@ -83,7 +91,7 @@ export default function CoachMessagesScreen() {
     return () => {
       isMounted = false;
     };
-  }, [t]);
+  }, [requestedTeamId, t]);
 
   useEffect(() => {
     if (memberships.length === 0) return;
@@ -97,7 +105,7 @@ export default function CoachMessagesScreen() {
     [memberships, selectedTeamId],
   );
   const selectedTeam = selectedMembership?.team ?? null;
-  const canCreate = hasCoachAccess(selectedMembership);
+  const canCreate = hasCoachAccess(selectedMembership) && isTeamActive(selectedMembership?.team);
   const selectedRecipientCount = audience === "staff" ? recipientCounts?.staff : recipientCounts?.all;
 
   useEffect(() => {
@@ -128,15 +136,40 @@ export default function CoachMessagesScreen() {
   useEffect(() => {
     if (!selectedTeam) {
       setAnnouncements([]);
+      setAnnouncementCursor(null);
+      setHasOlderAnnouncements(false);
       return;
     }
 
-    return listenToTeamAnnouncements(
+    setAnnouncements([]);
+    setAnnouncementCursor(null);
+    return listenToNewestTeamAnnouncementsPage(
       selectedTeam.id,
-      setAnnouncements,
+      (page) => {
+        setAnnouncements((current) => mergeAnnouncements(current, page.items));
+        setAnnouncementCursor((current) => current ?? page.nextCursor);
+        setHasOlderAnnouncements(page.hasMore);
+      },
       () => setError(t("coach.messages.error")),
     );
   }, [selectedTeam, t]);
+
+  const loadOlderAnnouncements = useCallback(async () => {
+    if (!selectedTeam || !announcementCursor || !hasOlderAnnouncements || olderAnnouncementsInFlight.current) return;
+    olderAnnouncementsInFlight.current = true;
+    setLoadingOlderAnnouncements(true);
+    try {
+      const page = await getOlderTeamAnnouncementsPage(selectedTeam.id, announcementCursor);
+      setAnnouncements((current) => mergeAnnouncements(current, page.items));
+      setAnnouncementCursor(page.nextCursor);
+      setHasOlderAnnouncements(page.hasMore);
+    } catch {
+      setError(t("coach.messages.error"));
+    } finally {
+      olderAnnouncementsInFlight.current = false;
+      setLoadingOlderAnnouncements(false);
+    }
+  }, [announcementCursor, hasOlderAnnouncements, selectedTeam, t]);
 
   const performCreate = useCallback(async () => {
     if (!selectedTeam || submissionInFlight.current) return;
@@ -345,6 +378,11 @@ export default function CoachMessagesScreen() {
                 <Text style={styles.announcementMeta}>{announcement.createdByName || t(announcement.authorProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")} • {t(`coach.messages.audience${capitalize(announcement.audience)}`)}</Text>
               </TouchableOpacity>
             ))}
+            {hasOlderAnnouncements ? (
+              <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: loadingOlderAnnouncements }} disabled={loadingOlderAnnouncements} onPress={() => { void loadOlderAnnouncements(); }} style={styles.secondaryButton}>
+                {loadingOlderAnnouncements ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.secondaryButtonText}>{t("coach.messages.loadOlder")}</Text>}
+              </TouchableOpacity>
+            ) : null}
           </Card>
         ) : null}
       </MessageKeyboardAwareScrollView>
@@ -376,8 +414,25 @@ function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function mergeAnnouncements(current: TeamAnnouncement[], incoming: TeamAnnouncement[]) {
+  const byId = new Map(current.map((announcement) => [announcement.id, announcement]));
+  incoming.forEach((announcement) => byId.set(announcement.id, announcement));
+  return Array.from(byId.values()).sort((first, second) => {
+    const time = announcementMillis(second.createdAt) - announcementMillis(first.createdAt);
+    return time || second.id.localeCompare(first.id);
+  });
+}
+
+function announcementMillis(value: unknown) {
+  if (value instanceof Date) return value.getTime();
+  if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") return value.toMillis();
+  return 0;
+}
+
 const styles = StyleSheet.create({
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
+  secondaryButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, minHeight: 44, justifyContent: "center", paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm },
+  secondaryButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold },
   cardGap: { gap: Spacing.md },
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
   errorCard: { borderLeftColor: Colors.primary, borderLeftWidth: 4 },

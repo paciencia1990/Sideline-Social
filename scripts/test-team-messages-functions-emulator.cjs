@@ -416,6 +416,22 @@ async function run() {
   const announcementNotification = (await announcementNotificationRef.get()).data();
   assert.equal(announcementNotification.type, "coachAnnouncement");
   assert.equal(JSON.stringify(announcementNotification).includes("Practice starts at six"), false, "push/inbox metadata excludes the written summary");
+  const announcementSummaryRef = db.collection("teamAnnouncementSummaries")
+    .doc(createHash("sha256").update(`${parent.uid}|team-1`).digest("hex"));
+  await waitForPredicate(async () => {
+    const value = (await announcementSummaryRef.get()).data();
+    return value?.recentUnreadAnnouncementIds?.includes(announcementReservation.targetId);
+  });
+  const summaryBeforeRead = (await parent.call("getTeamAnnouncementSummaries", { teamIds: ["team-1"] })).summaries[0];
+  assert.equal(summaryBeforeRead.available, true);
+  assert.equal(summaryBeforeRead.recentUnreadAnnouncementIds.includes(announcementReservation.targetId), true);
+  const unreadBeforeRead = summaryBeforeRead.unreadCount;
+  assert.equal((await parent.call("markTeamAnnouncementRead", { teamId: "team-1", announcementId: announcementReservation.targetId })).status, "read");
+  assert.equal((await parent.call("markTeamAnnouncementRead", { teamId: "team-1", announcementId: announcementReservation.targetId })).status, "read");
+  const summaryAfterRead = (await parent.call("getTeamAnnouncementSummaries", { teamIds: ["team-1"] })).summaries[0];
+  assert.equal(summaryAfterRead.unreadCount, Math.max(0, unreadBeforeRead - 1), "repeated reads decrement the summary once");
+  assert.equal(summaryAfterRead.recentUnreadAnnouncementIds.includes(announcementReservation.targetId), false);
+  assert.equal((await db.collection("teams").doc("team-1").collection("announcements").doc(announcementReservation.targetId).collection("reads").doc(parent.uid).get()).exists, true, "legacy read state remains available");
 
   const privateReservation = await parent.call("createTeamVoiceMemoUpload", {
     teamId: "team-1", kind: "privateMessage", conversationId: first.conversationId, clientMessageId: "voice_client_001", caption: "Private voice reply", voiceMemo,
@@ -504,6 +520,7 @@ async function run() {
   const privateNotificationId = `teamPrivateMessage_${first.conversationId}_${privateReservation.targetId}`;
   const privateNotification = (await db.collection("userNotifications").doc(coach.uid).collection("notifications").doc(privateNotificationId).get()).data();
   assert.equal(privateNotification.type, "teamPrivateMessage");
+  assert.equal(privateNotification.messageId, privateReservation.targetId);
   assert.equal(JSON.stringify(privateNotification).includes("Private voice reply"), false, "private captions are excluded from notification records");
 
   const playbackGrantToken = "a".repeat(64);
@@ -609,5 +626,12 @@ async function waitForDocument(reference) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${reference.id}`);
+}
+async function waitForPredicate(predicate) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Timed out waiting for derived state");
 }
 run().catch((error) => { console.error(error); process.exit(1); });

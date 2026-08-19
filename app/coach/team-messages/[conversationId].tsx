@@ -17,12 +17,16 @@ export default function CoachPrivateTeamMessageScreen() {
   const params = useLocalSearchParams<{
     conversationId?: string | string[];
     initialText?: string | string[];
+    messageId?: string | string[];
+    notificationId?: string | string[];
     source?: string | string[];
   }>();
   const conversationId = Array.isArray(params.conversationId) ? params.conversationId[0] ?? "" : params.conversationId ?? "";
   const initialText = Array.isArray(params.initialText) ? params.initialText[0] ?? "" : params.initialText ?? "";
+  const messageId = Array.isArray(params.messageId) ? params.messageId[0] ?? "" : params.messageId ?? "";
+  const notificationId = Array.isArray(params.notificationId) ? params.notificationId[0] ?? "" : params.notificationId ?? "";
   const source = Array.isArray(params.source) ? params.source[0] ?? "" : params.source ?? "";
-  return <ScreenWrapper><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={Platform.OS === "android" ? -insets.bottom : 0} style={styles.content}><CoachResourceHeader accessibilityLabel={t("teamMessages.back")} onBack={navigateBack} title={t("teamMessages.title")} /><PrivateTeamMessageThread conversationId={conversationId} initialText={initialText} isTemplateDraft={source === "message-parent"} role="coach" /></KeyboardAvoidingView></ScreenWrapper>;
+  return <ScreenWrapper><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={Platform.OS === "android" ? -insets.bottom : 0} style={styles.content}><CoachResourceHeader accessibilityLabel={t("teamMessages.back")} onBack={navigateBack} title={t("teamMessages.title")} /><PrivateTeamMessageThread conversationId={conversationId} initialText={initialText} isTemplateDraft={source === "message-parent"} notificationId={notificationId} role="coach" targetMessageId={messageId} /></KeyboardAvoidingView></ScreenWrapper>;
 }
 
 const styles = StyleSheet.create({ content: { flex: 1, gap: Spacing.md, padding: Spacing.lg } });

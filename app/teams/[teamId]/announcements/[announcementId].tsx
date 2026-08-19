@@ -20,13 +20,15 @@ import {
 } from "@/services/parentTeamService";
 import {
   deleteAnnouncementReply,
+  getOlderAnnouncementRepliesPage,
   getTeamAnnouncement,
-  listenToParentAnnouncementReplies,
+  listenToNewestAnnouncementRepliesPage,
   listenToTeamAnnouncement,
   replyToAnnouncement,
   type AnnouncementReply,
   type TeamAnnouncement,
 } from "@/services/teamMessageService";
+import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import { reportTeamContent } from "@/services/contentModerationService";
 
@@ -47,6 +49,9 @@ export default function ParentAnnouncementScreen() {
   const [summary, setSummary] = useState<ParentTeamSummary | null>(null);
   const [announcement, setAnnouncement] = useState<TeamAnnouncement | null>(null);
   const [replies, setReplies] = useState<AnnouncementReply[]>([]);
+  const [replyCursor, setReplyCursor] = useState<TeamHistoryCursor | null>(null);
+  const [hasOlderReplies, setHasOlderReplies] = useState(false);
+  const [loadingOlderReplies, setLoadingOlderReplies] = useState(false);
   const [replyBody, setReplyBody] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -55,6 +60,7 @@ export default function ParentAnnouncementScreen() {
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
   const replyDeletionInFlight = useRef(false);
+  const replyPageInFlight = useRef(false);
   const acknowledgedNotificationIds = useRef(new Set<string>());
   const keyboardTopRef = useRef<number | null>(null);
   const composerBoundaryRef = useRef<View>(null);
@@ -154,10 +160,17 @@ export default function ParentAnnouncementScreen() {
       return () => {};
     }
     if (!teamId || !announcementId) return () => {};
-    return listenToParentAnnouncementReplies(
+    setReplies([]);
+    setReplyCursor(null);
+    return listenToNewestAnnouncementRepliesPage(
       teamId,
       announcementId,
-      setReplies,
+      "team",
+      (page) => {
+        setReplies((current) => mergeReplies(current, page.items));
+        setReplyCursor((current) => current ?? page.nextCursor);
+        setHasOlderReplies(page.hasMore);
+      },
       (replyError) => {
         logOperationError("listenReplies", replyError);
         setError(t("myTeams.repliesLoadError"));
@@ -165,8 +178,26 @@ export default function ParentAnnouncementScreen() {
     );
   }, [announcement?.id, announcementId, t, teamId]);
 
+  const loadOlderReplies = useCallback(async () => {
+    if (!replyCursor || !hasOlderReplies || replyPageInFlight.current) return;
+    replyPageInFlight.current = true;
+    setLoadingOlderReplies(true);
+    try {
+      const page = await getOlderAnnouncementRepliesPage(teamId, announcementId, "team", replyCursor);
+      setReplies((current) => mergeReplies(page.items, current));
+      setReplyCursor(page.nextCursor);
+      setHasOlderReplies(page.hasMore);
+    } catch (replyError) {
+      logOperationError("loadOlderReplies", replyError);
+      setError(t("myTeams.repliesLoadError"));
+    } finally {
+      replyPageInFlight.current = false;
+      setLoadingOlderReplies(false);
+    }
+  }, [announcementId, hasOlderReplies, replyCursor, t, teamId]);
+
   const sendReply = useCallback(async () => {
-    if (!replyBody.trim() || !announcement?.allowReplies || replySubmissionInFlight.current) return;
+    if (!replyBody.trim() || !announcement?.allowReplies || summary?.team.status !== "active" || replySubmissionInFlight.current) return;
     replySubmissionInFlight.current = true;
     setSending(true);
     setError(null);
@@ -181,10 +212,10 @@ export default function ParentAnnouncementScreen() {
       replySubmissionInFlight.current = false;
       setSending(false);
     }
-  }, [announcement?.allowReplies, announcementId, replyBody, t, teamId]);
+  }, [announcement?.allowReplies, announcementId, replyBody, summary?.team.status, t, teamId]);
 
   const sendQuickReply = useCallback(async (quickReplyId: QuickReplyId) => {
-    if (!announcement?.allowReplies || replySubmissionInFlight.current) return;
+    if (!announcement?.allowReplies || summary?.team.status !== "active" || replySubmissionInFlight.current) return;
     replySubmissionInFlight.current = true;
     setSendingQuickReplyId(quickReplyId);
     setError(null);
@@ -203,7 +234,7 @@ export default function ParentAnnouncementScreen() {
       replySubmissionInFlight.current = false;
       setSendingQuickReplyId(null);
     }
-  }, [announcement?.allowReplies, announcementId, t, teamId]);
+  }, [announcement?.allowReplies, announcementId, summary?.team.status, t, teamId]);
 
   const deleteReply = useCallback(async (reply: AnnouncementReply) => {
     if (reply.isDeleted || reply.userId !== auth.currentUser?.uid || replyDeletionInFlight.current) return;
@@ -360,9 +391,14 @@ export default function ParentAnnouncementScreen() {
                   </Text>
                 </View>
               ))}
+              {hasOlderReplies ? (
+                <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: loadingOlderReplies }} disabled={loadingOlderReplies} onPress={() => { void loadOlderReplies(); }} style={styles.outlineButton}>
+                  {loadingOlderReplies ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.outlineButtonText}>{t("myTeams.loadOlderReplies")}</Text>}
+                </TouchableOpacity>
+              ) : null}
             </Card>
 
-            {announcement.allowReplies ? (
+            {announcement.allowReplies && summary?.team.status === "active" ? (
               <View
                 collapsable={false}
                 onLayout={updateComposerKeyboardOverlap}
@@ -464,7 +500,22 @@ function normalizeParam(value?: string | string[]) {
 }
 
 function appendReply(replies: AnnouncementReply[], reply: AnnouncementReply) {
-  return replies.some((item) => item.id === reply.id) ? replies : [...replies, reply];
+  return mergeReplies(replies, [reply]);
+}
+
+function mergeReplies(...groups: AnnouncementReply[][]) {
+  const byId = new Map<string, AnnouncementReply>();
+  groups.flat().forEach((reply) => byId.set(reply.id, reply));
+  return Array.from(byId.values()).sort((first, second) => {
+    const time = replyMillis(first.createdAt) - replyMillis(second.createdAt);
+    return time || first.id.localeCompare(second.id);
+  });
+}
+
+function replyMillis(value: unknown) {
+  if (value instanceof Date) return value.getTime();
+  if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") return value.toMillis();
+  return 0;
 }
 
 function logOperationError(operation: string, error: unknown) {

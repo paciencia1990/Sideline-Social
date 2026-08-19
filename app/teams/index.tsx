@@ -313,6 +313,15 @@ function PastTeamCard({
       </View>
       <View style={styles.pastTeamActions}>
         <TouchableOpacity
+          accessibilityLabel={t("myTeams.viewArchivedHistory", { team: team.name })}
+          accessibilityRole="button"
+          onPress={() => router.push({ pathname: "/teams/[teamId]", params: { teamId: team.teamId } } as never)}
+          style={styles.schedulePastButton}
+        >
+          <Archive color={Colors.communicationLink} size={18} />
+          <Text style={styles.schedulePastText}>{t("myTeams.viewHistory")}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
           accessibilityLabel={t("schedule.teamSchedule", { teamName: team.name })}
           accessibilityRole="button"
           onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId: team.teamId } } as never)}
@@ -341,7 +350,7 @@ function ParentTeamCard({ locale, summary }: { locale: string; summary: ParentTe
   const { t } = useTranslation();
   const latest = summary.latestAnnouncement;
   const details = [summary.team.sport, summary.team.season || summary.team.division || summary.team.ageRange].filter(Boolean).join(" · ");
-  const totalUnread = summary.unreadCount + summary.privateUnreadCount;
+  const totalUnread = (summary.unreadCountKnown ? summary.unreadCount : 0) + summary.privateUnreadCount;
 
   return (
     <TouchableOpacity
@@ -375,6 +384,7 @@ function ParentTeamCard({ locale, summary }: { locale: string; summary: ParentTe
           <Text style={styles.metaLabel}>{t("myTeams.child")}: {formatChildLabel(summary, t)}</Text>
           <Text style={styles.metaLabel}>{t("myTeams.coach")}: {summary.coachName ?? t(summary.coachProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
         </View>
+        {!summary.unreadCountKnown ? <Text style={styles.privateUnread}>{t("myTeams.unreadUnknown")}</Text> : null}
         {summary.privateUnreadCount > 0 ? <Text style={styles.privateUnread}>{t("teamMessages.unread", { count: summary.privateUnreadCount })} · {t("teamMessages.title")}</Text> : null}
         {latest ? (
           <View style={[styles.preview, !latest.isRead && styles.previewUnread]}>

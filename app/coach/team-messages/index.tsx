@@ -12,6 +12,7 @@ import { useCoachBackNavigation } from "@/hooks/useCoachBackNavigation";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import { getTeamPrivateMessageInboxPage } from "@/services/teamPrivateMessageService";
 import type { TeamPrivateConversation } from "@/types/teamVoiceMessaging";
+import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 
 export default function CoachTeamMessagesInboxScreen() {
   const { t } = useTranslation();
@@ -24,7 +25,7 @@ export default function CoachTeamMessagesInboxScreen() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
-  const [nextOffset, setNextOffset] = useState(0);
+  const [nextCursor, setNextCursor] = useState<TeamHistoryCursor | null>(null);
   const [error, setError] = useState(false);
   const load = useCallback(async () => {
     setLoading(true); setError(false);
@@ -32,7 +33,7 @@ export default function CoachTeamMessagesInboxScreen() {
       const page = await getTeamPrivateMessageInboxPage("coach", selectedTeamId);
       setConversations(page.conversations);
       setHasMore(page.hasMore);
-      setNextOffset(page.nextOffset);
+      setNextCursor(page.nextCursor);
       if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
         acknowledgedNotificationIds.current.add(notificationId);
         void acknowledgeNotificationAfterOpen(notificationId);
@@ -45,13 +46,13 @@ export default function CoachTeamMessagesInboxScreen() {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true); setError(false);
     try {
-      const page = await getTeamPrivateMessageInboxPage("coach", selectedTeamId, nextOffset);
-      setConversations((current) => [...current, ...page.conversations]);
+      const page = await getTeamPrivateMessageInboxPage("coach", selectedTeamId, nextCursor);
+      setConversations((current) => mergeConversations(current, page.conversations));
       setHasMore(page.hasMore);
-      setNextOffset(page.nextOffset);
+      setNextCursor(page.nextCursor);
     } catch { setError(true); }
     finally { setLoadingMore(false); }
-  }, [hasMore, loadingMore, nextOffset, selectedTeamId]);
+  }, [hasMore, loadingMore, nextCursor, selectedTeamId]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
   return (
     <ScreenWrapper>
@@ -103,6 +104,13 @@ function formatPreview(conversation: TeamPrivateConversation, t: (key: string) =
     : conversation.lastMessageType === "deleted"
       ? t("teamMessages.messageDeleted")
       : conversation.lastMessagePreview || t("teamMessages.noMessagesYet");
+}
+
+function mergeConversations(current: TeamPrivateConversation[], incoming: TeamPrivateConversation[]) {
+  const byId = new Map(current.map((conversation) => [conversation.conversationId, conversation]));
+  incoming.forEach((conversation) => byId.set(conversation.conversationId, conversation));
+  return Array.from(byId.values()).sort((first, second) =>
+    second.lastMessageAtMillis - first.lastMessageAtMillis || second.conversationId.localeCompare(first.conversationId));
 }
 
 function formatTime(milliseconds: number) {

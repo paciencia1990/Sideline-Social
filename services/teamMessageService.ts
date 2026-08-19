@@ -1,16 +1,22 @@
 import {
   collection,
   doc,
+  documentId,
   getDoc,
+  getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
+  startAfter,
+  Timestamp,
   where,
   type Unsubscribe,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 
 import { auth, db, functions } from "@/config/firebase";
+import { TEAM_HISTORY_PAGE_SIZES, type TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import { getTeamRosterProfiles } from "@/services/teamRosterService";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
 import { normalizeVoiceMessageFields } from "@/utils/voiceMessageNormalizer";
@@ -64,6 +70,12 @@ export type TeamAnnouncementRecipientCounts = {
   staff: number;
 };
 
+export type TeamHistoryPage<T> = {
+  items: T[];
+  hasMore: boolean;
+  nextCursor: TeamHistoryCursor | null;
+};
+
 export async function getTeamAnnouncementRecipientCounts(teamId: string) {
   requireUser();
   const callable = httpsCallable<
@@ -90,32 +102,76 @@ export function listenToTeamAnnouncements(
   callback: (announcements: TeamAnnouncement[]) => void,
   onError?: (error: Error) => void,
 ): Unsubscribe {
+  return listenToNewestTeamAnnouncementsPage(teamId, (page) => callback(page.items), onError);
+}
+
+export function listenToNewestTeamAnnouncementsPage(
+  teamId: string,
+  callback: (page: TeamHistoryPage<TeamAnnouncement>) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
   if (!teamId) {
-    callback([]);
+    callback({ items: [], hasMore: false, nextCursor: null });
     return () => {};
   }
 
-  const announcementsQuery = query(collection(db, "teams", teamId, "announcements"), orderBy("createdAt", "desc"));
+  const pageSize = TEAM_HISTORY_PAGE_SIZES.announcements;
+  const announcementsQuery = query(
+    collection(db, "teams", teamId, "announcements"),
+    orderBy("createdAt", "desc"),
+    orderBy(documentId(), "desc"),
+    limit(pageSize + 1),
+  );
   let disposed = false;
   let resolutionVersion = 0;
   const unsubscribe = onSnapshot(
     announcementsQuery,
     (snapshot) => {
       const version = ++resolutionVersion;
-      const announcements = snapshot.docs.map((announcementDoc) => normalizeAnnouncement(announcementDoc.id, announcementDoc.data()));
+      const pageDocuments = snapshot.docs.slice(0, pageSize);
+      const announcements = pageDocuments.map((announcementDoc) => normalizeAnnouncement(announcementDoc.id, announcementDoc.data()));
       void resolveAnnouncementDisplayNames(announcements).then((resolved) => {
-        if (!disposed && version === resolutionVersion) callback(resolved);
+        if (!disposed && version === resolutionVersion) {
+          callback({
+            items: resolved,
+            hasMore: snapshot.size > pageSize,
+            nextCursor: cursorForItem(resolved.at(-1)),
+          });
+        }
       });
     },
     (error) => {
       console.warn("[TeamMessageService] listen announcements error:", error);
-      callback([]);
+      callback({ items: [], hasMore: false, nextCursor: null });
       onError?.(error);
     },
   );
   return () => {
     disposed = true;
     unsubscribe();
+  };
+}
+
+export async function getOlderTeamAnnouncementsPage(
+  teamId: string,
+  cursor: TeamHistoryCursor,
+): Promise<TeamHistoryPage<TeamAnnouncement>> {
+  requireUser();
+  const pageSize = TEAM_HISTORY_PAGE_SIZES.announcements;
+  const snapshot = await getDocs(query(
+    collection(db, "teams", teamId, "announcements"),
+    orderBy("createdAt", "desc"),
+    orderBy(documentId(), "desc"),
+    startAfter(Timestamp.fromMillis(cursor.timestampMillis), cursor.id),
+    limit(pageSize + 1),
+  ));
+  const items = await resolveAnnouncementDisplayNames(snapshot.docs
+    .slice(0, pageSize)
+    .map((item) => normalizeAnnouncement(item.id, item.data())));
+  return {
+    items,
+    hasMore: snapshot.size > pageSize,
+    nextCursor: cursorForItem(items.at(-1)),
   };
 }
 
@@ -180,14 +236,29 @@ export function listenToAnnouncementReplies(
   callback: (replies: AnnouncementReply[]) => void,
   onError?: (error: Error) => void,
 ): Unsubscribe {
+  return listenToNewestAnnouncementRepliesPage(teamId, announcementId, "all", (page) => callback(page.items), onError);
+}
+
+export function listenToNewestAnnouncementRepliesPage(
+  teamId: string,
+  announcementId: string,
+  visibility: "all" | "team",
+  callback: (page: TeamHistoryPage<AnnouncementReply>) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
   if (!teamId || !announcementId) {
-    callback([]);
+    callback({ items: [], hasMore: false, nextCursor: null });
     return () => {};
   }
 
+  const pageSize = TEAM_HISTORY_PAGE_SIZES.announcementReplies;
+  const replyCollection = collection(db, "teams", teamId, "announcements", announcementId, "replies");
   const repliesQuery = query(
-    collection(db, "teams", teamId, "announcements", announcementId, "replies"),
-    orderBy("createdAt", "asc"),
+    replyCollection,
+    ...(visibility === "team" ? [where("replyType", "==", "team")] : []),
+    orderBy("createdAt", "desc"),
+    orderBy(documentId(), "desc"),
+    limit(pageSize + 1),
   );
   let disposed = false;
   let resolutionVersion = 0;
@@ -195,14 +266,22 @@ export function listenToAnnouncementReplies(
     repliesQuery,
     (snapshot) => {
       const version = ++resolutionVersion;
-      const nextReplies = snapshot.docs.map((replyDoc) => normalizeReply(replyDoc.id, replyDoc.data()));
+      const nextReplies = snapshot.docs.slice(0, pageSize)
+        .map((replyDoc) => normalizeReply(replyDoc.id, replyDoc.data()))
+        .reverse();
       void resolveReplyDisplayNames(nextReplies).then((resolvedReplies) => {
-        if (!disposed && version === resolutionVersion) callback(resolvedReplies);
+        if (!disposed && version === resolutionVersion) {
+          callback({
+            items: resolvedReplies,
+            hasMore: snapshot.size > pageSize,
+            nextCursor: cursorForItem(resolvedReplies[0]),
+          });
+        }
       });
     },
     (error) => {
       logMessageServiceIssue("listenReplies", error);
-      callback([]);
+      callback({ items: [], hasMore: false, nextCursor: null });
       onError?.(error);
     },
   );
@@ -218,37 +297,33 @@ export function listenToParentAnnouncementReplies(
   callback: (replies: AnnouncementReply[]) => void,
   onError?: (error: Error) => void,
 ): Unsubscribe {
-  if (!teamId || !announcementId) {
-    callback([]);
-    return () => {};
-  }
+  return listenToNewestAnnouncementRepliesPage(teamId, announcementId, "team", (page) => callback(page.items), onError);
+}
 
-  const repliesQuery = query(
+export async function getOlderAnnouncementRepliesPage(
+  teamId: string,
+  announcementId: string,
+  visibility: "all" | "team",
+  cursor: TeamHistoryCursor,
+): Promise<TeamHistoryPage<AnnouncementReply>> {
+  requireUser();
+  const pageSize = TEAM_HISTORY_PAGE_SIZES.announcementReplies;
+  const snapshot = await getDocs(query(
     collection(db, "teams", teamId, "announcements", announcementId, "replies"),
-    where("replyType", "==", "team"),
-  );
-  let disposed = false;
-  let resolutionVersion = 0;
-  const unsubscribe = onSnapshot(
-    repliesQuery,
-    (snapshot) => {
-      const version = ++resolutionVersion;
-      const nextReplies = snapshot.docs
-        .map((replyDoc) => normalizeReply(replyDoc.id, replyDoc.data()))
-        .sort((first, second) => readMillis(first.createdAt) - readMillis(second.createdAt));
-      void resolveReplyDisplayNames(nextReplies).then((resolvedReplies) => {
-        if (!disposed && version === resolutionVersion) callback(resolvedReplies);
-      });
-    },
-    (error) => {
-      logMessageServiceIssue("listenParentReplies", error);
-      callback([]);
-      onError?.(error);
-    },
-  );
-  return () => {
-    disposed = true;
-    unsubscribe();
+    ...(visibility === "team" ? [where("replyType", "==", "team")] : []),
+    orderBy("createdAt", "desc"),
+    orderBy(documentId(), "desc"),
+    startAfter(Timestamp.fromMillis(cursor.timestampMillis), cursor.id),
+    limit(pageSize + 1),
+  ));
+  const items = await resolveReplyDisplayNames(snapshot.docs
+    .slice(0, pageSize)
+    .map((item) => normalizeReply(item.id, item.data()))
+    .reverse());
+  return {
+    items,
+    hasMore: snapshot.size > pageSize,
+    nextCursor: cursorForItem(items[0]),
   };
 }
 export async function replyToAnnouncement(
@@ -423,6 +498,12 @@ function readMillis(value: unknown) {
 }
 function readString(value: unknown, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function cursorForItem(item: { id: string; createdAt?: unknown } | undefined): TeamHistoryCursor | null {
+  if (!item) return null;
+  const timestampMillis = readMillis(item.createdAt);
+  return timestampMillis > 0 ? { id: item.id, timestampMillis } : null;
 }
 
 function readNullableString(value: unknown) {

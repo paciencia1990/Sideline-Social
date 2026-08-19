@@ -1,15 +1,23 @@
 import {
   collection,
   doc,
+  documentId,
+  getDoc,
+  getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
+  startAfter,
+  Timestamp,
+  where,
   type Unsubscribe,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { ref, uploadBytesResumable, type UploadTask } from "firebase/storage";
 
 import { auth, db, functions, storage } from "@/config/firebase";
+import { TEAM_HISTORY_PAGE_SIZES, type TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import { getPublicUserProfiles } from "@/services/publicProfileService";
 import { isCanonicalTeamVoiceStoragePath, normalizeVoiceMessageFields } from "@/utils/voiceMessageNormalizer";
 import { normalizeVoicePlaybackUrlResponse } from "@/utils/voicePlaybackCore";
@@ -23,6 +31,12 @@ import type {
 export type EligiblePrivateTeamParent = {
   userId: string;
   displayName: string;
+};
+
+export type PrivateTeamMessagePage = {
+  messages: TeamPrivateMessage[];
+  hasMore: boolean;
+  nextCursor: TeamHistoryCursor | null;
 };
 
 export async function getEligiblePrivateTeamParents(teamId: string) {
@@ -59,15 +73,15 @@ export async function getOrCreatePrivateTeamConversation(teamId: string, parentU
 export async function getTeamPrivateMessageInboxPage(
   role: "coach" | "parent",
   teamId?: string,
-  offset = 0,
+  cursor: TeamHistoryCursor | null = null,
   pageSize = 25,
 ) {
   requireUser();
   const call = httpsCallable<
-    { role: "coach" | "parent"; teamId?: string; offset: number; pageSize: number },
-    { conversations: TeamPrivateConversation[]; hasMore: boolean; nextOffset: number }
+    { role: "coach" | "parent"; teamId?: string; cursor: TeamHistoryCursor | null; pageSize: number },
+    { conversations: TeamPrivateConversation[]; hasMore: boolean; nextCursor: TeamHistoryCursor | null; nextOffset?: number }
   >(functions, "getTeamPrivateMessageInbox");
-  const page = (await call({ role, ...(teamId ? { teamId } : {}), offset, pageSize })).data;
+  const page = (await call({ role, ...(teamId ? { teamId } : {}), cursor, pageSize })).data;
   return {
     ...page,
     conversations: await hydrateConversationNames(page.conversations).catch(() => page.conversations),
@@ -75,7 +89,7 @@ export async function getTeamPrivateMessageInboxPage(
 }
 
 export async function getTeamPrivateMessageInbox(role: "coach" | "parent", teamId?: string) {
-  return (await getTeamPrivateMessageInboxPage(role, teamId, 0, 50)).conversations;
+  return (await getTeamPrivateMessageInboxPage(role, teamId, null, 50)).conversations;
 }
 
 export async function sendPrivateTeamTextMessage(conversationId: string, text: string, clientMessageId: string) {
@@ -113,17 +127,31 @@ export function listenToPrivateTeamMessages(
   onValue: (messages: TeamPrivateMessage[]) => void,
   onError?: (error: Error) => void,
 ): Unsubscribe {
+  return listenToNewestPrivateTeamMessagesPage(conversationId, (page) => onValue(page.messages), onError);
+}
+
+export function listenToNewestPrivateTeamMessagesPage(
+  conversationId: string,
+  onValue: (page: PrivateTeamMessagePage) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
   const userId = auth.currentUser?.uid;
   if (!userId) {
     onError?.(new Error("private_team_message_auth_required"));
     return () => {};
   }
-  let canonicalMessages: TeamPrivateMessage[] | null = null;
-  let hiddenMessageIds: Set<string> | null = null;
+  const pageSize = TEAM_HISTORY_PAGE_SIZES.privateMessages;
+  let canonicalMessages: TeamPrivateMessage[] = [];
+  let hasMore = false;
+  let hiddenUnsubscribes: Unsubscribe[] = [];
+  let hiddenIdsByChunk = new Map<number, Set<string>>();
+  let receivedHiddenChunks = new Set<number>();
   let failed = false;
   const publishVisibleMessages = () => {
-    if (!canonicalMessages || !hiddenMessageIds) return;
-    onValue(canonicalMessages.filter((message) => !hiddenMessageIds?.has(message.id)));
+    if (receivedHiddenChunks.size !== hiddenIdsByChunk.size) return;
+    const hiddenMessageIds = new Set(Array.from(hiddenIdsByChunk.values()).flatMap((ids) => Array.from(ids)));
+    const messages = canonicalMessages.filter((message) => !hiddenMessageIds.has(message.id));
+    onValue({ messages, hasMore, nextCursor: cursorForMessage(canonicalMessages[0]) });
   };
   const reportError = (error: Error) => {
     if (failed) return;
@@ -131,32 +159,89 @@ export function listenToPrivateTeamMessages(
     onError?.(error);
   };
   const unsubscribeMessages = onSnapshot(
-    query(collection(db, "teamPrivateConversations", conversationId, "messages"), orderBy("createdAt", "asc")),
-    (snapshot) => {
-      canonicalMessages = snapshot.docs.map((message) => normalizeMessage(message.id, message.data()));
-      publishVisibleMessages();
-    },
-    reportError,
-  );
-  const unsubscribeHiddenMessages = onSnapshot(
-    collection(
-      db,
-      "teamPrivateConversations",
-      conversationId,
-      "members",
-      userId,
-      "hiddenMessages",
+    query(
+      collection(db, "teamPrivateConversations", conversationId, "messages"),
+      orderBy("createdAt", "desc"),
+      orderBy(documentId(), "desc"),
+      limit(pageSize + 1),
     ),
     (snapshot) => {
-      hiddenMessageIds = new Set(snapshot.docs.map((document) => document.id));
-      publishVisibleMessages();
+      hiddenUnsubscribes.forEach((unsubscribe) => unsubscribe());
+      hiddenUnsubscribes = [];
+      hiddenIdsByChunk = new Map();
+      receivedHiddenChunks = new Set();
+      hasMore = snapshot.size > pageSize;
+      canonicalMessages = snapshot.docs.slice(0, pageSize)
+        .map((message) => normalizeMessage(message.id, message.data()))
+        .reverse();
+      const chunks = chunkIds(canonicalMessages.map((message) => message.id));
+      if (chunks.length === 0) {
+        publishVisibleMessages();
+        return;
+      }
+      chunks.forEach((ids, chunkIndex) => {
+        hiddenIdsByChunk.set(chunkIndex, new Set());
+        hiddenUnsubscribes.push(onSnapshot(
+          query(
+            collection(db, "teamPrivateConversations", conversationId, "members", userId, "hiddenMessages"),
+            where(documentId(), "in", ids),
+          ),
+          (hiddenSnapshot) => {
+            hiddenIdsByChunk.set(chunkIndex, new Set(hiddenSnapshot.docs.map((item) => item.id)));
+            receivedHiddenChunks.add(chunkIndex);
+            publishVisibleMessages();
+          },
+          reportError,
+        ));
+      });
     },
     reportError,
   );
   return () => {
     unsubscribeMessages();
-    unsubscribeHiddenMessages();
+    hiddenUnsubscribes.forEach((unsubscribe) => unsubscribe());
   };
+}
+
+export async function getOlderPrivateTeamMessagesPage(
+  conversationId: string,
+  cursor: TeamHistoryCursor,
+): Promise<PrivateTeamMessagePage> {
+  const userId = auth.currentUser?.uid;
+  if (!userId) throw new Error("private_team_message_auth_required");
+  const pageSize = TEAM_HISTORY_PAGE_SIZES.privateMessages;
+  const snapshot = await getDocs(query(
+    collection(db, "teamPrivateConversations", conversationId, "messages"),
+    orderBy("createdAt", "desc"),
+    orderBy(documentId(), "desc"),
+    startAfter(Timestamp.fromMillis(cursor.timestampMillis), cursor.id),
+    limit(pageSize + 1),
+  ));
+  const canonicalMessages = snapshot.docs.slice(0, pageSize)
+    .map((message) => normalizeMessage(message.id, message.data()))
+    .reverse();
+  const hiddenMessageIds = await getHiddenMessageIds(conversationId, userId, canonicalMessages.map((message) => message.id));
+  return {
+    messages: canonicalMessages.filter((message) => !hiddenMessageIds.has(message.id)),
+    hasMore: snapshot.size > pageSize,
+    nextCursor: cursorForMessage(canonicalMessages[0]),
+  };
+}
+
+export async function getPrivateTeamMessage(conversationId: string, messageId: string) {
+  requireUser();
+  const snapshot = await getDoc(doc(db, "teamPrivateConversations", conversationId, "messages", messageId));
+  if (!snapshot.exists()) return null;
+  const hiddenSnapshot = await getDoc(doc(
+    db,
+    "teamPrivateConversations",
+    conversationId,
+    "members",
+    auth.currentUser!.uid,
+    "hiddenMessages",
+    messageId,
+  ));
+  return hiddenSnapshot.exists() ? null : normalizeMessage(snapshot.id, snapshot.data());
 }
 
 export async function markPrivateTeamConversationRead(conversationId: string) {
@@ -361,4 +446,24 @@ function readMillis(value: unknown) {
   if (typeof value === "number") return value;
   if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") return value.toMillis();
   return 0;
+}
+
+function cursorForMessage(message: TeamPrivateMessage | undefined): TeamHistoryCursor | null {
+  if (!message) return null;
+  const timestampMillis = readMillis(message.createdAt);
+  return timestampMillis > 0 ? { id: message.id, timestampMillis } : null;
+}
+
+function chunkIds(ids: string[]) {
+  const chunks: string[][] = [];
+  for (let index = 0; index < ids.length; index += 30) chunks.push(ids.slice(index, index + 30));
+  return chunks;
+}
+
+async function getHiddenMessageIds(conversationId: string, userId: string, messageIds: string[]) {
+  const snapshots = await Promise.all(chunkIds(messageIds).map((ids) => getDocs(query(
+    collection(db, "teamPrivateConversations", conversationId, "members", userId, "hiddenMessages"),
+    where(documentId(), "in", ids),
+  ))));
+  return new Set(snapshots.flatMap((snapshot) => snapshot.docs.map((item) => item.id)));
 }

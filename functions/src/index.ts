@@ -10,7 +10,7 @@
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
-import { FieldValue, GeoPoint, Timestamp } from 'firebase-admin/firestore';
+import { FieldPath, FieldValue, GeoPoint, Timestamp } from 'firebase-admin/firestore';
 import * as firebaseFunctions from 'firebase-functions';
 import { distanceBetween, geohashForLocation, geohashQueryBounds } from 'geofire-common';
 import {
@@ -271,6 +271,7 @@ type PersonalNotificationInput = {
   teamId?: string;
   announcementId?: string;
   conversationId?: string;
+  messageId?: string;
   conversationType?: 'coach' | 'parent';
   friendRequestId?: string;
   pushTitle: string;
@@ -318,6 +319,7 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
       teamId: input.teamId ?? null,
       announcementId: input.announcementId ?? null,
       conversationId: input.conversationId ?? null,
+      messageId: input.messageId ?? null,
       conversationType: input.conversationType ?? null,
       friendRequestId: input.friendRequestId ?? null,
       expiresAt: null,
@@ -2511,6 +2513,31 @@ const communicationTeamMessagingFunctions = communicationFunctions
     timeoutSeconds: 30,
     memory: '256MB',
   });
+
+export const syncTeamAnnouncementSummaries = functions.firestore
+  .document('teams/{teamId}/announcements/{announcementId}')
+  .onWrite(async (change, context) => {
+    const teamId = context.params.teamId as string;
+    const announcementId = context.params.announcementId as string;
+    await reconcileAnnouncementUnreadSummaries(
+      teamId,
+      announcementId,
+      change.before.exists ? change.before.data() : undefined,
+      change.after.exists ? change.after.data() : undefined,
+    );
+    return null;
+  });
+
+export const syncLegacyTeamAnnouncementRead = functions.firestore
+  .document('teams/{teamId}/announcements/{announcementId}/reads/{userId}')
+  .onCreate(async (_snapshot, context) => {
+    await reconcileLegacyAnnouncementRead(
+      context.params.teamId as string,
+      context.params.announcementId as string,
+      context.params.userId as string,
+    );
+    return null;
+  });
 const TEAM_VOICE_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 const TEAM_VOICE_SIGNED_URL_MS = 5 * 60 * 1000;
 
@@ -3140,9 +3167,16 @@ export const getTeamPrivateMessageInbox = teamMessagingFunctions.https.onCall(as
     if (!requestedRole) throw new Error('invalid_conversation_role');
     const teamId = data?.teamId == null ? null : readRequiredIdentifier(data.teamId, 'invalid_team_id');
     const offset = data?.offset == null ? 0 : Number(data.offset);
+    const cursor = data?.cursor == null ? null : {
+      id: readRequiredIdentifier(data.cursor.id, 'invalid_conversation_cursor'),
+      timestampMillis: Number(data.cursor.timestampMillis),
+    };
     const pageSize = data?.pageSize == null ? 25 : Number(data.pageSize);
     if (!Number.isInteger(offset) || offset < 0 || offset > 500) throw new Error('invalid_inbox_offset');
     if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) throw new Error('invalid_inbox_page_size');
+    if (cursor && (!Number.isFinite(cursor.timestampMillis) || cursor.timestampMillis < 0)) {
+      throw new Error('invalid_conversation_cursor');
+    }
     const firestore = admin.firestore();
     const userSnapshot = await firestore.collection('users').doc(uid).get();
     const activeTeamIds = new Set(readStringArray(
@@ -3150,23 +3184,37 @@ export const getTeamPrivateMessageInbox = teamMessagingFunctions.https.onCall(as
         ? userSnapshot.data()?.coachTeamIds
         : userSnapshot.data()?.parentTeamIds,
     ));
-    if (teamId && !activeTeamIds.has(teamId)) {
+    const archivedTeamIds = new Set(readStringArray(
+      requestedRole === 'coach'
+        ? userSnapshot.data()?.archivedCoachTeamIds
+        : userSnapshot.data()?.archivedParentTeamIds,
+    ));
+    if (teamId && !activeTeamIds.has(teamId) && !archivedTeamIds.has(teamId)) {
       return { conversations: [], hasMore: false, nextOffset: offset };
     }
-    const snapshot = await firestore.collection('teamPrivateConversations')
+    let inboxQuery = firestore.collection('teamPrivateConversations')
       .where('participantUserIds', 'array-contains', uid)
       .orderBy('lastMessageAt', 'desc')
-      .offset(offset)
-      .limit(pageSize + 1)
-      .get();
+      .orderBy(FieldPath.documentId(), 'desc');
+    if (cursor) {
+      inboxQuery = inboxQuery.startAfter(
+        cursor.timestampMillis > 0 ? Timestamp.fromMillis(cursor.timestampMillis) : null,
+        cursor.id,
+      );
+    } else if (offset > 0) {
+      // Compatibility only for installed clients. New clients use the stable cursor above.
+      inboxQuery = inboxQuery.offset(offset);
+    }
+    const snapshot = await inboxQuery.limit(pageSize + 1).get();
     const pageDocuments = snapshot.docs.slice(0, pageSize);
     const conversations = pageDocuments.filter((document) => {
       const value = document.data();
       if (!isExplicitConversationParticipant(value, uid)) return false;
       if (requestedRole === 'coach' && value.coachUserId !== uid) return false;
       if (requestedRole === 'parent' && value.parentUserId !== uid) return false;
-      if (value.status === 'readOnly') return false;
-      if (!activeTeamIds.has(String(value.teamId ?? ''))) return false;
+      const conversationTeamId = String(value.teamId ?? '');
+      if (value.status === 'readOnly' && (!teamId || !archivedTeamIds.has(conversationTeamId))) return false;
+      if (!activeTeamIds.has(conversationTeamId) && !(teamId && archivedTeamIds.has(conversationTeamId))) return false;
       return !teamId || value.teamId === teamId;
     });
     const memberSnapshots = conversations.length > 0
@@ -3180,6 +3228,10 @@ export const getTeamPrivateMessageInbox = teamMessagingFunctions.https.onCall(as
       )),
       hasMore: snapshot.size > pageSize,
       nextOffset: offset + pageDocuments.length,
+      nextCursor: pageDocuments.length > 0 ? {
+        id: pageDocuments[pageDocuments.length - 1].id,
+        timestampMillis: timestampMillis(pageDocuments[pageDocuments.length - 1].data().lastMessageAt) ?? 0,
+      } : null,
     };
   } catch (error) {
     throwTeamMessagingError(error);
@@ -3306,6 +3358,76 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
     });
     throwTeamMessagingError(error);
   }
+});
+
+export const getTeamAnnouncementSummaries = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.');
+  const teamIds = Array.from(new Set(Array.isArray(data?.teamIds) ? data.teamIds : []))
+    .map((value) => readRequiredIdentifier(value, 'invalid_team_id'));
+  if (teamIds.length > 50) throw new functions.https.HttpsError('invalid-argument', 'Too many teams were requested.');
+  const firestore = admin.firestore();
+  const membershipSnapshots = teamIds.length > 0
+    ? await firestore.getAll(...teamIds.map((teamId) => firestore.collection('teams').doc(teamId).collection('members').doc(uid)))
+    : [];
+  const authorizedTeamIds = teamIds.filter((_teamId, index) => membershipSnapshots[index]?.data()?.status === 'active');
+  const summarySnapshots = authorizedTeamIds.length > 0
+    ? await firestore.getAll(...authorizedTeamIds.map((teamId) => announcementSummaryRef(firestore, uid, teamId)))
+    : [];
+  return {
+    summaries: authorizedTeamIds.map((teamId, index) => ({
+      teamId,
+      available: summarySnapshots[index]?.exists === true,
+      unreadCount: summarySnapshots[index]?.exists
+        ? Math.max(0, Number(summarySnapshots[index]?.data()?.unreadCount ?? 0))
+        : null,
+      recentUnreadAnnouncementIds: summarySnapshots[index]?.exists
+        ? recentUnreadEntries(summarySnapshots[index]?.data()).map((entry) => entry.announcementId)
+        : [],
+      schemaVersion: 1,
+    })),
+  };
+});
+
+export const markTeamAnnouncementRead = teamMessagingFunctions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.');
+  const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
+  const announcementId = readRequiredIdentifier(data?.announcementId, 'invalid_announcement_id');
+  const firestore = admin.firestore();
+  const teamRef = firestore.collection('teams').doc(teamId);
+  const announcementRef = teamRef.collection('announcements').doc(announcementId);
+  const membershipRef = teamRef.collection('members').doc(uid);
+  const legacyReadRef = announcementRef.collection('reads').doc(uid);
+  const summaryRef = announcementSummaryRef(firestore, uid, teamId);
+  const markerRef = summaryRef.collection('unreadAnnouncements').doc(announcementId);
+  await firestore.runTransaction(async (transaction) => {
+    const [membership, announcement, summary, marker] = await transaction.getAll(
+      membershipRef,
+      announcementRef,
+      summaryRef,
+      markerRef,
+    );
+    if (!membership.exists || membership.data()?.status !== 'active' || !announcement.exists) {
+      throw new functions.https.HttpsError('permission-denied', 'This announcement is unavailable.');
+    }
+    if (!canAccessTeamAnnouncement(membership.data(), announcement.data()?.audience)) {
+      throw new functions.https.HttpsError('permission-denied', 'This announcement is unavailable.');
+    }
+    transaction.set(legacyReadRef, { userId: uid, teamId, announcementId, readAt: FieldValue.serverTimestamp() }, { merge: true });
+    if (marker.exists) {
+      const recentEntries = recentUnreadEntries(summary.data())
+        .filter((entry) => entry.announcementId !== announcementId);
+      transaction.delete(markerRef);
+      transaction.set(summaryRef, {
+        recentUnreadAnnouncements: recentEntries,
+        recentUnreadAnnouncementIds: recentEntries.map((entry) => entry.announcementId),
+        unreadCount: Math.max(0, Number(summary.data()?.unreadCount ?? 0) - 1),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  });
+  return { status: 'read' };
 });
 
 export const streamTeamVoiceMemo = teamMessagingFunctions.https.onRequest(async (request, response) => {
@@ -3778,6 +3900,7 @@ async function notifyPrivateTeamMessage(
     actorUserId: senderUserId,
     teamId: String(conversation.teamId ?? ''),
     conversationId: String(conversation.conversationId ?? ''),
+    messageId,
     conversationType: recipientIsCoach ? 'coach' : 'parent',
     pushTitle: recipientIsCoach ? 'New private team reply' : 'New private team message',
     pushBody: recipientIsCoach
@@ -3786,6 +3909,7 @@ async function notifyPrivateTeamMessage(
     pushData: {
       teamId: String(conversation.teamId ?? ''),
       conversationId: String(conversation.conversationId ?? ''),
+      messageId,
       conversationType: recipientIsCoach ? 'coach' : 'parent',
     },
   });
@@ -3891,6 +4015,112 @@ function serializePrivateConversation(
     lastSenderUserId: typeof lastSenderUserId === 'string' ? lastSenderUserId : null,
     unreadCount: Math.max(0, Number(member?.unreadCount ?? 0)),
   };
+}
+
+function announcementSummaryRef(
+  firestore: FirebaseFirestore.Firestore,
+  userId: string,
+  teamId: string,
+) {
+  const summaryId = createHash('sha256').update(`${userId}|${teamId}`).digest('hex');
+  return firestore.collection('teamAnnouncementSummaries').doc(summaryId);
+}
+
+function recentUnreadEntries(data: FirebaseFirestore.DocumentData | undefined) {
+  const entries = Array.isArray(data?.recentUnreadAnnouncements)
+    ? data.recentUnreadAnnouncements.flatMap((value: unknown) => {
+      if (!value || typeof value !== 'object') return [];
+      const entry = value as { announcementId?: unknown; timestampMillis?: unknown };
+      if (typeof entry.announcementId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(entry.announcementId)) return [];
+      const timestamp = Number(entry.timestampMillis);
+      return [{ announcementId: entry.announcementId, timestampMillis: Number.isFinite(timestamp) ? timestamp : 0 }];
+    })
+    : readStringArray(data?.recentUnreadAnnouncementIds).map((announcementId) => ({
+      announcementId,
+      timestampMillis: 0,
+    }));
+  return entries
+    .sort((first, second) => second.timestampMillis - first.timestampMillis || second.announcementId.localeCompare(first.announcementId))
+    .slice(0, 20);
+}
+
+async function reconcileAnnouncementUnreadSummaries(
+  teamId: string,
+  announcementId: string,
+  before: FirebaseFirestore.DocumentData | undefined,
+  after: FirebaseFirestore.DocumentData | undefined,
+) {
+  const beforeRecipients = storedAnnouncementRecipientUserIds(before?.recipientUserIds) ?? [];
+  const afterRecipients = storedAnnouncementRecipientUserIds(after?.recipientUserIds) ?? [];
+  const recipientUserIds = Array.from(new Set([...beforeRecipients, ...afterRecipients]));
+  const afterVisible = Boolean(after) && after?.isDeleted !== true && !contentIsModerated(after);
+  const firestore = admin.firestore();
+  for (let start = 0; start < recipientUserIds.length; start += 25) {
+    await Promise.all(recipientUserIds.slice(start, start + 25).map(async (userId) => {
+      const summaryRef = announcementSummaryRef(firestore, userId, teamId);
+      const markerRef = summaryRef.collection('unreadAnnouncements').doc(announcementId);
+      const legacyReadRef = firestore.collection('teams').doc(teamId)
+        .collection('announcements').doc(announcementId).collection('reads').doc(userId);
+      await firestore.runTransaction(async (transaction) => {
+        const [summary, marker, legacyRead] = await transaction.getAll(summaryRef, markerRef, legacyReadRef);
+        const currentUnread = Math.max(0, Number(summary.data()?.unreadCount ?? 0));
+        let recentEntries = recentUnreadEntries(summary.data())
+          .filter((entry) => entry.announcementId !== announcementId);
+        const shouldBeUnread = afterVisible && afterRecipients.includes(userId) && !legacyRead.exists;
+        let unreadCount = currentUnread;
+        if (shouldBeUnread && !marker.exists) {
+          transaction.create(markerRef, {
+            announcementId,
+            teamId,
+            userId,
+            createdAt: after?.createdAt ?? FieldValue.serverTimestamp(),
+            schemaVersion: 1,
+          });
+          unreadCount += 1;
+          recentEntries.push({
+            announcementId,
+            timestampMillis: timestampMillis(after?.createdAt) ?? Date.now(),
+          });
+          recentEntries = recentEntries
+            .sort((first, second) => second.timestampMillis - first.timestampMillis || second.announcementId.localeCompare(first.announcementId))
+            .slice(0, 20);
+        } else if (!shouldBeUnread && marker.exists) {
+          transaction.delete(markerRef);
+          unreadCount = Math.max(0, unreadCount - 1);
+        }
+        transaction.set(summaryRef, {
+          available: true,
+          schemaVersion: 1,
+          recentUnreadAnnouncements: recentEntries,
+          recentUnreadAnnouncementIds: recentEntries.map((entry) => entry.announcementId),
+          teamId,
+          unreadCount,
+          updatedAt: FieldValue.serverTimestamp(),
+          userId,
+        }, { merge: true });
+      });
+    }));
+  }
+}
+
+async function reconcileLegacyAnnouncementRead(teamId: string, announcementId: string, userId: string) {
+  const firestore = admin.firestore();
+  const summaryRef = announcementSummaryRef(firestore, userId, teamId);
+  const markerRef = summaryRef.collection('unreadAnnouncements').doc(announcementId);
+  await firestore.runTransaction(async (transaction) => {
+    const [summary, marker] = await transaction.getAll(summaryRef, markerRef);
+    if (!marker.exists) return;
+    transaction.delete(markerRef);
+    transaction.set(summaryRef, {
+      recentUnreadAnnouncements: recentUnreadEntries(summary.data())
+        .filter((entry) => entry.announcementId !== announcementId),
+      recentUnreadAnnouncementIds: recentUnreadEntries(summary.data())
+        .filter((entry) => entry.announcementId !== announcementId)
+        .map((entry) => entry.announcementId),
+      unreadCount: Math.max(0, Number(summary.data()?.unreadCount ?? 0) - 1),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
 }
 
 function throwTeamMessagingError(error: unknown): never {
@@ -5201,7 +5431,7 @@ async function reconcileTeamLifecycleIndexes(
   for (;;) {
     let membersQuery = teamRef
       .collection('members')
-      .orderBy(admin.firestore.FieldPath.documentId())
+      .orderBy(FieldPath.documentId())
       .limit(TEAM_ARCHIVE_RECONCILE_PAGE_SIZE);
     if (lastDocument) membersQuery = membersQuery.startAfter(lastDocument);
 
@@ -5324,7 +5554,7 @@ async function markTeamPrivateConversationsReadOnly(
   for (;;) {
     let conversationsQuery = firestore.collection('teamPrivateConversations')
       .where('teamId', '==', teamId)
-      .orderBy(admin.firestore.FieldPath.documentId())
+      .orderBy(FieldPath.documentId())
       .limit(TEAM_ARCHIVE_RECONCILE_PAGE_SIZE);
     if (lastDocument) conversationsQuery = conversationsQuery.startAfter(lastDocument);
 

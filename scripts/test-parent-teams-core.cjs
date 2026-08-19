@@ -287,7 +287,7 @@ assert.equal(replyServiceSource.includes("listenToTeamAnnouncement"), true);
 assert.equal(replyServiceSource.includes('.split("@")'), false);
 assert.equal(parentAnnouncementSource.includes("QUICK_REPLY_IDS.map"), true);
 assert.equal(coachAnnouncementSource.includes("QUICK_REPLY_IDS.map"), true);
-assert.equal(parentAnnouncementSource.includes("announcement.allowReplies ?"), true);
+assert.equal(parentAnnouncementSource.includes('announcement.allowReplies && summary?.team.status === "active"'), true);
 assert.equal(parentAnnouncementSource.includes("reply.userId === auth.currentUser?.uid"), true);
 assert.equal(coachAnnouncementSource.includes("canModerateReplies"), true);
 assert.equal(coachAnnouncementSource.includes("reply.userId === auth.currentUser?.uid"), true);
@@ -298,7 +298,7 @@ assert.equal(coachAnnouncementSource.includes('"teamMessages.deleteForEveryone"'
 assert.equal(coachAnnouncementSource.includes("announcement.isDeleted"), true);
 assert.equal(parentAnnouncementSource.includes("reply.isDeleted"), true);
 assert.equal(parentAnnouncementSource.includes("listenToTeamAnnouncement"), true);
-assert.equal(coachAnnouncementListSource.includes("listenToTeamAnnouncements"), true);
+assert.equal(coachAnnouncementListSource.includes("listenToNewestTeamAnnouncementsPage"), true);
 assert.equal(parentTeamServiceSource.includes("latestAnnouncement: announcements[0] ?? null"), true);
 
 const coachRosterSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "team.tsx"), "utf8");

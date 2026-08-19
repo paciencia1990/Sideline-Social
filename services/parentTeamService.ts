@@ -1,16 +1,20 @@
 import {
   collection,
   doc,
+  documentId,
   getDoc,
   getDocs,
+  limit,
   orderBy,
   query,
-  serverTimestamp,
-  setDoc,
+  startAfter,
+  Timestamp,
   where,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
-import { auth, db } from "@/config/firebase";
+import { auth, db, functions } from "@/config/firebase";
+import { TEAM_HISTORY_PAGE_SIZES, type TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import {
   groupTeamsByChild,
   summarizeTeamUpdates,
@@ -26,6 +30,7 @@ import { type TeamAnnouncement } from "@/services/teamMessageService";
 import {
   getArchivedParentTeamCount,
   getArchivedParentTeamMembershipsPage,
+  getCurrentUserTeamMembershipById,
   getParentTeams,
   removeArchivedParentTeamFromAccount,
   type Team,
@@ -55,7 +60,10 @@ export type ParentTeamSummary = {
   coachName: string | null;
   coachProfileState?: "available" | "unnamed" | "deleted";
   announcements: ParentTeamAnnouncement[];
+  announcementsCursor: TeamHistoryCursor | null;
+  hasOlderAnnouncements: boolean;
   unreadCount: number;
+  unreadCountKnown: boolean;
   latestAnnouncement: ParentTeamAnnouncement | null;
   privateConversations: TeamPrivateConversation[];
   privateUnreadCount: number;
@@ -65,9 +73,16 @@ export type ParentTeamsOverview = {
   teams: ParentTeamSummary[];
   totalTeams: number;
   unreadCount: number;
+  unreadCountKnown: boolean;
   latestTeam: ParentTeamSummary | null;
   latestAnnouncement: ParentTeamAnnouncement | null;
   privateUnreadCount: number;
+};
+
+export type ParentTeamAnnouncementsPage = {
+  announcements: ParentTeamAnnouncement[];
+  hasMore: boolean;
+  nextCursor: TeamHistoryCursor | null;
 };
 
 export type ArchivedParentTeamSummary = {
@@ -101,6 +116,7 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
     getCurrentUserChildren(),
     getTeamPrivateMessageInbox("parent"),
   ]);
+  const announcementSummaryStates = await getTeamAnnouncementSummaryStates(memberships.map((membership) => membership.teamId));
   const childLinksByTeam = await loadChildLinksByTeam(childProfiles);
   const summaries = await Promise.all(
     memberships
@@ -109,6 +125,8 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
         membership,
         resolveMembershipChildren(membership, childProfiles, childLinksByTeam),
         privateConversations.filter((conversation) => conversation.teamId === membership.teamId),
+        announcementSummaryStates.get(membership.teamId),
+        1,
       )),
   );
   const teams = summaries.sort(compareTeamSummaries);
@@ -118,6 +136,7 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
     teams,
     totalTeams,
     unreadCount,
+    unreadCountKnown: teams.every((team) => team.unreadCountKnown),
     latestTeam,
     latestAnnouncement: latestTeam?.latestAnnouncement ?? null,
     privateUnreadCount: teams.reduce((total, team) => total + team.privateUnreadCount, 0),
@@ -125,21 +144,36 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
 }
 
 export async function getParentTeamSummary(teamId: string): Promise<ParentTeamSummary> {
-  const overview = await getParentTeamsOverview();
-  const summary = overview.teams.find((item) => item.teamId === teamId);
-  if (!summary) {
+  const [memberships, childProfiles, privateConversations] = await Promise.all([
+    getParentTeams({ throwOnError: true }),
+    getCurrentUserChildren(),
+    getTeamPrivateMessageInbox("parent", teamId),
+  ]);
+  const membership = memberships.find((item) => item.teamId === teamId && item.team)
+    ?? await getCurrentUserTeamMembershipById(teamId);
+  if (!membership || !membership.roles.parent) {
     const error = new Error("Parent team membership is missing or inactive.");
     (error as { code?: string }).code = "membership-missing";
     throw error;
   }
-  return summary;
+  const [childLinksByTeam, summaryStates] = await Promise.all([
+    loadChildLinksByTeam(childProfiles),
+    getTeamAnnouncementSummaryStates([teamId]),
+  ]);
+  return loadParentTeamSummary(
+    membership,
+    resolveMembershipChildren(membership, childProfiles, childLinksByTeam),
+    privateConversations,
+    summaryStates.get(teamId),
+    TEAM_HISTORY_PAGE_SIZES.announcements,
+  );
 }
 
 export async function getParentPastTeamCount(): Promise<number> {
   return getArchivedParentTeamCount();
 }
 
-export async function getParentPastTeamsPage(offset = 0, pageSize = 8): Promise<ArchivedParentTeamsPage> {
+export async function getParentPastTeamsPage(offset = 0, pageSize = TEAM_HISTORY_PAGE_SIZES.archivedTeams): Promise<ArchivedParentTeamsPage> {
   const page = await getArchivedParentTeamMembershipsPage(offset, pageSize, { throwOnError: true });
   return {
     teams: page.memberships
@@ -169,16 +203,12 @@ export async function updateParentTeamChildName(teamId: string, childName: strin
   await setParentTeamChildLinks(teamId, [child.id]);
 }
 export async function markTeamAnnouncementRead(teamId: string, announcementId: string): Promise<void> {
-  const user = auth.currentUser;
-  if (!user) throw new Error("Sign in to read team updates.");
-  await setDoc(
-    doc(db, "teams", teamId, "announcements", announcementId, "reads", user.uid),
-    {
-      userId: user.uid,
-      readAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
+  if (!auth.currentUser) throw new Error("Sign in to read team updates.");
+  const callable = httpsCallable<
+    { teamId: string; announcementId: string },
+    { status: "read" }
+  >(functions, "markTeamAnnouncementRead");
+  await callable({ teamId, announcementId });
 }
 
 export function getCoachUpdateRoute(teamId: string, announcementId: string, ..._legacyContext: unknown[]) {
@@ -195,40 +225,23 @@ async function loadParentTeamSummary(
   membership: TeamMembership,
   childResolution: ResolvedMembershipChildren,
   privateConversations: TeamPrivateConversation[],
+  announcementSummaryState?: AnnouncementSummaryState,
+  announcementPageSize: number = TEAM_HISTORY_PAGE_SIZES.announcements,
 ): Promise<ParentTeamSummary> {
   const user = auth.currentUser;
   if (!user || !membership.team) throw new Error("Parent team membership is unavailable.");
   const team = membership.team;
-  const announcementSnapshot = await getDocs(
-    query(
-      collection(db, "teams", team.id, "announcements"),
-      where("audience", "in", ["parents", "all", "everyone"]),
-      orderBy("createdAt", "desc"),
-    ),
-  );
-  const visibleAnnouncements = announcementSnapshot.docs
-    .map((announcementDoc) => normalizeAnnouncement(announcementDoc.id, announcementDoc.data()))
-    .filter((announcement) => announcement.audience !== "staff");
-
-  const [profileResults, readStates, coachIdentity] = await Promise.all([
-    getPublicUserProfiles(
-      visibleAnnouncements.map((announcement) => announcement.createdBy).filter(Boolean),
-    ).catch(() => []),
-    Promise.all(
-      visibleAnnouncements.map((announcement) =>
-        getDoc(doc(db, "teams", team.id, "announcements", announcement.id, "reads", user.uid)),
-      ),
+  const [announcementPage, coachIdentity] = await Promise.all([
+    loadParentAnnouncementsPage(
+      team.id,
+      null,
+      user.uid,
+      announcementPageSize,
+      announcementSummaryState?.available ? new Set(announcementSummaryState.recentUnreadAnnouncementIds) : null,
     ),
     resolveCoachName(team),
   ]);
-  const authorProfiles = new Map(profileResults.map((profile) => [profile.userId, profile]));
-  const announcements = visibleAnnouncements.map((announcement, index) => ({
-    ...announcement,
-    createdByName: authorProfiles.get(announcement.createdBy)?.displayName
-      ?? (authorProfiles.get(announcement.createdBy)?.profileState === "deleted" ? "" : announcement.createdByName),
-    authorProfileState: authorProfiles.get(announcement.createdBy)?.profileState,
-    isRead: readStates[index]?.exists() ?? false,
-  }));
+  const announcements = announcementPage.announcements;
   return {
     teamId: team.id,
     team,
@@ -241,10 +254,89 @@ async function loadParentTeamSummary(
     coachName: coachIdentity?.displayName ?? null,
     coachProfileState: coachIdentity?.profileState,
     announcements,
-    unreadCount: announcements.filter((announcement) => !announcement.isRead).length,
+    announcementsCursor: announcementPage.nextCursor,
+    hasOlderAnnouncements: announcementPage.hasMore,
+    unreadCount: announcementSummaryState?.available
+      ? announcementSummaryState.unreadCount
+      : announcements.filter((announcement) => !announcement.isRead).length,
+    unreadCountKnown: announcementSummaryState?.available === true || (announcements.length === 0 && !announcementPage.hasMore),
     latestAnnouncement: announcements[0] ?? null,
     privateConversations,
     privateUnreadCount: privateConversations.reduce((total, conversation) => total + conversation.unreadCount, 0),
+  };
+}
+
+type AnnouncementSummaryState = {
+  available: boolean;
+  recentUnreadAnnouncementIds: string[];
+  unreadCount: number;
+};
+
+async function getTeamAnnouncementSummaryStates(teamIds: string[]) {
+  if (teamIds.length === 0) return new Map<string, AnnouncementSummaryState>();
+  const callable = httpsCallable<
+    { teamIds: string[] },
+    { summaries: { teamId: string; available: boolean; recentUnreadAnnouncementIds: string[]; unreadCount: number | null }[] }
+  >(functions, "getTeamAnnouncementSummaries");
+  try {
+    const response = await callable({ teamIds: Array.from(new Set(teamIds)).slice(0, 50) });
+    return new Map(response.data.summaries.map((summary) => [summary.teamId, {
+      available: summary.available && summary.unreadCount != null,
+      recentUnreadAnnouncementIds: Array.isArray(summary.recentUnreadAnnouncementIds)
+        ? summary.recentUnreadAnnouncementIds.slice(0, TEAM_HISTORY_PAGE_SIZES.announcements)
+        : [],
+      unreadCount: Math.max(0, Number(summary.unreadCount ?? 0)),
+    }]));
+  } catch {
+    return new Map<string, AnnouncementSummaryState>();
+  }
+}
+
+export async function getOlderParentTeamAnnouncementsPage(
+  teamId: string,
+  cursor: TeamHistoryCursor,
+): Promise<ParentTeamAnnouncementsPage> {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in to read team updates.");
+  return loadParentAnnouncementsPage(teamId, cursor, user.uid);
+}
+
+async function loadParentAnnouncementsPage(
+  teamId: string,
+  cursor: TeamHistoryCursor | null,
+  userId: string,
+  pageSize: number = TEAM_HISTORY_PAGE_SIZES.announcements,
+  knownUnreadIds: Set<string> | null = null,
+): Promise<ParentTeamAnnouncementsPage> {
+  const snapshot = await getDocs(query(
+    collection(db, "teams", teamId, "announcements"),
+    where("audience", "in", ["parents", "all", "everyone"]),
+    orderBy("createdAt", "desc"),
+    orderBy(documentId(), "desc"),
+    ...(cursor ? [startAfter(Timestamp.fromMillis(cursor.timestampMillis), cursor.id)] : []),
+    limit(pageSize + 1),
+  ));
+  const visibleAnnouncements = snapshot.docs.slice(0, pageSize)
+    .map((announcementDoc) => normalizeAnnouncement(announcementDoc.id, announcementDoc.data()))
+    .filter((announcement) => announcement.audience !== "staff");
+  const [profileResults, readStates] = await Promise.all([
+    getPublicUserProfiles(visibleAnnouncements.map((announcement) => announcement.createdBy).filter(Boolean)).catch(() => []),
+    knownUnreadIds ? Promise.resolve(null) : Promise.all(visibleAnnouncements.map((announcement) =>
+      getDoc(doc(db, "teams", teamId, "announcements", announcement.id, "reads", userId)))),
+  ]);
+  const authorProfiles = new Map(profileResults.map((profile) => [profile.userId, profile]));
+  const announcements = visibleAnnouncements.map((announcement, index) => ({
+    ...announcement,
+    createdByName: authorProfiles.get(announcement.createdBy)?.displayName
+      ?? (authorProfiles.get(announcement.createdBy)?.profileState === "deleted" ? "" : announcement.createdByName),
+    authorProfileState: authorProfiles.get(announcement.createdBy)?.profileState,
+    isRead: knownUnreadIds ? !knownUnreadIds.has(announcement.id) : readStates?.[index]?.exists() ?? false,
+  }));
+  const oldest = announcements.at(-1);
+  return {
+    announcements,
+    hasMore: snapshot.size > pageSize,
+    nextCursor: oldest?.createdAtDate ? { id: oldest.id, timestampMillis: oldest.createdAtDate.getTime() } : null,
   };
 }
 

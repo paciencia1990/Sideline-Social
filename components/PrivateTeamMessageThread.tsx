@@ -26,12 +26,16 @@ import {
   finalizePrivateVoiceMessage,
   hidePrivateTeamMessageForCurrentUser,
   listenToPrivateTeamConversation,
-  listenToPrivateTeamMessages,
+  listenToNewestPrivateTeamMessagesPage,
+  getOlderPrivateTeamMessagesPage,
+  getPrivateTeamMessage,
   markPrivateTeamConversationRead,
   reserveVoiceUpload,
   sendPrivateTeamTextMessage,
   uploadReservedVoiceMemo,
 } from "@/services/teamPrivateMessageService";
+import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
+import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import { clearPersistedVoicePlaybackArtifacts } from "@/services/voicePlaybackCleanupService";
@@ -43,16 +47,24 @@ export function PrivateTeamMessageThread({
   conversationId,
   initialText = "",
   isTemplateDraft = false,
+  notificationId = "",
   role,
+  targetMessageId = "",
 }: {
   conversationId: string;
   initialText?: string;
   isTemplateDraft?: boolean;
+  notificationId?: string;
   role: "coach" | "parent";
+  targetMessageId?: string;
 }) {
   const { t } = useTranslation();
   const [conversation, setConversation] = useState<TeamPrivateConversation | null>(null);
   const [messages, setMessages] = useState<TeamPrivateMessage[]>([]);
+  const [olderMessages, setOlderMessages] = useState<TeamPrivateMessage[]>([]);
+  const [historyCursor, setHistoryCursor] = useState<TeamHistoryCursor | null>(null);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [mode, setMode] = useState<"text" | "voice">("text");
   const [text, setText] = useState(() => initialText.slice(0, 2000));
   const [caption, setCaption] = useState("");
@@ -69,6 +81,14 @@ export function PrivateTeamMessageThread({
   const sendInFlight = useRef(false);
   const deleteInFlight = useRef(false);
   const messageScrollRef = useRef<ScrollView>(null);
+  const paginationInFlight = useRef(false);
+  const paginationGeneration = useRef(0);
+  const olderPageLoadedRef = useRef(false);
+  const contentHeightRef = useRef(0);
+  const scrollOffsetRef = useRef(0);
+  const olderAnchorRef = useRef<{ height: number; offset: number } | null>(null);
+  const targetResolvedRef = useRef(!targetMessageId);
+  const acknowledgedNotificationIds = useRef(new Set<string>());
   const keyboardVisibleRef = useRef(false);
   const keyboardTopRef = useRef<number | null>(null);
   const composerBoundaryRef = useRef<View>(null);
@@ -94,12 +114,46 @@ export function PrivateTeamMessageThread({
   }, []);
 
   useEffect(() => listenToPrivateTeamConversation(conversationId, setConversation, () => setError(t("teamMessages.loadError"))), [conversationId, t]);
-  useEffect(() => listenToPrivateTeamMessages(conversationId, (next) => {
-    setMessages(next);
-    void markPrivateTeamConversationRead(conversationId).catch(() => {});
-  }, () => setError(t("teamMessages.loadError"))), [conversationId, t]);
+  useEffect(() => {
+    const generation = ++paginationGeneration.current;
+    setOlderMessages([]);
+    setMessages([]);
+    setHistoryCursor(null);
+    setHasOlderMessages(false);
+    paginationInFlight.current = false;
+    olderPageLoadedRef.current = false;
+    return listenToNewestPrivateTeamMessagesPage(conversationId, (page) => {
+      if (generation !== paginationGeneration.current) return;
+      setMessages(page.messages);
+      setHistoryCursor((current) => current ?? page.nextCursor);
+      if (!olderPageLoadedRef.current) setHasOlderMessages(page.hasMore);
+      if (targetResolvedRef.current) void markPrivateTeamConversationRead(conversationId).catch(() => {});
+    }, () => setError(t("teamMessages.loadError")));
+  }, [conversationId, t]);
+  useEffect(() => {
+    targetResolvedRef.current = !targetMessageId;
+    if (!targetMessageId) return () => {};
+    let active = true;
+    void getPrivateTeamMessage(conversationId, targetMessageId).then((target) => {
+      if (!active) return;
+      if (!target) {
+        setError(t("teamMessages.targetUnavailable"));
+        return;
+      }
+      setOlderMessages((current) => mergeThreadMessages(current, [target]));
+      targetResolvedRef.current = true;
+      void markPrivateTeamConversationRead(conversationId).catch(() => {});
+      if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
+        acknowledgedNotificationIds.current.add(notificationId);
+        void acknowledgeNotificationAfterOpen(notificationId);
+      }
+    }).catch(() => {
+      if (active) setError(t("teamMessages.targetUnavailable"));
+    });
+    return () => { active = false; };
+  }, [conversationId, notificationId, t, targetMessageId]);
   useFocusEffect(useCallback(() => {
-    void markPrivateTeamConversationRead(conversationId).catch(() => {});
+    if (targetResolvedRef.current) void markPrivateTeamConversationRead(conversationId).catch(() => {});
   }, [conversationId]));
   useEffect(() => () => { uploadCancel.current?.(); }, []);
   useEffect(() => {
@@ -129,10 +183,38 @@ export function PrivateTeamMessageThread({
     return displayName || t(profileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember");
   }, [conversation, role, t]);
   const readOnly = conversation?.status === "readOnly";
+  const visibleMessages = useMemo(
+    () => mergeThreadMessages(olderMessages, messages),
+    [messages, olderMessages],
+  );
   const unresolvedTemplatePlaceholders = useMemo(
     () => isTemplateDraft ? findUnresolvedCoachPlaceholders(text) : [],
     [isTemplateDraft, text],
   );
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!historyCursor || !hasOlderMessages || paginationInFlight.current) return;
+    const generation = paginationGeneration.current;
+    paginationInFlight.current = true;
+    olderAnchorRef.current = { height: contentHeightRef.current, offset: scrollOffsetRef.current };
+    setLoadingOlder(true);
+    setError(null);
+    try {
+      const page = await getOlderPrivateTeamMessagesPage(conversationId, historyCursor);
+      if (generation !== paginationGeneration.current) return;
+      olderPageLoadedRef.current = true;
+      setOlderMessages((current) => mergeThreadMessages(page.messages, current));
+      setHistoryCursor(page.nextCursor);
+      setHasOlderMessages(page.hasMore);
+    } catch {
+      if (generation === paginationGeneration.current) setError(t("teamMessages.loadError"));
+    } finally {
+      if (generation === paginationGeneration.current) {
+        paginationInFlight.current = false;
+        setLoadingOlder(false);
+      }
+    }
+  }, [conversationId, hasOlderMessages, historyCursor, t]);
 
   const sendText = useCallback(async () => {
     if (!text.trim() || sending || sendInFlight.current || readOnly) return;
@@ -299,10 +381,21 @@ export function PrivateTeamMessageThread({
         contentContainerStyle={styles.threadContent}
         keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         keyboardShouldPersistTaps="handled"
-        onContentSizeChange={() => scrollToLatest(keyboardVisibleRef.current)}
+        onContentSizeChange={(_width, height) => {
+          const anchor = olderAnchorRef.current;
+          contentHeightRef.current = height;
+          if (anchor) {
+            olderAnchorRef.current = null;
+            messageScrollRef.current?.scrollTo({ animated: false, y: anchor.offset + Math.max(0, height - anchor.height) });
+          } else if (keyboardVisibleRef.current) {
+            scrollToLatest(false);
+          }
+        }}
         onLayout={() => {
           if (keyboardVisibleRef.current) scrollToLatest(false);
         }}
+        onScroll={(event) => { scrollOffsetRef.current = event.nativeEvent.contentOffset.y; }}
+        scrollEventThrottle={32}
         showsVerticalScrollIndicator={false}
         style={styles.messageScroll}
       >
@@ -317,8 +410,13 @@ export function PrivateTeamMessageThread({
         {readOnly ? <Card style={styles.readOnlyCard}><Text style={styles.error}>{t("teamMessages.readOnly")}</Text></Card> : null}
 
         <View style={styles.messages}>
-          {messages.length === 0 ? <Text style={styles.empty}>{t("teamMessages.empty")}</Text> : null}
-          {messages.map((message) => {
+          {hasOlderMessages ? (
+            <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: loadingOlder }} disabled={loadingOlder} onPress={() => { void loadOlderMessages(); }} style={styles.loadOlderButton}>
+              {loadingOlder ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.loadOlderText}>{t("teamMessages.loadOlder")}</Text>}
+            </TouchableOpacity>
+          ) : null}
+          {visibleMessages.length === 0 ? <Text style={styles.empty}>{t("teamMessages.empty")}</Text> : null}
+          {visibleMessages.map((message) => {
             const mine = message.senderUserId === auth.currentUser?.uid;
             return (
               <View key={message.id} style={[styles.bubble, message.contentType === "voice" && !message.isDeleted && styles.voiceBubble, mine ? styles.mine : styles.theirs]}>
@@ -418,6 +516,21 @@ function resolveSendError(error: unknown, t: (key: string) => string) {
   return t("teamMessages.sendError");
 }
 
+function mergeThreadMessages(...groups: TeamPrivateMessage[][]) {
+  const byId = new Map<string, TeamPrivateMessage>();
+  groups.flat().forEach((message) => byId.set(message.id, message));
+  return Array.from(byId.values()).sort((first, second) => {
+    const time = messageMillis(first.createdAt) - messageMillis(second.createdAt);
+    return time || first.id.localeCompare(second.id);
+  });
+}
+
+function messageMillis(value: unknown) {
+  if (value instanceof Date) return value.getTime();
+  if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") return value.toMillis();
+  return 0;
+}
+
 function getErrorCode(error: unknown) {
   return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
 }
@@ -434,6 +547,8 @@ const styles = StyleSheet.create({
   error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   readOnlyCard: { borderLeftColor: Colors.primary, borderLeftWidth: 4 },
   messages: { gap: Spacing.sm },
+  loadOlderButton: { alignItems: "center", alignSelf: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, minHeight: 44, justifyContent: "center", paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm },
+  loadOlderText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13 },
   empty: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, paddingVertical: Spacing.lg, textAlign: "center" },
   bubble: { borderRadius: Radius.card, gap: Spacing.xs, maxWidth: "92%", padding: Spacing.md, width: "auto" },
   voiceBubble: { width: "92%" },

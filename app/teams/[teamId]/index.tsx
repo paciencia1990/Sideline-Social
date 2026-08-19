@@ -12,6 +12,7 @@ import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPla
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import {
   getCoachUpdateRoute,
+  getOlderParentTeamAnnouncementsPage,
   getParentTeamSummary,
   getTeamChildNames,
   type ParentTeamSummary,
@@ -36,6 +37,8 @@ export default function ParentTeamHubScreen() {
   const [savingChild, setSavingChild] = useState(false);
   const [teamAction, setTeamAction] = useState<TeamAction>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [loadingOlderAnnouncements, setLoadingOlderAnnouncements] = useState(false);
+  const olderAnnouncementsInFlight = useRef(false);
 
   const loadTeam = useCallback(async () => {
     setLoading(true);
@@ -57,6 +60,28 @@ export default function ParentTeamHubScreen() {
       setLoading(false);
     }
   }, [notificationId, t, teamId]);
+
+  const loadOlderAnnouncements = useCallback(async () => {
+    if (!summary?.announcementsCursor || !summary.hasOlderAnnouncements || olderAnnouncementsInFlight.current) return;
+    olderAnnouncementsInFlight.current = true;
+    setLoadingOlderAnnouncements(true);
+    setError(null);
+    try {
+      const page = await getOlderParentTeamAnnouncementsPage(teamId, summary.announcementsCursor);
+      setSummary((current) => current ? {
+        ...current,
+        announcements: mergeParentAnnouncements(current.announcements, page.announcements),
+        announcementsCursor: page.nextCursor,
+        hasOlderAnnouncements: page.hasMore,
+      } : current);
+    } catch (nextError) {
+      console.warn("[ParentTeamHub] announcement page error:", getErrorCode(nextError));
+      setError(t("myTeams.teamLoadError"));
+    } finally {
+      olderAnnouncementsInFlight.current = false;
+      setLoadingOlderAnnouncements(false);
+    }
+  }, [summary, t, teamId]);
 
   useFocusEffect(useCallback(() => {
     void loadTeam();
@@ -177,7 +202,7 @@ export default function ParentTeamHubScreen() {
             <Text accessibilityRole="header" style={styles.title}>{summary?.team.name ?? t("myTeams.team")}</Text>
             <Text style={styles.subtitle}>{summary ? formatTeamChildren(summary, t) : t("myTeams.childNotSpecified")}</Text>
           </View>
-          {summary ? (
+          {summary?.team.status === "active" ? (
             <TouchableOpacity
               accessibilityLabel={teamAction === "remove-child"
                 ? t("myTeams.removingChild")
@@ -231,6 +256,7 @@ export default function ParentTeamHubScreen() {
         {summary ? (
           <>
             <Card style={styles.teamHeaderCard}>
+              {summary.team.status === "archived" ? <Text style={styles.privateNotice}>{t("myTeams.archivedReadOnly")}</Text> : null}
               <View style={styles.identityRow}>
                 <Text style={styles.childLabel}>{t("myTeams.child")}</Text>
                 <Text style={styles.childName}>{formatTeamChildren(summary, t)}</Text>
@@ -243,14 +269,14 @@ export default function ParentTeamHubScreen() {
                 {summary.team.division ? <Fact label={t("myTeams.division")} value={summary.team.division} /> : null}
                 <Fact label={t("myTeams.coach")} value={summary.coachName ?? t(summary.coachProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")} />
               </View>
-              <TouchableOpacity
+              {summary.team.status === "active" ? <TouchableOpacity
                 accessibilityRole="button"
                 disabled={Boolean(teamAction)}
                 onPress={openManageChildren}
                 style={styles.outlineButton}
               >
                 <Text style={styles.outlineButtonText}>{t("myTeams.manageChildren")}</Text>
-              </TouchableOpacity>
+              </TouchableOpacity> : null}
             </Card>
 
             <TouchableOpacity
@@ -326,12 +352,14 @@ export default function ParentTeamHubScreen() {
               <View>
                 <Text accessibilityRole="header" style={styles.sectionTitle}>{t("myTeams.coachUpdates")}</Text>
                 <Text style={styles.sectionSubtitle}>
-                  {summary.unreadCount > 0
+                  {!summary.unreadCountKnown
+                    ? t("myTeams.unreadUnknown")
+                    : summary.unreadCount > 0
                     ? t("myTeams.unreadUpdates", { count: summary.unreadCount })
                     : t("myTeams.caughtUp")}
                 </Text>
               </View>
-              {summary.unreadCount > 0 ? (
+              {summary.unreadCountKnown && summary.unreadCount > 0 ? (
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>{summary.unreadCount}</Text>
                 </View>
@@ -392,6 +420,11 @@ export default function ParentTeamHubScreen() {
                 </Card>
               </TouchableOpacity>
             ))}
+            {summary.hasOlderAnnouncements ? (
+              <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: loadingOlderAnnouncements }} disabled={loadingOlderAnnouncements} onPress={() => { void loadOlderAnnouncements(); }} style={styles.outlineButton}>
+                {loadingOlderAnnouncements ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.outlineButtonText}>{t("myTeams.loadOlderAnnouncements")}</Text>}
+              </TouchableOpacity>
+            ) : null}
           </>
         ) : null}
       </KeyboardAwareScrollView>
@@ -433,7 +466,20 @@ function normalizeParam(value?: string | string[]) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
+function mergeParentAnnouncements(
+  current: ParentTeamSummary["announcements"],
+  incoming: ParentTeamSummary["announcements"],
+) {
+  const byId = new Map(current.map((announcement) => [announcement.id, announcement]));
+  incoming.forEach((announcement) => byId.set(announcement.id, announcement));
+  return Array.from(byId.values()).sort((first, second) => {
+    const time = (second.createdAtDate?.getTime() ?? 0) - (first.createdAtDate?.getTime() ?? 0);
+    return time || second.id.localeCompare(first.id);
+  });
+}
+
 const styles = StyleSheet.create({
+  privateNotice: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19 },
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
   headerRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
   headerCopy: { flex: 1 },

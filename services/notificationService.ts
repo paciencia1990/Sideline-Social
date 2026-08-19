@@ -48,6 +48,7 @@ export type AppNotification = {
   eventId: string | null;
   friendRequestId: string | null;
   conversationId: string | null;
+  messageId: string | null;
   conversationType: "coach" | "parent" | null;
   squadId: string | null;
   squadAdminInvitationId: string | null;
@@ -119,6 +120,7 @@ function toNotification(snapshot: QueryDocumentSnapshot<DocumentData>): AppNotif
     eventId: typeof data.eventId === "string" ? data.eventId : null,
     friendRequestId: typeof data.friendRequestId === "string" ? data.friendRequestId : null,
     conversationId: typeof data.conversationId === "string" ? data.conversationId : null,
+    messageId: typeof data.messageId === "string" ? data.messageId : null,
     conversationType: data.conversationType === "coach" || data.conversationType === "parent" ? data.conversationType : null,
     squadId: typeof data.squadId === "string" ? data.squadId : null,
     squadAdminInvitationId: typeof data.squadAdminInvitationId === "string" ? data.squadAdminInvitationId : null,

@@ -13,6 +13,7 @@ import {
 import { httpsCallable } from "firebase/functions";
 
 import { auth, db, functions } from "@/config/firebase";
+import { TEAM_HISTORY_PAGE_SIZES } from "@/constants/teamHistoryPagination";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
 
 export type TeamRole = "parent" | "coach" | "assistantCoach" | "teamParent";
@@ -308,7 +309,7 @@ export async function getArchivedCoachTeamCount(): Promise<number> {
 
 export async function getArchivedParentTeamMembershipsPage(
   offset = 0,
-  pageSize = 10,
+  pageSize = TEAM_HISTORY_PAGE_SIZES.archivedTeams,
   options: TeamLookupOptions = {},
 ): Promise<TeamMembershipPage> {
   const page = await getIndexedTeamMembershipsPage("archivedParentTeamIds", offset, pageSize, options);
@@ -319,7 +320,7 @@ export async function getArchivedParentTeamMembershipsPage(
 
 export async function getArchivedCoachTeamMembershipsPage(
   offset = 0,
-  pageSize = 10,
+  pageSize = TEAM_HISTORY_PAGE_SIZES.archivedTeams,
   options: TeamLookupOptions = {},
 ): Promise<TeamMembershipPage> {
   const page = await getIndexedTeamMembershipsPage("archivedCoachTeamIds", offset, pageSize, options);
@@ -541,6 +542,20 @@ function logCreateTeamDiagnostics(event: "commit-error" | "commit-start", detail
 function resolveDisplayName() {
   const user = auth.currentUser;
   return formatPublicUserName(user?.displayName) ?? "Sideline Social member";
+}
+
+export async function getCurrentUserTeamMembershipById(teamId: string): Promise<TeamMembership | null> {
+  const user = auth.currentUser;
+  if (!user || !teamId) return null;
+  const [teamSnapshot, membershipSnapshot] = await Promise.all([
+    getDoc(doc(db, "teams", teamId)),
+    getDoc(doc(db, "teams", teamId, "members", user.uid)),
+  ]);
+  if (!teamSnapshot.exists() || !membershipSnapshot.exists()) return null;
+  const membership = normalizeMembership(membershipSnapshot.id, { ...membershipSnapshot.data(), teamId });
+  return membership.status === "active"
+    ? { ...membership, team: normalizeTeam(teamSnapshot.id, teamSnapshot.data()) }
+    : null;
 }
 
 function generateInviteCode() {

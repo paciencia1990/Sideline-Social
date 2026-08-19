@@ -10,11 +10,14 @@ import { TeamScheduleEventCard } from "@/components/TeamScheduleEventCard";
 import { getSyntheticTeamSchedule } from "@/constants/teamSchedulePreview";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import {
+  getMoreUpcomingTeamSchedule,
+  getPastTeamSchedulePage,
   getTeamScheduleAccess,
-  subscribeToTeamSchedule,
+  subscribeToUpcomingTeamSchedule,
   type TeamScheduleAccess,
   type TeamScheduleEvent,
 } from "@/services/teamScheduleService";
+import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import { groupScheduleEvents, splitScheduleEvents, type ScheduleMonthGroup } from "@/utils/teamScheduleCore";
 
 export default function TeamScheduleScreen() {
@@ -22,7 +25,15 @@ export default function TeamScheduleScreen() {
   const params = useLocalSearchParams<{ teamId?: string | string[] }>();
   const teamId = normalizeParam(params.teamId);
   const [access, setAccess] = useState<TeamScheduleAccess | null>(null);
-  const [events, setEvents] = useState<TeamScheduleEvent[]>([]);
+  const [upcomingEvents, setUpcomingEvents] = useState<TeamScheduleEvent[]>([]);
+  const [pastEvents, setPastEvents] = useState<TeamScheduleEvent[]>([]);
+  const [upcomingCursor, setUpcomingCursor] = useState<TeamHistoryCursor | null>(null);
+  const [pastCursor, setPastCursor] = useState<TeamHistoryCursor | null>(null);
+  const [hasMoreUpcoming, setHasMoreUpcoming] = useState(false);
+  const [hasMorePast, setHasMorePast] = useState(true);
+  const [loadingMoreUpcoming, setLoadingMoreUpcoming] = useState(false);
+  const [pastLoading, setPastLoading] = useState(false);
+  const [pastError, setPastError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -39,11 +50,14 @@ export default function TeamScheduleScreen() {
       .then((nextAccess) => {
         if (!active) return;
         setAccess(nextAccess);
-        unsubscribe = subscribeToTeamSchedule(
+        unsubscribe = subscribeToUpcomingTeamSchedule(
           teamId,
-          (nextEvents, fromCache) => {
+          (page, fromCache) => {
             if (!active) return;
-            setEvents(nextEvents.length > 0 ? nextEvents : getSyntheticTeamSchedule(teamId));
+            const syntheticUpcoming = splitScheduleEvents(getSyntheticTeamSchedule(teamId)).upcoming;
+            setUpcomingEvents(page.events.length > 0 ? page.events : syntheticUpcoming);
+            setUpcomingCursor(page.nextCursor);
+            setHasMoreUpcoming(page.hasMore);
             setOffline(fromCache);
             setLoading(false);
             setRefreshing(false);
@@ -69,14 +83,55 @@ export default function TeamScheduleScreen() {
     };
   }, [reloadKey, t, teamId]);
 
-  const split = useMemo(() => splitScheduleEvents(events), [events]);
-  const upcomingGroups = useMemo(() => groupScheduleEvents(split.upcoming), [split.upcoming]);
-  const pastGroups = useMemo(() => groupScheduleEvents(split.past), [split.past]);
+  const upcomingGroups = useMemo(() => groupScheduleEvents(upcomingEvents), [upcomingEvents]);
+  const pastGroups = useMemo(() => groupScheduleEvents(pastEvents), [pastEvents]);
   const canManage = access?.canManage === true && access.teamStatus === "active";
   const refresh = useCallback(() => {
+    setPastEvents([]);
+    setPastCursor(null);
+    setHasMorePast(true);
+    setPastExpanded(false);
     setRefreshing(true);
     setReloadKey((value) => value + 1);
   }, []);
+
+  const loadMoreUpcoming = useCallback(async () => {
+    if (!upcomingCursor || !hasMoreUpcoming || loadingMoreUpcoming) return;
+    setLoadingMoreUpcoming(true);
+    try {
+      const page = await getMoreUpcomingTeamSchedule(teamId, upcomingCursor);
+      setUpcomingEvents((current) => mergeScheduleEvents(current, page.events, "asc"));
+      setUpcomingCursor(page.nextCursor);
+      setHasMoreUpcoming(page.hasMore);
+    } catch {
+      setError(t("schedule.errors.load"));
+    } finally {
+      setLoadingMoreUpcoming(false);
+    }
+  }, [hasMoreUpcoming, loadingMoreUpcoming, t, teamId, upcomingCursor]);
+
+  const loadPast = useCallback(async () => {
+    if (pastLoading || (!hasMorePast && pastEvents.length > 0)) return;
+    setPastLoading(true);
+    setPastError(null);
+    try {
+      const page = await getPastTeamSchedulePage(teamId, pastCursor);
+      setPastEvents((current) => mergeScheduleEvents(current, page.events, "desc"));
+      setPastCursor(page.nextCursor);
+      setHasMorePast(page.hasMore);
+    } catch {
+      setPastError(t("schedule.errors.load"));
+    } finally {
+      setPastLoading(false);
+    }
+  }, [hasMorePast, pastCursor, pastEvents.length, pastLoading, t, teamId]);
+
+  const togglePast = useCallback(() => {
+    setPastExpanded((expanded) => {
+      if (!expanded && pastEvents.length === 0) void loadPast();
+      return !expanded;
+    });
+  }, [loadPast, pastEvents.length]);
 
   return (
     <ScreenWrapper>
@@ -144,7 +199,7 @@ export default function TeamScheduleScreen() {
           </Card>
         ) : null}
 
-        {!loading && !error && events.length === 0 ? (
+        {!loading && !error && upcomingEvents.length === 0 ? (
           <Card style={styles.stateCard}>
             <CalendarPlus color={Colors.accentGreen} size={30} />
             <Text style={styles.stateTitle}>{t("schedule.emptyTitle")}</Text>
@@ -156,16 +211,32 @@ export default function TeamScheduleScreen() {
           <View style={styles.section}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>{t("schedule.upcoming")}</Text>
             <ScheduleGroups groups={upcomingGroups} locale={i18n.language} teamId={teamId} />
+            {hasMoreUpcoming ? (
+              <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: loadingMoreUpcoming }} disabled={loadingMoreUpcoming} onPress={() => { void loadMoreUpcoming(); }} style={styles.retryButton}>
+                {loadingMoreUpcoming ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.retryText}>{t("schedule.loadMoreUpcoming")}</Text>}
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : null}
 
-        {!loading && !error && pastGroups.length > 0 ? (
+        {!loading && !error ? (
           <View style={styles.section}>
-            <TouchableOpacity accessibilityRole="button" accessibilityState={{ expanded: pastExpanded }} onPress={() => setPastExpanded((value) => !value)} style={styles.pastHeader}>
-              <Text accessibilityRole="header" style={styles.sectionTitle}>{t("schedule.pastEvents", { count: split.past.length })}</Text>
+            <TouchableOpacity accessibilityRole="button" accessibilityState={{ expanded: pastExpanded }} onPress={togglePast} style={styles.pastHeader}>
+              <Text accessibilityRole="header" style={styles.sectionTitle}>{t("schedule.pastEvents", { count: pastEvents.length })}</Text>
               {pastExpanded ? <ChevronUp color={Colors.textHeading} size={22} /> : <ChevronDown color={Colors.textHeading} size={22} />}
             </TouchableOpacity>
-            {pastExpanded ? <ScheduleGroups groups={pastGroups} locale={i18n.language} teamId={teamId} /> : null}
+            {pastExpanded ? (
+              <View style={styles.section}>
+                <ScheduleGroups groups={pastGroups} locale={i18n.language} teamId={teamId} />
+                {pastLoading ? <ActivityIndicator accessibilityLabel={t("schedule.loading")} color={Colors.primary} /> : null}
+                {pastError ? <Text accessibilityLiveRegion="polite" style={styles.stateText}>{pastError}</Text> : null}
+                {!pastLoading && !pastError && hasMorePast ? (
+                  <TouchableOpacity accessibilityRole="button" onPress={() => { void loadPast(); }} style={styles.retryButton}>
+                    <Text style={styles.retryText}>{t("schedule.loadMorePast")}</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ) : null}
           </View>
         ) : null}
       </ScrollView>
@@ -210,6 +281,16 @@ function formatDay(value: string, locale: string) {
 
 function normalizeParam(value?: string | string[]) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function mergeScheduleEvents(current: TeamScheduleEvent[], incoming: TeamScheduleEvent[], direction: "asc" | "desc") {
+  const byId = new Map(current.map((event) => [event.id, event]));
+  incoming.forEach((event) => byId.set(event.id, event));
+  return Array.from(byId.values()).sort((first, second) => {
+    const time = first.startAt.getTime() - second.startAt.getTime();
+    const stable = time || first.id.localeCompare(second.id);
+    return direction === "asc" ? stable : -stable;
+  });
 }
 
 const styles = StyleSheet.create({
