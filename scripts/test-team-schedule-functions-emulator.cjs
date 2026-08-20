@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const admin = require("../functions/node_modules/firebase-admin");
 const { initializeApp } = require("firebase/app");
 const { connectAuthEmulator, createUserWithEmailAndPassword, getAuth } = require("firebase/auth");
@@ -109,6 +111,31 @@ async function run() {
   assert.deepEqual(await coach.call("importTeamScheduleEvents", importPayload), imported, "same import operation is idempotent");
   const retriedImport = await coach.call("importTeamScheduleEvents", { ...importPayload, clientOperationId: "csv-import-2", rows: [importPayload.rows[0]] });
   assert.deepEqual({ created: retriedImport.createdCount, unchanged: retriedImport.unchangedCount }, { created: 0, unchanged: 1 });
+
+  const syntheticIcs = fs.readFileSync(path.join(process.cwd(), "scripts", "fixtures", "team-calendar-synthetic.ics"), "utf8");
+  await assert.rejects(() => parent.call("previewTeamScheduleIcs", { teamId: "team-active", ics: syntheticIcs }), hasCode("permission-denied"));
+  const icsPreview = await coach.call("previewTeamScheduleIcs", { teamId: "team-active", ics: syntheticIcs });
+  assert.equal(icsPreview.events.length, 6);
+  const icsImport = await coach.call("importTeamScheduleIcs", { teamId: "team-active", previewId: icsPreview.previewId, selectedKeys: icsPreview.events.map((event) => event.key), notifyTeam: true });
+  assert.equal(icsImport.created, 6);
+  const icsNotifications = await db.collection("userNotifications").doc(parent.uid).collection("notifications").where("type", "==", "teamScheduleEvent").get();
+  assert.equal(icsNotifications.docs.filter((document) => document.data().bodyKey === "notifications.types.teamScheduleImportBody").length, 1, "ICS import sends at most one explicit summary notification");
+  const repeatPreview = await coach.call("previewTeamScheduleIcs", { teamId: "team-active", ics: syntheticIcs });
+  const repeatImport = await coach.call("importTeamScheduleIcs", { teamId: "team-active", previewId: repeatPreview.previewId, selectedKeys: repeatPreview.events.map((event) => event.key) });
+  assert.equal(repeatImport.created, 0);
+  assert.equal(repeatImport.unchanged, 6, "iCalendar retry must update or retain stable external identities without duplicates");
+
+  const feedEventRef = db.collection("teams").doc("team-active").collection("events").doc("synthetic-feed-event");
+  await feedEventRef.set({ ...practice(), teamId: "team-active", localDate: "2027-07-01", startAt: admin.firestore.Timestamp.fromDate(new Date("2027-07-01T14:00:00Z")), endAt: admin.firestore.Timestamp.fromDate(new Date("2027-07-01T15:00:00Z")), source: "ics-feed", sourceType: "ics-feed", sourceIntegrationId: "synthetic-integration", externalUid: "synthetic@example.invalid", externalKey: "synthetic@example.invalid|", createdBy: coach.uid, updatedBy: coach.uid, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() });
+  await assert.rejects(() => coach.call("saveTeamScheduleEvent", { ...createPayload, eventId: feedEventRef.id, clientOperationId: "feed-edit-blocked" }), hasCode("failed-precondition"));
+  assert.equal((await coach.call("detachTeamScheduleEvent", { teamId: "team-active", eventId: feedEventRef.id })).detached, true);
+  assert.equal((await feedEventRef.get()).data().sourceType, "manual");
+
+  const subscription = await parent.call("createTeamCalendarSubscription", { teamId: "team-active" });
+  assert.match(subscription.httpsUrl, /^https:\/\/us-central1-/);
+  assert.doesNotMatch(JSON.stringify((await db.collection("teamCalendarSubscriptions").get()).docs.map((document) => document.data())), /[?&]token=/, "only a token hash may be stored");
+  assert.equal((await parent.call("revokeTeamCalendarSubscription", { teamId: "team-active" })).revoked, true);
+  await assert.rejects(() => removed.call("createTeamCalendarSubscription", { teamId: "team-active" }), hasCode("permission-denied"));
 
   const notificationCreate = await coach.call("saveTeamScheduleEvent", {
     ...createPayload, event: practice({ title: "Synthetic notified event", date: "2027-06-01" }), notifyTeam: true,

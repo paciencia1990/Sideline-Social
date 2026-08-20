@@ -38,6 +38,7 @@ export function TeamScheduleEventCard({ event, locale, onPress }: {
           </View>
         </View>
         <Text style={styles.time}>{formatEventTime(event, locale, t)}</Text>
+        {event.source === "ics-feed" ? <Text accessibilityLabel={t("schedule.syncedIndicator")} style={styles.synced}>{t("schedule.syncedIndicator")}</Text> : null}
         {event.opponentName ? (
           <Text style={styles.detail}>
             {t(`schedule.homeAway.${event.homeAway ?? "neutral"}`)} | {event.opponentName}
@@ -108,4 +109,5 @@ const styles = StyleSheet.create({
   locationRow: { alignItems: "center", flexDirection: "row", gap: Spacing.xs },
   location: { color: Colors.communicationLink, flex: 1, fontFamily: Typography.bodyMedium, fontSize: 13 },
   score: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 14 },
+  synced: { color: Colors.communicationLink, fontFamily: Typography.bodyBold, fontSize: 10, textTransform: "uppercase" },
 });

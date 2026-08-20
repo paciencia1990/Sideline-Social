@@ -100,6 +100,7 @@ export const saveTeamScheduleEvent = functions.https.onCall(async (data, context
       const sourceSnapshot = await transaction.get(eventRef);
       if (!sourceSnapshot.exists) throw notFound('event_not_found');
       const source = sourceSnapshot.data() ?? {};
+      if (source.sourceType === 'ics-feed') throw failedPrecondition('detach_synced_event_first');
       resolvedRecurrenceGroupId = typeof source.recurrenceGroupId === 'string' ? source.recurrenceGroupId : null;
       const refs = editScope === 'future' && futureRefs.length > 0 ? futureRefs : [eventRef];
       const snapshots = refs.length === 1 && refs[0].path === eventRef.path
@@ -290,6 +291,7 @@ export const deleteTeamScheduleEvent = functions.https.onCall(async (data, conte
     await assertScheduleManager(transaction, teamId, userId);
     const snapshot = await transaction.get(eventRef);
     if (!snapshot.exists) return;
+    if (snapshot.data()?.sourceType === 'ics-feed') throw failedPrecondition('detach_synced_event_first');
     const now = Timestamp.now();
     const auditRef = firestore().collection('teamScheduleAudit').doc(
       `delete_${hash(`${teamId}|${eventId}|${now.toMillis()}`).slice(0, 32)}`,
@@ -305,6 +307,34 @@ export const deleteTeamScheduleEvent = functions.https.onCall(async (data, conte
     transaction.delete(eventRef);
   });
   return { deleted: true };
+});
+
+export const detachTeamScheduleEvent = functions.https.onCall(async (data, context) => {
+  const userId = authenticatedUserId(context);
+  const teamId = readId(data?.teamId, 'team ID');
+  const eventId = readId(data?.eventId, 'event ID');
+  const eventRef = firestore().collection('teams').doc(teamId).collection('events').doc(eventId);
+  await firestore().runTransaction(async (transaction) => {
+    await assertScheduleManager(transaction, teamId, userId);
+    const snapshot = await transaction.get(eventRef);
+    if (!snapshot.exists) throw notFound('event_not_found');
+    const value = snapshot.data() ?? {};
+    if (value.sourceType !== 'ics-feed') return;
+    transaction.set(eventRef, {
+      source: 'manual',
+      sourceType: 'manual',
+      sourceIntegrationId: null,
+      detachedExternalUid: value.externalUid ?? null,
+      externalUid: null,
+      externalKey: null,
+      recurrenceId: null,
+      detachedFromSourceAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      updatedBy: userId,
+      revision: Number.isInteger(value.revision) ? Number(value.revision) + 1 : 1,
+    }, { merge: true });
+  });
+  return { detached: true };
 });
 
 async function assertScheduleManager(
@@ -383,7 +413,7 @@ function eventFields(input: {
   };
 }
 
-async function notifyScheduleMembers(input: {
+export async function notifyScheduleMembers(input: {
   teamId: string;
   teamName: string;
   actorUserId: string;

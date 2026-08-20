@@ -176,6 +176,7 @@ assert.match(scheduleForm, /notificationReviewOpen/);
 assert.match(scheduleForm, /schedule\.form\.notifyConfirmTitle/);
 const calendarService = read("services", "teamScheduleCalendarService.ts");
 assert.match(calendarService, /require\("expo-calendar\/legacy"\)/);
+assert.match(calendarService, /requireOptionalNativeModule\("ExpoCalendar"\)[\s\S]*calendar_build_required[\s\S]*require\("expo-calendar\/legacy"\)/, "native capability must be checked before evaluating the crash-prone legacy module");
 assert.match(calendarService, /CalendarDialogResultActions/);
 assert.match(calendarService, /startNewActivityTask: false/);
 assert.match(calendarService, /Platform\.OS !== "ios" \|\| iosMajorVersion\(Platform\.Version\) >= 17/);
@@ -223,6 +224,11 @@ const scheduleSources = [
   "app/teams/[teamId]/schedule/index.tsx", "app/teams/[teamId]/schedule/import.tsx",
 ].map((file) => read(file)).join("\n");
 assert.doesNotMatch(scheduleSources, /GameChanger|gamechanger/i);
+const importScreen = read("app", "teams", "[teamId]", "schedule", "import.tsx");
+assert.match(importScreen, /copyToCacheDirectory: true/);
+assert.match(importScreen, /type: "\*\/\*"/);
+assert.match(importScreen, /new modern\.File\(uri\)\.text\(\)/);
+assert.match(importScreen, /\.csv\$\/iu/);
 
 function codedError(code, message = code) {
   const error = new Error(message);

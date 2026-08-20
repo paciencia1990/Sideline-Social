@@ -19,6 +19,7 @@
     "test:functions-packaging": "node scripts/test-functions-packaging.cjs",
     "test:functions-node22-reproducibility": "node scripts/test-functions-node22-reproducibility.cjs",
     "test:android-backup-config": "node scripts/test-android-backup-config.cjs",
+    "test:native-config-parity": "node scripts/test-native-config-parity.cjs",
     "validate:android-backup-release": "node scripts/validate-android-backup-release.cjs",
     "test:android-variants": "node scripts/test-android-variants-core.cjs",
     "audit:app-size": "node scripts/audit-app-size.cjs",
@@ -81,7 +82,8 @@
     "test:emulator:notifications": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-notifications-functions-test --only auth,firestore,functions \"node scripts/test-notification-functions-emulator.cjs\"",
     "test:firestore:announcement-deletion": "npm --prefix functions run build && firebase.cmd emulators:exec --only firestore \"node scripts/test-announcement-deletion-firestore.cjs\"",
     "test:parent-teams": "node scripts/test-parent-teams-core.cjs",
-    "test:team-schedule": "node scripts/test-team-schedule-core.cjs",
+    "test:team-schedule": "node scripts/test-team-schedule-core.cjs && node scripts/test-team-calendar-core.cjs",
+    "test:team-calendar-security": "node scripts/test-team-calendar-core.cjs",
     "test:firestore:team-schedule": "firebase.cmd emulators:exec --project sideline-team-schedule-rules-test --only firestore \"node scripts/test-team-schedule-firestore-rules.cjs\"",
     "test:emulator:team-schedule": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-team-schedule-functions-test --only auth,database,firestore,functions \"node scripts/test-team-schedule-functions-emulator.cjs\"",
     "test:archived-team-lifecycle": "node scripts/test-archived-team-lifecycle-core.cjs",
@@ -195,6 +197,20 @@
   },
   "overrides": {
     "undici": "6.28.0"
+  },
+  "expo": {
+    "doctor": {
+      "appConfigFieldsNotSyncedCheck": {
+        "enabled": false
+      },
+      "reactNativeDirectoryCheck": {
+        "enabled": true,
+        "exclude": [
+          "react-native-nitro-google-signin"
+        ],
+        "listUnknownPackages": true
+      }
+    }
   },
   "private": true
 }

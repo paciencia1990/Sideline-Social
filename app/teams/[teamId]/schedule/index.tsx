@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { Archive, ArrowLeft, CalendarPlus, ChevronDown, ChevronUp, FileUp, WifiOff } from "lucide-react-native";
+import { Archive, ArrowLeft, CalendarDays, CalendarPlus, ChevronDown, ChevronUp, WifiOff } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -171,15 +171,18 @@ export default function TeamScheduleScreen() {
 
         {canManage ? (
           <View style={styles.actionRow}>
-            <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/teams/[teamId]/schedule/edit", params: { teamId } } as never)} style={styles.primaryAction}>
+            <TouchableOpacity accessibilityHint={t("schedule.addSchedule.intro")} accessibilityRole="button" onPress={() => router.push({ pathname: "/teams/[teamId]/schedule/add", params: { teamId } } as never)} style={styles.primaryAction}>
               <CalendarPlus color={Colors.surface} size={19} />
-              <Text style={styles.primaryActionText}>{t("schedule.addEvent")}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/teams/[teamId]/schedule/import", params: { teamId } } as never)} style={styles.secondaryAction}>
-              <FileUp color={Colors.communicationLink} size={19} />
-              <Text style={styles.secondaryActionText}>{t("schedule.importCsv")}</Text>
+              <Text style={styles.primaryActionText}>{t("schedule.addSchedule.title")}</Text>
             </TouchableOpacity>
           </View>
+        ) : null}
+
+        {access ? (
+          <TouchableOpacity accessibilityHint={t("schedule.subscription.body")} accessibilityRole="button" onPress={() => router.push({ pathname: "/teams/[teamId]/schedule/subscribe", params: { teamId } } as never)} style={styles.secondaryAction}>
+            <CalendarDays color={Colors.communicationLink} size={19} />
+            <Text style={styles.secondaryActionText}>{t("schedule.subscription.title")}</Text>
+          </TouchableOpacity>
         ) : null}
 
         {loading ? (

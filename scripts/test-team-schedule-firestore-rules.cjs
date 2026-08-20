@@ -69,6 +69,14 @@ async function run() {
     await assertFails(getDoc(activeEvent(testEnv.unauthenticatedContext().firestore())));
     await assertFails(getDoc(doc(dbFor("coach"), "teamScheduleOperations", "private")));
     await assertFails(getDoc(doc(dbFor("coach"), "teamScheduleAudit", "private")));
+    for (const collectionName of [
+      "teamCalendarIntegrations", "teamCalendarSyncLeases", "teamCalendarSubscriptions",
+      "teamCalendarSubscriptionOwners", "teamCalendarSyncAudit", "teamCalendarImportPreviews",
+      "teamCalendarRateLimits",
+    ]) {
+      await assertFails(getDoc(doc(dbFor("coach"), collectionName, "private")));
+      await assertFails(setDoc(doc(dbFor("coach"), collectionName, "private"), { secret: true }));
+    }
 
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();

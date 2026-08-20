@@ -1,3 +1,4 @@
+import { requireOptionalNativeModule } from "expo-modules-core";
 import { Linking, Platform } from "react-native";
 
 import type { TeamScheduleEvent } from "@/services/teamScheduleService";
@@ -109,6 +110,11 @@ async function requestLegacyIosCalendarPermissionIfNeeded(calendar: ExpoCalendar
 }
 
 function loadCalendar(): ExpoCalendarLegacyModule {
+  // `expo-calendar/legacy` calls requireNativeModule at module evaluation time.
+  // Probe first so an older development client cannot trigger Expo's red screen.
+  if (!requireOptionalNativeModule("ExpoCalendar")) {
+    throw createTeamScheduleCalendarError("calendar_build_required");
+  }
   try {
     // The SDK 57 legacy editor lets the user choose a calendar without reading calendar data.
     // eslint-disable-next-line @typescript-eslint/no-require-imports

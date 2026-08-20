@@ -243,9 +243,24 @@ export {
 } from './friendChat';
 export {
   deleteTeamScheduleEvent,
+  detachTeamScheduleEvent,
   importTeamScheduleEvents,
   saveTeamScheduleEvent,
 } from './teamSchedule';
+export {
+  confirmTeamCalendarFeed,
+  connectTeamCalendarFeed,
+  createTeamCalendarSubscription,
+  disconnectTeamCalendarFeed,
+  getTeamCalendarConnection,
+  importTeamScheduleIcs,
+  previewTeamScheduleIcs,
+  revokeTeamCalendarSubscription,
+  setTeamCalendarAutomaticSync,
+  syncTeamCalendarFeedNow,
+  syncTeamCalendarFeeds,
+  teamCalendarSubscription,
+} from './teamCalendar';
 
 admin.initializeApp();
 

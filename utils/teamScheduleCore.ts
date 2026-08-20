@@ -50,7 +50,15 @@ export type ParsedScheduleCsvRow = {
   rowNumber: number;
   draft: TeamScheduleDraft | null;
   errors: string[];
+  problems: { field: string; code: string }[];
   fingerprint: string | null;
+};
+
+export type TeamScheduleCsvAnalysis = {
+  delimiter: "," | ";";
+  rows: ParsedScheduleCsvRow[];
+  fileErrors: string[];
+  headerMap: Record<string, string>;
 };
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
@@ -261,27 +269,81 @@ export function addDateDays(date: string, days: number) {
 }
 
 export function parseTeamScheduleCsv(text: string): ParsedScheduleCsvRow[] {
-  const rows = parseCsvRows(text.replace(/^\uFEFF/u, ""));
-  if (rows.length === 0) return [];
-  const headers = rows[0].map((value) => value.trim().toLowerCase());
-  const requiredHeaders = ["type", "title", "date", "start_time", "end_time", "timezone"];
-  if (requiredHeaders.some((header) => !headers.includes(header))) {
-    return [{ rowNumber: 1, draft: null, errors: ["missingHeaders"], fingerprint: null }];
+  const analysis = analyzeTeamScheduleCsv(text);
+  if (analysis.fileErrors.length > 0) {
+    return [{ rowNumber: 1, draft: null, errors: analysis.fileErrors, problems: analysis.fileErrors.map((code) => ({ field: "file", code })), fingerprint: null }];
+  }
+  return analysis.rows;
+}
+
+const CSV_HEADER_ALIASES: Record<string, string[]> = {
+  type: ["type", "event type"],
+  title: ["title", "event name"],
+  date: ["date", "start date"],
+  start_time: ["start time"],
+  end_date: ["end date"],
+  end_time: ["end time"],
+  arrival_time: ["arrival time"],
+  timezone: ["timezone", "time zone"],
+  all_day: ["all day", "all-day"],
+  opponent: ["opponent"],
+  home_away: ["home away", "home/away"],
+  venue: ["venue", "location"],
+  field: ["field"],
+  address: ["address"],
+  status: ["status"],
+  team_score: ["team score"],
+  opponent_score: ["opponent score"],
+  notes: ["notes", "description"],
+};
+
+const REQUIRED_CSV_HEADERS = ["type", "title", "date", "start_time", "end_time", "timezone"];
+
+export function analyzeTeamScheduleCsv(text: string): TeamScheduleCsvAnalysis {
+  if (/^\uFFFE/u.test(text) || /\u0000/u.test(text)) {
+    return { delimiter: ",", rows: [], fileErrors: ["invalidEncoding"], headerMap: {} };
+  }
+  const normalizedText = text.replace(/^\uFEFF/u, "");
+  const delimiter = detectCsvDelimiter(normalizedText);
+  const rows = parseCsvRows(normalizedText, delimiter);
+  if (rows.length === 0) return { delimiter, rows: [], fileErrors: ["noValidEvents"], headerMap: {} };
+  const normalizedHeaders = rows[0].map(normalizeCsvHeader);
+  const headerMap: Record<string, string> = {};
+  const ambiguous: string[] = [];
+  Object.entries(CSV_HEADER_ALIASES).forEach(([canonical, aliases]) => {
+    const indexes = normalizedHeaders.flatMap((header, index) => aliases.includes(header) ? [index] : []);
+    if (indexes.length > 1) ambiguous.push(canonical);
+    else if (indexes.length === 1) headerMap[canonical] = String(indexes[0]);
+  });
+  if (ambiguous.length > 0) return { delimiter, rows: [], fileErrors: ["ambiguousHeaders"], headerMap };
+  if (REQUIRED_CSV_HEADERS.some((header) => headerMap[header] === undefined)) {
+    return { delimiter, rows: [], fileErrors: ["missingHeaders"], headerMap };
   }
   const parsed = rows.slice(1, TEAM_SCHEDULE_MAX_IMPORT_ROWS + 1).map((row, index) => {
-    const value = (header: string) => row[headers.indexOf(header)]?.trim() ?? "";
-    const type = parseEventType(value("type"));
-    const status = parseStatus(value("status"));
-    const homeAway = parseHomeAway(value("home_away"));
+    const value = (header: string) => {
+      const mappedIndex = headerMap[header];
+      return mappedIndex === undefined ? "" : row[Number(mappedIndex)]?.trim() ?? "";
+    };
+    const rawType = value("type");
+    const rawStatus = value("status");
+    const rawHomeAway = value("home_away");
+    const type = parseEventType(rawType);
+    const status = parseStatus(rawStatus);
+    const homeAway = parseHomeAway(rawHomeAway);
+    const date = normalizeCsvDate(value("date"));
+    const endDate = normalizeCsvDate(value("end_date")) || date;
+    const startTime = normalizeCsvTime(value("start_time"));
+    const endTime = normalizeCsvTime(value("end_time"));
+    const allDay = parseBoolean(value("all_day"));
     const draft: TeamScheduleDraft = {
       type,
       title: value("title"),
-      date: value("date"),
-      startTime: value("start_time"),
-      endTime: value("end_time"),
-      arrivalTime: value("arrival_time"),
+      date,
+      startTime: allDay ? "" : startTime,
+      endTime: allDay ? "" : endDate === date ? endTime : endTime,
+      arrivalTime: allDay ? "" : normalizeCsvTime(value("arrival_time")),
       timezone: value("timezone"),
-      isAllDay: parseBoolean(value("all_day")),
+      isAllDay: allDay,
       opponentName: value("opponent"),
       homeAway,
       venueName: value("venue"),
@@ -293,14 +355,17 @@ export function parseTeamScheduleCsv(text: string): ParsedScheduleCsvRow[] {
       notes: value("notes"),
     };
     const validation = validateScheduleDraft(draft);
-    if (value("type") && !TEAM_SCHEDULE_EVENT_TYPES.includes(value("type") as TeamScheduleEventType)) validation.type = "invalidType";
-    if (value("status") && !TEAM_SCHEDULE_STATUSES.includes(value("status") as TeamScheduleStatus)) validation.status = "invalidStatus";
-    if (value("home_away") && !TEAM_SCHEDULE_HOME_AWAY.includes(value("home_away") as TeamScheduleHomeAway)) validation.homeAway = "invalidHomeAway";
-    const errors = Object.values(validation);
+    if (!recognizedEventType(rawType)) validation.type = "invalidType";
+    if (rawStatus && !recognizedStatus(rawStatus)) validation.status = "invalidStatus";
+    if (rawHomeAway && !recognizedHomeAway(rawHomeAway)) validation.homeAway = "invalidHomeAway";
+    if (endDate !== date) validation.endDate = "multiDayUnsupported";
+    const problems = Object.entries(validation).map(([field, code]) => ({ field, code }));
+    const errors = problems.map((problem) => problem.code);
     return {
       rowNumber: index + 2,
       draft: errors.length === 0 ? draft : null,
       errors: Array.from(new Set(errors)),
+      problems,
       fingerprint: errors.length === 0 ? buildScheduleFingerprint(draft) : null,
     };
   });
@@ -309,10 +374,11 @@ export function parseTeamScheduleCsv(text: string): ParsedScheduleCsvRow[] {
       rowNumber: TEAM_SCHEDULE_MAX_IMPORT_ROWS + 2,
       draft: null,
       errors: ["rowLimit"],
+      problems: [{ field: "file", code: "rowLimit" }],
       fingerprint: null,
     });
   }
-  return parsed;
+  return { delimiter, rows: parsed, fileErrors: [], headerMap };
 }
 
 export const TEAM_SCHEDULE_SAMPLE_CSV = [
@@ -321,7 +387,7 @@ export const TEAM_SCHEDULE_SAMPLE_CSV = [
   "practice,Weekly practice,2027-03-18,17:30,19:00,17:15,America/New_York,false,,,Training Center,North Field,200 Park Ave,scheduled,,,Water and cleats",
 ].join("\n");
 
-function parseCsvRows(text: string) {
+function parseCsvRows(text: string, delimiter: "," | ";") {
   const rows: string[][] = [];
   let row: string[] = [];
   let value = "";
@@ -335,7 +401,7 @@ function parseCsvRows(text: string) {
       } else {
         quoted = !quoted;
       }
-    } else if (character === "," && !quoted) {
+    } else if (character === delimiter && !quoted) {
       row.push(value);
       value = "";
     } else if ((character === "\n" || character === "\r") && !quoted) {
@@ -353,19 +419,86 @@ function parseCsvRows(text: string) {
   return rows;
 }
 
+function detectCsvDelimiter(text: string): "," | ";" {
+  const firstRecord = firstCsvRecord(text);
+  const commas = countUnquoted(firstRecord, ",");
+  const semicolons = countUnquoted(firstRecord, ";");
+  return semicolons > commas ? ";" : ",";
+}
+
+function firstCsvRecord(text: string) {
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '"') quoted = text[index + 1] === '"' && quoted ? quoted : !quoted;
+    if (!quoted && (text[index] === "\r" || text[index] === "\n")) return text.slice(0, index);
+  }
+  return text;
+}
+
+function countUnquoted(text: string, delimiter: string) {
+  let count = 0;
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '"') quoted = text[index + 1] === '"' && quoted ? quoted : !quoted;
+    else if (!quoted && text[index] === delimiter) count += 1;
+  }
+  return count;
+}
+
+function normalizeCsvHeader(value: string) {
+  return value.trim().toLocaleLowerCase("en-US").replace(/^\uFEFF/u, "").replace(/[_-]+/gu, " ").replace(/\s+/gu, " ");
+}
+
+function normalizeCsvDate(value: string) {
+  const trimmed = value.trim();
+  if (DATE_PATTERN.test(trimmed)) return trimmed;
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(trimmed);
+  return match ? `${match[3]}-${pad(Number(match[1]))}-${pad(Number(match[2]))}` : trimmed;
+}
+
+function normalizeCsvTime(value: string) {
+  const trimmed = value.trim();
+  if (TIME_PATTERN.test(trimmed)) return trimmed;
+  const match = /^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AP]M)?$/iu.exec(trimmed);
+  if (!match) return trimmed;
+  let hour = Number(match[1]);
+  const suffix = match[3]?.toUpperCase();
+  if (suffix === "AM" && hour === 12) hour = 0;
+  if (suffix === "PM" && hour < 12) hour += 12;
+  return hour <= 23 ? `${pad(hour)}:${match[2]}` : trimmed;
+}
+
 function parseEventType(value: string): TeamScheduleEventType {
-  if (value === "game" || value === "teamEvent") return value;
-  return "practice";
+  const normalized = value.trim().toLocaleLowerCase("en-US").replace(/[\s_-]+/gu, "");
+  if (normalized === "game" || normalized === "match") return "game";
+  if (normalized === "practice" || normalized === "training") return "practice";
+  return "teamEvent";
 }
 
 function parseStatus(value: string): TeamScheduleStatus {
-  if (value === "postponed" || value === "cancelled" || value === "completed") return value;
+  const normalized = value.trim().toLocaleLowerCase("en-US");
+  if (normalized === "postponed" || normalized === "cancelled" || normalized === "completed") return normalized;
   return "scheduled";
 }
 
 function parseHomeAway(value: string): TeamScheduleHomeAway | "" {
-  if (value === "home" || value === "away" || value === "neutral") return value;
+  const normalized = value.trim().toLocaleLowerCase("en-US").replace(/\s+site$/u, "");
+  if (normalized === "home" || normalized === "away" || normalized === "neutral") return normalized;
   return "";
+}
+
+function recognizedEventType(value: string) {
+  const normalized = value.trim().toLocaleLowerCase("en-US").replace(/[\s_-]+/gu, "");
+  return ["game", "match", "practice", "training", "teamevent", "event", "meeting", "other"].includes(normalized);
+}
+
+function recognizedStatus(value: string) {
+  return TEAM_SCHEDULE_STATUSES.includes(value.trim().toLocaleLowerCase("en-US") as TeamScheduleStatus);
+}
+
+function recognizedHomeAway(value: string) {
+  const normalized = value.trim().toLocaleLowerCase("en-US").replace(/\s+site$/u, "");
+  return TEAM_SCHEDULE_HOME_AWAY.includes(normalized as TeamScheduleHomeAway);
 }
 
 function parseBoolean(value: string) {

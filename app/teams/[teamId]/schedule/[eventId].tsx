@@ -12,7 +12,7 @@ import {
   View,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { ArrowLeft, CalendarPlus, Clock3, MapPin, Pencil, Trash2, type LucideIcon } from "lucide-react-native";
+import { ArrowLeft, CalendarPlus, Clock3, MapPin, Pencil, Trash2, Unlink, type LucideIcon } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -22,6 +22,7 @@ import { acknowledgeNotificationAfterOpen } from "@/services/notificationService
 import { addTeamEventToPersonalCalendar, openCalendarSettings } from "@/services/teamScheduleCalendarService";
 import {
   deleteTeamScheduleEvent,
+  detachTeamScheduleEvent,
   getTeamScheduleAccess,
   getTeamScheduleEvent,
   type TeamScheduleAccess,
@@ -135,6 +136,17 @@ export default function TeamScheduleEventDetailScreen() {
     ]);
   }, [busy, event, remove, t]);
 
+  const confirmDetach = useCallback(() => {
+    if (!event || busy) return;
+    Alert.alert(t("schedule.detach.title"), t("schedule.detach.body"), [
+      { text: t("common.cancel"), style: "cancel" },
+      { text: t("schedule.detach.confirm"), onPress: () => {
+        setBusy("delete");
+        void detachTeamScheduleEvent(teamId, event.id).then(() => load()).catch(() => Alert.alert(t("schedule.detach.errorTitle"), t("schedule.detach.errorBody"))).finally(() => setBusy(null));
+      } },
+    ]);
+  }, [busy, event, load, t, teamId]);
+
   const canManage = access?.canManage === true && access.teamStatus === "active";
   return (
     <ScreenWrapper>
@@ -170,6 +182,7 @@ export default function TeamScheduleEventDetailScreen() {
               {event.field ? <Detail label={t("schedule.form.field")} value={event.field} /> : null}
               {event.address ? <Detail icon={<MapPin color={Colors.communicationLink} size={19} />} label={t("schedule.form.address")} value={event.address} /> : null}
               {event.notes ? <Detail label={t("schedule.form.notes")} value={event.notes} /> : null}
+              {event.source === "ics-feed" ? <Detail label={t("schedule.syncedIndicator")} value={t("schedule.syncedExplanation")} /> : null}
             </Card>
 
             <View style={styles.actions}>
@@ -183,10 +196,11 @@ export default function TeamScheduleEventDetailScreen() {
                 Icon={CalendarPlus}
                 onPress={() => { void addToCalendar(); }}
               />
-              {canManage ? <Action label={t("schedule.editEvent")} Icon={Pencil} onPress={() => router.push({ pathname: "/teams/[teamId]/schedule/edit", params: { teamId, eventId: event.id } } as never)} /> : null}
+              {canManage && event.source !== "ics-feed" ? <Action label={t("schedule.editEvent")} Icon={Pencil} onPress={() => router.push({ pathname: "/teams/[teamId]/schedule/edit", params: { teamId, eventId: event.id } } as never)} /> : null}
+              {canManage && event.source === "ics-feed" ? <Action label={t("schedule.detach.action")} Icon={Unlink} onPress={confirmDetach} /> : null}
             </View>
 
-            {canManage ? (
+            {canManage && event.source !== "ics-feed" ? (
               <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: busy === "delete", disabled: Boolean(busy) }} disabled={Boolean(busy)} onPress={confirmDelete} style={styles.deleteButton}>
                 {busy === "delete" ? <ActivityIndicator color={Colors.primary} /> : <Trash2 color={Colors.primary} size={18} />}
                 <Text style={styles.deleteText}>{t("schedule.delete.action")}</Text>

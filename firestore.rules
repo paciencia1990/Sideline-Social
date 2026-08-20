@@ -735,6 +735,30 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Calendar feed credentials, leases, token hashes, rate limits, previews,
+    // and privacy-safe sync summaries are reachable only through Functions.
+    match /teamCalendarIntegrations/{integrationId} {
+      allow read, write: if false;
+    }
+    match /teamCalendarSyncLeases/{leaseId} {
+      allow read, write: if false;
+    }
+    match /teamCalendarSubscriptions/{subscriptionId} {
+      allow read, write: if false;
+    }
+    match /teamCalendarSubscriptionOwners/{ownerId} {
+      allow read, write: if false;
+    }
+    match /teamCalendarSyncAudit/{auditId} {
+      allow read, write: if false;
+    }
+    match /teamCalendarImportPreviews/{previewId} {
+      allow read, write: if false;
+    }
+    match /teamCalendarRateLimits/{rateLimitId} {
+      allow read, write: if false;
+    }
+
     // Canonical standing and moderation records are server-only. The separate
     // self-readable projection contains no moderator identity, evidence, notes,
     // action path, reporter information, or child data.

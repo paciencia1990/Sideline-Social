@@ -17,7 +17,7 @@ import {
 import {
   TEAM_SCHEDULE_MAX_CSV_BYTES,
   TEAM_SCHEDULE_SAMPLE_CSV,
-  parseTeamScheduleCsv,
+  analyzeTeamScheduleCsv,
   type ParsedScheduleCsvRow,
 } from "@/utils/teamScheduleCore";
 
@@ -32,6 +32,20 @@ type FileSystemModule = {
   EncodingType: { UTF8: string };
   readAsStringAsync: (uri: string, options?: { encoding?: string }) => Promise<string>;
 };
+
+type ModernFileSystemModule = {
+  File: new (uri: string) => { text: () => Promise<string> };
+};
+
+const ACCEPTED_CSV_MIME_TYPES = new Set([
+  "text/csv",
+  "text/comma-separated-values",
+  "application/csv",
+  "application/vnd.ms-excel",
+  "application/octet-stream",
+  "application/x-download",
+  "text/plain",
+]);
 
 type PreviewRow = ParsedScheduleCsvRow & {
   selected: boolean;
@@ -74,18 +88,22 @@ export default function TeamScheduleImportScreen() {
     try {
       const picker = loadDocumentPicker();
       const result = await picker.getDocumentAsync({
-        type: ["text/csv", "text/comma-separated-values", "application/vnd.ms-excel", "text/plain"],
+        // Android providers often label CSV files as generic documents. Validate
+        // the returned extension/MIME after the provider copies it to app cache.
+        type: "*/*",
         copyToCacheDirectory: true,
         multiple: false,
       });
       if (result.canceled) return;
       const asset = result.assets?.[0];
       if (!asset) throw importError("file_unavailable");
+      validateCsvAsset(asset);
       if (typeof asset.size === "number" && asset.size > TEAM_SCHEDULE_MAX_CSV_BYTES) throw importError("file_too_large");
-      const fileSystem = loadFileSystem();
-      const text = await fileSystem.readAsStringAsync(asset.uri, { encoding: fileSystem.EncodingType.UTF8 });
+      const text = await readPickedText(asset.uri);
       if (new TextEncoder().encode(text).length > TEAM_SCHEDULE_MAX_CSV_BYTES) throw importError("file_too_large");
-      const parsed = parseTeamScheduleCsv(text);
+      const analysis = analyzeTeamScheduleCsv(text);
+      if (analysis.fileErrors.length > 0) throw importError(analysis.fileErrors[0]);
+      const parsed = analysis.rows;
       const parsedWithFingerprints = [];
       for (const row of parsed) {
         parsedWithFingerprints.push({
@@ -117,10 +135,17 @@ export default function TeamScheduleImportScreen() {
       }
       setFileName(asset.name);
       setRows(preview);
-      if (preview.length === 0) setError(t("schedule.import.emptyFile"));
+      if (preview.length === 0) setError(t("schedule.import.noValidEvents"));
+      else if (preview.some((row) => row.state === "invalid") && preview.some((row) => row.state === "valid")) {
+        setError(t("schedule.import.partialRows"));
+      }
     } catch (nextError) {
       const code = errorCode(nextError);
-      const key = ["file_too_large", "picker_build_required", "file_unavailable"].includes(code) ? code : "readFailed";
+      const known = [
+        "file_too_large", "picker_build_required", "file_unavailable", "unsupportedFileType",
+        "invalidEncoding", "missingHeaders", "ambiguousHeaders", "rowLimit", "noValidEvents",
+      ];
+      const key = known.includes(code) ? code : "readFailed";
       setError(t(`schedule.import.${key}`));
     } finally {
       setPicking(false);
@@ -147,12 +172,15 @@ export default function TeamScheduleImportScreen() {
       }));
       const result = await importTeamScheduleEvents(teamId, payload, notifyTeam);
       Alert.alert(
-        t("schedule.import.successTitle"),
-        t("schedule.import.successBody", { created: result.createdCount, unchanged: result.unchangedCount }),
+        t(result.createdCount === 0 && result.unchangedCount > 0 ? "schedule.import.duplicateCompletedTitle" : "schedule.import.successTitle"),
+        t(result.createdCount === 0 && result.unchangedCount > 0 ? "schedule.import.duplicateCompleted" : "schedule.import.successBody", { created: result.createdCount, unchanged: result.unchangedCount }),
         [{ text: t("common.ok"), onPress: () => router.replace({ pathname: "/teams/[teamId]/schedule", params: { teamId } } as never) }],
       );
-    } catch {
-      setError(t("schedule.import.importFailed"));
+    } catch (nextError) {
+      const code = errorCode(nextError);
+      setError(t(code.includes("permission-denied") || code.includes("failed-precondition")
+        ? "schedule.import.authorizationChanged"
+        : "schedule.import.importFailed"));
       setImporting(false);
     }
   }, [importing, notifyTeam, selectedRows, t, teamId]);
@@ -215,7 +243,7 @@ export default function TeamScheduleImportScreen() {
               <View style={styles.rowCopy}>
                 <Text style={styles.rowTitle}>{row.draft?.title || t("schedule.import.rowNumber", { row: row.rowNumber })}</Text>
                 <Text style={styles.rowMeta}>{t(`schedule.import.states.${row.state}`)}</Text>
-                {row.errors.length > 0 ? <Text style={styles.rowError}>{row.errors.map((code) => t(`schedule.validation.${code}`)).join(" | ")}</Text> : null}
+                {row.problems.length > 0 ? <Text style={styles.rowError}>{row.problems.map((problem) => t("schedule.import.fieldProblem", { field: t(`schedule.import.fields.${problem.field}`), problem: t(`schedule.validation.${problem.code}`) })).join(" | ")}</Text> : null}
               </View>
             </Card>
           </TouchableOpacity>
@@ -260,6 +288,29 @@ function loadFileSystem(): FileSystemModule {
   // Metro requires a literal package name for the legacy UTF-8 file reader.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require("expo-file-system/legacy") as FileSystemModule;
+}
+
+async function readPickedText(uri: string) {
+  try {
+    // SDK 57's File API handles the cached file:// URI returned by the picker.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const modern = require("expo-file-system") as ModernFileSystemModule;
+    if (typeof modern.File === "function") return await new modern.File(uri).text();
+  } catch {
+    // Fall through to the supported legacy reader for older embedded runtimes.
+  }
+  try {
+    const legacy = loadFileSystem();
+    return await legacy.readAsStringAsync(uri, { encoding: legacy.EncodingType.UTF8 });
+  } catch {
+    throw importError("file_unavailable");
+  }
+}
+
+function validateCsvAsset(asset: { name: string; mimeType?: string }) {
+  const nameIsCsv = /\.csv$/iu.test(asset.name.trim());
+  const mime = asset.mimeType?.split(";")[0]?.trim().toLocaleLowerCase("en-US") ?? "";
+  if (!nameIsCsv || (mime && !ACCEPTED_CSV_MIME_TYPES.has(mime))) throw importError("unsupportedFileType");
 }
 
 function importError(code: string) {

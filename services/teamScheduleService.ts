@@ -47,7 +47,10 @@ export type TeamScheduleEvent = {
   teamScore: number | null;
   opponentScore: number | null;
   notes: string | null;
-  source: "manual" | "csv";
+  source: "manual" | "csv" | "ics-file" | "ics-feed";
+  sourceIntegrationId: string | null;
+  externalUid: string | null;
+  recurrenceId: string | null;
   importFingerprint: string | null;
   recurrenceGroupId: string | null;
   recurrenceIndex: number | null;
@@ -267,6 +270,11 @@ export async function deleteTeamScheduleEvent(teamId: string, eventId: string) {
   return (await callable({ teamId, eventId })).data;
 }
 
+export async function detachTeamScheduleEvent(teamId: string, eventId: string) {
+  const callable = httpsCallable<{ teamId: string; eventId: string }, { detached: boolean }>(functions, "detachTeamScheduleEvent");
+  return (await callable({ teamId, eventId })).data;
+}
+
 export async function importTeamScheduleEvents(
   teamId: string,
   rows: ImportScheduleRow[],
@@ -327,7 +335,10 @@ function normalizeEvent(teamId: string, snapshot: QueryDocumentSnapshot<Document
     teamScore: readScore(data.teamScore),
     opponentScore: readScore(data.opponentScore),
     notes: readNullableString(data.notes),
-    source: data.source === "csv" ? "csv" : "manual",
+    source: data.source === "csv" || data.source === "ics-file" || data.source === "ics-feed" ? data.source : "manual",
+    sourceIntegrationId: readNullableString(data.sourceIntegrationId),
+    externalUid: readNullableString(data.externalUid),
+    recurrenceId: readNullableString(data.recurrenceId),
     importFingerprint: readNullableString(data.importFingerprint),
     recurrenceGroupId: readNullableString(data.recurrenceGroupId),
     recurrenceIndex: Number.isInteger(data.recurrenceIndex) ? data.recurrenceIndex : null,
