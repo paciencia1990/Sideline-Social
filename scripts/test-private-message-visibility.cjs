@@ -61,15 +61,81 @@ assert.match(streamAuthorization, /!hiddenSnapshot\.exists/);
 const service = read("services", "teamPrivateMessageService.ts");
 const listener = callableSlice(
   service,
-  "export function listenToPrivateTeamMessages",
+  "export function listenToNewestPrivateTeamMessagesPage",
   "export async function markPrivateTeamConversationRead",
 );
 assert.match(listener, /hiddenMessages/);
-assert.match(listener, /canonicalMessages: TeamPrivateMessage\[\] \| null = null/);
-assert.match(listener, /hiddenMessageIds: Set<string> \| null = null/);
-assert.match(listener, /if \(!canonicalMessages \|\| !hiddenMessageIds\) return/);
-assert.match(listener, /filter\(\(message\) => !hiddenMessageIds\?\.has\(message\.id\)\)/);
+assert.match(listener, /canonicalMessages: TeamPrivateMessage\[\] = \[\]/);
+assert.match(listener, /receivedHiddenChunks\.size !== hiddenIdsByChunk\.size/);
+assert.match(listener, /canonicalMessages\.filter\(\(message\) => !hiddenMessageIds\.has\(message\.id\)\)/);
+assert.ok(
+  listener.indexOf("receivedHiddenChunks.size !== hiddenIdsByChunk.size") < listener.indexOf("onValue({ messages"),
+  "canonical messages cannot publish before every hidden-ID chunk is ready",
+);
+assert.ok(
+  listener.indexOf("hiddenIdsByChunk = new Map()") < listener.indexOf("canonicalMessages = snapshot.docs.slice"),
+  "reconnect snapshots reset hidden state before replacing canonical messages",
+);
+assert.match(listener, /if \(chunks\.length === 0\) \{\s*publishVisibleMessages\(\)/, "empty conversations resolve as a loaded empty page");
+assert.match(listener, /hiddenUnsubscribes\.forEach\(\(unsubscribe\) => unsubscribe\(\)\)/, "old hidden listeners are retired on snapshot replacement and cleanup");
 assert.match(service, /functions, "hidePrivateTeamMessageForCurrentUser"/);
+
+function createVisibilityGate() {
+  let generation = 0;
+  let canonicalMessages = [];
+  let hiddenIdsByChunk = new Map();
+  let receivedHiddenChunks = new Set();
+  const emitted = [];
+  return {
+    replace(messages, chunkCount) {
+      generation += 1;
+      canonicalMessages = messages;
+      hiddenIdsByChunk = new Map(Array.from({ length: chunkCount }, (_, index) => [index, new Set()]));
+      receivedHiddenChunks = new Set();
+      if (chunkCount === 0) emitted.push([]);
+      return generation;
+    },
+    receiveHidden(resultGeneration, chunkIndex, ids) {
+      if (resultGeneration !== generation || !hiddenIdsByChunk.has(chunkIndex)) return;
+      hiddenIdsByChunk.set(chunkIndex, new Set(ids));
+      receivedHiddenChunks.add(chunkIndex);
+      if (receivedHiddenChunks.size !== hiddenIdsByChunk.size) return;
+      const hidden = new Set([...hiddenIdsByChunk.values()].flatMap((idsForChunk) => [...idsForChunk]));
+      emitted.push(canonicalMessages.filter((message) => !hidden.has(message.id)));
+    },
+    emitted,
+  };
+}
+
+const visibility = createVisibilityGate();
+const startup = visibility.replace([{ id: "visible" }, { id: "hidden" }], 2);
+assert.deepEqual(visibility.emitted, [], "an initial empty canonical container is not a loaded visibility result");
+visibility.receiveHidden(startup, 0, ["hidden"]);
+assert.deepEqual(visibility.emitted, [], "partial hidden hydration cannot flash canonical content");
+visibility.receiveHidden(startup, 1, []);
+assert.deepEqual(visibility.emitted, [[{ id: "visible" }]]);
+
+const reconnect = visibility.replace([{ id: "next-visible" }, { id: "next-hidden" }], 1);
+assert.equal(visibility.emitted.length, 1, "reconnect resets do not publish before new hidden state arrives");
+visibility.receiveHidden(startup, 0, []);
+assert.equal(visibility.emitted.length, 1, "stale listener results cannot restore hidden content");
+visibility.receiveHidden(reconnect, 0, ["next-hidden"]);
+assert.deepEqual(visibility.emitted.at(-1), [{ id: "next-visible" }]);
+
+visibility.replace([], 0);
+assert.deepEqual(visibility.emitted.at(-1), [], "empty conversations reach a valid loaded state");
+
+function filterOlderPage(messages, hiddenIds) {
+  return messages.filter((message) => !hiddenIds.has(message.id));
+}
+assert.deepEqual(
+  filterOlderPage([{ id: "older-visible" }, { id: "older-hidden" }], new Set(["older-hidden"])),
+  [{ id: "older-visible" }],
+  "older pages are filtered before they are returned for display",
+);
+const olderPage = callableSlice(service, "export async function getOlderPrivateTeamMessagesPage", "export async function getPrivateTeamMessage");
+assert.ok(olderPage.indexOf("await getHiddenMessageIds") < olderPage.indexOf("return {"));
+assert.match(olderPage, /messages: canonicalMessages\.filter\(\(message\) => !hiddenMessageIds\.has\(message\.id\)\)/);
 
 const rules = read("firestore.rules");
 const hiddenRules = rules.slice(rules.indexOf("match /hiddenMessages/{messageId}"));
@@ -83,6 +149,12 @@ assert.match(thread, /deleteForMe/);
 assert.match(thread, /hidePrivateTeamMessageForCurrentUser/);
 assert.match(thread, /clearPersistedVoicePlaybackArtifacts/);
 assert.match(thread, /message\.senderUserId === auth\.currentUser\?\.uid/);
+assert.match(thread, /const generation = \+\+paginationGeneration\.current/);
+assert.match(thread, /setOlderMessages\(\[\]\);[\s\S]*setMessages\(\[\]\);[\s\S]*setHistoryCursor\(null\)/, "conversation/account route changes clear prior canonical and paginated state");
+assert.match(thread, /if \(generation !== paginationGeneration\.current\) return;/, "stale newest and older page results are ignored");
+
+assert.match(rules, /isPrivateTeamConversationParticipant\(conversationId\)/, "sign-out, restriction, or membership removal blocks hidden and canonical reads through authorization");
+assert.match(thread, /readOnly = conversation\?\.status === "readOnly"/);
 
 const cleanupService = read("services", "voicePlaybackCleanupService.ts");
 assert.match(cleanupService, /stopVoicePlaybackForSource/);
