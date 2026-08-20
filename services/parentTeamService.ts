@@ -16,8 +16,10 @@ import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "@/config/firebase";
 import { TEAM_HISTORY_PAGE_SIZES, type TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import {
+  buildParentHomeTeamRows,
   groupTeamsByChild,
   summarizeTeamUpdates,
+  type ParentHomeTeamRow,
   type StableChildIdentity,
 } from "@/utils/parentTeamCore";
 import {
@@ -32,6 +34,8 @@ import {
   getArchivedParentTeamMembershipsPage,
   getCurrentUserTeamMembershipById,
   getParentTeams,
+  hasTeamRole,
+  isTeamActive,
   removeArchivedParentTeamFromAccount,
   type Team,
   type TeamMembership,
@@ -79,6 +83,11 @@ export type ParentTeamsOverview = {
   privateUnreadCount: number;
 };
 
+export type ParentHomeTeamsSummary = {
+  rows: ParentHomeTeamRow[];
+  totalTeams: number;
+};
+
 export type ParentTeamAnnouncementsPage = {
   announcements: ParentTeamAnnouncement[];
   hasMore: boolean;
@@ -109,6 +118,36 @@ export type ChildTeamGroup = {
   teams: ParentTeamSummary[];
   legacy: boolean;
 };
+
+export async function getParentHomeTeamsSummary(): Promise<ParentHomeTeamsSummary> {
+  const [memberships, childProfiles, childLinkRecords] = await Promise.all([
+    getParentTeams({ throwOnError: true }),
+    getCurrentUserChildren(),
+    loadActiveTeamChildLinkRecords(),
+  ]);
+  const childLinksByTeam = resolveChildLinksByTeam(childProfiles, childLinkRecords);
+  const teams = memberships.flatMap((membership) => {
+    if (!membership.team) return [];
+    const childResolution = resolveMembershipChildren(membership, childProfiles, childLinksByTeam);
+    return [{
+      teamId: membership.team.id,
+      team: { name: membership.team.name },
+      children: childResolution.children,
+      legacyChildName: childResolution.legacyChildName,
+    }];
+  });
+
+  return {
+    rows: buildParentHomeTeamRows(teams),
+    totalTeams: new Set(teams.map((team) => team.teamId)).size,
+  };
+}
+
+export async function isParentHomeTeamAvailable(teamId: string): Promise<boolean> {
+  if (!teamId) return false;
+  const membership = await getCurrentUserTeamMembershipById(teamId);
+  return Boolean(membership && hasTeamRole(membership, "parent") && isTeamActive(membership.team));
+}
 
 export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
   const [memberships, childProfiles, privateConversations] = await Promise.all([
@@ -347,18 +386,38 @@ type ResolvedMembershipChildren = {
 };
 
 async function loadChildLinksByTeam(childProfiles: ParentChildProfile[]) {
+  return resolveChildLinksByTeam(childProfiles, await loadActiveTeamChildLinkRecords());
+}
+
+type ParentTeamChildLinkRecord = {
+  teamId: string;
+  childIds: string[];
+};
+
+async function loadActiveTeamChildLinkRecords(): Promise<ParentTeamChildLinkRecord[]> {
   const user = auth.currentUser;
-  const linkedChildren = new Map<string, StableChildIdentity[]>();
-  if (!user) return linkedChildren;
-  const profilesById = new Map(childProfiles.map((child) => [child.id, child]));
+  if (!user) return [];
   const linkSnapshot = await getDocs(collection(db, "users", user.uid, "teamChildLinks"));
-  linkSnapshot.docs.forEach((linkDocument) => {
+  return linkSnapshot.docs.flatMap((linkDocument) => {
     const data = linkDocument.data();
-    if (data.status !== "active") return;
+    if (data.status !== "active") return [];
     const teamId = readString(data.teamId) ?? linkDocument.id;
-    const childIds = Array.isArray(data.childIds) ? data.childIds : [];
+    const childIds = Array.isArray(data.childIds)
+      ? data.childIds.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+      : [];
+    return teamId ? [{ teamId, childIds }] : [];
+  });
+}
+
+function resolveChildLinksByTeam(
+  childProfiles: ParentChildProfile[],
+  linkRecords: ParentTeamChildLinkRecord[],
+) {
+  const linkedChildren = new Map<string, StableChildIdentity[]>();
+  const profilesById = new Map(childProfiles.map((child) => [child.id, child]));
+  linkRecords.forEach(({ childIds, teamId }) => {
     const identities = childIds.flatMap((value) => {
-      const child = typeof value === "string" ? profilesById.get(value) : undefined;
+      const child = profilesById.get(value);
       return child ? [{ id: child.id, displayName: child.displayName, legacy: false }] : [];
     });
     if (teamId && identities.length > 0) linkedChildren.set(teamId, identities);

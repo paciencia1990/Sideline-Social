@@ -13,7 +13,7 @@ function loadTypeScript(relativePath) {
   return loaded.exports;
 }
 
-const { groupTeamsByChild, summarizeTeamUpdates } = loadTypeScript("utils/parentTeamCore.ts");
+const { buildParentHomeTeamRows, groupTeamsByChild, summarizeTeamUpdates } = loadTypeScript("utils/parentTeamCore.ts");
 const {
   activeLinkReferencesChild,
   allChildProfilesExist,
@@ -136,6 +136,24 @@ const summary = summarizeTeamUpdates([...teams, sharedTeam]);
 assert.equal(summary.totalTeams, 4);
 assert.equal(summary.unreadCount, 10);
 assert.equal(summary.latestTeam.teamId, "team-storm");
+
+const homeRows = buildParentHomeTeamRows([...teams, sharedTeam]);
+assert.deepEqual(homeRows.map((row) => `${row.childName} – ${row.teamName}`), [
+  "Emma – Storm",
+  "Emma – Wildcats",
+  "Noah – Wildcats",
+  "Sam – Falcons",
+  "Sam – Tigers",
+]);
+assert.deepEqual(
+  homeRows.filter((row) => row.teamId === "team-shared").map((row) => row.childId),
+  ["child-emma", "child-noah"],
+  "two children connected to one team must keep deterministic canonical associations",
+);
+assert.equal(new Set(homeRows.map((row) => row.key)).size, homeRows.length);
+assert.equal(buildParentHomeTeamRows([
+  team("team #1", "Route Test", [child("child-route", "Alek")], 0, null),
+])[0].teamId, "team #1", "route-sensitive canonical IDs must remain unchanged for parameter navigation");
 
 const legacyGroups = groupTeamsByChild([
   team("legacy-1", "Legacy One", [], 0, null, "Alex"),

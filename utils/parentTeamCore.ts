@@ -4,16 +4,27 @@ export type StableChildIdentity = {
   legacy: boolean;
 };
 
-export type ChildLinkedTeam = {
+export type ChildAssociationTeam = {
   teamId: string;
   team: { name: string };
   children: StableChildIdentity[];
   legacyChildName: string | null;
+};
+
+export type ChildLinkedTeam = ChildAssociationTeam & {
   unreadCount: number;
   latestAnnouncement: { createdAtDate: Date | null } | null;
 };
 
-export type ChildLinkedTeamGroup<T extends ChildLinkedTeam> = {
+export type ParentHomeTeamRow = {
+  key: string;
+  teamId: string;
+  teamName: string;
+  childId: string | null;
+  childName: string | null;
+};
+
+export type ChildLinkedTeamGroup<T extends ChildAssociationTeam> = {
   key: string;
   childId: string | null;
   childName: string | null;
@@ -21,7 +32,7 @@ export type ChildLinkedTeamGroup<T extends ChildLinkedTeam> = {
   teams: T[];
 };
 
-export function groupTeamsByChild<T extends ChildLinkedTeam>(teams: T[]): ChildLinkedTeamGroup<T>[] {
+export function groupTeamsByChild<T extends ChildAssociationTeam>(teams: T[]): ChildLinkedTeamGroup<T>[] {
   const groups = new Map<string, ChildLinkedTeamGroup<T>>();
   teams.forEach((team) => {
     resolveDisplayIdentities(team).forEach((identity) => {
@@ -52,6 +63,25 @@ export function groupTeamsByChild<T extends ChildLinkedTeam>(teams: T[]): ChildL
     });
 }
 
+export function buildParentHomeTeamRows<T extends ChildAssociationTeam>(teams: T[]): ParentHomeTeamRow[] {
+  const uniqueTeams = Array.from(new Map(teams.map((team) => [team.teamId, team])).values());
+  return uniqueTeams
+    .flatMap((team) => resolveDisplayIdentities(team).map((identity) => ({
+      key: JSON.stringify([identity.id, team.teamId]),
+      teamId: team.teamId,
+      teamName: team.team.name,
+      childId: identity.legacy ? null : identity.id,
+      childName: identity.displayName || null,
+    })))
+    .sort((first, second) => {
+      const childComparison = (first.childName ?? "").localeCompare(second.childName ?? "");
+      if (childComparison) return childComparison;
+      const teamComparison = first.teamName.localeCompare(second.teamName);
+      if (teamComparison) return teamComparison;
+      return first.key.localeCompare(second.key);
+    });
+}
+
 export function summarizeTeamUpdates<T extends ChildLinkedTeam>(teams: T[]) {
   const uniqueTeams = Array.from(new Map(teams.map((team) => [team.teamId, team])).values());
   const latestTeam = [...uniqueTeams]
@@ -64,7 +94,7 @@ export function summarizeTeamUpdates<T extends ChildLinkedTeam>(teams: T[]) {
   };
 }
 
-function resolveDisplayIdentities(team: ChildLinkedTeam): StableChildIdentity[] {
+function resolveDisplayIdentities(team: ChildAssociationTeam): StableChildIdentity[] {
   const identities = [...team.children];
   if (team.legacyChildName) {
     identities.push({

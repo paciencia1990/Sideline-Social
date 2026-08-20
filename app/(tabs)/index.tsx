@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -34,10 +35,9 @@ import { subscribeToUnreadFriendConversationCount } from "@/services/chatService
 import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 import type { GameJoinCodeType } from "@/services/gameJoinCodeService";
 import {
-  getParentTeamsOverview,
-  getTeamChildNames,
-  type ParentTeamsOverview,
-  type ParentTeamSummary,
+  getParentHomeTeamsSummary,
+  isParentHomeTeamAvailable,
+  type ParentHomeTeamsSummary,
 } from "@/services/parentTeamService";
 import {
   completeWeeklyChallenge,
@@ -73,9 +73,12 @@ export default function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
-  const [myTeamsOverview, setMyTeamsOverview] = useState<ParentTeamsOverview | null>(null);
+  const [myTeamsSummary, setMyTeamsSummary] = useState<ParentHomeTeamsSummary | null>(null);
   const [myTeamsLoading, setMyTeamsLoading] = useState(true);
   const [myTeamsError, setMyTeamsError] = useState<string | null>(null);
+  const [openingTeamId, setOpeningTeamId] = useState<string | null>(null);
+  const myTeamsRequestId = useRef(0);
+  const teamNavigationInFlight = useRef<string | null>(null);
   const [activeChallenge, setActiveChallenge] = useState<UserWeeklyChallenge | null>(null);
   const [challengeError, setChallengeError] = useState<string | null>(null);
   const [challengeCompletionLoading, setChallengeCompletionLoading] = useState(false);
@@ -101,25 +104,56 @@ export default function HomeScreen() {
   const localPerkPreviewOffer = LOCAL_PERK_AD_PREVIEW_ENABLED ? getLocalPerkPreviewOffer(t) : null;
 
   const loadMyTeams = useCallback(async () => {
+    const requestId = ++myTeamsRequestId.current;
     if (!user?.uid) {
-      setMyTeamsOverview(null);
+      setMyTeamsSummary(null);
+      setMyTeamsError(null);
       setMyTeamsLoading(false);
       return;
     }
     setMyTeamsLoading(true);
     setMyTeamsError(null);
     try {
-      setMyTeamsOverview(await measureDevelopmentPerformance(
+      const nextSummary = await measureDevelopmentPerformance(
         "home.parent-teams",
-        getParentTeamsOverview,
-      ));
+        getParentHomeTeamsSummary,
+      );
+      if (requestId === myTeamsRequestId.current) setMyTeamsSummary(nextSummary);
     } catch (nextError) {
       console.warn("[HomeScreen] My Teams load error:", nextError);
-      setMyTeamsError(t("myTeams.loadError"));
+      if (requestId === myTeamsRequestId.current) setMyTeamsError(t("myTeams.loadError"));
     } finally {
-      setMyTeamsLoading(false);
+      if (requestId === myTeamsRequestId.current) setMyTeamsLoading(false);
     }
   }, [t, user?.uid]);
+  const openParentTeam = useCallback(async (teamId: string) => {
+    if (teamNavigationInFlight.current) return;
+    teamNavigationInFlight.current = teamId;
+    setOpeningTeamId(teamId);
+    setMyTeamsError(null);
+    let didNavigate = false;
+    try {
+      if (!await isParentHomeTeamAvailable(teamId)) {
+        await loadMyTeams();
+        setMyTeamsError(t("myTeams.teamLoadError"));
+        return;
+      }
+      router.push({
+        pathname: "/teams/[teamId]",
+        params: { teamId },
+      } as never);
+      didNavigate = true;
+    } catch (nextError) {
+      console.warn("[HomeScreen] My Teams navigation validation error:", nextError);
+      await loadMyTeams();
+      setMyTeamsError(t("myTeams.teamLoadError"));
+    } finally {
+      if (!didNavigate) {
+        teamNavigationInFlight.current = null;
+        setOpeningTeamId(null);
+      }
+    }
+  }, [loadMyTeams, t]);
   const loadHome = useCallback(async () => {
     setError(null);
     setChallengeError(null);
@@ -155,6 +189,8 @@ export default function HomeScreen() {
   }, [loadHome]);
 
   useFocusEffect(useCallback(() => {
+    teamNavigationInFlight.current = null;
+    setOpeningTeamId(null);
     void loadMyTeams();
   }, [loadMyTeams]));
   useFocusEffect(useCallback(() => {
@@ -275,8 +311,11 @@ export default function HomeScreen() {
         <MyTeamsCard
           error={myTeamsError}
           loading={myTeamsLoading}
+          onOpenTeam={openParentTeam}
           onRetry={loadMyTeams}
-          overview={myTeamsOverview}
+          onViewTeams={() => router.push("/teams" as never)}
+          openingTeamId={openingTeamId}
+          summary={myTeamsSummary}
         />
         {error ? <StateCard title={t("home.errorTitle")} body={error} /> : null}
 
@@ -366,23 +405,23 @@ export default function HomeScreen() {
 function MyTeamsCard({
   error,
   loading,
+  onOpenTeam,
   onRetry,
-  overview,
+  onViewTeams,
+  openingTeamId,
+  summary,
 }: {
   error: string | null;
   loading: boolean;
+  onOpenTeam: (teamId: string) => void;
   onRetry: () => void;
-  overview: ParentTeamsOverview | null;
+  onViewTeams: () => void;
+  openingTeamId: string | null;
+  summary: ParentHomeTeamsSummary | null;
 }) {
   const { t } = useTranslation();
-  const latestTeam = overview?.latestTeam ?? null;
-  const latest = overview?.latestAnnouncement ?? null;
-  const latestPrivate = overview?.teams
-    .flatMap((team) => team.privateConversations.map((conversation) => ({ conversation, team })))
-    .sort((first, second) => second.conversation.lastMessageAtMillis - first.conversation.lastMessageAtMillis)[0] ?? null;
-  const combinedUnread = (overview?.unreadCount ?? 0) + (overview?.privateUnreadCount ?? 0);
 
-  if (error && !overview) {
+  if (error && !summary) {
     return (
       <Card style={[styles.myTeamsCard, styles.myTeamsErrorCard]}>
         <View style={styles.myTeamsTopRow}>
@@ -393,75 +432,113 @@ function MyTeamsCard({
         <TouchableOpacity accessibilityRole="button" onPress={onRetry} style={styles.outlineInlineButton}>
           <Text style={styles.outlineInlineText}>{t("myTeams.tryAgain")}</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          accessibilityLabel={t("myTeams.viewTeams")}
+          accessibilityRole="button"
+          activeOpacity={0.78}
+          onPress={onViewTeams}
+          style={styles.myTeamsViewAction}
+        >
+          <Text style={styles.myTeamsAction}>{t("myTeams.viewTeams")}</Text>
+          <ChevronRight color={Colors.primary} size={19} />
+        </TouchableOpacity>
       </Card>
     );
   }
 
   return (
-    <TouchableOpacity
-      accessibilityLabel={t("myTeams.viewTeams")}
-      accessibilityRole="button"
-      activeOpacity={0.86}
-      onPress={() => router.push("/teams" as never)}
-    >
-      <Card style={styles.myTeamsCard}>
-        <View style={styles.myTeamsTopRow}>
-          <View style={styles.myTeamsIcon}>
-            {loading && !overview ? <ActivityIndicator color={Colors.primary} size="small" /> : <Users color={Colors.primary} size={22} />}
-          </View>
-          <View style={styles.cardCopy}>
-            <Text style={styles.myTeamsTitle}>{t("myTeams.title")}</Text>
-            {loading && !overview ? (
-              <Text style={styles.cardText}>{t("myTeams.loading")}</Text>
-            ) : overview?.totalTeams ? (
-              <Text style={styles.myTeamsSummary}>
-                {t("myTeams.teamCount", { count: overview.totalTeams })}
-                {overview.unreadCountKnown
-                  ? overview.unreadCount > 0 ? " · " + t("myTeams.unreadUpdates", { count: overview.unreadCount }) : ""
-                  : " · " + t("myTeams.unreadUnknown")}
-                {overview.privateUnreadCount > 0 ? " · " + t("teamMessages.unread", { count: overview.privateUnreadCount }) : ""}
-              </Text>
-            ) : (
-              <Text style={styles.myTeamsSummary}>{t("myTeams.noTeams")}</Text>
-            )}
-          </View>
-          {combinedUnread > 0 ? (
-            <View style={styles.myTeamsBadge}>
-              <Text style={styles.myTeamsBadgeText}>{combinedUnread}</Text>
-            </View>
-          ) : null}
-          <ChevronRight color={Colors.textPrimary} size={20} />
+    <Card style={styles.myTeamsCard}>
+      <View style={styles.myTeamsTopRow}>
+        <View style={styles.myTeamsIcon}>
+          {loading && !summary ? <ActivityIndicator color={Colors.primary} size="small" /> : <Users color={Colors.primary} size={22} />}
         </View>
+        <Text accessibilityRole="header" style={styles.myTeamsTitle}>{t("myTeams.title")}</Text>
+      </View>
 
-        {!loading && overview?.totalTeams === 0 ? (
+      {loading && !summary ? <Text style={styles.cardText}>{t("myTeams.loading")}</Text> : null}
+
+      {summary?.rows.map((row) => (
+        <ParentHomeTeamRowButton
+          disabled={openingTeamId !== null}
+          key={row.key}
+          onPress={() => onOpenTeam(row.teamId)}
+          opening={openingTeamId === row.teamId}
+          row={row}
+        />
+      ))}
+
+      {!loading && summary?.totalTeams === 0 ? (
+        <View style={styles.myTeamsEmptyState}>
+          <Text style={styles.myTeamsEmptyTitle}>{t("myTeams.noTeams")}</Text>
           <Text style={styles.cardText}>{t("myTeams.noTeamsBody")}</Text>
-        ) : null}
+        </View>
+      ) : null}
 
-        {latestTeam && latest ? (
-          <View style={styles.myTeamsPreview}>
-            <Text style={styles.myTeamsPreviewTeam}>
-              {formatHomeTeamLabel(latestTeam, t("myTeams.childNotSpecified"))}
-            </Text>
-            <Text numberOfLines={2} style={styles.myTeamsPreviewBody}>{latest.isDeleted ? t("teamMessages.messageDeleted") : latest.body}</Text>
-          </View>
-        ) : null}
+      {error && summary ? (
+        <View accessibilityLiveRegion="polite" style={styles.myTeamsInlineError}>
+          <Text style={styles.myTeamsErrorText}>{error}</Text>
+          <TouchableOpacity accessibilityRole="button" onPress={onRetry} style={styles.outlineInlineButton}>
+            <Text style={styles.outlineInlineText}>{t("myTeams.tryAgain")}</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
-        {latestPrivate ? (
-          <View style={styles.myTeamsPreview}>
-            <Text style={styles.myTeamsPreviewTeam}>{t("teamMessages.privateLabel")} · {latestPrivate.team.team.name}</Text>
-            <Text numberOfLines={2} style={styles.myTeamsPreviewBody}>{latestPrivate.conversation.lastMessageType === "voice" ? t("teamMessages.voicePreview") : latestPrivate.conversation.lastMessageType === "deleted" ? t("teamMessages.messageDeleted") : latestPrivate.conversation.lastMessagePreview || t("teamMessages.noMessagesYet")}</Text>
-          </View>
-        ) : null}
-
-        {!loading && overview?.totalTeams && combinedUnread === 0 ? (
-          <Text style={styles.myTeamsCaughtUp}>{t("myTeams.caughtUp")}</Text>
-        ) : null}
-
+      <TouchableOpacity
+        accessibilityLabel={t("myTeams.viewTeams")}
+        accessibilityRole="button"
+        activeOpacity={0.78}
+        onPress={onViewTeams}
+        style={styles.myTeamsViewAction}
+      >
         <Text style={styles.myTeamsAction}>{t("myTeams.viewTeams")}</Text>
-      </Card>
-    </TouchableOpacity>
+        <ChevronRight color={Colors.primary} size={19} />
+      </TouchableOpacity>
+    </Card>
   );
 }
+
+function ParentHomeTeamRowButton({
+  disabled,
+  onPress,
+  opening,
+  row,
+}: {
+  disabled: boolean;
+  onPress: () => void;
+  opening: boolean;
+  row: ParentHomeTeamsSummary["rows"][number];
+}) {
+  const { t } = useTranslation();
+  const [focused, setFocused] = useState(false);
+  const childName = row.childName ?? t("myTeams.childNotSpecified");
+
+  return (
+    <Pressable
+      accessibilityLabel={t("myTeams.openTeamForChild", { child: childName, team: row.teamName })}
+      accessibilityRole="button"
+      accessibilityState={{ busy: opening, disabled }}
+      android_ripple={{ color: Colors.secondary }}
+      disabled={disabled}
+      onBlur={() => setFocused(false)}
+      onFocus={() => setFocused(true)}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.myTeamsTeamRow,
+        pressed && styles.myTeamsTeamRowPressed,
+        focused && styles.myTeamsTeamRowFocused,
+        disabled && !opening && styles.myTeamsTeamRowDisabled,
+      ]}
+    >
+      <Text style={styles.myTeamsTeamRowText}>
+        {t("myTeams.homeTeamLabel", { child: childName, team: row.teamName })}
+      </Text>
+      {opening
+        ? <ActivityIndicator color={Colors.primary} size="small" />
+        : <ChevronRight color={Colors.textPrimary} size={18} />}
+    </Pressable>
+  );
+}
+
 function SecondaryActions({ unreadChatCount }: { unreadChatCount: number }) {
   const { t } = useTranslation();
   const actions = [
@@ -695,12 +772,6 @@ function StateCard({
   );
 }
 
-function formatHomeTeamLabel(summary: ParentTeamSummary, childFallback: string) {
-  const childNames = getTeamChildNames(summary);
-  const childLabel = childNames.length > 0 ? childNames.join(", ") : childFallback;
-  return `${childLabel} - ${summary.team.name}`;
-}
-
 const styles = StyleSheet.create({
   fixedHeader: {
     backgroundColor: Colors.background,
@@ -795,47 +866,63 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodyBold,
     fontSize: 18,
   },
-  myTeamsSummary: {
-    color: Colors.textPrimary,
-    fontFamily: Typography.bodyMedium,
-    fontSize: 12,
-  },
-  myTeamsBadge: {
+  myTeamsTeamRow: {
     alignItems: "center",
-    backgroundColor: Colors.primary,
-    borderRadius: 13,
-    minWidth: 26,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  myTeamsBadgeText: {
-    color: Colors.surface,
-    fontFamily: Typography.bodyBold,
-    fontSize: 12,
-  },
-  myTeamsPreview: {
     backgroundColor: Colors.background,
-    borderColor: Colors.accentGold,
-    borderRadius: Radius.sm,
+    borderColor: Colors.secondary,
+    borderRadius: Radius.button,
     borderWidth: 1,
-    gap: 3,
-    padding: Spacing.sm,
+    flexDirection: "row",
+    gap: Spacing.sm,
+    minHeight: 48,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.sm,
   },
-  myTeamsPreviewTeam: {
+  myTeamsTeamRowPressed: {
+    backgroundColor: Colors.secondary,
+    opacity: 0.86,
+  },
+  myTeamsTeamRowFocused: {
+    borderColor: Colors.primary,
+    borderWidth: 2,
+  },
+  myTeamsTeamRowDisabled: {
+    opacity: 0.58,
+  },
+  myTeamsTeamRowText: {
+    color: Colors.textHeading,
+    flex: 1,
+    flexShrink: 1,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  myTeamsEmptyState: {
+    gap: Spacing.xs,
+  },
+  myTeamsEmptyTitle: {
     color: Colors.textHeading,
     fontFamily: Typography.bodySemiBold,
-    fontSize: 13,
+    fontSize: 15,
+    textAlign: "center",
   },
-  myTeamsPreviewBody: {
-    color: Colors.textPrimary,
-    fontFamily: Typography.bodyRegular,
-    fontSize: 13,
-    lineHeight: 18,
+  myTeamsInlineError: {
+    alignItems: "flex-start",
+    gap: Spacing.sm,
   },
-  myTeamsCaughtUp: {
-    color: Colors.accentGreen,
-    fontFamily: Typography.bodySemiBold,
+  myTeamsErrorText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyMedium,
     fontSize: 13,
+    lineHeight: 19,
+  },
+  myTeamsViewAction: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    gap: Spacing.xs,
+    minHeight: 44,
+    paddingHorizontal: Spacing.xs,
   },
   myTeamsAction: {
     color: Colors.primary,
