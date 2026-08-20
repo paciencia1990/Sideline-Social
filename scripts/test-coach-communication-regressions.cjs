@@ -86,8 +86,70 @@ for (const source of [teamService, parentService]) {
   assert.match(source, /orderBy\("createdAt", "desc"\)/);
 }
 assert.match(teamService, /listenToAnnouncementReplies/);
-assert.match(parentService, /isRead: readStates\[index\]\?\.exists\(\)/);
+const parentPageStart = parentService.indexOf("async function loadParentAnnouncementsPage");
+const parentPageEnd = parentService.indexOf("type ResolvedMembershipChildren", parentPageStart);
+const parentPage = parentService.slice(parentPageStart, parentPageEnd);
+assert.ok(parentPageStart >= 0 && parentPageEnd > parentPageStart, "bounded parent announcement loader exists");
+assert.match(parentPage, /knownUnreadIds \? Promise\.resolve\(null\) : Promise\.all\(visibleAnnouncements\.map/);
+assert.match(parentPage, /isRead: knownUnreadIds \? !knownUnreadIds\.has\(announcement\.id\) : readStates\?\.\[index\]\?\.exists\(\) \?\? false/);
+assert.match(parentPage, /snapshot\.docs\.slice\(0, pageSize\)/, "legacy reads and profiles are limited to visible announcements");
 assert.match(parentService, /latestAnnouncement: announcements\[0\] \?\? null/);
+
+function resolvePageReadState(announcementIds, summary, legacyReadIds = new Set()) {
+  const knownUnreadIds = summary?.available ? new Set(summary.recentUnreadAnnouncementIds) : null;
+  return {
+    fallbackIds: knownUnreadIds ? [] : [...announcementIds],
+    isReadById: new Map(announcementIds.map((id) => [
+      id,
+      knownUnreadIds ? !knownUnreadIds.has(id) : legacyReadIds.has(id),
+    ])),
+    unreadCount: summary?.available
+      ? summary.unreadCount
+      : announcementIds.filter((id) => !legacyReadIds.has(id)).length,
+    unreadCountKnown: summary?.available === true || announcementIds.length === 0,
+  };
+}
+
+const visibleIds = ["new-unread", "new-read", "moderated", "deleted"];
+const summaryFirst = resolvePageReadState(visibleIds, {
+  available: true,
+  recentUnreadAnnouncementIds: ["new-unread", "new-unread"],
+  unreadCount: 1,
+});
+assert.equal(summaryFirst.isReadById.get("new-unread"), false, "known unread content is never marked read");
+assert.equal(summaryFirst.isReadById.get("new-read"), true, "absence from an available recent-unread set means read");
+assert.equal(summaryFirst.isReadById.get("moderated"), true, "moderation does not bypass summary mapping");
+assert.equal(summaryFirst.isReadById.get("deleted"), true, "tombstones retain deterministic read mapping");
+assert.deepEqual(summaryFirst.fallbackIds, [], "available summaries avoid legacy per-document reads");
+assert.equal(summaryFirst.unreadCount, 1, "duplicate or retried summary entries cannot double-count the authoritative total");
+
+const summaryAfterPage = resolvePageReadState(visibleIds, {
+  available: true,
+  recentUnreadAnnouncementIds: ["new-unread"],
+  unreadCount: 1,
+});
+assert.deepEqual([...summaryAfterPage.isReadById], [...summaryFirst.isReadById], "summary/page arrival order does not change mapping");
+
+const missingSummary = resolvePageReadState(visibleIds, undefined, new Set(["new-read", "moderated"]));
+assert.equal(missingSummary.isReadById.get("new-unread"), false);
+assert.equal(missingSummary.isReadById.get("new-read"), true, "legacy read documents remain authoritative during fallback");
+assert.equal(missingSummary.isReadById.get("deleted"), false);
+assert.deepEqual(missingSummary.fallbackIds, visibleIds, "only the visible page receives fallback work");
+assert.equal(missingSummary.unreadCountKnown, false, "a missing summary never silently displays a known zero");
+
+const partiallyBackfilled = resolvePageReadState(visibleIds, {
+  available: false,
+  recentUnreadAnnouncementIds: ["new-unread"],
+  unreadCount: 0,
+}, new Set(["new-read"]));
+assert.deepEqual(partiallyBackfilled.fallbackIds, visibleIds, "an unavailable partial projection falls back instead of trusting incomplete IDs");
+assert.equal(partiallyBackfilled.unreadCountKnown, false);
+
+const archivedPage = resolvePageReadState(["archived-unread"], undefined, new Set());
+assert.equal(archivedPage.isReadById.get("archived-unread"), false, "archived history keeps the same legacy compatibility mapping");
+
+const rules = read("firestore.rules");
+assert.match(rules, /allow get, list: if canReadTeamAnnouncement\(teamId\)/, "parent and coach announcement access remains Rules-authorized");
 
 const coachComposer = read("app", "coach", "messages.tsx");
 const recorder = read("components", "VoiceMemoComposer.tsx");
