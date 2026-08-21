@@ -122,9 +122,9 @@ Describe providers as processors/service providers only after contracts and sett
 
 ### Coach AI
 
-- `coachAiEnabled` is false. Client UI does not call the backend; active callable is an authenticated non-secret disabled stub; unfinished provider code is outside the runtime import graph.
-- Do not disclose current prompt/provider/model processing because none is active.
-- Before any enablement, update the policy, Apple/Play disclosures, consent/notice, provider list, retention/deletion and child/personal-data restrictions.
+- AI Coach has a local development-only preview gated by exact `EXPO_PUBLIC_AI_COACH_TESTING_ENABLED=true`, `__DEV__`, adult Coach Mode, and active standing. No EAS profile enables it, so current store builds remain closed.
+- The repository callable is additionally gated by a server test flag and administrator-only tester claim, but the deployed callable remains the prior disabled stub and provider secrets are incomplete. No production prompt/provider/model processing is active.
+- Before any non-isolated-test enablement, update the policy, Apple/Play disclosures, consent/notice, provider list, retention/deletion and child/personal-data restrictions. See `docs/coach-ai-backend-enablement.md`.
 
 ## Platform-Specific Information wording facts
 

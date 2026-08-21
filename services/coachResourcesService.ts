@@ -17,6 +17,7 @@ import type {
   LocalizedText,
   SavedCoachHelpResult,
 } from "@/types/coachResources";
+import { CoachAiRequestError, classifyCoachAiRequestError } from "@/utils/coachAiErrors";
 
 const CHECKLIST_KEY_PREFIX = "sidelineSocial.coachChecklistProgress.v1";
 const GENERATED_HELP_KEY_PREFIX = "sidelineSocial.coachGeneratedHelp.v1";
@@ -121,9 +122,13 @@ export function getDailyCoachProTip(date = new Date(), tips = getCoachProTips())
 }
 
 export async function generateCoachResourceHelp(request: CoachHelpRequest) {
-  if (!FEATURE_FLAGS.coachAiEnabled) throw new Error("coach_ai_feature_disabled");
+  if (!FEATURE_FLAGS.coachAiEnabled) throw new CoachAiRequestError("access");
   const callable = httpsCallable<CoachHelpRequest, CoachHelpResult>(functions, "generateCoachResourceHelp", { timeout: 30_000 });
-  return (await callable(request)).data;
+  try {
+    return (await callable(request)).data;
+  } catch (error) {
+    throw classifyCoachAiRequestError(error);
+  }
 }
 
 export async function cacheGeneratedCoachHelpResult(userId: string, requestId: string, result: CoachHelpResult) {

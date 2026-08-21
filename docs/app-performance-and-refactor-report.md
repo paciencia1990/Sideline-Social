@@ -152,7 +152,7 @@ The new coalescing state stores only the current promise and user key, and clear
 | Space Mono root registration | Safe to remove now | No source reference; removed from loader, asset retained |
 | Home `i18n` binding used only by a development mount log | Safe to remove now | Removed with the user-identifying log |
 | `services/homeFeedService.ts` / `fetchConnectionPrompt` | Safe after focused verification | No runtime import found; tests still reference the service |
-| `functions/src/disabled/coachResourceHelp.ts` | Must remain for backward compatibility | Exported compatibility callable despite folder name |
+| `functions/src/disabled/coachResourceHelp.ts` | Removed after focused verification | Disconnected duplicate was consolidated into the development-gated active callable; the stable export name remains in `functions/src/coachResourceHelp.ts` |
 | Duplicate `(games)` and `/games` route families | Must remain for backward compatibility | Current lobby/play and compatibility routing use both patterns |
 | Local Perk architecture | Requires product confirmation | Feature flag is off, but tests intentionally preserve future architecture |
 | Adaptive/splash duplicate image bytes | Requires visual/config confirmation | Different native roles may intentionally share artwork |

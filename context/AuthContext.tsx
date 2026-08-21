@@ -55,6 +55,7 @@ export type AppUser = {
   activeMode: AppMode | null;
   defaultMode: AppMode | null;
   onboardingPath: AppMode | null;
+  adultEligibilityConfirmed: boolean;
   accountOnboardingCompleted: boolean;
   modeOnboardingCompleted: boolean;
 };
@@ -99,6 +100,7 @@ const defaultUser: AppUser = {
   activeMode: null,
   defaultMode: null,
   onboardingPath: null,
+  adultEligibilityConfirmed: false,
   accountOnboardingCompleted: true,
   modeOnboardingCompleted: true,
 };
@@ -132,6 +134,7 @@ function mapUser(firebaseUser: User, profileExists: boolean, profile?: DocumentD
     activeMode: modeState.activeMode,
     defaultMode: modeState.preferredMode,
     onboardingPath: modeState.onboardingPath,
+    adultEligibilityConfirmed: profile?.adultEligibilityConfirmed === true,
     accountOnboardingCompleted: readAccountOnboardingCompleted(profileExists, profile),
     modeOnboardingCompleted: modeState.onboardingCompleted,
   };

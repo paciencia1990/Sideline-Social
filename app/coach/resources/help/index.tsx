@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { ChevronRight, ShieldAlert } from "lucide-react-native";
@@ -8,9 +8,9 @@ import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
+import { useCoachAiAccess } from "@/hooks/useCoachAiAccess";
 import {
   cacheGeneratedCoachHelpResult,
   generateCoachResourceHelp,
@@ -18,6 +18,7 @@ import {
   resolveCoachResourceLocale,
 } from "@/services/coachResourcesService";
 import type { CoachHelpCategory, CoachHelpRequest, CoachHelpTone, SavedCoachHelpResult } from "@/types/coachResources";
+import { CoachAiRequestError } from "@/utils/coachAiErrors";
 
 const CATEGORIES: CoachHelpCategory[] = [
   "practice_plan", "parent_message", "parent_concern", "player_behavior", "discouraged_player",
@@ -28,6 +29,7 @@ const TONES: CoachHelpTone[] = ["warm", "direct", "encouraging", "neutral"];
 export default function CoachResourceHelpScreen() {
   const { i18n, t } = useTranslation();
   const { user } = useAuth();
+  const coachAiAccess = useCoachAiAccess();
   const locale = resolveCoachResourceLocale(i18n.language);
   const [category, setCategory] = useState<CoachHelpCategory | null>(null);
   const [sport, setSport] = useState("");
@@ -40,47 +42,72 @@ export default function CoachResourceHelpScreen() {
   const [equipment, setEquipment] = useState("");
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryRequest, setRetryRequest] = useState<CoachHelpRequest | null>(null);
   const [saved, setSaved] = useState<SavedCoachHelpResult[]>([]);
+  const generationToken = useRef(0);
+  const generationInFlight = useRef(false);
 
   useFocusEffect(useCallback(() => {
     if (user?.uid) void getSavedCoachHelpResults(user.uid).then(setSaved);
   }, [user?.uid]));
 
-  const generate = useCallback(async () => {
-    if (!user?.uid || !category || generating) return;
-    const trimmedSituation = situation.trim();
-    if (trimmedSituation.length < 10) {
-      setError(t("coach.resources.helpSituationRequired"));
-      return;
+  const generate = useCallback(async (requestToRetry?: CoachHelpRequest) => {
+    if (!user?.uid || !category || generationInFlight.current || !coachAiAccess.canRequest) return;
+    let request = requestToRetry;
+    if (!request) {
+      const trimmedSituation = situation.trim();
+      if (trimmedSituation.length < 10) {
+        setError(t("coach.resources.helpSituationRequired"));
+        setRetryRequest(null);
+        return;
+      }
+      request = {
+        category,
+        situation: trimmedSituation.slice(0, 1500),
+        clientRequestId: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        locale,
+        ...(sport.trim() ? { sport: sport.trim().slice(0, 80) } : {}),
+        ...(ageGroup.trim() ? { ageGroup: ageGroup.trim().slice(0, 80) } : {}),
+        ...(desiredOutcome.trim() ? { desiredOutcome: desiredOutcome.trim().slice(0, 500) } : {}),
+        ...(!["practice_plan"].includes(category) ? { tone } : {}),
+        ...(practiceMinutes ? { practiceMinutes: Number(practiceMinutes) } : {}),
+        ...(playerCount ? { playerCount: Number(playerCount) } : {}),
+        ...(equipment.trim() ? { equipment: equipment.split(",").map((entry) => entry.trim()).filter(Boolean).slice(0, 12) } : {}),
+      };
     }
-    const clientRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const request: CoachHelpRequest = {
-      category,
-      situation: trimmedSituation.slice(0, 1500),
-      clientRequestId,
-      locale,
-      ...(sport.trim() ? { sport: sport.trim().slice(0, 80) } : {}),
-      ...(ageGroup.trim() ? { ageGroup: ageGroup.trim().slice(0, 80) } : {}),
-      ...(desiredOutcome.trim() ? { desiredOutcome: desiredOutcome.trim().slice(0, 500) } : {}),
-      ...(!["practice_plan"].includes(category) ? { tone } : {}),
-      ...(practiceMinutes ? { practiceMinutes: Number(practiceMinutes) } : {}),
-      ...(playerCount ? { playerCount: Number(playerCount) } : {}),
-      ...(equipment.trim() ? { equipment: equipment.split(",").map((entry) => entry.trim()).filter(Boolean).slice(0, 12) } : {}),
-    };
+    const operationToken = ++generationToken.current;
+    generationInFlight.current = true;
     setGenerating(true);
     setError(null);
+    setRetryRequest(request);
     try {
       const result = await generateCoachResourceHelp(request);
-      await cacheGeneratedCoachHelpResult(user.uid, clientRequestId, result);
-      router.push({ pathname: "/coach/resources/help/result", params: { requestId: clientRequestId } } as never);
-    } catch {
-      setError(t("coach.resources.helpError"));
+      if (operationToken !== generationToken.current) return;
+      await cacheGeneratedCoachHelpResult(user.uid, request.clientRequestId, result);
+      if (operationToken !== generationToken.current) return;
+      setRetryRequest(null);
+      router.push({ pathname: "/coach/resources/help/result", params: { requestId: request.clientRequestId } } as never);
+    } catch (requestError) {
+      if (operationToken !== generationToken.current) return;
+      const kind = requestError instanceof CoachAiRequestError ? requestError.kind : "unknown";
+      setError(t(`coach.resources.helpErrors.${kind}`));
     } finally {
-      setGenerating(false);
+      if (operationToken === generationToken.current) {
+        generationInFlight.current = false;
+        setGenerating(false);
+      }
     }
-  }, [ageGroup, category, desiredOutcome, equipment, generating, locale, playerCount, practiceMinutes, situation, sport, t, tone, user?.uid]);
+  }, [ageGroup, category, coachAiAccess.canRequest, desiredOutcome, equipment, locale, playerCount, practiceMinutes, situation, sport, t, tone, user?.uid]);
 
-  if (!FEATURE_FLAGS.coachAiEnabled) {
+  const cancelGeneration = useCallback(() => {
+    if (!generationInFlight.current) return;
+    generationToken.current += 1;
+    generationInFlight.current = false;
+    setGenerating(false);
+    setError(t("coach.resources.helpCanceled"));
+  }, [t]);
+
+  if (!coachAiAccess.canView) {
     return (
       <ScreenWrapper>
         <View style={styles.unavailableContent}>
@@ -97,13 +124,14 @@ export default function CoachResourceHelpScreen() {
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <CoachResourceHeader subtitle={t("coach.resources.helpSubtitle")} title={t("coach.resources.needHelp")} />
+        <Text style={styles.previewLabel}>{t("coach.resources.coachAiTestingPreview")}</Text>
 
         {!category ? (
           <>
             <Text accessibilityRole="header" style={styles.sectionTitle}>{t("coach.resources.helpQuestion")}</Text>
             <View style={styles.categoryList}>
               {CATEGORIES.map((entry) => (
-                <TouchableOpacity accessibilityRole="button" key={entry} onPress={() => { setCategory(entry); setError(null); }} style={styles.categoryRow}>
+                <TouchableOpacity accessibilityRole="button" key={entry} onPress={() => { setCategory(entry); setError(null); setRetryRequest(null); }} style={styles.categoryRow}>
                   <Text style={styles.categoryText}>{t(`coach.resources.helpCategories.${entry}`)}</Text>
                   <ChevronRight color={Colors.textHeading} size={20} />
                 </TouchableOpacity>
@@ -156,10 +184,20 @@ export default function CoachResourceHelpScreen() {
             )}
 
             {error ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
+            {error && retryRequest && !generating ? (
+              <TouchableOpacity accessibilityRole="button" onPress={() => void generate(retryRequest)} style={styles.retryButton}>
+                <Text style={styles.retryText}>{t("coach.resources.retryHelp")}</Text>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: generating, disabled: generating }} disabled={generating} onPress={() => void generate()} style={[styles.generateButton, generating && styles.disabled]}>
               {generating ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.generateText}>{t("coach.resources.generateHelp")}</Text>}
             </TouchableOpacity>
             {generating ? <Text accessibilityLiveRegion="polite" style={styles.loadingText}>{t("coach.resources.generating")}</Text> : null}
+            {generating ? (
+              <TouchableOpacity accessibilityRole="button" onPress={cancelGeneration} style={styles.backStepButton}>
+                <Text style={styles.backStepText}>{t("coach.resources.cancelGeneration")}</Text>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity accessibilityRole="button" disabled={generating} onPress={() => { setCategory(null); setError(null); }} style={styles.backStepButton}>
               <Text style={styles.backStepText}>{t("coach.resources.chooseDifferentSituation")}</Text>
             </TouchableOpacity>
@@ -186,6 +224,7 @@ const styles = StyleSheet.create({
   backToResourcesButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, justifyContent: "center", minHeight: 52, paddingHorizontal: Spacing.lg },
   backToResourcesText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 15, textAlign: "center" },
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
+  previewLabel: { alignSelf: "flex-start", backgroundColor: Colors.background, borderColor: Colors.accentGold, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 11, lineHeight: 16, overflow: "hidden", paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs },
   sectionTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, lineHeight: 24 },
   categoryList: { gap: Spacing.sm },
   categoryRow: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.sm, minHeight: 58, padding: Spacing.md },
@@ -203,6 +242,8 @@ const styles = StyleSheet.create({
   toneText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   toneTextSelected: { color: Colors.surface },
   error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19, textAlign: "center" },
+  retryButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.lg },
+  retryText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14, textAlign: "center" },
   generateButton: { alignItems: "center", backgroundColor: Colors.textHeading, borderRadius: Radius.button, justifyContent: "center", minHeight: 52, paddingHorizontal: Spacing.lg },
   generateText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 15, textAlign: "center" },
   loadingText: { color: Colors.textPrimary, fontFamily: Typography.bodyMedium, fontSize: 13, textAlign: "center" },

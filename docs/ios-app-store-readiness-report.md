@@ -601,7 +601,7 @@ This is the complete current audit working-tree inventory. It includes the prese
 - `functions/src/accountDeletion.ts`
 - `functions/src/coachResourceHelp.ts`
 - `functions/src/contentModeration.ts`
-- `functions/src/disabled/coachResourceHelp.ts`
+- `functions/src/coachResourceHelp.ts` (development-gated test implementation; not deployed by this work)
 - `functions/src/friendChat.ts`
 - `functions/src/gameJoinCodes.ts`
 - `functions/src/index.ts`

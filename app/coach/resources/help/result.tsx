@@ -8,9 +8,9 @@ import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
+import { useCoachAiAccess } from "@/hooks/useCoachAiAccess";
 import {
   deleteCoachHelpResult,
   formatCoachHelpResultForSharing,
@@ -24,6 +24,7 @@ import type { CoachHelpResult } from "@/types/coachResources";
 export default function CoachHelpResultScreen() {
   const { i18n, t } = useTranslation();
   const { user } = useAuth();
+  const coachAiAccess = useCoachAiAccess();
   const params = useLocalSearchParams<{ requestId?: string | string[] }>();
   const requestId = Array.isArray(params.requestId) ? params.requestId[0] ?? "" : params.requestId ?? "";
   const locale = resolveCoachResourceLocale(i18n.language);
@@ -113,7 +114,7 @@ export default function CoachHelpResultScreen() {
     router.push({ pathname: "/coach/messages", params: { draftTitle: result.title, draftBody: formatCoachHelpResultForSharing(result, locale) } } as never);
   }, [locale, result]);
 
-  if (!FEATURE_FLAGS.coachAiEnabled) {
+  if (!coachAiAccess.canView) {
     return (
       <ScreenWrapper>
         <View style={styles.unavailableContent}>
@@ -133,6 +134,7 @@ export default function CoachHelpResultScreen() {
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <CoachResourceHeader subtitle={t("coach.resources.resultSubtitle")} title={result.title} titleRef={resultHeadingRef} />
+        <Text style={styles.previewLabel}>{t("coach.resources.coachAiTestingPreview")}</Text>
 
         {editing ? (
           <Card style={styles.cardGap}>
@@ -187,6 +189,7 @@ const styles = StyleSheet.create({
   backToResourcesText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 15, textAlign: "center" },
   center: { alignItems: "center", flex: 1, justifyContent: "center", padding: Spacing.lg },
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
+  previewLabel: { alignSelf: "flex-start", backgroundColor: Colors.background, borderColor: Colors.accentGold, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 11, lineHeight: 16, overflow: "hidden", paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs },
   cardGap: { gap: Spacing.md },
   section: { gap: Spacing.sm },
   sectionTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 16, lineHeight: 22 },
