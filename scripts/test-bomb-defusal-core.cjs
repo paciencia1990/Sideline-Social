@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -6,81 +7,184 @@ const core = require('../functions/lib/bombDefusalCore.js');
 
 const root = path.resolve(__dirname, '..');
 const source = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const normalize = (value) => core.normalizeBombWord(value);
+const sortedLetters = (value) => [...normalize(value)].sort().join('');
+const seedFor = (locale, index) => createHash('sha256').update(`bomb-defusal:${locale}:${index}`).digest('hex');
 
 assert.equal(core.BOMB_ROLE_SCHEMA_VERSION, 3);
 assert.equal(core.BOMB_COMMAND_COUNT, 6);
 assert.equal(core.BOMB_MAX_STRIKES, 1);
+assert.equal(core.BOMB_GENERATOR_VERSION, 1);
+assert.equal(core.BOMB_RECENT_FINGERPRINT_LIMIT, 30);
+assert.equal(core.BOMB_GENERATION_MAX_ATTEMPTS, 12);
 
-const allChallenges = [
-  ...core.BOMB_CHALLENGE_BANK.direct,
-  ...core.BOMB_CHALLENGE_BANK.interpretation,
-  ...Object.values(core.BOMB_CHALLENGE_BANK.reasoning).flat(),
-  ...core.BOMB_CHALLENGE_BANK.combined,
-];
-assert.ok(allChallenges.length >= 15, 'the curated bank must provide meaningful replay variety');
+assert.ok(core.BOMB_WORD_CONCEPTS.length >= 20, 'at least 20 bilingual word concepts are required');
+assert.ok(core.BOMB_RIDDLE_CONCEPTS.length >= 20, 'at least 20 original bilingual riddles are required');
+assert.equal(new Set(core.BOMB_WORD_CONCEPTS.map((entry) => entry.id)).size, core.BOMB_WORD_CONCEPTS.length);
+assert.equal(new Set(core.BOMB_RIDDLE_CONCEPTS.map((entry) => entry.id)).size, core.BOMB_RIDDLE_CONCEPTS.length);
 
-for (const challenge of allChallenges) {
-  assert.equal(core.validateBombChallenge(challenge), true, `${challenge.challengeId} must pass server validation`);
-  assert.equal(challenge.options.length, 4);
-  assert.equal(new Set(challenge.options.map((option) => option.id)).size, 4);
-  assert.equal(new Set(challenge.options.map((option) => option.number)).size, 4);
-  assert.equal(challenge.options.every((option) => option.number > 0 && option.marker), true, 'controls need non-color identifiers');
+for (const concept of core.BOMB_WORD_CONCEPTS) {
+  assert.equal(concept.validation.familiarObject, true);
+  assert.deepEqual(concept.validation.independentlyReviewedLocales, ['en', 'es']);
   for (const locale of ['en', 'es']) {
-    assert.ok(challenge.prompt[locale].trim(), `${challenge.challengeId} needs a ${locale} prompt`);
-    assert.ok(challenge.explanation[locale].trim(), `${challenge.challengeId} needs a ${locale} explanation`);
-    assert.equal(new Set(challenge.options.map((option) => option.label[locale].toUpperCase())).size, 4);
-    const solution = core.createBombSolution(challenge, locale);
-    assert.equal(challenge.options.filter((option) => option.id === solution.correctOptionId).length, 1);
-    assert.ok(solution.correctOptionLabel.trim());
-    assert.ok(solution.explanation.trim());
+    assert.ok(concept.answer[locale].trim());
+    assert.ok(concept.controlLabel[locale].trim());
+    assert.equal(sortedLetters(concept.answer[locale]), sortedLetters(concept.scramble[locale]), `${concept.id} must be a valid ${locale} scramble`);
+    assert.notEqual(normalize(concept.answer[locale]), normalize(concept.scramble[locale]), `${concept.id} must actually be scrambled in ${locale}`);
+  }
+  if (concept.cipherApproved) {
+    assert.match(concept.answer.en, /^[A-Z]+$/);
+    assert.match(concept.answer.es, /^[A-Z]+$/);
+    assert.doesNotMatch(concept.answer.es, /Ñ/);
   }
 }
 
-for (const challenge of core.BOMB_CHALLENGE_BANK.reasoning.math) {
-  const solution = core.createBombSolution(challenge, 'en');
-  assert.equal(challenge.options.filter((option) => option.label.en === solution.correctOptionLabel).length, 1, 'math has one matching result');
-  assert.equal(Number.isInteger(Number(solution.correctOptionLabel)), true, 'math answers remain whole numbers');
+for (const riddle of core.BOMB_RIDDLE_CONCEPTS) {
+  assert.equal(riddle.source, 'original-sideline-social');
+  assert.ok(core.bombControlLabel(riddle.answerConceptId), `${riddle.id} needs a bilingual answer control`);
+  assert.equal(new Set([riddle.answerConceptId, ...riddle.distractorConceptIds]).size, 4, `${riddle.id} needs three distinct distractors`);
+  for (const locale of ['en', 'es']) {
+    assert.ok(riddle.prompt[locale].trim());
+    assert.ok(riddle.explanation[locale].trim());
+    assert.ok(riddle.prompt[locale].length <= 180, `${riddle.id} must remain concise in ${locale}`);
+  }
 }
-for (const challenge of core.BOMB_CHALLENGE_BANK.reasoning.word) {
-  assert.equal(challenge.validation.kind, 'word');
-  assert.notEqual(challenge.validation.scramble.en, challenge.validation.scramble.es, 'word scrambles are curated per language');
-}
-for (const challenge of core.BOMB_CHALLENGE_BANK.reasoning.riddle) {
-  assert.equal(challenge.validation.kind, 'riddle');
-  assert.equal(challenge.prompt.en.length < 100 && challenge.prompt.es.length < 120, true, 'riddles stay concise');
-}
-for (const challenge of core.BOMB_CHALLENGE_BANK.reasoning.cipher) {
-  assert.equal(challenge.validation.kind, 'cipher');
-  assert.ok(challenge.key?.en.includes('back 1'));
-  assert.ok(challenge.key?.es.includes('1'));
-}
-for (const challenge of core.BOMB_CHALLENGE_BANK.combined) {
-  assert.equal(challenge.validation.kind, 'combined');
-  assert.equal(new Set(challenge.validation.mechanics).size, 2);
+for (const locale of ['en', 'es']) {
+  assert.equal(new Set(core.BOMB_RIDDLE_CONCEPTS.map((entry) => normalize(entry.prompt[locale]))).size, core.BOMB_RIDDLE_CONCEPTS.length);
 }
 
-const alwaysFirst = () => 0;
-const firstSequence = core.createBombChallengeSequence(alwaysFirst);
-assert.equal(firstSequence.length, 6);
-assert.equal(firstSequence[0].stage, 'direct');
-assert.equal(firstSequence[1].stage, 'interpretation');
-assert.equal(firstSequence[5].stage, 'combined');
-assert.equal(firstSequence.slice(2, 5).every((command) => command.stage === 'reasoning'), true);
-assert.equal(new Set(firstSequence.slice(2, 5).map((command) => command.category)).size, 3);
-assert.equal(core.validateBombChallengeSequence(firstSequence), true);
-
-const replaySequence = core.createBombChallengeSequence(alwaysFirst, firstSequence.map((command) => command.challengeId));
+const deterministicSeed = seedFor('deterministic', 1);
+const deterministicHistory = Array.from({ length: 8 }, (_, index) => createHash('sha256').update(`history:${index}`).digest('hex').slice(0, 24));
+const deterministicA = core.createBombGeneratedRound(deterministicSeed, deterministicHistory);
+const deterministicB = core.createBombGeneratedRound(deterministicSeed, deterministicHistory);
+assert.deepEqual(deterministicA, deterministicB, 'the same seed and history must reproduce the complete stored round');
 assert.notDeepEqual(
-  replaySequence.map((command) => command.challengeId),
-  firstSequence.map((command) => command.challengeId),
-  'a rematch must not repeat the complete previous sequence when alternatives exist',
+  core.createBombGeneratedRound(seedFor('deterministic', 2), deterministicHistory).challengeFingerprints,
+  deterministicA.challengeFingerprints,
+  'different seeds should produce different rounds',
 );
 
+const fakeHistory = Array.from({ length: 40 }, (_, index) => index.toString(16).padStart(24, '0'));
+assert.deepEqual(
+  core.normalizeBombRecentHistory(['invalid', ...fakeHistory, fakeHistory[39]]),
+  fakeHistory.slice(-30),
+  'history must reject malformed entries, keep the newest duplicate, and stay bounded to five rounds',
+);
+
+const coverage = {
+  directTemplates: new Set(),
+  positionTemplates: new Set(),
+  reasoningCategories: new Set(),
+  mathOperations: new Set(),
+  wordConcepts: new Set(),
+  riddleConcepts: new Set(),
+  cipherConcepts: new Set(),
+  combinedRecipes: new Set(),
+  sequenceSignatures: new Set(),
+};
+
+const generatedRoundCountPerLocale = 10_000;
+const performanceStartedAt = Date.now();
+for (const locale of ['en', 'es']) {
+  let recentHistory = [];
+  let previousFingerprints = [];
+  for (let roundIndex = 0; roundIndex < generatedRoundCountPerLocale; roundIndex += 1) {
+    const generated = core.createBombGeneratedRound(seedFor(locale, roundIndex), recentHistory);
+    assert.equal(core.validateBombChallengeSequence(generated.commands), true, `${locale} round ${roundIndex} must validate`);
+    assert.equal(generated.commands.length, 6);
+    assert.deepEqual(generated.commands.map((command) => command.stage), ['direct', 'interpretation', 'reasoning', 'reasoning', 'reasoning', 'combined']);
+    assert.equal(new Set(generated.commands.slice(2, 5).map((command) => command.category)).size, 3);
+    assert.equal(generated.challengeFingerprints.length, 6);
+    assert.equal(new Set(generated.challengeFingerprints).size, 6);
+    coverage.sequenceSignatures.add(generated.challengeFingerprints.join(':'));
+    assert.deepEqual(generated.challengeFingerprints, generated.commands.map(core.createBombChallengeFingerprint));
+    assert.ok(generated.challengeFingerprints.every((fingerprint) => /^[a-f0-9]{24}$/.test(fingerprint)));
+    assert.ok(generated.recentChallengeFingerprints.length <= core.BOMB_RECENT_FINGERPRINT_LIMIT);
+    assert.deepEqual(
+      generated.recentChallengeFingerprints,
+      core.normalizeBombRecentHistory([...recentHistory, ...generated.challengeFingerprints]),
+    );
+    const immediateOverlap = generated.challengeFingerprints.filter((fingerprint) => previousFingerprints.includes(fingerprint)).length;
+    assert.ok(immediateOverlap <= 2, `${locale} round ${roundIndex} must differ materially from the prior round`);
+
+    for (let commandIndex = 0; commandIndex < generated.commands.length; commandIndex += 1) {
+      const command = generated.commands[commandIndex];
+      assert.equal(core.validateBombChallenge(command), true);
+      assert.equal(core.isBombPrivateCommand(command), true);
+      assert.equal(command.options.length, 4);
+      assert.deepEqual([...command.options.map((option) => option.number)].sort((a, b) => a - b), [1, 2, 3, 4]);
+      assert.equal(new Set(command.options.map((option) => option.id)).size, 4);
+      assert.equal(new Set(command.options.map((option) => option.marker)).size, 4);
+      assert.equal(new Set(command.options.map((option) => normalize(option.label[locale]))).size, 4);
+      assert.ok(command.options.every((option) => /^control-[a-f0-9]{16}$/.test(option.id)), 'option IDs must be opaque');
+      assert.equal(command.options.filter((option) => option.id === command.correctOptionId).length, 1);
+      assert.ok(command.prompt[locale].trim());
+      assert.ok(command.explanation[locale].trim());
+
+      const publicCommand = core.createBombPublicCommand(command, commandIndex);
+      assert.deepEqual(Object.keys(publicCommand).sort(), ['category', 'commandId', 'commandIndex', 'controlKind', 'options', 'stage']);
+      assert.equal(JSON.stringify(publicCommand).includes('correctOptionId'), false);
+      assert.equal(JSON.stringify(publicCommand).includes('prompt'), false);
+      assert.equal(JSON.stringify(publicCommand).includes('explanation'), false);
+      assert.equal(JSON.stringify(publicCommand).includes('validation'), false);
+      assert.equal(JSON.stringify(publicCommand).includes('challengeId'), false);
+      const localizedPublic = core.localizeBombPublicCommand(command, commandIndex, locale);
+      assert.ok(localizedPublic.options.every((option) => typeof option.label === 'string' && option.label.trim()));
+
+      const expertInstruction = core.createBombExpertInstruction(command, locale);
+      assert.ok(expertInstruction.prompt.trim());
+      assert.equal('challengeId' in expertInstruction, false);
+      assert.equal('correctOptionId' in expertInstruction, false);
+      const solution = core.createBombSolution(command, locale);
+      assert.equal(solution.correctOptionId, command.correctOptionId);
+      assert.ok(solution.correctOptionLabel.trim());
+      assert.ok(solution.explanation.trim());
+      assert.equal(core.bombCommandMatches(command, { optionId: command.correctOptionId }), true);
+      assert.equal(core.bombCommandMatches(command, { optionId: command.options.find((option) => option.id !== command.correctOptionId).id }), false);
+
+      const validation = command.validation;
+      if (validation.kind === 'direct') coverage.directTemplates.add(validation.template);
+      if (validation.kind === 'position') coverage.positionTemplates.add(validation.template);
+      if (command.stage === 'reasoning') coverage.reasoningCategories.add(command.category);
+      if (validation.kind === 'math') {
+        coverage.mathOperations.add(validation.operation);
+        assert.equal(core.evaluateBombMath(validation.operation, validation.operands), validation.answer);
+      }
+      if (validation.kind === 'word') {
+        coverage.wordConcepts.add(validation.conceptId);
+        assert.equal(sortedLetters(validation.answer[locale]), sortedLetters(validation.scramble[locale]));
+      }
+      if (validation.kind === 'riddle') coverage.riddleConcepts.add(validation.conceptId);
+      if (validation.kind === 'cipher') {
+        coverage.cipherConcepts.add(validation.conceptId);
+        assert.equal(core.encodeBombCaesar(validation.decoded[locale], validation.shift), validation.encoded[locale]);
+        assert.equal(core.decodeBombCaesar(validation.encoded[locale], validation.shift), validation.decoded[locale]);
+      }
+      if (validation.kind === 'combined') {
+        coverage.combinedRecipes.add(validation.recipe);
+        assert.equal(validation.mechanics.length, 2);
+        assert.equal(new Set(validation.mechanics).size, 2);
+      }
+    }
+    previousFingerprints = generated.challengeFingerprints;
+    recentHistory = generated.recentChallengeFingerprints;
+  }
+}
+const generationDurationMs = Date.now() - performanceStartedAt;
+assert.ok(generationDurationMs < 60_000, `20,000 localized rounds took ${generationDurationMs}ms`);
+
+assert.deepEqual([...coverage.directTemplates].sort(), ['number', 'object', 'pattern', 'symbol', 'wire']);
+assert.deepEqual([...coverage.positionTemplates].sort(), ['between', 'offset', 'ordinal']);
+assert.deepEqual([...coverage.reasoningCategories].sort(), ['cipher', 'math', 'riddle', 'word']);
+assert.deepEqual([...coverage.mathOperations].sort(), ['addition', 'divide-add', 'divide-subtract', 'larger-total', 'missing-addend', 'multiply-add', 'multiply-subtract', 'subtraction']);
+assert.deepEqual([...coverage.combinedRecipes].sort(), ['cipher-position', 'math-marker', 'math-symbol', 'position-pattern', 'riddle-position', 'word-marker']);
+assert.equal(coverage.wordConcepts.size, core.BOMB_WORD_CONCEPTS.length);
+assert.equal(coverage.riddleConcepts.size, core.BOMB_RIDDLE_CONCEPTS.length);
+assert.equal(coverage.cipherConcepts.size, core.BOMB_WORD_CONCEPTS.filter((entry) => entry.cipherApproved).length);
+assert.equal(coverage.sequenceSignatures.size, generatedRoundCountPerLocale * 2, 'the deterministic 20,000-round sample must contain no duplicate sequence');
+
 for (let playerCount = 2; playerCount <= 6; playerCount += 1) {
-  const players = Array.from({ length: playerCount }, (_, index) => ({
-    uid: `player-${index + 1}`,
-    joinOrder: index + 1,
-  }));
+  const players = Array.from({ length: playerCount }, (_, index) => ({ uid: `player-${index + 1}`, joinOrder: index + 1 }));
   const defuserTurns = new Map(players.map((player) => [player.uid, 0]));
   const expertTurns = new Map(players.map((player) => [player.uid, 0]));
   for (let commandIndex = 0; commandIndex < playerCount * 2; commandIndex += 1) {
@@ -91,11 +195,7 @@ for (let playerCount = 2; playerCount <= 6; playerCount += 1) {
     defuserTurns.set(assignment.defuserUserId, defuserTurns.get(assignment.defuserUserId) + 1);
     expertTurns.set(assignment.expertUserId, expertTurns.get(assignment.expertUserId) + 1);
     for (const player of players) {
-      const expectedRole = player.uid === assignment.defuserUserId
-        ? 'defuser'
-        : player.uid === assignment.expertUserId
-          ? 'expert'
-          : 'support';
+      const expectedRole = player.uid === assignment.defuserUserId ? 'defuser' : player.uid === assignment.expertUserId ? 'expert' : 'support';
       assert.equal(core.roleForBombPlayer(player.uid, assignment), expectedRole);
     }
   }
@@ -103,34 +203,31 @@ for (let playerCount = 2; playerCount <= 6; playerCount += 1) {
   assert.deepEqual([...expertTurns.values()], Array(playerCount).fill(2));
 }
 
-const privateCommand = firstSequence[0];
-const publicCommand = core.createBombPublicCommand(privateCommand, 0);
-assert.equal(publicCommand.commandId, 'command-1');
-assert.deepEqual(
-  Object.keys(publicCommand).sort(),
-  ['category', 'commandId', 'commandIndex', 'controlKind', 'options', 'stage'],
-  'the public command exposes no private clue, answer, explanation, or validation metadata',
-);
-assert.equal(JSON.stringify(publicCommand).includes('correctOptionId'), false);
-assert.equal(JSON.stringify(publicCommand).includes('prompt'), false);
-assert.equal(JSON.stringify(publicCommand).includes('explanation'), false);
-assert.equal(JSON.stringify(publicCommand).includes('validation'), false);
-assert.equal(core.bombCommandMatches(privateCommand, { optionId: privateCommand.correctOptionId }), true);
-assert.equal(core.bombCommandMatches(privateCommand, { optionId: privateCommand.options.find((option) => option.id !== privateCommand.correctOptionId).id }), false);
-const expertInstruction = core.createBombExpertInstruction(privateCommand, 'en');
-assert.ok(expertInstruction.prompt);
-assert.equal('challengeId' in expertInstruction, false, 'server-only challenge IDs must not leak through the Expert view');
-assert.equal('correctOptionId' in expertInstruction, false, 'the Expert clue must not reveal the answer');
-assert.ok(core.createBombExpertInstruction(privateCommand, 'es').prompt);
-assert.doesNotThrow(() => core.validateBombChallenge({ ...privateCommand, validation: undefined }));
-assert.equal(core.validateBombChallenge({ ...privateCommand, validation: undefined }), false, 'malformed legacy commands fail safely');
+const malformed = deterministicA.commands[0];
+assert.equal(core.validateBombChallenge({ ...malformed, validation: undefined }), false, 'malformed stored commands fail closed');
+assert.equal(core.validateBombChallenge({ ...malformed, options: malformed.options.slice(0, 3) }), false);
+assert.equal(core.validateBombChallenge({ ...malformed, correctOptionId: 'control-ffffffffffffffff' }), false);
+const ordinalCommand = Array.from({ length: 100 }, (_, index) => core.createBombGeneratedRound(seedFor('ordinal', index)).commands[1])
+  .find((command) => command.validation.kind === 'position' && command.validation.template === 'ordinal');
+assert.ok(ordinalCommand);
+const realtimeRoundTrippedOrdinal = core.cloneBombChallenge(ordinalCommand);
+delete realtimeRoundTrippedOrdinal.validation.anchorOptionIds;
+delete realtimeRoundTrippedOrdinal.validation.anchorConceptIds;
+assert.equal(core.validateBombChallenge(realtimeRoundTrippedOrdinal), true, 'ordinal validation survives Realtime Database omitting empty arrays');
+assert.doesNotThrow(() => core.validateBombChallenge({ ...malformed, validation: { kind: 'combined' } }));
+assert.throws(() => core.createBombGeneratedRound('short'), /bomb_seed_invalid/);
 
 const functionSource = source('functions/src/gameJoinCodes.ts');
+const generatorSource = source('functions/src/bombDefusalGenerator.ts');
 const serviceSource = source('services/gameJoinCodeService.ts');
 const screenSource = source('src/game/BombDefusalScreen.tsx');
 const rulesSource = source('database.rules.json');
 const rewardSource = source('functions/src/sidelineStarsCore.ts');
 
+assert.match(functionSource, /randomBytes\(32\)\.toString\('hex'\)/, 'round seeds must use server-side cryptographic randomness');
+assert.match(functionSource, /generationSeed: bombSeed/);
+assert.match(functionSource, /generatorVersion: BOMB_GENERATOR_VERSION/);
+assert.match(functionSource, /recentChallengeFingerprints: bombRound\?\.recentChallengeFingerprints/);
 assert.match(functionSource, /assignment\.defuserUserId !== uid/);
 assert.match(functionSource, /role === 'expert'[\s\S]*createBombExpertInstruction/);
 assert.match(functionSource, /solution:[\s\S]*=== 'playing'[\s\S]*createBombSolution/);
@@ -141,6 +238,10 @@ assert.match(functionSource, /processedSubmissions/);
 assert.match(functionSource, /validateBombChallengeSequence/);
 assert.match(functionSource, /rewardEligible: false/, 'abandoned rounds remain ineligible');
 assert.match(functionSource, /completionReason: 'timeout'[\s\S]*strikeCount: BOMB_MAX_STRIKES/);
+assert.doesNotMatch(generatorSource, /\bwhile\b/, 'generation must not contain an unbounded retry loop');
+assert.match(generatorSource, /attempt < BOMB_GENERATION_MAX_ATTEMPTS/);
+assert.doesNotMatch(generatorSource, /fetch\(|axios|openai|https?:\/\//i, 'generation must not call external services');
+assert.doesNotMatch(serviceSource, /generationSeed|challengeFingerprints|recentChallengeFingerprints/, 'server generation metadata must not enter the client contract');
 assert.doesNotMatch(serviceSource, /nextStep\??:/, 'submission responses never return a private next command');
 assert.match(screenSource, /playerView\.role === "defuser"/);
 assert.match(screenSource, /playerView\.role === "expert"/);
@@ -151,4 +252,6 @@ assert.match(rulesSource, /roleSchemaVersion'\)\.val\(\) == 3/);
 assert.match(rulesSource, /"gameSessionSecrets"[\s\S]*?"\.read": false/);
 assert.match(rewardSource, /completionStars: input\.outcome === 'defused' \? 5 : 0/);
 
-console.log('Bomb Defusal challenge progression, localization, validation, role isolation, detonation, and reward tests passed.');
+console.log(`Bomb Defusal generated and validated ${generatedRoundCountPerLocale.toLocaleString()} rounds per locale (${(generatedRoundCountPerLocale * 2).toLocaleString()} total) in ${generationDurationMs}ms.`);
+console.log(`Curated content: ${core.BOMB_WORD_CONCEPTS.length} bilingual word concepts and ${core.BOMB_RIDDLE_CONCEPTS.length} original bilingual riddles.`);
+console.log('Determinism, bounded replay history, answer correctness, role isolation, privacy, detonation, and reward tests passed.');

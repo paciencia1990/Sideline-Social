@@ -456,6 +456,12 @@ async function run() {
   });
   const bombSecondJoinOrder = (await database
     .ref(`gameSessions/${roleLobby.sessionId}/players/${bombSecond.uid}/joinOrder`).get()).val();
+  const provisionedBombSecret = (await database.ref(`gameSessionSecrets/${roleLobby.sessionId}`).get()).val();
+  assert.equal(provisionedBombSecret.generatorVersion, 1);
+  assert.match(provisionedBombSecret.generationSeed, /^[a-f0-9]{64}$/);
+  assert.equal(provisionedBombSecret.bombSteps.length, 6);
+  assert.equal(provisionedBombSecret.challengeFingerprints.length, 6);
+  assert.ok(provisionedBombSecret.recentChallengeFingerprints.length <= 30);
   const bombReconnect = await bombSecond.call('joinGameLobbyById', {
     gameType: 'bombDefusal', squadId: squadA, lobbyId: roleLobby.lobbyId,
   });
@@ -465,6 +471,9 @@ async function run() {
     bombSecondJoinOrder,
     'a Bomb reconnect preserves the frozen server join order',
   );
+  const reconnectedBombSecret = (await database.ref(`gameSessionSecrets/${roleLobby.sessionId}`).get()).val();
+  assert.equal(reconnectedBombSecret.generationSeed, provisionedBombSecret.generationSeed, 'reconnects reuse the stored seed');
+  assert.deepEqual(reconnectedBombSecret.bombSteps, provisionedBombSecret.bombSteps, 'reconnects never regenerate the command sequence');
   await Promise.all([bombHost, bombSecond, bombThird, bombFourth].map((client) =>
     client.call('setRealtimeGamePlayerReady', { sessionId: roleLobby.sessionId, ready: true })));
   await acknowledgeSynchronizedStart(
@@ -499,6 +508,13 @@ async function run() {
   assert.deepEqual(hostView.publicCommand, fourthView.publicCommand);
   assert.equal('correctAnswer' in hostView.publicCommand, false);
   assert.equal('solution' in hostView && hostView.solution === null, true, 'live views do not reveal a solution');
+  const publicBombSession = (await database.ref(`gameSessions/${roleLobby.sessionId}`).get()).val();
+  for (const publicValue of [publicBombSession, hostView, secondView, thirdView, fourthView]) {
+    const serialized = JSON.stringify(publicValue);
+    assert.equal(serialized.includes('generationSeed'), false, 'the generation seed remains server-only');
+    assert.equal(serialized.includes('challengeFingerprints'), false, 'semantic fingerprints remain server-only');
+    assert.equal(serialized.includes('recentChallengeFingerprints'), false, 'replay history remains server-only');
+  }
   const initialBombSecret = (await database.ref(`gameSessionSecrets/${roleLobby.sessionId}`).get()).val();
   assert.equal(initialBombSecret.bombSteps.length, 6);
   assert.deepEqual(initialBombSecret.bombSteps.map((command) => command.stage), [
@@ -629,6 +645,19 @@ async function run() {
   assert.equal(bombRematchState.currentCommandId ?? null, null);
   const rematchSecret = (await database.ref(`gameSessionSecrets/${bombRematch.sessionId}`).get()).val();
   assert.notDeepEqual(rematchSecret.challengeIds, initialBombSecret.challengeIds, 'the complete challenge sequence changes on rematch');
+  assert.notEqual(rematchSecret.generationSeed, initialBombSecret.generationSeed, 'a rematch receives a fresh cryptographic seed');
+  assert.equal(rematchSecret.generatorVersion, 1);
+  assert.equal(rematchSecret.bombSteps.length, 6);
+  assert.equal(rematchSecret.challengeFingerprints.length, 6);
+  assert.ok(rematchSecret.recentChallengeFingerprints.length <= 30, 'server-only replay history remains bounded to five rounds');
+  assert.ok(
+    initialBombSecret.challengeFingerprints.every((fingerprint) => rematchSecret.recentChallengeFingerprints.includes(fingerprint)),
+    'the rematch carries forward the previous semantic fingerprints',
+  );
+  assert.ok(
+    rematchSecret.challengeFingerprints.filter((fingerprint) => initialBombSecret.challengeFingerprints.includes(fingerprint)).length <= 2,
+    'the rematch differs materially from the immediately previous round',
+  );
   await Promise.all([bombHost, bombFourth].map((client) =>
     client.call('setRealtimeGamePlayerReady', { sessionId: bombRematch.sessionId, ready: true })));
   await acknowledgeSynchronizedStart('bombDefusal', bombRematch.sessionId, bombHost, [bombHost, bombFourth]);

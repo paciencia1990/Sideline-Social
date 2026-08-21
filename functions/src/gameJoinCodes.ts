@@ -6,15 +6,18 @@ import * as firebaseFunctions from 'firebase-functions';
 
 import {
   BOMB_COMMAND_COUNT,
+  BOMB_GENERATOR_VERSION,
   BOMB_MAX_STRIKES,
   BOMB_ROLE_SCHEMA_VERSION,
   assignBombRoles,
   bombCommandMatches,
-  createBombChallengeSequence,
+  createBombChallengeFingerprint,
   createBombExpertInstruction,
+  createBombGeneratedRound,
   createBombPublicCommand,
   createBombSolution,
   localizeBombPublicCommand,
+  normalizeBombRecentHistory,
   normalizeBombLocale,
   roleForBombPlayer,
   sortBombPlayers,
@@ -1706,7 +1709,7 @@ async function provisionCanonicalLobbyRound(input: {
   hostUserId: string;
   participants: TriviaLobbyParticipant[];
   expiresAtMs: number;
-  previousBombChallengeIds?: string[];
+  previousBombFingerprints?: string[];
 }) {
   if (input.gameType === 'triviaBlitz') {
     return provisionTriviaLobbySession(input);
@@ -1720,7 +1723,7 @@ async function provisionCanonicalLobbyRound(input: {
     sourceSquadId: input.squadId,
     participants: input.participants,
     expiresAtMs: input.expiresAtMs,
-    previousBombChallengeIds: input.previousBombChallengeIds,
+    previousBombFingerprints: input.previousBombFingerprints,
   });
 }
 
@@ -2944,8 +2947,8 @@ async function createNextLobbyRound(
     .map((participant, index) => ({ ...participant, joinOrder: index + 1 }));
   const newSessionId = `${hydrated.entry.gameType === 'triviaBlitz' ? 'trivia' : 'game'}_${randomBytes(18).toString('base64url')}`;
   const expiresAtMs = Date.now() + JOIN_CODE_TTL_MS;
-  const previousBombChallengeIds = hydrated.entry.gameType === 'bombDefusal'
-    ? await readStoredBombChallengeIds(hydrated.entry.sessionId)
+  const previousBombFingerprints = hydrated.entry.gameType === 'bombDefusal'
+    ? await readStoredBombFingerprintHistory(hydrated.entry.sessionId)
     : [];
   const rematch = await reserveLobbyRematch({
     entry: hydrated.entry,
@@ -2964,7 +2967,7 @@ async function createNextLobbyRound(
       hostUserId: uid,
       participants: orderedParticipants,
       expiresAtMs,
-      previousBombChallengeIds,
+      previousBombFingerprints,
     });
     await completeLobbyRematch({
       entry: hydrated.entry,
@@ -3430,7 +3433,7 @@ async function createRealtimeSession(input: {
   sourceSquadId: string | null;
   participants?: TriviaLobbyParticipant[];
   expiresAtMs?: number;
-  previousBombChallengeIds?: string[];
+  previousBombFingerprints?: string[];
 }) {
   const sessionId = input.sessionId ?? `game_${randomBytes(18).toString('base64url')}`;
   const existing = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
@@ -3456,9 +3459,11 @@ async function createRealtimeSession(input: {
     throw safeError('failed-precondition', 'session_creation_failed');
   }
   const now = Date.now();
-  const bombSteps = input.gameType === 'bombDefusal'
-    ? createBombChallengeSequence((limit) => randomInt(limit), input.previousBombChallengeIds)
+  const bombSeed = input.gameType === 'bombDefusal' ? randomBytes(32).toString('hex') : null;
+  const bombRound = bombSeed
+    ? createBombGeneratedRound(bombSeed, input.previousBombFingerprints)
     : null;
+  const bombSteps = bombRound?.commands ?? null;
   const sceneId = `scene_${String(randomInt(1, 22)).padStart(3, '0')}`;
   const gameState = bombSteps
     ? {
@@ -3526,8 +3531,12 @@ async function createRealtimeSession(input: {
   if (bombSteps) {
     updates[`gameSessionSecrets/${sessionId}`] = {
       roleSchemaVersion: BOMB_ROLE_SCHEMA_VERSION,
+      generatorVersion: BOMB_GENERATOR_VERSION,
+      generationSeed: bombSeed,
       bombSteps,
       challengeIds: bombSteps.map((command) => command.challengeId),
+      challengeFingerprints: bombRound?.challengeFingerprints ?? [],
+      recentChallengeFingerprints: bombRound?.recentChallengeFingerprints ?? [],
       expiresAt: session.expiresAt,
     };
   } else {
@@ -4599,17 +4608,24 @@ function readBombAction(value: unknown): Record<string, string | number> {
   throw safeError('invalid-argument', 'not_authorized');
 }
 
-async function readStoredBombChallengeIds(sessionId: string) {
+async function readStoredBombFingerprintHistory(sessionId: string) {
   const snapshot = await admin.database().ref(`/gameSessionSecrets/${sessionId}`).once('value');
   const secret = readRecord(snapshot.val());
-  const storedIds = readStringArray(secret.challengeIds);
-  if (storedIds.length === BOMB_COMMAND_COUNT) return storedIds;
-  return Array.isArray(secret.bombSteps)
-    ? secret.bombSteps.flatMap((value) => {
-      const command = readRecord(value);
-      return typeof command.challengeId === 'string' ? [command.challengeId] : [];
-    })
-    : [];
+  const storedHistory = normalizeBombRecentHistory(readStringArray(secret.recentChallengeFingerprints));
+  if (storedHistory.length > 0) return storedHistory;
+  const storedRound = normalizeBombRecentHistory(readStringArray(secret.challengeFingerprints));
+  if (storedRound.length > 0) return storedRound;
+  return normalizeBombRecentHistory(
+    Array.isArray(secret.bombSteps)
+      ? secret.bombSteps.flatMap((value) => {
+        try {
+          return [createBombChallengeFingerprint(value as BombPrivateCommand)];
+        } catch {
+          return [];
+        }
+      })
+      : [],
+  );
 }
 
 function readBombSubmissionResult(

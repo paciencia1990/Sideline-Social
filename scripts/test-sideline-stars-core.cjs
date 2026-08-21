@@ -2,6 +2,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
+const {
+  assertSidelineStarsSourceIntegrity,
+  scanSidelineStarsSource,
+} = require("./sideline-stars-source-integrity.cjs");
+
 const core = require("../functions/lib/sidelineStarsCore");
 const weekly = require("../functions/lib/weeklyChallengeCore");
 const { formatPublicUserName } = require("../functions/lib/friendSuggestionCore");
@@ -108,6 +113,55 @@ lobbySources.forEach((lobbySource) => {
     "each canonical game route preserves stable lobby identity",
   );
 });
-assert.doesNotMatch(functionsSource, /dailyGame|dailyStars|subscription|entitlement|advertisement/i, "no reward cap or monetization gate was introduced");
+assert.doesNotThrow(
+  () => assertSidelineStarsSourceIntegrity(functionsSource),
+  "only the trusted reward handlers may mutate Sideline Stars or reward transactions",
+);
+
+const unrelatedCallableSource = `
+  export const createTeamCalendarSubscription = functions.https.onCall(async () => ({
+    subscription: "calendar",
+  }));
+`;
+assert.deepEqual(
+  scanSidelineStarsSource(unrelatedCallableSource),
+  [],
+  "legitimate unrelated callable names do not trigger the reward-integrity scan",
+);
+
+const gatedRewardFlowSource = `
+  export const finalizeGameReward = functions.https.onCall(async (request) => {
+    if (!request.data.subscription) throw new Error("paid_reward_gate");
+  });
+`;
+assert.throws(
+  () => assertSidelineStarsSourceIntegrity(gatedRewardFlowSource),
+  /finalizeGameReward[\s\S]*reward flow contains "subscription"/,
+  "subscription and monetization vocabulary is still prohibited inside the reward flow",
+);
+
+const unauthorizedStarsMutationSource = `
+  export const grantMysteryStars = functions.https.onCall(async (request) => {
+    const rewardRef = admin.firestore()
+      .collection("users")
+      .doc(request.auth.uid)
+      .collection("rewardTransactions")
+      .doc("mystery");
+    await admin.firestore().runTransaction(async (transaction) => {
+      transaction.update(rewardRef.parent.parent, {
+        sidelineStars: FieldValue.increment(50),
+      });
+      transaction.create(rewardRef, {
+        amount: 50,
+        rewardReason: "mystery_bonus",
+      });
+    });
+  });
+`;
+assert.throws(
+  () => assertSidelineStarsSourceIntegrity(unauthorizedStarsMutationSource),
+  /grantMysteryStars[\s\S]*sidelineStars[\s\S]*grantMysteryStars[\s\S]*(rewardReason|rewardTransactions write)/,
+  "a simulated unauthorized Stars balance and reward grant is rejected",
+);
 
 console.log("Sideline Stars reward and Squad leaderboard core tests passed.");
