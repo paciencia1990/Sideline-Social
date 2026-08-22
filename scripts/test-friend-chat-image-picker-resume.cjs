@@ -29,6 +29,7 @@ function loadTypeScript(relativePath, requireModule = require) {
 }
 
 const resumeCore = loadTypeScript("utils/friendChatImagePickerResumeCore.ts");
+const coachAiExperienceCore = loadTypeScript("utils/coachAiExperienceCore.ts");
 const imageProfile = loadTypeScript("constants/friendChatImageProfile.ts");
 const storage = new Map();
 const asyncStorage = {
@@ -38,6 +39,7 @@ const asyncStorage = {
 };
 const resumeService = loadTypeScript("services/systemRouteResumeService.ts", (name) => {
   if (name === "@react-native-async-storage/async-storage") return asyncStorage;
+  if (name === "@/utils/coachAiExperienceCore") return coachAiExperienceCore;
   if (name === "@/utils/friendChatImagePickerResumeCore") return resumeCore;
   throw new Error(`Unexpected resume-service import: ${name}`);
 });

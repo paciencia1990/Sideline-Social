@@ -14,9 +14,18 @@ async function callableClient(label, authenticated = true) {
   connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
   const callableFunctions = getFunctions(app, "us-central1");
   connectFunctionsEmulator(callableFunctions, "127.0.0.1", 5001);
-  if (!authenticated) return { uid: null, user: null, call: httpsCallable(callableFunctions, "generateCoachResourceHelp") };
+  if (!authenticated) return {
+    uid: null, user: null,
+    call: httpsCallable(callableFunctions, "generateCoachResourceHelp"),
+    callFeedback: httpsCallable(callableFunctions, "submitCoachAiFeedback"),
+  };
   const credential = await createUserWithEmailAndPassword(auth, `${label}@example.test`, "ValidPass123!");
-  return { uid: credential.user.uid, user: credential.user, call: httpsCallable(callableFunctions, "generateCoachResourceHelp") };
+  return {
+    uid: credential.user.uid,
+    user: credential.user,
+    call: httpsCallable(callableFunctions, "generateCoachResourceHelp"),
+    callFeedback: httpsCallable(callableFunctions, "submitCoachAiFeedback"),
+  };
 }
 
 async function authorizeTester(client, { adult = true, mode = "coach" } = {}) {
@@ -41,6 +50,7 @@ async function expectStandingDenied(label, standing, reason) {
 }
 
 async function run() {
+  await db.collection("coachAiInternalConfig").doc("runtime").set({ enabled: true });
   const anonymous = await callableClient("coach-help-anonymous", false);
   await assert.rejects(() => anonymous.call({}), hasReason("auth_required"));
 
@@ -66,7 +76,24 @@ async function run() {
   assert.equal(first.canSendAsAnnouncement, false);
   assert.equal((await coach.call(request("authorized_request"))).data.title, first.title, "same request ID and payload must return the stored result");
   assert.equal((await db.collection("coachAiRateLimits").doc(coach.uid).get()).data().count, 1, "idempotent replay must not consume a second request");
+  const rateData = (await db.collection("coachAiRateLimits").doc(coach.uid).get()).data();
+  assert.equal(rateData.requestTimes.length, 1, "rolling rate limit must record one unique timestamp");
+  assert.ok(rateData.expiresAt, "rate-limit retention must be bounded");
   await assert.rejects(() => coach.call(request("authorized_request", "There is a different emergency situation to review.")), hasReason("request_id_conflict"));
+
+  assert.equal((await coach.callFeedback({ requestId: "authorized_request", rating: "up" })).data.saved, true);
+  assert.equal((await coach.callFeedback({ requestId: "authorized_request", rating: "down", reason: "unsafe", comment: "Synthetic review only." })).data.reviewStatus, "needs_review");
+  const feedbackRecord = (await db.collection("coachAiFeedback").doc(`${coach.uid}_authorized_request`).get()).data();
+  assert.equal(feedbackRecord.rating, "down");
+  assert.equal(feedbackRecord.reviewStatus, "needs_review");
+  assert.equal(feedbackRecord.category, "other");
+  assert.equal(JSON.stringify(feedbackRecord).includes("immediate danger"), false, "feedback must not duplicate prompts or generated guides");
+  assert.ok(feedbackRecord.expiresAt);
+  assert.equal((await db.collection("coachAiFeedbackRateLimits").doc(coach.uid).get()).data().count, 1, "feedback updates must be idempotent");
+
+  await db.collection("coachAiInternalConfig").doc("runtime").set({ enabled: false });
+  await assert.rejects(() => coach.call(request("disabled_request")), hasReason("coach_ai_disabled"));
+  await db.collection("coachAiInternalConfig").doc("runtime").set({ enabled: true });
 
   const missingProvider = await callableClient("coach-help-provider-missing");
   await authorizeTester(missingProvider);
@@ -96,7 +123,7 @@ async function run() {
   await assert.rejects(() => limited.call(request("rate_request_10")), hasReason("rate_limited"));
   assert.equal((await db.collection("coachAiRateLimits").doc(limited.uid).get()).data().count, 10);
 
-  console.log("AI Coach tester authorization, account standing, idempotency, provider failure, and 10-per-day limit emulator tests passed.");
+  console.log("AI Coach tester authorization, account standing, circuit breaker, idempotency, feedback, provider failure, and rolling 10-per-day limit emulator tests passed.");
 }
 
 run().catch((error) => { console.error(error); process.exit(1); });

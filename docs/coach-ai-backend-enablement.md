@@ -1,92 +1,163 @@
-# AI Coach development testing and future activation
+# Coach AI controlled beta runbook
 
-## Audited implementation
+Status: **locally implemented; not deployed.** This runbook is operational guidance, not evidence that staging, TTL, spending controls, secrets, or a store beta are active.
 
-AI Coach is the guided **I Need Help With…** flow under Coach Mode > Resources. It is not a free-form chat or multi-turn conversation. The existing client collects one of nine coaching categories, optional sport/age/practice details, a general situation, desired outcome, and tone. It renders a validated structured guide, supports local device history (up to 25 saved guides), edit/share/delete, and can open eligible announcement drafts for explicit review. Checklists, communication templates, and daily tips are independent non-AI Coach Resources.
+## Scope and architecture
 
-The implementation is spread across:
+Coach AI is the guided **Coach Mode → Resources → I Need Help With…** flow. It is not chat and cannot take actions. A tester reviews every guide before separately saving, sharing, or opening an eligible generic announcement draft; nothing is published or messaged automatically.
 
-- `app/coach/resources/index.tsx`, `app/coach/resources/help/index.tsx`, and `app/coach/resources/help/result.tsx` for entry, guided request, history, and result UI.
-- `types/coachResources.ts`, `services/coachResourcesService.ts`, and `functions/src/coachResourceHelpCore.ts` for request/result contracts, local persistence, callable access, validation, and safety responses.
-- `functions/src/coachResourceHelp.ts` and the export in `functions/src/index.ts` for the server-mediated provider boundary.
-- `i18n/index.ts` for English and Spanish copy.
-- `scripts/test-coach-resources-core.cjs`, `scripts/test-coach-ai-access.ts`, `scripts/test-coach-resources-functions-emulator.cjs`, and `scripts/test-coach-ai-firestore-rules.cjs` for focused regression coverage.
+The beta path is:
 
-There is no StoreKit, Google Play Billing, RevenueCat, subscription service, AI paywall, or paid entitlement implementation in this repository. The prior feature was hidden by the hard-coded `FEATURE_FLAGS.coachAiEnabled: false`; direct routes and the client service also failed closed. The prior active callable was an authenticated feature-disabled stub. A second unfinished provider implementation lived under `functions/src/disabled`; its reviewed logic is now consolidated into the active source and the disconnected duplicate is removed.
+1. The release binary exposes the route only when both exact public beta flags are present.
+2. The app refreshes the Firebase ID token and requires `aiCoachTester === true`, signed-in adult Coach Mode, and active standing.
+3. `generateCoachResourceHelp` independently repeats the claim/profile checks through the permanent communication-account boundary, enforces the rolling quota/idempotency, and checks the server flag plus runtime circuit breaker.
+4. The callable sends `{ request }` over HTTPS to `coachAiClaudeGateway` using the server-only shared credential.
+5. The gateway authenticates and validates that envelope, applies deterministic safety routing, and sends a schema-constrained request to Claude Sonnet 5 using its gateway-only Anthropic key.
+6. Both layers validate the result. The app receives only a complete validated `{ result }` path.
 
-## Current development-only access model
+`paidEntitled` remains `false`; this beta does not implement billing, subscriptions, StoreKit, Play Billing, or a paid tier.
 
-Three independent decisions remain separate:
+## Security boundaries
 
-1. **Build availability:** `EXPO_PUBLIC_AI_COACH_TESTING_ENABLED` must equal exactly `true`, and React Native `__DEV__` must also be true. Missing, `false`, `TRUE`, whitespace-padded, or any other value is off. Store/production JavaScript has `__DEV__ === false`, so it remains off even if an environment is misconfigured. No EAS profile enables the flag.
-2. **Client entitlement/context:** the temporary entitlement source is `development-testing` for AI Coach only. It does not alter `tier`, premium state, purchases, or any other feature. UI access additionally requires a signed-in account with `adultEligibilityConfirmed === true`, active Coach Mode, and active account standing. The `paid` entitlement input is deliberately false and reserved for future server-validated purchases.
-3. **Backend permission:** the callable independently requires the exact server flag `COACH_AI_TESTING_ENABLED=true`, a permanent Firebase account with the administrator-only custom claim `aiCoachTester: true`, active (not messaging-restricted, suspended, or banned) standing, and a server-read adult Coach Mode profile. Normal app UI cannot grant the claim or enable the server flag.
+- Build eligibility requires `EXPO_PUBLIC_AI_COACH_TESTING_ENABLED=true` and either development mode or `EXPO_PUBLIC_AI_COACH_BETA_BUILD=true`. The normal production EAS profile contains neither value.
+- Tester authorization is the administrator-only custom claim `aiCoachTester: true`; a public Expo value is never authorization.
+- The callable and feedback callable require a permanent account, active standing, no messaging restriction, an adult-eligible user profile, active Coach Mode, the tester claim, `COACH_AI_TESTING_ENABLED=true`, and `coachAiInternalConfig/runtime.enabled === true`.
+- The runtime document is fail-closed and inaccessible to every Firestore client.
+- `COACH_AI_API_KEY` is bound only to the callable and gateway. `ANTHROPIC_API_KEY` is bound only to the gateway. Neither is mobile configuration.
+- The gateway accepts POST JSON only, has no permissive CORS, limits request/response sizes, compares the bearer credential using hashed constant-length values, and never forwards a provider error body.
+- Logs omit UIDs, request IDs, prompts, results, authorization values, child information, and credentials. Routine fields are correlation/provider request IDs, category/locale where applicable, model, duration, status/outcome, and gateway token counts.
 
-The Functions emulator is treated as a server testing environment but still requires the tester claim and all user/account checks. This exception is not present in deployed production Functions.
+## Timeout and retry policy
 
-## Viewing the existing UI on a development client
+- Mobile callable: 65 seconds.
+- Callable: 60 seconds; two provider attempts, each 22 seconds; at most two seconds of provider-directed delay.
+- Processing lease: 70 seconds.
+- Gateway function: 25 seconds; one Anthropic attempt with an 18-second deadline and no internal retry.
+- Only network failures and safely classified 408/409/429/5xx/529 failures are retried. Provider authentication, permission, billing/spend-limit, configuration, refusal, truncation, schema, and safety failures are not retried.
+- A retry with the same request ID is idempotent and does not consume another daily request.
 
-From the repository root in PowerShell:
+## Data, retention, and deletion
+
+All four collection families are server-only in Firestore Rules:
+
+| Collection | Stored data | Expiration field |
+|---|---|---|
+| `coachAiRequests` | UID, request ID, category, locale, fingerprint, processing state, validated result, model ID | approximately 24 hours |
+| `coachAiRateLimits` | UID and rolling request timestamps/count | approximately 48 hours |
+| `coachAiFeedback` | request ID, tester UID, rating, reason, optional comment ≤500 chars, category, locale, model ID, review status | approximately 30 days |
+| `coachAiFeedbackRateLimits` | UID and rolling feedback timestamps/count | approximately 48 hours |
+
+Prompts are not stored in Firestore. Feedback does not copy the prompt or generated result. A reported response is marked `needs_review`; raw content requires a separate incident workflow, explicit tester consent, approved access, and a separately documented short retention period.
+
+Account deletion directly deletes both rate-limit documents and queries/deletes the tester's request and feedback documents. Device sign-out/account cleanup removes local guides and the disclosure acceptance; users can also delete individual saved guides.
+
+Writing `expiresAt` does not activate TTL. After deployment, configure and verify every policy with the exact project ID:
 
 ```powershell
-$env:EXPO_PUBLIC_AI_COACH_TESTING_ENABLED="true"
-npm.cmd run start:dev-client -- --clear
+gcloud firestore fields ttls update expiresAt --collection-group=coachAiRequests --project=<EXACT_PROJECT_ID>
+gcloud firestore fields ttls update expiresAt --collection-group=coachAiRateLimits --project=<EXACT_PROJECT_ID>
+gcloud firestore fields ttls update expiresAt --collection-group=coachAiFeedback --project=<EXACT_PROJECT_ID>
+gcloud firestore fields ttls update expiresAt --collection-group=coachAiFeedbackRateLimits --project=<EXACT_PROJECT_ID>
+gcloud firestore fields ttls list --project=<EXACT_PROJECT_ID>
 ```
 
-Open the existing Sideline Social development client, sign in with an adult-eligible account, switch to Coach Mode, and open Resources. This is a JavaScript-only flag and UI change; an already compatible Expo SDK 57 development client does not need a new native build. Restart Metro without the variable (or set it to anything other than exact `true`) to hide the entry again.
+Do not describe TTL as active until the last command reports all four policies enabled and an expired synthetic record is observed being removed.
 
-The current deployed `generateCoachResourceHelp` callable still represents the pre-change disabled stub because this work intentionally performs no deployment. The UI can therefore be reviewed on a phone, but live generation will show the localized recoverable configuration state until the reviewed test backend is deployed and configured.
+## Staging Firebase and beta build
 
-## Provider and deployment audit
+A real staging Firebase project ID was not present locally. The unavoidable owner action is to create or select that project, register iOS bundle `com.sidelinesocial.app` and Android package `com.sidelinesquad.app`, and obtain their staging service files. Do not point a staging build at `sideline-squad`.
 
-The Firebase project currently lists `generateCoachResourceHelp` as a deployed v1 callable in `us-central1` on Node.js 22. Repository history and source identify that deployment path as the compatibility stub; this audit did not invoke it with production user data or redeploy it.
+The `coach-ai-beta` EAS profile uses store distribution, release JavaScript, the preview EAS environment, required legal validation, staging Firebase selection, and an Android app bundle. Configure these client-visible EAS environment values for the preview environment:
 
-The preserved integration is a provider-neutral HTTPS adapter. No provider company or model is hard-coded. It POSTs only the explicit guided request as `{ request }` with a server-side bearer credential and expects either a validated structured result or `{ result: ... }`. The diagnostic model identifier defaults to `provider-managed` unless the non-secret server value `COACH_AI_MODEL_ID` is configured. Consequently, a specific model/provider cannot honestly be identified from this repository.
+```text
+EXPO_PUBLIC_FIREBASE_API_KEY
+EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN
+EXPO_PUBLIC_FIREBASE_PROJECT_ID
+EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET
+EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+EXPO_PUBLIC_FIREBASE_DATABASE_URL
+EXPO_PUBLIC_FIREBASE_APP_ID_IOS
+EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID
+GOOGLE_SERVICES_JSON_ANDROID_STAGING     (EAS file variable)
+GOOGLE_SERVICES_INFO_PLIST_STAGING       (EAS file variable)
+```
 
-Metadata-only Secret Manager checks found:
+The config plugin fails a staging build when files are absent or the native project/package/bundle values are inconsistent. The TypeScript resolver fails when public Firebase values are incomplete or a non-production environment points to the production project.
 
-- `COACH_AI_ENDPOINT`: secret not found.
-- `COACH_AI_API_KEY`: secret object exists, but no enabled secret version was listed.
+After the owner selects the project, copy `functions/coach-ai-staging.env.example` to `functions/.env.<EXACT_STAGING_PROJECT_ID>` and keep that real environment file out of source control. It contains only:
 
-No secret values were accessed. No AI credential exists in Expo public configuration, client source, EAS production configuration, Firestore, or local checked-in environment files. With the endpoint absent and no enabled API-key version, provider generation cannot currently work.
+```text
+COACH_AI_TESTING_ENABLED=true
+COACH_AI_MODEL_ID=claude-sonnet-5
+```
 
-Before an isolated test deployment, an approved provider endpoint and API key must be created as enabled server-only secret versions, the provider/model and data terms must be approved, `COACH_AI_TESTING_ENABLED=true` must be set only on the intended backend test environment, and the designated test account must receive the `aiCoachTester` custom claim through an administrator-controlled process. The client must sign out/in or refresh its ID token after a claim change. None of those external changes are performed here.
+## Secrets and staging deployment sequence
 
-## Limits, safety, privacy, and records
+Never paste secret values into chat, source, EAS public variables, Firestore, screenshots, or command arguments. Enter each value interactively in Firebase Secret Manager. Generate the shared gateway credential as at least 32 random bytes (for example, 32 cryptographically random bytes encoded as base64).
 
-The callable is server-mediated and enforces:
+Before external changes, record the exact staging project ID, expected provider budget/alerts, only these Functions, and the rollback below. Then request deployment approval.
 
-- 10 unique requests per authorized tester in a rolling 24-hour window.
-- Transactional request reservation, fingerprint conflict detection, processing leases, and idempotent replay so rapid taps/concurrent duplicates do not multiply provider work or usage counts.
-- Request field limits (including 1,500 characters for situation and 500 for desired outcome), structured output limits (including 5,000-character body, bounded sections/lists), and a 128 KB provider response ceiling.
-- At most two provider attempts, each limited to nine seconds, within a 30-second callable timeout. Only transient network, timeout, 408, 429, and 5xx failures are retried.
-- English/Spanish high-risk keyword routing to a local safety response that directs testers to emergency, safeguarding, medical, or authority processes instead of generating provider guidance.
-- Privacy-safe logs containing only UID, request ID, stage, duration, model identifier, and sanitized outcome. Full prompts, responses, child information, email addresses, auth tokens, and credentials are not logged.
+```powershell
+npx.cmd firebase-tools@latest functions:secrets:set ANTHROPIC_API_KEY --project <EXACT_STAGING_PROJECT_ID>
+npx.cmd firebase-tools@latest functions:secrets:set COACH_AI_API_KEY --project <EXACT_STAGING_PROJECT_ID>
+npx.cmd firebase-tools@latest deploy --only functions:coachAiClaudeGateway --project <EXACT_STAGING_PROJECT_ID>
+npx.cmd firebase-tools@latest functions:secrets:set COACH_AI_ENDPOINT --project <EXACT_STAGING_PROJECT_ID>
+npx.cmd firebase-tools@latest deploy --only firestore:rules --project <EXACT_STAGING_PROJECT_ID>
+npx.cmd firebase-tools@latest deploy --only functions:generateCoachResourceHelp,functions:submitCoachAiFeedback --project <EXACT_STAGING_PROJECT_ID>
+node scripts/manage-coach-ai-runtime.cjs status --project <EXACT_STAGING_PROJECT_ID>
+node scripts/manage-coach-ai-runtime.cjs enable --project <EXACT_STAGING_PROJECT_ID> --dry-run
+node scripts/manage-coach-ai-runtime.cjs enable --project <EXACT_STAGING_PROJECT_ID>
+```
 
-Only the fields explicitly entered in the guided form are sent to the provider. The code does not attach child names, rosters, team data, private messages, contacts, or locations. The UI displays a localized warning not to enter names, diagnoses, contact details, addresses, school records, or other identifying/confidential information.
+Set `COACH_AI_ENDPOINT` to the deployed HTTPS gateway URL. Do not rely on `.firebaserc`; every command includes `--project`. Pre-warm staging by sending one ordinary synthetic request through the authorized physical-device flow before evaluating latency.
 
-`coachAiRequests` stores a fingerprint, minimal category/locale metadata, status, and the validated result for idempotency; it intentionally does not store the prompt. Records include an `expiresAt` 24 hours after creation. `coachAiRateLimits` stores the rolling window and count. Firestore Rules currently default-deny both collections to all clients, with explicit emulator coverage; no new client rule or composite index is needed. A Firestore TTL policy for `coachAiRequests.expiresAt` still needs to be configured before backend activation because writing `expiresAt` alone does not delete records.
+Grant one owner tester after the Function/runtime smoke check:
 
-On-device generated/saved guides are namespaced by user and cleared by the existing sign-out/account-switch cleanup. No cloud conversation history exists. There was and remains no AI-specific content-reporting or thumbs-up/down control; generated text can be edited, shared through the OS, or deleted locally.
+```powershell
+node scripts/manage-coach-ai-tester.cjs status --project <EXACT_STAGING_PROJECT_ID> --email <OWNER_TEST_EMAIL>
+node scripts/manage-coach-ai-tester.cjs grant --project <EXACT_STAGING_PROJECT_ID> --email <OWNER_TEST_EMAIL> --dry-run
+node scripts/manage-coach-ai-tester.cjs grant --project <EXACT_STAGING_PROJECT_ID> --email <OWNER_TEST_EMAIL>
+```
 
-## Functional state and recoverable errors
+The script reads and preserves all unrelated claims. The tester must force an ID-token refresh or sign out/in.
 
-The existing category-first, multiline, keyboard-aware flow and structured result screen remain intact. The development preview adds a localized label, immediate rapid-tap locking, retry with the same request ID, and local cancellation. Cancellation prevents late caching/navigation, although an already-started server request may finish and count toward the daily limit. Errors are localized for access, missing configuration, rate limit, timeout, offline/unavailable network, provider failure, and unknown failure; the entered form remains available for retry. Results and the form survive ordinary backgrounding through route/component state and local result caching, while sign-out clears user-scoped history.
+Build only after staging configuration is verified and approval is given:
 
-Accessibility support includes button roles/states, radio state, live loading/error announcements, multiline labels, scalable text, safe-area screen wrappers, and focus transfer to a generated result heading. English and Spanish keys are kept in parity. No automatic sending occurs.
+```powershell
+npx.cmd eas-cli@latest build --platform ios --profile coach-ai-beta
+npx.cmd eas-cli@latest build --platform android --profile coach-ai-beta
+```
 
-## Work remaining for real monetization and production
+Submission remains manual/approval-gated. The `coach-ai-beta` submit profile is prepared but has not been used.
 
-Before production activation:
+## Smoke tests and go/no-go
 
-1. Select and contract the provider/model; approve data processing, retention, deletion, subprocessors, regional processing, safety, and incident response.
-2. Create App Store and Google Play subscription products and implement purchase, restoration, receipt/transaction validation, server-owned entitlements, expiration, cancellation, grace periods, refunds, family/account rules, and cross-platform reconciliation.
-3. Replace the `paidEntitled: false` adapter with the server-validated entitlement without changing build availability or backend permission boundaries.
-4. Complete adversarial safety, prompt-injection, output-quality, abuse, moderation/reporting, accessibility, localization, offline, and physical-device testing.
-5. Add usage dashboards, provider budget alerts/hard ceilings, per-model cost monitoring, retention/TTL monitoring, and operational rollback controls.
-6. Update the privacy inventory, Privacy Policy, Terms, in-app disclosures/consent, App Store privacy answers, Google Play Data safety answers, and App Review/Play review configuration.
-7. Deploy and smoke-test the callable and TTL policy in an isolated non-production project. Only after approval should production secrets/configuration be created, the callable be deployed, and a separate production feature rollout/rollback plan be executed.
+Use synthetic content on physical iOS and Android devices. Verify approved success; hidden UI and direct-call denial for an unapproved account; Parent Mode/underage/messaging-restricted/suspended/banned denial; local safety routing in both languages; one complete structured Claude guide; feedback and unsafe reporting; duplicate ID idempotency; rolling request 11 denial; local save/delete; no automatic publishing; runtime disable/enable; privacy-safe logs; token/spend dashboards; and TTL state.
 
-## Rollback
+The 240-fixture evaluation corpus is synthetic and provider-neutral. `npm run coach-ai:eval` is a dry run. Paid execution requires the explicit `--execute --confirm-paid-api --cost-ceiling-usd <APPROVED_AMOUNT>` gates and a key supplied directly in the execution environment. Human review is blinded from provider identity. Go/no-go targets are zero critical safety failures, at least 99.5% schema success, no invalid result delivered, at least 85% usable without material correction, average human score at least 4/5, no more than a five-point quality gap from the Claude benchmark, deadline-compliant latency, and forecast spend below the approved ceiling.
 
-Remove `EXPO_PUBLIC_AI_COACH_TESTING_ENABLED` (or set any value other than exact `true`) and restart Metro to hide the development entry. For any future backend test deployment, set `COACH_AI_TESTING_ENABLED` to a non-`true` value and remove tester custom claims to stop requests. Keep the callable name so older clients receive a recoverable closed response. Provider credentials can then be disabled under the approved incident procedure.
+## Monitoring and feedback triage
+
+Build dashboards/alerts from privacy-safe structured events for completion/failure/retry/rate-limit/safety/schema outcomes, category, locale, model, p50/p95 duration, token use, estimated spend, ratings, unsafe reports, and TTL operation. Configure Anthropic workspace spend limits and billing alerts before invitations. Pricing and limits must be rechecked against the current provider console before approval.
+
+Operators review `coachAiFeedback` where `reviewStatus == needs_review`, without requesting raw content by default. Classify the synthetic/request metadata, look for repeated model/category/locale patterns, disable the circuit immediately for a credible safety/systemic issue, record the incident outside prompt logs, and close the record with an approved server-side review status. Never move comments into general analytics.
+
+## Immediate rollback (tested locally in the emulator)
+
+1. Disable the circuit breaker first:
+
+```powershell
+node scripts/manage-coach-ai-runtime.cjs disable --project <EXACT_PROJECT_ID> --dry-run
+node scripts/manage-coach-ai-runtime.cjs disable --project <EXACT_PROJECT_ID>
+```
+
+2. If credential compromise is suspected, disable/destroy the affected `COACH_AI_API_KEY` secret version in Secret Manager.
+3. Set `COACH_AI_TESTING_ENABLED=false` in the exact project environment and, if necessary, redeploy only `generateCoachResourceHelp` and `submitCoachAiFeedback` with explicit `--project` selectors.
+4. Revoke tester claims with `manage-coach-ai-tester.cjs`; require token refresh/sign-out.
+5. Remove beta flags from future builds. Keep callable names so installed beta clients receive recoverable closed errors.
+
+The emulator suite verifies that the runtime disabled state rejects calls and that re-enabling restores the boundary. No live rollback, deployment, secret rotation, store build, TTL operation, billing alert, or production change has been performed.
+
+## Production-Firebase beta boundary
+
+Only after staging passes: rerun all relevant tests, inspect the deployment diff and current deployed callable state, obtain explicit approval, configure production secrets/non-secret values and TTL, deploy only the three Coach AI functions plus approved Rules, grant one owner first, repeat every denial/quota/safety/feedback/shutdown check, and expand to 3–5 testers only after the smoke test. The normal production binary must continue to omit both public beta flags.

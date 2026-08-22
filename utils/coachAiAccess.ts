@@ -1,4 +1,4 @@
-export type CoachAiEntitlementSource = "development-testing" | "paid" | null;
+export type CoachAiEntitlementSource = "tester-claim" | "paid" | null;
 
 export type CoachAiAccess = Readonly<{
   buildAvailable: boolean;
@@ -9,7 +9,8 @@ export type CoachAiAccess = Readonly<{
 
 export function resolveCoachAiAccess({
   buildAvailable,
-  developmentTestingEntitled,
+  claimLoaded,
+  testerClaimEntitled,
   paidEntitled,
   signedIn,
   adultEligible,
@@ -17,7 +18,8 @@ export function resolveCoachAiAccess({
   accountStanding,
 }: {
   buildAvailable: boolean;
-  developmentTestingEntitled: boolean;
+  claimLoaded: boolean;
+  testerClaimEntitled: boolean;
   paidEntitled: boolean;
   signedIn: boolean;
   adultEligible: boolean;
@@ -26,8 +28,8 @@ export function resolveCoachAiAccess({
 }): CoachAiAccess {
   const entitlementSource: CoachAiEntitlementSource = paidEntitled
     ? "paid"
-    : developmentTestingEntitled
-      ? "development-testing"
+    : claimLoaded && testerClaimEntitled
+      ? "tester-claim"
       : null;
   const authorizedContext = signedIn && adultEligible && activeMode === "coach" && accountStanding === "active";
   const canUse = buildAvailable && entitlementSource !== null && authorizedContext;

@@ -122,9 +122,10 @@ Describe providers as processors/service providers only after contracts and sett
 
 ### Coach AI
 
-- AI Coach has a local development-only preview gated by exact `EXPO_PUBLIC_AI_COACH_TESTING_ENABLED=true`, `__DEV__`, adult Coach Mode, and active standing. No EAS profile enables it, so current store builds remain closed.
-- The repository callable is additionally gated by a server test flag and administrator-only tester claim, but the deployed callable remains the prior disabled stub and provider secrets are incomplete. No production prompt/provider/model processing is active.
-- Before any non-isolated-test enablement, update the policy, Apple/Play disclosures, consent/notice, provider list, retention/deletion and child/personal-data restrictions. See `docs/coach-ai-backend-enablement.md`.
+- The source now supports a controlled free beta in a dedicated store-signed beta profile. It requires exact beta build flags, a refreshed administrator-issued tester claim, signed-in adult Coach Mode, active standing, the server deployment flag, and a fail-closed runtime circuit breaker. The normal production build contains neither beta flag and remains hidden.
+- An authorized guided request is processed by Firebase Functions and Anthropic Claude. The request record stores no prompt, but retains UID/request metadata and the validated guide for about 24 hours for idempotency. Rolling quota data is retained about 48 hours. Feedback stores the selection, optional comment, request metadata/model and review status—not the prompt or guide—for about 30 days; TTL must be separately enabled and verified.
+- The first-use English/Spanish notice prohibits names, diagnoses, contact details, addresses, school records and confidential team information; says AI can be wrong and is not emergency/medical/legal/disciplinary/safeguarding advice; explains provider processing, temporary server retention, device-only saved guides and feedback. Nothing sends or publishes automatically.
+- This is locally prepared but not evidence of a deployed beta. Before distribution, approve the provider/terms, policy and store disclosures; activate/verify TTL; configure spending limits/alerts; and complete the staging smoke/rollback checks in `docs/coach-ai-backend-enablement.md`.
 
 ## Platform-Specific Information wording facts
 

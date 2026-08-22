@@ -1,0 +1,108 @@
+export const COACH_AI_RESULT_RETURN_ROUTE = "/coach/resources/help/result" as const;
+export const COACH_AI_RESULT_RETURN_TTL_MS = 10 * 60 * 1000;
+
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+
+export type CoachAiResultReturnIntent = Readonly<{
+  createdAt: number;
+  expiresAt: number;
+  requestId: string;
+  route: typeof COACH_AI_RESULT_RETURN_ROUTE;
+  userId: string;
+}>;
+
+export function toggleCoachAiSavedExpanded(expanded: boolean) {
+  return !expanded;
+}
+
+export function resolveKeyboardRevealOffset(
+  platform: "android" | "ios" | "web" | string,
+  safeAreaBottom: number,
+) {
+  const safeBottom = Number.isFinite(safeAreaBottom) ? Math.max(0, safeAreaBottom) : 0;
+  return platform === "android" ? Math.max(32, safeBottom + 16) : 16;
+}
+
+export async function runCoachAiResultAction<T>({
+  clearReturn,
+  execute,
+  rememberReturn,
+}: {
+  clearReturn: () => Promise<void>;
+  execute: () => Promise<T>;
+  rememberReturn: () => Promise<void>;
+}) {
+  let returnRemembered = false;
+  try {
+    await rememberReturn();
+    returnRemembered = true;
+  } catch {
+    // Local resume protection must never block an explicit save or share action.
+  }
+
+  try {
+    return await execute();
+  } finally {
+    if (returnRemembered) await clearReturn().catch(() => undefined);
+  }
+}
+
+export function createCoachAiResultReturnIntent({
+  now = Date.now(),
+  requestId,
+  userId,
+}: {
+  now?: number;
+  requestId: string;
+  userId: string;
+}): CoachAiResultReturnIntent {
+  if (!isSafeUserId(userId) || !REQUEST_ID_PATTERN.test(requestId) || !Number.isFinite(now)) {
+    throw new Error("invalid_coach_ai_return_context");
+  }
+  return Object.freeze({
+    createdAt: now,
+    expiresAt: now + COACH_AI_RESULT_RETURN_TTL_MS,
+    requestId,
+    route: COACH_AI_RESULT_RETURN_ROUTE,
+    userId,
+  });
+}
+
+export function parseCoachAiResultReturnIntent(
+  raw: string,
+  now = Date.now(),
+): CoachAiResultReturnIntent | null {
+  try {
+    const value = JSON.parse(raw) as Partial<CoachAiResultReturnIntent>;
+    if (
+      value.route !== COACH_AI_RESULT_RETURN_ROUTE
+      || !isSafeUserId(value.userId)
+      || typeof value.requestId !== "string"
+      || !REQUEST_ID_PATTERN.test(value.requestId)
+      || typeof value.createdAt !== "number"
+      || !Number.isFinite(value.createdAt)
+      || typeof value.expiresAt !== "number"
+      || !Number.isFinite(value.expiresAt)
+      || value.expiresAt !== value.createdAt + COACH_AI_RESULT_RETURN_TTL_MS
+      || value.createdAt > now
+      || value.expiresAt <= now
+    ) return null;
+    return Object.freeze({
+      createdAt: value.createdAt,
+      expiresAt: value.expiresAt,
+      requestId: value.requestId,
+      route: value.route,
+      userId: value.userId,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function isSafeUserId(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= 128
+    && value.trim() === value
+    && !/[\\/\s]/.test(value);
+}

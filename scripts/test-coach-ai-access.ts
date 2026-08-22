@@ -18,6 +18,9 @@ async function run() {
   assert.equal(resolveFeatureFlags({ isDevelopment: true, coachAiTestingValue: " true " }).coachAiEnabled, false);
   assert.equal(resolveFeatureFlags({ isDevelopment: true, coachAiTestingValue: "true" }).coachAiEnabled, true);
   assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "true" }).coachAiEnabled, false);
+  assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "true", coachAiBetaBuildValue: "true" }).coachAiEnabled, true);
+  assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "true", coachAiBetaBuildValue: "TRUE" }).coachAiEnabled, false);
+  assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "false", coachAiBetaBuildValue: "true" }).coachAiEnabled, false);
   assert.equal(classifyCoachAiRequestError({ code: "functions/failed-precondition", details: { reason: "provider_unavailable" } }).kind, "configuration");
   assert.equal(classifyCoachAiRequestError({ code: "functions/resource-exhausted", details: { reason: "rate_limited" } }).kind, "rate_limit");
   assert.equal(classifyCoachAiRequestError({ code: "functions/deadline-exceeded" }).kind, "timeout");
@@ -27,7 +30,8 @@ async function run() {
 
   const allowed = resolveCoachAiAccess({
   buildAvailable: true,
-  developmentTestingEntitled: true,
+  claimLoaded: true,
+  testerClaimEntitled: true,
   paidEntitled: false,
   signedIn: true,
   adultEligible: true,
@@ -35,7 +39,7 @@ async function run() {
   accountStanding: "active",
   });
   assert.equal(allowed.canView, true);
-  assert.equal(allowed.entitlementSource, "development-testing");
+  assert.equal(allowed.entitlementSource, "tester-claim");
 
   for (const denied of [
   { signedIn: false },
@@ -44,12 +48,14 @@ async function run() {
   { accountStanding: "messagingRestricted" as const },
   { accountStanding: "suspended" as const },
   { accountStanding: "banned" as const },
-  { developmentTestingEntitled: false },
+  { claimLoaded: false },
+  { testerClaimEntitled: false },
   { buildAvailable: false },
   ]) {
     assert.equal(resolveCoachAiAccess({
       buildAvailable: true,
-      developmentTestingEntitled: true,
+      claimLoaded: true,
+      testerClaimEntitled: true,
       paidEntitled: false,
       signedIn: true,
       adultEligible: true,
@@ -59,5 +65,5 @@ async function run() {
     }).canRequest, false);
   }
 
-  console.log("AI Coach development flag and access-context tests passed.");
+  console.log("AI Coach beta flags, token claim, and access-context tests passed.");
 }

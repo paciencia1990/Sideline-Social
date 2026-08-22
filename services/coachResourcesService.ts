@@ -12,6 +12,7 @@ import type {
   CoachCommunicationTemplate,
   CoachHelpRequest,
   CoachHelpResult,
+  CoachAiFeedbackInput,
   CoachProTip,
   CoachResourceLocale,
   LocalizedText,
@@ -23,6 +24,7 @@ const CHECKLIST_KEY_PREFIX = "sidelineSocial.coachChecklistProgress.v1";
 const GENERATED_HELP_KEY_PREFIX = "sidelineSocial.coachGeneratedHelp.v1";
 const SAVED_HELP_KEY_PREFIX = "sidelineSocial.coachSavedHelp.v1";
 const PLACEHOLDER_PATTERN = /\{([a-zA-Z][a-zA-Z0-9]*)\}/g;
+const COACH_AI_DISCLOSURE_KEY_PREFIX = "sidelineSocial.coachAiDisclosure.v1";
 
 export function resolveCoachResourceLocale(language?: string): CoachResourceLocale {
   return language?.toLowerCase().startsWith("es") ? "es" : "en";
@@ -123,12 +125,32 @@ export function getDailyCoachProTip(date = new Date(), tips = getCoachProTips())
 
 export async function generateCoachResourceHelp(request: CoachHelpRequest) {
   if (!FEATURE_FLAGS.coachAiEnabled) throw new CoachAiRequestError("access");
-  const callable = httpsCallable<CoachHelpRequest, CoachHelpResult>(functions, "generateCoachResourceHelp", { timeout: 30_000 });
+  const callable = httpsCallable<CoachHelpRequest, CoachHelpResult>(functions, "generateCoachResourceHelp", { timeout: 65_000 });
   try {
     return (await callable(request)).data;
   } catch (error) {
     throw classifyCoachAiRequestError(error);
   }
+}
+
+export async function submitCoachAiFeedback(input: CoachAiFeedbackInput) {
+  if (!FEATURE_FLAGS.coachAiEnabled) throw new CoachAiRequestError("access");
+  const callable = httpsCallable<CoachAiFeedbackInput, { saved: true; reviewStatus: "received" | "needs_review" }>(
+    functions,
+    "submitCoachAiFeedback",
+    { timeout: 20_000 },
+  );
+  return (await callable(input)).data;
+}
+
+export async function hasAcceptedCoachAiDisclosure(userId: string) {
+  if (!userId) return false;
+  return (await AsyncStorage.getItem(coachAiDisclosureKey(userId))) === "accepted";
+}
+
+export async function acceptCoachAiDisclosure(userId: string) {
+  if (!userId) throw new Error("auth_required");
+  await AsyncStorage.setItem(coachAiDisclosureKey(userId), "accepted");
 }
 
 export async function cacheGeneratedCoachHelpResult(userId: string, requestId: string, result: CoachHelpResult) {
@@ -204,6 +226,10 @@ function generatedHelpKey(userId: string, requestId: string) {
 
 function savedHelpKey(userId: string) {
   return `${SAVED_HELP_KEY_PREFIX}.${userId}`;
+}
+
+function coachAiDisclosureKey(userId: string) {
+  return `${COACH_AI_DISCLOSURE_KEY_PREFIX}.${userId}`;
 }
 
 function isSavedHelpResult(value: unknown): value is SavedCoachHelpResult {

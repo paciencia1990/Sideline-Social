@@ -1,24 +1,30 @@
-import React, { useCallback, useRef, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { AccessibilityInfo, ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
-import { ChevronRight, ShieldAlert } from "lucide-react-native";
+import { ChevronDown, ChevronRight, ShieldAlert } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
-import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
+import {
+  KeyboardAwareScrollView,
+  useKeyboardAwareInputReveal,
+} from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useCoachAiAccess } from "@/hooks/useCoachAiAccess";
 import {
+  acceptCoachAiDisclosure,
   cacheGeneratedCoachHelpResult,
   generateCoachResourceHelp,
+  hasAcceptedCoachAiDisclosure,
   getSavedCoachHelpResults,
   resolveCoachResourceLocale,
 } from "@/services/coachResourcesService";
 import type { CoachHelpCategory, CoachHelpRequest, CoachHelpTone, SavedCoachHelpResult } from "@/types/coachResources";
 import { CoachAiRequestError } from "@/utils/coachAiErrors";
+import { toggleCoachAiSavedExpanded } from "@/utils/coachAiExperienceCore";
 
 const CATEGORIES: CoachHelpCategory[] = [
   "practice_plan", "parent_message", "parent_concern", "player_behavior", "discouraged_player",
@@ -44,12 +50,36 @@ export default function CoachResourceHelpScreen() {
   const [error, setError] = useState<string | null>(null);
   const [retryRequest, setRetryRequest] = useState<CoachHelpRequest | null>(null);
   const [saved, setSaved] = useState<SavedCoachHelpResult[]>([]);
+  const [savedExpanded, setSavedExpanded] = useState(false);
+  const [disclosureAccepted, setDisclosureAccepted] = useState<boolean | null>(null);
+  const [disclosureError, setDisclosureError] = useState(false);
   const generationToken = useRef(0);
   const generationInFlight = useRef(false);
 
+  useEffect(() => {
+    setDisclosureAccepted(null);
+    setDisclosureError(false);
+    setSavedExpanded(false);
+  }, [user?.uid]);
+
   useFocusEffect(useCallback(() => {
-    if (user?.uid) void getSavedCoachHelpResults(user.uid).then(setSaved);
+    if (user?.uid) {
+      void getSavedCoachHelpResults(user.uid).then(setSaved);
+      void hasAcceptedCoachAiDisclosure(user.uid).then(setDisclosureAccepted).catch(() => setDisclosureAccepted(false));
+    }
   }, [user?.uid]));
+
+  const acceptDisclosure = useCallback(async () => {
+    if (!user?.uid) return;
+    setDisclosureError(false);
+    try {
+      await acceptCoachAiDisclosure(user.uid);
+      setDisclosureAccepted(true);
+      AccessibilityInfo.announceForAccessibility(t("coach.resources.aiDisclosureAccepted"));
+    } catch {
+      setDisclosureError(true);
+    }
+  }, [t, user?.uid]);
 
   const generate = useCallback(async (requestToRetry?: CoachHelpRequest) => {
     if (!user?.uid || !category || generationInFlight.current || !coachAiAccess.canRequest) return;
@@ -120,6 +150,28 @@ export default function CoachResourceHelpScreen() {
     );
   }
 
+  if (disclosureAccepted !== true) {
+    return (
+      <ScreenWrapper>
+        <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <CoachResourceHeader subtitle={t("coach.resources.aiDisclosureSubtitle")} title={t("coach.resources.aiDisclosureTitle")} />
+          <Card style={styles.disclosureCard}>
+            <Text style={styles.reminderText}>{t("coach.resources.aiDisclosureBody")}</Text>
+            <Text style={styles.reminderText}>{t("coach.resources.aiDisclosurePrivacy")}</Text>
+            <Text style={styles.reminderText}>{t("coach.resources.aiDisclosureStorage")}</Text>
+          </Card>
+          {disclosureError ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{t("coach.resources.aiDisclosureError")}</Text> : null}
+          <TouchableOpacity accessibilityRole="button" disabled={disclosureAccepted === null} onPress={() => void acceptDisclosure()} style={[styles.generateButton, disclosureAccepted === null && styles.disabled]}>
+            {disclosureAccepted === null ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.generateText}>{t("coach.resources.aiDisclosureContinue")}</Text>}
+          </TouchableOpacity>
+          <TouchableOpacity accessibilityRole="button" onPress={() => router.replace("/coach/resources" as never)} style={styles.backStepButton}>
+            <Text style={styles.backStepText}>{t("coach.resources.backToResources")}</Text>
+          </TouchableOpacity>
+        </KeyboardAwareScrollView>
+      </ScreenWrapper>
+    );
+  }
+
   return (
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -139,13 +191,29 @@ export default function CoachResourceHelpScreen() {
             </View>
             {saved.length > 0 ? (
               <View style={styles.savedSection}>
-                <Text accessibilityRole="header" style={styles.sectionTitle}>{t("coach.resources.savedHelp")}</Text>
-                {saved.map((entry) => (
-                  <TouchableOpacity accessibilityRole="button" key={entry.id} onPress={() => router.push({ pathname: "/coach/resources/help/result", params: { requestId: entry.id } } as never)} style={styles.categoryRow}>
-                    <Text style={styles.categoryText}>{entry.result.title}</Text>
-                    <ChevronRight color={Colors.textHeading} size={20} />
-                  </TouchableOpacity>
-                ))}
+                <TouchableOpacity
+                  accessibilityHint={t(savedExpanded ? "coach.resources.savedCollapseHint" : "coach.resources.savedExpandHint")}
+                  accessibilityLabel={t("coach.resources.savedHelp")}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: savedExpanded }}
+                  onPress={() => setSavedExpanded(toggleCoachAiSavedExpanded)}
+                  style={styles.savedHeader}
+                >
+                  <Text accessibilityRole="header" style={styles.sectionTitle}>{t("coach.resources.savedHelp")}</Text>
+                  {savedExpanded
+                    ? <ChevronDown color={Colors.textHeading} size={20} />
+                    : <ChevronRight color={Colors.textHeading} size={20} />}
+                </TouchableOpacity>
+                {savedExpanded ? (
+                  <View style={styles.savedList}>
+                    {saved.map((entry) => (
+                      <TouchableOpacity accessibilityRole="button" key={entry.id} onPress={() => router.push({ pathname: "/coach/resources/help/result", params: { requestId: entry.id } } as never)} style={styles.categoryRow}>
+                        <Text style={styles.categoryText}>{entry.result.title}</Text>
+                        <ChevronRight color={Colors.textHeading} size={20} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
               </View>
             ) : null}
           </>
@@ -211,10 +279,27 @@ export default function CoachResourceHelpScreen() {
 function Field({ keyboardType, label, maxLength, multiline, onChangeText, value }: {
   keyboardType?: "default" | "number-pad"; label: string; maxLength: number; multiline?: boolean; onChangeText: (value: string) => void; value: string;
 }) {
+  const inputRef = useRef<TextInput>(null);
+  const requestInputReveal = useKeyboardAwareInputReveal();
+  const revealInput = useCallback(() => requestInputReveal(inputRef.current), [requestInputReveal]);
+
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput accessibilityLabel={label} keyboardType={keyboardType} maxLength={maxLength} multiline={multiline} onChangeText={onChangeText} style={[styles.input, multiline && styles.textarea]} textAlignVertical={multiline ? "top" : "center"} value={value} />
+      <TextInput
+        accessibilityLabel={label}
+        keyboardType={keyboardType}
+        maxLength={maxLength}
+        multiline={multiline}
+        onChangeText={onChangeText}
+        onContentSizeChange={multiline ? revealInput : undefined}
+        onFocus={revealInput}
+        onSelectionChange={multiline ? revealInput : undefined}
+        ref={inputRef}
+        style={[styles.input, multiline && styles.textarea]}
+        textAlignVertical={multiline ? "top" : "center"}
+        value={value}
+      />
     </View>
   );
 }
@@ -230,7 +315,10 @@ const styles = StyleSheet.create({
   categoryRow: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.sm, minHeight: 58, padding: Spacing.md },
   categoryText: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodySemiBold, fontSize: 14, lineHeight: 20 },
   savedSection: { gap: Spacing.sm, paddingTop: Spacing.md },
+  savedHeader: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 52, paddingHorizontal: Spacing.md },
+  savedList: { gap: Spacing.sm },
   reminderCard: { alignItems: "flex-start", borderLeftColor: Colors.accentGold, borderLeftWidth: 4, flexDirection: "row", gap: Spacing.sm },
+  disclosureCard: { borderLeftColor: Colors.accentGold, borderLeftWidth: 4, gap: Spacing.md },
   reminderText: { color: Colors.textPrimary, flex: 1, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 20 },
   field: { gap: Spacing.xs },
   label: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19 },

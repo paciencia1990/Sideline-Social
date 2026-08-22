@@ -38,3 +38,11 @@ export type CoachHelpResult = {
   phrasesToUse?: string[]; phrasesToAvoid?: string[]; safetyNotice?: string; canSendAsAnnouncement: boolean;
 };
 export type SavedCoachHelpResult = { id: string; result: CoachHelpResult; createdAt: string };
+export type CoachAiFeedbackRating = "up" | "down";
+export type CoachAiFeedbackReason = "inaccurate" | "unsafe" | "wrong_tone" | "not_useful" | "technical_problem" | "other";
+export type CoachAiFeedbackInput = {
+  requestId: string;
+  rating: CoachAiFeedbackRating;
+  reason?: CoachAiFeedbackReason;
+  comment?: string;
+};

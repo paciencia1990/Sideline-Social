@@ -116,6 +116,10 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, cont
     firestore.collection('coachAiRequests').where('userId', '==', uid),
     true,
   );
+  summary.deletedDocuments += await deleteMatchingDocuments(
+    firestore.collection('coachAiFeedback').where('testerUid', '==', uid),
+    true,
+  );
   for (const collectionName of ['gameJoinCodes', 'gameJoinSessionLinks', 'gameJoinRequests']) {
     summary.deletedDocuments += await deleteMatchingDocuments(
       firestore.collection(collectionName).where('hostUserId', '==', uid),
@@ -123,11 +127,13 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, cont
     );
   }
   await Promise.all([
+    firestore.collection('coachAiRateLimits').doc(uid).delete(),
+    firestore.collection('coachAiFeedbackRateLimits').doc(uid).delete(),
     firestore.collection('gameJoinRateLimits').doc(hashIdentifier(uid)).delete(),
     firestore.collection('triviaGameRateLimits').doc(hashIdentifier(uid)).delete(),
     firestore.collection('triviaGameRateLimits').doc(hashIdentifier(`create:${uid}`)).delete(),
   ]);
-  summary.deletedDocuments += 3;
+  summary.deletedDocuments += 5;
   summary.deletedDocuments += await deleteMatchingDocuments(
     firestore.collection('triviaGameRateLimits').where('userId', '==', uid),
   );

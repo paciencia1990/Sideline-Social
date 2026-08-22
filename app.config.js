@@ -2,15 +2,34 @@ const {
   SUPPORT_EMAIL,
   assertProductionLegalConfig,
 } = require("./config/legalConfig");
+const {
+  assertStagingNativeFirebaseConfig,
+  shouldDeferStagingNativeFirebaseValidation,
+} = require("./config/firebaseNativeConfig");
 
 const IOS_BUNDLE_IDENTIFIER = "com.sidelinesocial.app";
 const APP_VARIANT = process.env.APP_VARIANT === "development" ? "development" : "production";
 const IS_DEVELOPMENT = APP_VARIANT === "development";
+const FIREBASE_ENVIRONMENT = process.env.EXPO_PUBLIC_FIREBASE_ENVIRONMENT || "production";
+const IS_STAGING_FIREBASE = FIREBASE_ENVIRONMENT === "staging";
+const COACH_AI_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD === "true";
+const COACH_AI_TESTING_BUILD = process.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED === "true";
+const DEFER_STAGING_NATIVE_FIREBASE_VALIDATION = shouldDeferStagingNativeFirebaseValidation({
+  requested: process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true",
+  isEasBuild: process.env.EAS_BUILD === "true",
+  coachAiBetaBuild: COACH_AI_BETA_BUILD,
+  coachAiTestingBuild: COACH_AI_TESTING_BUILD,
+  firebaseEnvironment: FIREBASE_ENVIRONMENT,
+});
 const ANDROID_PACKAGE = IS_DEVELOPMENT ? "com.sidelinesquad.app.dev" : "com.sidelinesquad.app";
-const ANDROID_GOOGLE_SERVICES_FILE = IS_DEVELOPMENT
-  ? process.env.GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT
+const ANDROID_GOOGLE_SERVICES_FILE = IS_STAGING_FIREBASE
+  ? process.env.GOOGLE_SERVICES_JSON_ANDROID_STAGING
+  : IS_DEVELOPMENT
+    ? process.env.GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT
   : "./google-services.json";
-const IOS_GOOGLE_SERVICES_FILE = process.env.GOOGLE_SERVICES_INFO_PLIST;
+const IOS_GOOGLE_SERVICES_FILE = IS_STAGING_FIREBASE
+  ? process.env.GOOGLE_SERVICES_INFO_PLIST_STAGING
+  : process.env.GOOGLE_SERVICES_INFO_PLIST;
 const GOOGLE_IOS_URL_SCHEME = process.env.EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME;
 const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
@@ -44,6 +63,23 @@ if (!IS_DEVELOPMENT && process.env.REQUIRE_PRODUCTION_LEGAL_CONFIG === "true") {
     termsOfUseUrl: process.env.EXPO_PUBLIC_TERMS_OF_USE_URL,
     supportUrl: process.env.EXPO_PUBLIC_SUPPORT_URL,
     supportEmail: SUPPORT_EMAIL,
+  });
+}
+
+if (!["development", "staging", "production"].includes(FIREBASE_ENVIRONMENT)) {
+  throw new Error("EXPO_PUBLIC_FIREBASE_ENVIRONMENT must be development, staging, or production.");
+}
+if (COACH_AI_BETA_BUILD && (!COACH_AI_TESTING_BUILD || !IS_STAGING_FIREBASE)) {
+  throw new Error("A Coach AI beta build requires the exact testing flag and staging Firebase.");
+}
+
+if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {
+  assertStagingNativeFirebaseConfig({
+    androidFile: ANDROID_GOOGLE_SERVICES_FILE,
+    iosFile: IOS_GOOGLE_SERVICES_FILE,
+    projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+    androidPackage: ANDROID_PACKAGE,
+    iosBundleIdentifier: IOS_BUNDLE_IDENTIFIER,
   });
 }
 

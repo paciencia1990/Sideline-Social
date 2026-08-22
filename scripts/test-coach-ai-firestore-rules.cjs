@@ -19,6 +19,12 @@ async function run() {
       await setDoc(doc(firestore, "coachAiRateLimits", "parent-a"), {
         count: 1,
       });
+      await setDoc(doc(firestore, "coachAiFeedback", "parent-a_request-1"), {
+        testerUid: "parent-a",
+        rating: "down",
+      });
+      await setDoc(doc(firestore, "coachAiFeedbackRateLimits", "parent-a"), { count: 1 });
+      await setDoc(doc(firestore, "coachAiInternalConfig", "runtime"), { enabled: true });
     });
 
     const authenticatedDb = testEnv.authenticatedContext("parent-a").firestore();
@@ -27,6 +33,9 @@ async function run() {
     for (const [collectionName, documentId] of [
       ["coachAiRequests", "parent-a_request-1"],
       ["coachAiRateLimits", "parent-a"],
+      ["coachAiFeedback", "parent-a_request-1"],
+      ["coachAiFeedbackRateLimits", "parent-a"],
+      ["coachAiInternalConfig", "runtime"],
     ]) {
       const authenticatedRef = doc(authenticatedDb, collectionName, documentId);
       const anonymousRef = doc(anonymousDb, collectionName, documentId);
@@ -37,7 +46,7 @@ async function run() {
       await assertFails(deleteDoc(authenticatedRef));
     }
 
-    console.log("Coach AI request and rate-limit collections remain inaccessible to all clients.");
+    console.log("Coach AI requests, rate limits, feedback, and circuit-breaker records remain inaccessible to all clients.");
   } finally {
     await testEnv.cleanup();
   }

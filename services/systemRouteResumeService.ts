@@ -6,10 +6,16 @@ import {
   type FriendChatImagePickerReturnIntent,
   type FriendChatImagePickerPhase,
 } from '@/utils/friendChatImagePickerResumeCore';
+import {
+  COACH_AI_RESULT_RETURN_ROUTE,
+  createCoachAiResultReturnIntent,
+  parseCoachAiResultReturnIntent,
+} from '@/utils/coachAiExperienceCore';
 
 const SYSTEM_ROUTE_RESUME_KEY = 'sidelineSocial.systemRouteResume';
 const SYSTEM_ROUTE_RESUME_TTL_MS = 10 * 60 * 1000;
 const FRIEND_CHAT_IMAGE_PICKER_RETURN_KEY = 'sidelineSocial.friendChatImagePickerReturn.v1';
+const COACH_AI_RESULT_RETURN_KEY = 'sidelineSocial.coachAiResultReturn.v1';
 
 export const SQUAD_SYSTEM_RETURN_ROUTE = '/(tabs)/squad' as const;
 
@@ -35,6 +41,35 @@ export async function consumeSystemReturnRoute(now = Date.now()) {
   if (!raw) return null;
   await AsyncStorage.removeItem(SYSTEM_ROUTE_RESUME_KEY);
   return parseSystemReturnRoute(raw, now);
+}
+
+export async function rememberCoachAiResultReturn(
+  input: { requestId: string; userId: string },
+  now = Date.now(),
+) {
+  const intent = createCoachAiResultReturnIntent({ ...input, now });
+  await AsyncStorage.setItem(COACH_AI_RESULT_RETURN_KEY, JSON.stringify(intent));
+}
+
+export async function clearCoachAiResultReturn(input: { requestId: string; userId: string }) {
+  const raw = await AsyncStorage.getItem(COACH_AI_RESULT_RETURN_KEY);
+  if (!raw) return;
+  const intent = parseCoachAiResultReturnIntent(raw);
+  if (intent && (intent.requestId !== input.requestId || intent.userId !== input.userId)) return;
+  await AsyncStorage.removeItem(COACH_AI_RESULT_RETURN_KEY);
+}
+
+export async function consumeCoachAiResultReturn(userId: string, now = Date.now()) {
+  const raw = await AsyncStorage.getItem(COACH_AI_RESULT_RETURN_KEY);
+  if (!raw) return null;
+  await AsyncStorage.removeItem(COACH_AI_RESULT_RETURN_KEY);
+  const intent = parseCoachAiResultReturnIntent(raw, now);
+  if (!intent || intent.userId !== userId) return null;
+  return {
+    params: { requestId: intent.requestId },
+    pathname: COACH_AI_RESULT_RETURN_ROUTE,
+    requiredMode: 'coach' as const,
+  };
 }
 
 export async function rememberFriendChatImagePickerReturn(input: {

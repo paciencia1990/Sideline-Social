@@ -92,6 +92,17 @@ async function run() {
       attemptCount: 5,
       userId: deletingUser.uid,
     }),
+    db.collection("coachAiRequests").doc(`${deletingUser.uid}_delete_request`).set({
+      userId: deletingUser.uid,
+      status: "completed",
+    }),
+    db.collection("coachAiRateLimits").doc(deletingUser.uid).set({ userId: deletingUser.uid, count: 1 }),
+    db.collection("coachAiFeedback").doc(`${deletingUser.uid}_delete_request`).set({
+      testerUid: deletingUser.uid,
+      requestId: "delete_request",
+      rating: "down",
+    }),
+    db.collection("coachAiFeedbackRateLimits").doc(deletingUser.uid).set({ userId: deletingUser.uid, count: 1 }),
     db.collection("gameRewardSessions").doc("spot_shared").set({
       gameType: "spotDifferences",
       mode: "multiplayer",
@@ -262,6 +273,10 @@ async function run() {
   assert.equal((await db.collection("triviaGameRateLimits").doc(triviaRateLimitId).get()).exists, false);
   assert.equal((await db.collection("triviaGameRateLimits").doc(triviaCreateRateLimitId).get()).exists, false);
   assert.equal((await db.collection("triviaGameRateLimits").doc("answer-rate-delete-fixture").get()).exists, false);
+  assert.equal((await db.collection("coachAiRequests").doc(`${deletingUser.uid}_delete_request`).get()).exists, false);
+  assert.equal((await db.collection("coachAiRateLimits").doc(deletingUser.uid).get()).exists, false);
+  assert.equal((await db.collection("coachAiFeedback").doc(`${deletingUser.uid}_delete_request`).get()).exists, false);
+  assert.equal((await db.collection("coachAiFeedbackRateLimits").doc(deletingUser.uid).get()).exists, false);
   assert.deepEqual(
     (await db.collection("gameRewardSessions").doc("spot_shared").get()).data().participantIds,
     [friend.uid],

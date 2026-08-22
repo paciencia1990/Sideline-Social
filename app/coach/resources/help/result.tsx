@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AccessibilityInfo, Alert, findNodeHandle, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { AccessibilityInfo, Alert, AppState, findNodeHandle, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { Edit3, Save, Send, Share2, Trash2 } from "lucide-react-native";
+import { Edit3, Save, Send, Share2, ShieldAlert, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -18,8 +18,18 @@ import {
   getSavedCoachHelpResults,
   resolveCoachResourceLocale,
   saveCoachHelpResult,
+  submitCoachAiFeedback,
 } from "@/services/coachResourcesService";
-import type { CoachHelpResult } from "@/types/coachResources";
+import {
+  clearCoachAiResultReturn,
+  rememberCoachAiResultReturn,
+} from "@/services/systemRouteResumeService";
+import type { CoachAiFeedbackRating, CoachAiFeedbackReason, CoachHelpResult } from "@/types/coachResources";
+import { runCoachAiResultAction } from "@/utils/coachAiExperienceCore";
+
+const FEEDBACK_REASONS: CoachAiFeedbackReason[] = [
+  "inaccurate", "unsafe", "wrong_tone", "not_useful", "technical_problem", "other",
+];
 
 export default function CoachHelpResultScreen() {
   const { i18n, t } = useTranslation();
@@ -34,7 +44,32 @@ export default function CoachHelpResultScreen() {
   const [editing, setEditing] = useState(false);
   const [editableText, setEditableText] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [feedbackRating, setFeedbackRating] = useState<CoachAiFeedbackRating | null>(null);
+  const [feedbackReason, setFeedbackReason] = useState<CoachAiFeedbackReason | null>(null);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const resultHeadingRef = useRef<Text>(null);
+  const pendingShareReturnRef = useRef<{ requestId: string; userId: string } | null>(null);
+  const shareBackgroundedRef = useRef(false);
+
+  const clearPendingShareReturn = useCallback(async () => {
+    const pendingReturn = pendingShareReturnRef.current;
+    pendingShareReturnRef.current = null;
+    shareBackgroundedRef.current = false;
+    if (pendingReturn) await clearCoachAiResultReturn(pendingReturn).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (!pendingShareReturnRef.current) return;
+      if (state !== "active") {
+        shareBackgroundedRef.current = true;
+        return;
+      }
+      if (shareBackgroundedRef.current) void clearPendingShareReturn();
+    });
+    return () => subscription.remove();
+  }, [clearPendingShareReturn]);
 
   useEffect(() => {
     let active = true;
@@ -81,7 +116,11 @@ export default function CoachHelpResultScreen() {
   const saveResult = useCallback(async () => {
     if (!result || !user?.uid) return;
     try {
-      await saveCoachHelpResult(user.uid, requestId, result);
+      await runCoachAiResultAction({
+        clearReturn: () => clearCoachAiResultReturn({ requestId, userId: user.uid }),
+        execute: () => saveCoachHelpResult(user.uid, requestId, result),
+        rememberReturn: () => rememberCoachAiResultReturn({ requestId, userId: user.uid }),
+      });
       setSaved(true);
       setFeedback(t("coach.resources.resultSaved"));
     } catch {
@@ -100,19 +139,55 @@ export default function CoachHelpResultScreen() {
   }, [requestId, t, user?.uid]);
 
   const shareResult = useCallback(async () => {
-    if (!result) return;
+    if (!result || !user?.uid) return;
+    const returnContext = { requestId, userId: user.uid };
+    try {
+      await rememberCoachAiResultReturn(returnContext);
+      pendingShareReturnRef.current = returnContext;
+      shareBackgroundedRef.current = AppState.currentState !== "active";
+    } catch {
+      pendingShareReturnRef.current = null;
+      shareBackgroundedRef.current = false;
+    }
     try {
       const response = await Share.share({ message: formatCoachHelpResultForSharing(result, locale), title: result.title });
+      if (response.action === Share.dismissedAction) await clearPendingShareReturn();
       if (response.action === Share.sharedAction) setFeedback(t("coach.resources.shareSuccessBody"));
     } catch {
+      await clearPendingShareReturn();
       setFeedback(t("coach.resources.shareError"));
     }
-  }, [locale, result, t]);
+  }, [clearPendingShareReturn, locale, requestId, result, t, user?.uid]);
 
   const sendToComposer = useCallback(() => {
     if (!result?.canSendAsAnnouncement) return;
     router.push({ pathname: "/coach/messages", params: { draftTitle: result.title, draftBody: formatCoachHelpResultForSharing(result, locale) } } as never);
   }, [locale, result]);
+
+  const sendFeedback = useCallback(async (rating: CoachAiFeedbackRating, reason?: CoachAiFeedbackReason) => {
+    if (!requestId || submittingFeedback || (rating === "down" && !reason)) return;
+    setSubmittingFeedback(true);
+    setFeedback(null);
+    try {
+      await submitCoachAiFeedback({
+        requestId,
+        rating,
+        ...(reason ? { reason } : {}),
+        ...(feedbackComment.trim() ? { comment: feedbackComment.trim().slice(0, 500) } : {}),
+      });
+      setFeedbackRating(rating);
+      setFeedbackReason(reason ?? null);
+      const message = reason === "unsafe"
+        ? t("coach.resources.unsafeReportThanks")
+        : t("coach.resources.feedbackThanks");
+      setFeedback(message);
+      AccessibilityInfo.announceForAccessibility(message);
+    } catch {
+      setFeedback(t("coach.resources.feedbackError"));
+    } finally {
+      setSubmittingFeedback(false);
+    }
+  }, [feedbackComment, requestId, submittingFeedback, t]);
 
   if (!coachAiAccess.canView) {
     return (
@@ -157,6 +232,84 @@ export default function CoachHelpResultScreen() {
           </Card>
         )}
 
+        <Card style={styles.feedbackCard}>
+          <Text accessibilityRole="header" style={styles.sectionTitle}>{t("coach.resources.feedbackTitle")}</Text>
+          <Text style={styles.body}>{t("coach.resources.feedbackBody")}</Text>
+          <View style={styles.feedbackActions}>
+            <TouchableOpacity
+              accessibilityLabel={t("coach.resources.feedbackHelpful")}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: submittingFeedback, selected: feedbackRating === "up" }}
+              disabled={submittingFeedback}
+              onPress={() => void sendFeedback("up")}
+              style={[styles.feedbackChoice, feedbackRating === "up" && styles.feedbackChoiceSelected]}
+            >
+              <ThumbsUp color={Colors.primary} size={20} />
+              <Text style={styles.outlineText}>{t("coach.resources.feedbackHelpful")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityLabel={t("coach.resources.feedbackNotHelpful")}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: submittingFeedback, selected: feedbackRating === "down" && feedbackReason !== "unsafe" }}
+              disabled={submittingFeedback}
+              onPress={() => { setFeedbackRating("down"); setFeedbackReason((current) => current === "unsafe" ? null : current); }}
+              style={[styles.feedbackChoice, feedbackRating === "down" && feedbackReason !== "unsafe" && styles.feedbackChoiceSelected]}
+            >
+              <ThumbsDown color={Colors.primary} size={20} />
+              <Text style={styles.outlineText}>{t("coach.resources.feedbackNotHelpful")}</Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityState={{ disabled: submittingFeedback, selected: feedbackReason === "unsafe" }}
+            disabled={submittingFeedback}
+            onPress={() => { setFeedbackRating("down"); setFeedbackReason("unsafe"); }}
+            style={[styles.unsafeButton, feedbackReason === "unsafe" && styles.feedbackChoiceSelected]}
+          >
+            <ShieldAlert color={Colors.primary} size={20} />
+            <Text style={styles.outlineText}>{t("coach.resources.reportUnsafe")}</Text>
+          </TouchableOpacity>
+          {feedbackRating === "down" ? (
+            <>
+              <Text style={styles.label}>{t("coach.resources.feedbackReasonTitle")}</Text>
+              <View accessibilityRole="radiogroup" style={styles.reasonList}>
+                {FEEDBACK_REASONS.map((reason) => (
+                  <TouchableOpacity
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: feedbackReason === reason, disabled: submittingFeedback }}
+                    disabled={submittingFeedback}
+                    key={reason}
+                    onPress={() => setFeedbackReason(reason)}
+                    style={[styles.reasonChoice, feedbackReason === reason && styles.reasonChoiceSelected]}
+                  >
+                    <Text style={[styles.reasonText, feedbackReason === reason && styles.reasonTextSelected]}>{t(`coach.resources.feedbackReasons.${reason}`)}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TextInput
+                accessibilityLabel={t("coach.resources.feedbackComment")}
+                editable={!submittingFeedback}
+                maxLength={500}
+                multiline
+                onChangeText={setFeedbackComment}
+                placeholder={t("coach.resources.feedbackCommentPlaceholder")}
+                style={styles.feedbackInput}
+                textAlignVertical="top"
+                value={feedbackComment}
+              />
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityState={{ busy: submittingFeedback, disabled: submittingFeedback || !feedbackReason }}
+                disabled={submittingFeedback || !feedbackReason}
+                onPress={() => void sendFeedback("down", feedbackReason ?? undefined)}
+                style={[styles.primaryButton, (submittingFeedback || !feedbackReason) && styles.disabled]}
+              >
+                <Text style={styles.primaryText}>{t("coach.resources.submitFeedback")}</Text>
+              </TouchableOpacity>
+            </>
+          ) : null}
+        </Card>
+
         {feedback ? <Text accessibilityLiveRegion="polite" style={styles.feedback}>{feedback}</Text> : null}
         <View style={styles.actions}>
           <Action Icon={Edit3} label={t("coach.resources.editResult")} onPress={() => setEditing(true)} primary={false} />
@@ -199,6 +352,19 @@ const styles = StyleSheet.create({
   feedback: { color: Colors.accentGreen, fontFamily: Typography.bodySemiBold, fontSize: 13, textAlign: "center" },
   error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  feedbackCard: { gap: Spacing.md },
+  feedbackActions: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  feedbackChoice: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", flexGrow: 1, gap: Spacing.sm, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
+  feedbackChoiceSelected: { backgroundColor: Colors.background, borderWidth: 2 },
+  unsafeButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.sm, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
+  label: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19 },
+  reasonList: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  reasonChoice: { borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, minHeight: 42, paddingHorizontal: Spacing.sm, paddingVertical: Spacing.sm },
+  reasonChoiceSelected: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  reasonText: { color: Colors.textHeading, fontFamily: Typography.bodyMedium, fontSize: 13 },
+  reasonTextSelected: { color: Colors.surface },
+  feedbackInput: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 90, padding: Spacing.md },
+  disabled: { opacity: 0.55 },
   primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, flexDirection: "row", flexGrow: 1, gap: Spacing.sm, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
   primaryText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 14, textAlign: "center" },
   outlineButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", flexGrow: 1, gap: Spacing.sm, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },

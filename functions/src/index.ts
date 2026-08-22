@@ -167,6 +167,8 @@ export {
   clearUserNotifications,
 } from './userNotificationDismissal';
 export { generateCoachResourceHelp } from './coachResourceHelp';
+export { coachAiClaudeGateway } from './coachAiClaudeGateway';
+export { submitCoachAiFeedback } from './coachAiFeedback';
 export { deleteOwnAccount } from './accountDeletion';
 export { reportTeamContent } from './contentModeration';
 export {
