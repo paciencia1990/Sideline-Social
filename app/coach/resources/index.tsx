@@ -7,14 +7,15 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { useCoachAiAccess } from "@/hooks/useCoachAiAccess";
 import { getDailyCoachProTip, localizeCoachText, resolveCoachResourceLocale } from "@/services/coachResourcesService";
 
 export default function CoachResourcesScreen() {
   const { i18n, t } = useTranslation();
   const locale = resolveCoachResourceLocale(i18n.language);
   const dailyTip = getDailyCoachProTip();
+  const coachAiAccess = useCoachAiAccess();
 
   return (
     <ScreenWrapper>
@@ -46,8 +47,9 @@ export default function CoachResourcesScreen() {
           </Card>
         </TouchableOpacity>
 
-        {FEATURE_FLAGS.coachAiEnabled ? (
+        {coachAiAccess.canView ? (
           <View style={styles.helpArea}>
+            <Text accessibilityRole="text" style={styles.previewLabel}>{t("coach.resources.coachAiTestingPreview")}</Text>
             <Text style={styles.helpPrompt}>{t("coach.resources.notFinding")}</Text>
             <TouchableOpacity
               accessibilityHint={t("coach.resources.helpHint")}
@@ -92,6 +94,7 @@ const styles = StyleSheet.create({
   cardBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21 },
   actionText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   helpArea: { alignItems: "center", gap: Spacing.sm, paddingTop: Spacing.md },
+  previewLabel: { backgroundColor: Colors.background, borderColor: Colors.accentGold, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 11, lineHeight: 16, overflow: "hidden", paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs, textAlign: "center" },
   helpPrompt: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 16, textAlign: "center" },
   helpButton: { alignItems: "center", backgroundColor: Colors.textHeading, borderRadius: Radius.button, flexDirection: "row", gap: Spacing.sm, justifyContent: "center", minHeight: 52, paddingHorizontal: Spacing.lg, width: "100%", ...Shadow.card },
   helpButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 16, textAlign: "center" },

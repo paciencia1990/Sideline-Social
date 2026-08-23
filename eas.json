@@ -22,6 +22,47 @@
       "environment": "preview",
       "node": "24.16.0"
     },
+    "coach-ai-beta": {
+      "autoIncrement": true,
+      "developmentClient": false,
+      "distribution": "store",
+      "environment": "preview",
+      "node": "24.16.0",
+      "env": {
+        "APP_VARIANT": "production",
+        "REQUIRE_PRODUCTION_LEGAL_CONFIG": "true",
+        "EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION": "true",
+        "EXPO_PUBLIC_AI_COACH_TESTING_ENABLED": "true",
+        "EXPO_PUBLIC_AI_COACH_BETA_BUILD": "true",
+        "EXPO_PUBLIC_PRIVACY_POLICY_URL": "https://www.joinsidelinesocial.com/privacy",
+        "EXPO_PUBLIC_TERMS_OF_USE_URL": "https://www.joinsidelinesocial.com/terms",
+        "EXPO_PUBLIC_SUPPORT_URL": "https://www.joinsidelinesocial.com/support",
+        "EXPO_PUBLIC_FIREBASE_ENVIRONMENT": "staging"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      }
+    },
+    "coach-ai-production-beta": {
+      "autoIncrement": true,
+      "developmentClient": false,
+      "distribution": "store",
+      "environment": "production",
+      "node": "24.16.0",
+      "env": {
+        "APP_VARIANT": "production",
+        "REQUIRE_PRODUCTION_LEGAL_CONFIG": "true",
+        "EXPO_PUBLIC_AI_COACH_TESTING_ENABLED": "true",
+        "EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD": "true",
+        "EXPO_PUBLIC_PRIVACY_POLICY_URL": "https://www.joinsidelinesocial.com/privacy",
+        "EXPO_PUBLIC_TERMS_OF_USE_URL": "https://www.joinsidelinesocial.com/terms",
+        "EXPO_PUBLIC_SUPPORT_URL": "https://www.joinsidelinesocial.com/support",
+        "EXPO_PUBLIC_FIREBASE_ENVIRONMENT": "production"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "developmentClient": false,
@@ -38,6 +79,8 @@
     }
   },
   "submit": {
+    "coach-ai-beta": {},
+    "coach-ai-production-beta": {},
     "production": {}
   }
 }

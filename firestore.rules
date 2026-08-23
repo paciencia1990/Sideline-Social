@@ -735,6 +735,25 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Coach AI prompts/results, rate limits, feedback, and the runtime circuit
+    // breaker are server-owned. Tester authorization is enforced by callables;
+    // no mobile client may inspect or mutate these internal records.
+    match /coachAiRequests/{requestId} {
+      allow read, create, update, delete: if false;
+    }
+    match /coachAiRateLimits/{userId} {
+      allow read, create, update, delete: if false;
+    }
+    match /coachAiFeedback/{feedbackId} {
+      allow read, create, update, delete: if false;
+    }
+    match /coachAiFeedbackRateLimits/{userId} {
+      allow read, create, update, delete: if false;
+    }
+    match /coachAiInternalConfig/{documentId} {
+      allow read, create, update, delete: if false;
+    }
+
     // Canonical standing and moderation records are server-only. The separate
     // self-readable projection contains no moderator identity, evidence, notes,
     // action path, reporter information, or child data.

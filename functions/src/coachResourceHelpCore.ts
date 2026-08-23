@@ -34,10 +34,41 @@ const TONES = new Set<CoachHelpTone>(['warm', 'direct', 'encouraging', 'neutral'
 const RESULT_TYPES = new Set<ValidatedCoachHelpResult['resultType']>(['practice_plan', 'message', 'talking_points', 'step_by_step', 'checklist']);
 const ANNOUNCEMENT_CATEGORIES = new Set<CoachHelpCategory>(['parent_message', 'team_culture', 'game_day']);
 const SENSITIVE_SAFETY_TERMS = [
-  'abuse', 'assault', 'suicide', 'self-harm', 'weapon', 'threat', 'immediate danger', 'missing child',
-  'severe injury', 'unconscious', 'can\'t breathe', 'cannot breathe', 'emergency',
-  'abuso', 'agresión', 'suicidio', 'autolesión', 'arma', 'amenaza', 'peligro inmediato',
-  'menor desaparecido', 'lesión grave', 'inconsciente', 'no puede respirar', 'emergencia',
+  // Abuse, violence, safeguarding, self-harm, and immediate danger.
+  'abuse', 'assault', 'grooming', 'self harm', 'suicide', 'suicidal', 'hopeless', 'violence',
+  'weapon', 'gun', 'knife', 'threat', 'missing child', 'missing kid', 'immediate danger', 'emergency',
+  'abuso', 'agresion', 'acoso sexual', 'captacion', 'autolesion', 'suicidio', 'suicida',
+  'desesperanza', 'violencia', 'arma', 'pistola', 'cuchillo', 'amenaza', 'menor desaparecido',
+  'nino desaparecido', 'nina desaparecida', 'peligro inmediato', 'emergencia',
+  // Severe injury, breathing, medication, diagnosis, and concussion requests.
+  'severe injury', 'serious injury', 'unconscious', 'cannot breathe', 'cant breathe', 'can t breathe',
+  'breathing problem', 'concussion', 'diagnose', 'diagnosis', 'medication', 'prescribe',
+  'lesion grave', 'lesion severa', 'inconsciente', 'no puede respirar', 'problema respiratorio',
+  'conmocion', 'diagnostico', 'diagnosticar', 'medicamento', 'medicacion', 'recetar',
+  // Bullying, discrimination, retaliation, humiliation, and unsafe punishment.
+  'bullying', 'discrimination', 'retaliation', 'humiliate', 'humiliation', 'unsafe punishment',
+  'punish with exercise', 'withhold water', 'novatada', 'intimidacion', 'acoso escolar', 'discriminacion',
+  'represalia', 'humillar', 'humillacion', 'castigo inseguro', 'negar agua',
+  // Privacy and prompt/system extraction attempts.
+  'private child information', 'child home address', 'school record', 'medical record',
+  'ignore previous instructions', 'ignore all instructions', 'system prompt', 'developer message',
+  'reveal your prompt', 'show hidden instructions', 'informacion privada del menor',
+  'direccion del menor', 'expediente escolar', 'expediente medico', 'ignora las instrucciones',
+  'mensaje del sistema', 'mensaje del desarrollador', 'revela tu prompt', 'instrucciones ocultas',
+];
+
+const UNSAFE_OUTPUT_PATTERNS = [
+  /\b(?:keep|make) (?:this|it) (?:a )?secret from (?:their|the) parent/i,
+  /\bmeet (?:the )?(?:child|player) alone\b/i,
+  /\b(?:humiliate|shame|retaliate against|withhold water|deny water)\b/i,
+  /\bdiagnos(?:e|is) (?:the )?(?:child|player)\b/i,
+  /\b(?:you should|must) (?:arrest|suspend|expel)\b/i,
+  /\b(?:manten|mantenga) (?:esto|lo) en secreto de (?:sus|los) padres\b/i,
+  /\breunete a solas con (?:el|la) (?:menor|jugador|jugadora)\b/i,
+  /\b(?:humilla|averguenza|toma represalias|niega agua)\b/i,
+  /\bdiagnostica (?:al|a la) (?:menor|jugador|jugadora)\b/i,
+  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+  /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/,
 ];
 
 export function validateCoachHelpRequest(value: unknown): ValidatedCoachHelpRequest {
@@ -68,8 +99,14 @@ export function validateCoachHelpRequest(value: unknown): ValidatedCoachHelpRequ
 }
 
 export function isCoachHelpSafetySensitive(request: ValidatedCoachHelpRequest) {
-  const text = `${request.situation} ${request.desiredOutcome ?? ''}`.toLowerCase();
-  return SENSITIVE_SAFETY_TERMS.some((term) => text.includes(term));
+  const text = foldCoachHelpSafetyText(normalizeCoachHelpText([
+    request.sport,
+    request.ageGroup,
+    request.situation,
+    request.desiredOutcome,
+    ...(request.equipment ?? []),
+  ].filter(Boolean).join(' ')));
+  return SENSITIVE_SAFETY_TERMS.some((term) => text.includes(foldCoachHelpSafetyText(term)));
 }
 
 export function createCoachHelpSafetyResult(locale: CoachHelpLocale): ValidatedCoachHelpResult {
@@ -111,7 +148,7 @@ export function validateCoachHelpResult(value: unknown, category: CoachHelpCateg
   const introduction = readOptionalString(data.introduction, 1000);
   const body = readOptionalString(data.body, 5000);
   if (!introduction && !body && !sections?.length) throw new Error('invalid_provider_result');
-  return {
+  const result: ValidatedCoachHelpResult = {
     resultType,
     title,
     ...(introduction ? { introduction } : {}),
@@ -122,6 +159,38 @@ export function validateCoachHelpResult(value: unknown, category: CoachHelpCateg
     ...readOptionalField(data, 'safetyNotice', 800),
     canSendAsAnnouncement: data.canSendAsAnnouncement === true && ANNOUNCEMENT_CATEGORIES.has(category),
   };
+  assertCoachHelpOutputSafety(result);
+  return result;
+}
+
+export function assertCoachHelpOutputSafety(result: ValidatedCoachHelpResult) {
+  const output = normalizeCoachHelpText([
+    result.title,
+    result.introduction,
+    result.body,
+    ...(result.sections ?? []).flatMap((section) => [section.heading, ...section.items]),
+    ...(result.phrasesToUse ?? []),
+    // Phrases explicitly labeled "avoid" are not recommended actions.
+    result.safetyNotice,
+  ].filter(Boolean).join(' '));
+  if (UNSAFE_OUTPUT_PATTERNS.some((pattern) => pattern.test(output))) {
+    throw new Error('unsafe_provider_result');
+  }
+}
+
+export function normalizeCoachHelpText(value: string) {
+  return value.normalize('NFKC').replace(/\s+/gu, ' ').trim();
+}
+
+function foldCoachHelpSafetyText(value: string) {
+  return value
+    .normalize('NFKC')
+    .normalize('NFD')
+    .replace(/\p{Mark}/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
 }
 
 function readSections(value: unknown) {
@@ -162,7 +231,7 @@ function readOptionalString(value: unknown, max: number) {
 
 function readString(value: unknown, max: number) {
   if (typeof value !== 'string') return '';
-  const result = value.trim();
+  const result = normalizeCoachHelpText(value);
   if (result.length > max) throw new Error('value_too_long');
   return result;
 }

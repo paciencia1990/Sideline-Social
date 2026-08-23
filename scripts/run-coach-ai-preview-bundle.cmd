@@ -1,0 +1,13 @@
+@echo off
+set "APP_VARIANT=production"
+set "REQUIRE_PRODUCTION_LEGAL_CONFIG=true"
+set "EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION=true"
+set "EXPO_PUBLIC_AI_COACH_TESTING_ENABLED=true"
+set "EXPO_PUBLIC_AI_COACH_BETA_BUILD=true"
+set "EXPO_PUBLIC_FIREBASE_ENVIRONMENT=staging"
+set "EXPO_PUBLIC_PRIVACY_POLICY_URL=https://www.joinsidelinesocial.com/privacy"
+set "EXPO_PUBLIC_TERMS_OF_USE_URL=https://www.joinsidelinesocial.com/terms"
+set "EXPO_PUBLIC_SUPPORT_URL=https://www.joinsidelinesocial.com/support"
+set "COACH_AI_REQUIRE_EAS_PREVIEW=true"
+set "COACH_AI_COMPILED_PROFILE=staging"
+node scripts\test-coach-ai-compiled-environment.cjs

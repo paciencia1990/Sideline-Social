@@ -15,7 +15,10 @@ import {
   readFriendChatImagePickerNavigationReturn,
 } from "@/services/friendChatImageService";
 import { getPendingNotificationOpenTarget } from "@/services/notificationService";
-import { consumeSystemReturnRoute } from "@/services/systemRouteResumeService";
+import {
+  consumeCoachAiResultReturn,
+  consumeSystemReturnRoute,
+} from "@/services/systemRouteResumeService";
 LogBox.ignoreAllLogs(false);
 
 export default function Index() {
@@ -86,6 +89,24 @@ export default function Index() {
           }
         } catch (error) {
           console.warn("[Notifications] initial route error:", getErrorCode(error));
+        }
+
+        const coachAiReturn = await consumeCoachAiResultReturn(user.uid).catch(() => null);
+        if (!mounted) return;
+        if (coachAiReturn) {
+          if (coachAiReturn.requiredMode !== activeMode) {
+            setActiveMode(coachAiReturn.requiredMode);
+            setTimeout(() => router.replace({
+              pathname: coachAiReturn.pathname,
+              params: coachAiReturn.params,
+            } as never), 0);
+          } else {
+            router.replace({
+              pathname: coachAiReturn.pathname,
+              params: coachAiReturn.params,
+            } as never);
+          }
+          return;
         }
 
         const systemReturnRoute = await consumeSystemReturnRoute().catch(() => null);

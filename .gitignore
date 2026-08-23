@@ -16,6 +16,8 @@ npm-cache/
 *.tmp
 .env.local
 .env.*.local
+functions/.env.*
+functions/.secret.local
 
 # OS junk
 .DS_Store
@@ -32,4 +34,3 @@ functions/lib/
 # Firebase Android development app config is injected from an EAS file variable.
 android/app/src/debug/google-services.json
 GoogleService-Info.ios.plist
-
