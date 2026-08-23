@@ -7,11 +7,12 @@ function read(...segments) {
 }
 
 function sourceBetween(source, start, end) {
-  const startIndex = source.indexOf(start);
-  const endIndex = source.indexOf(end, startIndex);
+  const normalizedSource = source.replace(/\r\n/g, "\n");
+  const startIndex = normalizedSource.indexOf(start);
+  const endIndex = normalizedSource.indexOf(end, startIndex);
   assert.ok(startIndex >= 0, `missing ${start}`);
   assert.ok(endIndex > startIndex, `missing ${end} after ${start}`);
-  return source.slice(startIndex, endIndex);
+  return normalizedSource.slice(startIndex, endIndex);
 }
 
 function styleObject(source, styleName) {

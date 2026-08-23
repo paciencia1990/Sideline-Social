@@ -1,6 +1,6 @@
 # Coach AI controlled beta runbook
 
-Status: **locally implemented; not deployed.** This runbook is operational guidance, not evidence that staging, TTL, spending controls, secrets, or a store beta are active.
+Status: **staging and production-connected build boundaries are locally implemented; production is not enabled.** This runbook is operational guidance, not evidence that production Functions, secrets, runtime state, TTL, spending controls, claims, or a store beta are active.
 
 ## Scope and architecture
 
@@ -8,7 +8,7 @@ Coach AI is the guided **Coach Mode → Resources → I Need Help With…** flow
 
 The beta path is:
 
-1. The release binary exposes the route only when both exact public beta flags are present.
+1. A release binary exposes the route only when the exact testing flag and exactly one environment-specific beta marker are present: the existing staging marker for `sideline-social-staging-2026`, or the production-beta marker for `sideline-squad`.
 2. The app refreshes the Firebase ID token and requires `aiCoachTester === true`, signed-in adult Coach Mode, and active standing.
 3. `generateCoachResourceHelp` independently repeats the claim/profile checks through the permanent communication-account boundary, enforces the rolling quota/idempotency, and checks the server flag plus runtime circuit breaker.
 4. The callable sends `{ request }` over HTTPS to `coachAiClaudeGateway` using the server-only shared credential.
@@ -19,7 +19,7 @@ The beta path is:
 
 ## Security boundaries
 
-- Build eligibility requires `EXPO_PUBLIC_AI_COACH_TESTING_ENABLED=true` and either development mode or `EXPO_PUBLIC_AI_COACH_BETA_BUILD=true`. The normal production EAS profile contains neither value.
+- Build eligibility requires `EXPO_PUBLIC_AI_COACH_TESTING_ENABLED=true` and one valid context: development, staging marker `EXPO_PUBLIC_AI_COACH_BETA_BUILD=true`, or release-only production marker `EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD=true`. Both markers together fail closed. The normal production EAS profile contains none of these values.
 - Tester authorization is the administrator-only custom claim `aiCoachTester: true`; a public Expo value is never authorization.
 - The callable and feedback callable require a permanent account, active standing, no messaging restriction, an adult-eligible user profile, active Coach Mode, the tester claim, `COACH_AI_TESTING_ENABLED=true`, and `coachAiInternalConfig/runtime.enabled === true`.
 - The runtime document is fail-closed and inaccessible to every Firestore client.
@@ -49,7 +49,7 @@ All four collection families are server-only in Firestore Rules:
 
 Prompts are not stored in Firestore. Feedback does not copy the prompt or generated result. A reported response is marked `needs_review`; raw content requires a separate incident workflow, explicit tester consent, approved access, and a separately documented short retention period.
 
-Account deletion directly deletes both rate-limit documents and queries/deletes the tester's request and feedback documents. Device sign-out/account cleanup removes local guides and the disclosure acceptance; users can also delete individual saved guides.
+Account deletion directly deletes both rate-limit documents and queries/deletes the tester's request and feedback documents. Saved guides remain only on that device. Deleting a guide removes it locally; sign-out/local-account cleanup, clearing app data, or uninstalling the app removes the local copy. Server request, feedback, and quota records follow the separate retention and account-deletion behavior above.
 
 Writing `expiresAt` does not activate TTL. After deployment, configure and verify every policy with the exact project ID:
 
@@ -65,7 +65,7 @@ Do not describe TTL as active until the last command reports all four policies e
 
 ## Staging Firebase and beta build
 
-A real staging Firebase project ID was not present locally. The unavoidable owner action is to create or select that project, register iOS bundle `com.sidelinesocial.app` and Android package `com.sidelinesquad.app`, and obtain their staging service files. Do not point a staging build at `sideline-squad`.
+The controlled staging project is `sideline-social-staging-2026`. Its registered iOS bundle remains `com.sidelinesocial.app` and Android package remains `com.sidelinesquad.app`. Do not point the staging-marker build at `sideline-squad`.
 
 The `coach-ai-beta` EAS profile uses store distribution, release JavaScript, the preview EAS environment, required legal validation, staging Firebase selection, and an Android app bundle. Configure these client-visible EAS environment values for the preview environment:
 
@@ -83,6 +83,14 @@ GOOGLE_SERVICES_INFO_PLIST_STAGING       (EAS file variable)
 ```
 
 The config plugin fails a staging build when files are absent or the native project/package/bundle values are inconsistent. The TypeScript resolver fails when public Firebase values are incomplete or a non-production environment points to the production project.
+
+## Production-connected beta build boundary
+
+The dedicated `coach-ai-production-beta` profile uses store distribution, release JavaScript, the EAS `production` environment, the existing production package/bundle/native configuration, required legal validation, and Android App Bundle output. It adds only the exact testing flag and `EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD=true`; it does not set the staging marker. The Firebase bootstrap fails before initializing any Firebase service unless that marker resolves to environment `production` and project `sideline-squad`.
+
+This marker is visibility configuration, never authorization. Each production tester must still receive the administrator-issued `aiCoachTester: true` claim individually and must be signed in, adult-eligible, in Coach Mode, and in active standing. Approved coaches and staff follow the same account process. Testing is free, `paidEntitled` remains false, and the server limit remains 10 unique requests per rolling 24 hours; an idempotent retry with the same request ID does not consume another request.
+
+The normal `production` profile remains unchanged and contains no testing flag or beta marker, so Coach AI stays hidden even for an account that happens to carry a tester claim. Do not copy staging accounts, claims, Squads, messages, requests, feedback, or generated guides into production.
 
 After the owner selects the project, copy `functions/coach-ai-staging.env.example` to `functions/.env.<EXACT_STAGING_PROJECT_ID>` and keep that real environment file out of source control. It contains only:
 
@@ -134,6 +142,8 @@ Submission remains manual/approval-gated. The `coach-ai-beta` submit profile is 
 
 Use synthetic content on physical iOS and Android devices. Verify approved success; hidden UI and direct-call denial for an unapproved account; Parent Mode/underage/messaging-restricted/suspended/banned denial; local safety routing in both languages; one complete structured Claude guide; feedback and unsafe reporting; duplicate ID idempotency; rolling request 11 denial; local save/delete; no automatic publishing; runtime disable/enable; privacy-safe logs; token/spend dashboards; and TTL state.
 
+Never enter child-identifying, confidential team, medical, legal, emergency, or safeguarding information. The product is coaching guidance, not an emergency, medical, legal, disciplinary, or safeguarding decision service.
+
 The 240-fixture evaluation corpus is synthetic and provider-neutral. `npm run coach-ai:eval` is a dry run. Paid execution requires the explicit `--execute --confirm-paid-api --cost-ceiling-usd <APPROVED_AMOUNT>` gates and a key supplied directly in the execution environment. Human review is blinded from provider identity. Go/no-go targets are zero critical safety failures, at least 99.5% schema success, no invalid result delivered, at least 85% usable without material correction, average human score at least 4/5, no more than a five-point quality gap from the Claude benchmark, deadline-compliant latency, and forecast spend below the approved ceiling.
 
 ## Monitoring and feedback triage
@@ -158,6 +168,8 @@ node scripts/manage-coach-ai-runtime.cjs disable --project <EXACT_PROJECT_ID>
 
 The emulator suite verifies that the runtime disabled state rejects calls and that re-enabling restores the boundary. No live rollback, deployment, secret rotation, store build, TTL operation, billing alert, or production change has been performed.
 
-## Production-Firebase beta boundary
+## Production-Firebase beta rollout boundary
 
-Only after staging passes: rerun all relevant tests, inspect the deployment diff and current deployed callable state, obtain explicit approval, configure production secrets/non-secret values and TTL, deploy only the three Coach AI functions plus approved Rules, grant one owner first, repeat every denial/quota/safety/feedback/shutdown check, and expand to 3–5 testers only after the smoke test. The normal production binary must continue to omit both public beta flags.
+The read-only Phase 1 snapshot found 162 production Functions; only the older `generateCoachResourceHelp` is deployed, while `coachAiClaudeGateway` and `submitCoachAiFeedback` are absent. `COACH_AI_API_KEY` exists without an enabled version; `COACH_AI_ENDPOINT` and `ANTHROPIC_API_KEY` are absent; `coachAiInternalConfig/runtime` is absent/fail-closed; and none of the four Coach AI TTL policies is configured.
+
+Only after explicit Phase 2 approval: create or update production-specific secret versions without revealing values, keep the runtime disabled, configure TTL only for the four Coach AI collection groups, and deploy only `coachAiClaudeGateway`, `generateCoachResourceHelp`, and `submitCoachAiFeedback` with `--project sideline-squad`. Do not deploy Rules or any unrelated Function. Stop again before granting a claim, enabling runtime, making a provider request, or building. The normal production binary must continue to omit the testing flag and both public beta markers.

@@ -13,6 +13,7 @@ const IS_DEVELOPMENT = APP_VARIANT === "development";
 const FIREBASE_ENVIRONMENT = process.env.EXPO_PUBLIC_FIREBASE_ENVIRONMENT || "production";
 const IS_STAGING_FIREBASE = FIREBASE_ENVIRONMENT === "staging";
 const COACH_AI_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD === "true";
+const COACH_AI_PRODUCTION_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD === "true";
 const COACH_AI_TESTING_BUILD = process.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED === "true";
 const DEFER_STAGING_NATIVE_FIREBASE_VALIDATION = shouldDeferStagingNativeFirebaseValidation({
   requested: process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true",
@@ -69,8 +70,17 @@ if (!IS_DEVELOPMENT && process.env.REQUIRE_PRODUCTION_LEGAL_CONFIG === "true") {
 if (!["development", "staging", "production"].includes(FIREBASE_ENVIRONMENT)) {
   throw new Error("EXPO_PUBLIC_FIREBASE_ENVIRONMENT must be development, staging, or production.");
 }
+if (COACH_AI_BETA_BUILD && COACH_AI_PRODUCTION_BETA_BUILD) {
+  throw new Error("Coach AI staging-beta and production-beta build markers cannot both be enabled.");
+}
 if (COACH_AI_BETA_BUILD && (!COACH_AI_TESTING_BUILD || !IS_STAGING_FIREBASE)) {
-  throw new Error("A Coach AI beta build requires the exact testing flag and staging Firebase.");
+  throw new Error("A Coach AI staging-beta build requires the exact testing flag and staging Firebase.");
+}
+if (
+  COACH_AI_PRODUCTION_BETA_BUILD
+  && (!COACH_AI_TESTING_BUILD || IS_DEVELOPMENT || FIREBASE_ENVIRONMENT !== "production")
+) {
+  throw new Error("A Coach AI production-beta build requires release JavaScript, the exact testing flag, and production Firebase.");
 }
 
 if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {

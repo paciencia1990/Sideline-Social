@@ -139,7 +139,7 @@ async function run() {
   const help = read("app", "coach", "resources", "help", "index.tsx");
   const result = read("app", "coach", "resources", "help", "result.tsx");
   const rootIndex = read("app", "index.tsx");
-  const keyboard = read("components", "KeyboardAwareScrollView.tsx");
+  const keyboard = read("components", "CoachAiKeyboardAwareScrollView.tsx");
   const translations = read("i18n", "index.ts");
 
   const saveStart = result.indexOf("const saveResult");

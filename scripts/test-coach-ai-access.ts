@@ -19,8 +19,21 @@ async function run() {
   assert.equal(resolveFeatureFlags({ isDevelopment: true, coachAiTestingValue: "true" }).coachAiEnabled, true);
   assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "true" }).coachAiEnabled, false);
   assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "true", coachAiBetaBuildValue: "true" }).coachAiEnabled, true);
+  assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "true", coachAiProductionBetaBuildValue: "true" }).coachAiEnabled, true);
+  assert.equal(resolveFeatureFlags({ isDevelopment: true, coachAiTestingValue: "true", coachAiProductionBetaBuildValue: "true" }).coachAiEnabled, false);
+  assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiProductionBetaBuildValue: "true" }).coachAiEnabled, false);
   assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "true", coachAiBetaBuildValue: "TRUE" }).coachAiEnabled, false);
+  assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "true", coachAiProductionBetaBuildValue: "TRUE" }).coachAiEnabled, false);
   assert.equal(resolveFeatureFlags({ isDevelopment: false, coachAiTestingValue: "false", coachAiBetaBuildValue: "true" }).coachAiEnabled, false);
+  assert.throws(
+    () => resolveFeatureFlags({
+      isDevelopment: false,
+      coachAiTestingValue: "true",
+      coachAiBetaBuildValue: "true",
+      coachAiProductionBetaBuildValue: "true",
+    }),
+    /cannot both be enabled/,
+  );
   assert.equal(classifyCoachAiRequestError({ code: "functions/failed-precondition", details: { reason: "provider_unavailable" } }).kind, "configuration");
   assert.equal(classifyCoachAiRequestError({ code: "functions/resource-exhausted", details: { reason: "rate_limited" } }).kind, "rate_limit");
   assert.equal(classifyCoachAiRequestError({ code: "functions/deadline-exceeded" }).kind, "timeout");
@@ -40,6 +53,29 @@ async function run() {
   });
   assert.equal(allowed.canView, true);
   assert.equal(allowed.entitlementSource, "tester-claim");
+
+  const approvedStaffUsingCoachMode = resolveCoachAiAccess({
+    buildAvailable: true,
+    claimLoaded: true,
+    testerClaimEntitled: true,
+    paidEntitled: false,
+    signedIn: true,
+    adultEligible: true,
+    activeMode: "coach",
+    accountStanding: "active",
+  });
+  assert.equal(approvedStaffUsingCoachMode.canRequest, true);
+
+  assert.equal(resolveCoachAiAccess({
+    buildAvailable: false,
+    claimLoaded: true,
+    testerClaimEntitled: true,
+    paidEntitled: false,
+    signedIn: true,
+    adultEligible: true,
+    activeMode: "coach",
+    accountStanding: "active",
+  }).canView, false, "A tester claim must not reveal Coach AI in a normal production build.");
 
   for (const denied of [
   { signedIn: false },

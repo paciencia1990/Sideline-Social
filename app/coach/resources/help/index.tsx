@@ -9,7 +9,7 @@ import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import {
   KeyboardAwareScrollView,
   useKeyboardAwareInputReveal,
-} from "@/components/KeyboardAwareScrollView";
+} from "@/components/CoachAiKeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";

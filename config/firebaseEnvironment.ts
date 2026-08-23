@@ -3,6 +3,7 @@ import type { FirebaseOptions } from "firebase/app";
 export type FirebaseClientEnvironment = "development" | "staging" | "production";
 export type FirebaseClientPlatform = "ios" | "android" | "web";
 export const COACH_AI_STAGING_FIREBASE_PROJECT_ID = "sideline-social-staging-2026";
+export const COACH_AI_PRODUCTION_FIREBASE_PROJECT_ID = "sideline-squad";
 
 const PRODUCTION_CONFIG = Object.freeze({
   apiKey: "AIzaSyCG4ym5jJQPG724Pp_Da7yBj3wBdPEOdOs",
@@ -41,7 +42,12 @@ export function resolveFirebaseClientConfig(
   environment: PublicFirebaseEnvironment,
   platform: FirebaseClientPlatform,
   coachAiBetaBuildValue?: string,
+  coachAiProductionBetaBuildValue?: string,
 ): { environment: FirebaseClientEnvironment; options: FirebaseOptions } {
+  assertCoachAiBetaMarkerExclusivity(
+    coachAiBetaBuildValue,
+    coachAiProductionBetaBuildValue,
+  );
   const target = readTarget(environment.EXPO_PUBLIC_FIREBASE_ENVIRONMENT);
   const suppliedValues = readSuppliedValues(environment);
   const usesBundledProduction = target === "production" && suppliedValues.length === 0;
@@ -71,21 +77,46 @@ export function resolveFirebaseClientConfig(
       databaseURL: source.databaseURL,
     },
   };
-  assertCoachAiBetaFirebaseIsolation(coachAiBetaBuildValue, resolved);
+  assertCoachAiBetaFirebaseIsolation(
+    coachAiBetaBuildValue,
+    coachAiProductionBetaBuildValue,
+    resolved,
+  );
   return resolved;
+}
+
+export function assertCoachAiBetaMarkerExclusivity(
+  coachAiBetaBuildValue: string | undefined,
+  coachAiProductionBetaBuildValue: string | undefined,
+) {
+  if (coachAiBetaBuildValue === "true" && coachAiProductionBetaBuildValue === "true") {
+    throw new Error("Coach AI staging-beta and production-beta build markers cannot both be enabled.");
+  }
 }
 
 export function assertCoachAiBetaFirebaseIsolation(
   coachAiBetaBuildValue: string | undefined,
+  coachAiProductionBetaBuildValue: string | undefined,
   resolved: { environment: FirebaseClientEnvironment; options: FirebaseOptions },
 ) {
-  if (coachAiBetaBuildValue !== "true") return;
-  if (
+  assertCoachAiBetaMarkerExclusivity(
+    coachAiBetaBuildValue,
+    coachAiProductionBetaBuildValue,
+  );
+  if (coachAiBetaBuildValue === "true" && (
     resolved.environment !== "staging"
     || resolved.options.projectId !== COACH_AI_STAGING_FIREBASE_PROJECT_ID
-  ) {
+  )) {
     throw new Error(
-      `Coach AI beta Firebase configuration must resolve to staging project ${COACH_AI_STAGING_FIREBASE_PROJECT_ID}.`,
+      `Coach AI staging-beta Firebase configuration must resolve to staging project ${COACH_AI_STAGING_FIREBASE_PROJECT_ID}.`,
+    );
+  }
+  if (coachAiProductionBetaBuildValue === "true" && (
+    resolved.environment !== "production"
+    || resolved.options.projectId !== COACH_AI_PRODUCTION_FIREBASE_PROJECT_ID
+  )) {
+    throw new Error(
+      `Coach AI production-beta Firebase configuration must resolve to production project ${COACH_AI_PRODUCTION_FIREBASE_PROJECT_ID}.`,
     );
   }
 }

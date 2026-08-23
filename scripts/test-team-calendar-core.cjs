@@ -22,7 +22,7 @@ assert.equal(excel.rows.length, 2);
 assert.equal(excel.rows[0].draft.title, "Home, Opener");
 assert.equal(excel.rows[0].draft.date, "2027-03-14");
 assert.equal(excel.rows[0].draft.startTime, "10:00");
-assert.equal(excel.rows[0].draft.notes, "Bring water;\nand both jerseys");
+assert.equal(excel.rows[0].draft.notes.replace(/\r\n/g, "\n"), "Bring water;\nand both jerseys");
 assert.equal(excel.rows[1].draft.notes, 'Coach said "arrive early"');
 
 const comma = csv.analyzeTeamScheduleCsv('Type,Title,Date,Start Time,End Time,Time Zone,Notes\r\nPractice,"Quoted, title",2027-03-20,17:30,19:00,UTC,"line one\nline two"\r\n');

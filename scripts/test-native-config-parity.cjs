@@ -44,7 +44,10 @@ function digestFiles(baseDirectory, relativePaths) {
   for (const relativePath of [...relativePaths].sort()) {
     hash.update(relativePath.replaceAll("\\", "/"));
     hash.update(Buffer.from([0]));
-    hash.update(fs.readFileSync(path.join(baseDirectory, relativePath)));
+    const contents = fs.readFileSync(path.join(baseDirectory, relativePath));
+    hash.update(path.extname(relativePath) === ".xml"
+      ? contents.toString("utf8").replace(/\r\n/g, "\n")
+      : contents);
   }
   return hash.digest("hex");
 }
