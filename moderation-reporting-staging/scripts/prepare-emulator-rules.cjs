@@ -4,7 +4,7 @@ const { createHash } = require("node:crypto");
 const { mkdirSync, readFileSync, realpathSync, writeFileSync } = require("node:fs");
 const { dirname, resolve, sep } = require("node:path");
 
-const EXPECTED_SHA256 = "7b4b422f4254691ae51765f115acadbe5b8000ac71dbea4158a5197d8286f67e";
+const EXPECTED_SHA256 = "08e41d2abf8756ece597bcdae2356b35830d672251712370f13bef5ccd8b259d";
 const codebaseRoot = resolve(__dirname, "..");
 const consoleRoot = resolve(codebaseRoot, "..", "..", "Sideline_Social_Safety_Console_Phase2");
 const canonicalRules = resolve(consoleRoot, "firebase", "staging-firestore.rules");
