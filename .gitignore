@@ -31,6 +31,7 @@ codex-write-test.tmp
 tree.txt
 functions/lib/
 
+/moderation-reporting-staging/.env.sideline-social-staging-2026
 # Firebase Android development app config is injected from an EAS file variable.
 android/app/src/debug/google-services.json
 GoogleService-Info.ios.plist
