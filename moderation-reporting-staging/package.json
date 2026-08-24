@@ -8,14 +8,16 @@
     "prepare:emulator": "npm run build && node scripts/prepare-emulator-rules.cjs",
     "build": "npm run prepare:source && tsc",
     "verify:isolation": "node scripts/verify-isolation.cjs",
-    "test": "npm run build && npm run verify:isolation"
+    "verify:security-exception": "node scripts/verify-security-exception.cjs --project=sideline-social-staging-2026",
+    "test:security-exception-policy": "node scripts/test-security-exception-policy.cjs",
+    "test": "npm run build && npm run verify:isolation && npm run test:security-exception-policy"
   },
   "engines": {
     "node": "22"
   },
   "dependencies": {
-    "firebase-admin": "12.7.0",
-    "firebase-functions": "5.1.1"
+    "firebase-admin": "14.3.0",
+    "firebase-functions": "7.3.2"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

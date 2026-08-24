@@ -7,7 +7,8 @@
       "predeploy": [
         "node \"$RESOURCE_DIR/scripts/assert-staging-project.cjs\"",
         "npm --prefix \"$RESOURCE_DIR\" run build",
-        "npm --prefix \"$RESOURCE_DIR\" run verify:isolation"
+        "npm --prefix \"$RESOURCE_DIR\" run verify:isolation",
+        "npm --prefix \"$RESOURCE_DIR\" run verify:security-exception"
       ]
     }
   ]

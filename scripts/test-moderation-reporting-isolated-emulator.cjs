@@ -1,15 +1,22 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const admin = require("../moderation-reporting-staging/node_modules/firebase-admin");
+const { createRequire } = require("node:module");
+const { resolve } = require("node:path");
+
+const requireIsolated = createRequire(resolve(__dirname, "..", "moderation-reporting-staging", "package.json"));
+const { deleteApp, getApps, initializeApp: initializeAdminApp } = requireIsolated("firebase-admin/app");
+const { getFirestore: getAdminFirestore, Timestamp } = requireIsolated("firebase-admin/firestore");
+const { getStorage: getAdminStorage } = requireIsolated("firebase-admin/storage");
 const { initializeApp } = require("firebase/app");
 const { connectAuthEmulator, createUserWithEmailAndPassword, getAuth } = require("firebase/auth");
 const { connectFirestoreEmulator, doc, getDoc, getFirestore } = require("firebase/firestore");
 const { connectFunctionsEmulator, getFunctions, httpsCallable } = require("firebase/functions");
 
 const projectId = process.env.GCLOUD_PROJECT || "demo-sideline-moderation-reporting-isolation";
-if (!admin.apps.length) admin.initializeApp({ projectId, storageBucket: `${projectId}.appspot.com` });
-const adminDb = admin.firestore();
+const adminApp = getApps()[0] || initializeAdminApp({ projectId, storageBucket: `${projectId}.appspot.com` });
+const adminDb = getAdminFirestore(adminApp);
+const adminBucket = getAdminStorage(adminApp).bucket();
 
 async function createClient(label) {
   const app = initializeApp({
@@ -50,7 +57,7 @@ async function main() {
   const reporter = await createClient("synthetic-isolated-reporter");
   const subject = await createClient("synthetic-isolated-subject");
   const outsider = await createClient("synthetic-isolated-outsider");
-  const now = admin.firestore.Timestamp.now();
+  const now = Timestamp.now();
   for (const client of [reporter, subject, outsider]) {
     await adminDb.collection("users").doc(client.uid).set({
       adultEligibilityConfirmed: true,
@@ -84,8 +91,8 @@ async function main() {
   const fullPath = `friendChatMedia/${conversationId}/${messageId}/syntheticReservation/image.jpg`;
   const thumbnailPath = `friendChatMedia/${conversationId}/${messageId}/syntheticReservation/thumbnail.jpg`;
   await Promise.all([
-    admin.storage().bucket().file(fullPath).save(Buffer.from("benign synthetic image bytes")),
-    admin.storage().bucket().file(thumbnailPath).save(Buffer.from("benign synthetic thumbnail bytes")),
+    adminBucket.file(fullPath).save(Buffer.from("benign synthetic image bytes")),
+    adminBucket.file(thumbnailPath).save(Buffer.from("benign synthetic thumbnail bytes")),
   ]);
   const messageReference = conversation.collection("messages").doc(messageId);
   await messageReference.set({
@@ -154,11 +161,11 @@ async function main() {
 
 main()
   .then(async () => {
-    await Promise.all(admin.apps.map((app) => app.delete()));
+    await Promise.all(getApps().map((app) => deleteApp(app)));
     process.exit(0);
   })
   .catch(async (error) => {
     console.error(error);
-    await Promise.all(admin.apps.map((app) => app.delete()));
+    await Promise.all(getApps().map((app) => deleteApp(app)));
     process.exit(1);
   });

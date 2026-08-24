@@ -8,7 +8,7 @@ const codebaseRoot = resolve(__dirname, "..");
 const mobileRoot = resolve(codebaseRoot, "..");
 const broadSourceRoot = resolve(mobileRoot, "functions", "src");
 const generatedRoot = resolve(codebaseRoot, "src", "generated");
-const approvedCopies = ["permanentAuth.ts", "teamMembershipCore.ts", "teamVoiceMessagingCore.ts"];
+const approvedCopies = ["teamMembershipCore.ts", "teamVoiceMessagingCore.ts"];
 
 function assertContained(child, parent, label) {
   const path = realpathSync(child);
@@ -34,6 +34,11 @@ function removeRange(source, startMarker, endMarker, label) {
   return `${source.slice(0, start)}${source.slice(end)}`;
 }
 
+function replaceAllRequired(source, search, replacement, label) {
+  if (!source.includes(search)) throw new Error(`Expected at least one ${label} marker in the tested source.`);
+  return source.replaceAll(search, replacement);
+}
+
 function readApprovedSource(name) {
   const path = resolve(broadSourceRoot, name);
   assertContained(path, broadSourceRoot, name);
@@ -43,6 +48,24 @@ function readApprovedSource(name) {
 mkdirSync(generatedRoot, { recursive: true });
 
 let reportSource = readApprovedSource("moderationReports.ts");
+reportSource = replaceSingle(
+  reportSource,
+  'import * as admin from "firebase-admin";',
+  'import { getFirestore } from "firebase-admin/firestore";',
+  "Firebase Admin modular Firestore import",
+);
+reportSource = replaceSingle(
+  reportSource,
+  'import * as firebaseFunctions from "firebase-functions";',
+  'import * as firebaseFunctions from "firebase-functions/v1";',
+  "Firebase Functions v1 import",
+);
+reportSource = replaceAllRequired(
+  reportSource,
+  "admin.firestore()",
+  "getFirestore()",
+  "Firebase Admin namespaced Firestore call",
+);
 reportSource = replaceSingle(
   reportSource,
   "  coachAiModerationIngestionEnabled,\n",
@@ -76,6 +99,26 @@ coreSource = removeRange(
   "Coach AI ingestion gate",
 );
 
+let permanentAuthSource = readApprovedSource("permanentAuth.ts");
+permanentAuthSource = replaceSingle(
+  permanentAuthSource,
+  'import * as admin from "firebase-admin";',
+  'import { getFirestore } from "firebase-admin/firestore";',
+  "permanent-auth Firebase Admin modular Firestore import",
+);
+permanentAuthSource = replaceSingle(
+  permanentAuthSource,
+  'import * as functions from "firebase-functions";',
+  'import * as functions from "firebase-functions/v1";',
+  "permanent-auth Firebase Functions v1 import",
+);
+permanentAuthSource = replaceAllRequired(
+  permanentAuthSource,
+  "admin.firestore()",
+  "getFirestore()",
+  "permanent-auth namespaced Firestore call",
+);
+
 const forbiddenGeneratedSource = [
   "accountDeletion",
   "createCoachAiUnsafeModerationReport",
@@ -92,6 +135,7 @@ for (const token of forbiddenGeneratedSource) {
 const generated = new Map([
   ["moderationReports.ts", reportSource],
   ["moderationReportsCore.ts", coreSource],
+  ["permanentAuth.ts", permanentAuthSource],
 ]);
 for (const name of approvedCopies) generated.set(name, readApprovedSource(name));
 

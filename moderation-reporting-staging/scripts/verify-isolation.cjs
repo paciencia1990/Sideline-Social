@@ -18,6 +18,7 @@ assert.equal(firebaseConfig.functions.length, 1);
 assert.equal(firebaseConfig.functions[0].source, "moderation-reporting-staging");
 assert.equal(firebaseConfig.functions[0].codebase, "moderation-reporting-staging");
 assert.match(firebaseConfig.functions[0].predeploy[0], /assert-staging-project/u);
+assert.match(firebaseConfig.functions[0].predeploy.join("\n"), /verify:security-exception/u);
 assert.equal(Object.keys(generatedManifest.sha256).length, 5);
 
 const guard = resolve(root, "scripts", "assert-staging-project.cjs");
@@ -84,11 +85,16 @@ for (const forbidden of [
   "accountDeletion",
   "createCoachAiUnsafeModerationReport",
   "defineSecret",
+  "firebase-admin/storage",
+  "getStorage",
   "listMyModerationReports",
   "secretmanager",
   "submitCoachAiFeedback",
+  "from \"uuid\"",
 ]) {
   assert.equal(ownRuntimeSource.includes(forbidden), false, `runtime source contains ${forbidden}`);
 }
+assert.match(ownRuntimeSource, /node:crypto/u);
+assert.match(ownRuntimeSource, /randomUUID/u);
 
 console.log(`Isolated discovery exports only submitModerationReportV2; loaded ${localLoaded.size} approved local modules and no secret-bound Function source.`);
