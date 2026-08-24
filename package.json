@@ -61,6 +61,8 @@
     "test:message-reporting-modal": "node scripts/test-message-reporting-modal.cjs",
     "test:moderation-reports": "npm --prefix functions run build && node scripts/test-moderation-reports-core.cjs && node scripts/test-message-reporting-modal.cjs",
     "test:emulator:moderation-reports": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-moderation-reports-test --only auth,firestore,storage,functions \"node scripts/test-moderation-reports-emulator.cjs\"",
+    "test:moderation-reporting:isolation": "npm --prefix moderation-reporting-staging test",
+    "test:emulator:moderation-reporting:isolation": "npm --prefix moderation-reporting-staging run prepare:emulator && firebase.cmd --config firebase.moderation-staging-emulator.json emulators:exec --project demo-sideline-moderation-reporting-isolation --only auth,firestore,storage,functions \"node scripts/test-moderation-reporting-isolated-emulator.cjs\"",
     "test:message-keyboard-layout": "node scripts/test-message-keyboard-layout.cjs",
     "test:chat-composer-keyboard-layout": "node scripts/test-chat-composer-keyboard-layout.cjs",
     "test:support-contact": "node scripts/test-support-contact.cjs",

@@ -1,0 +1,25 @@
+{
+  "name": "sideline-social-moderation-reporting-staging",
+  "version": "1.0.0",
+  "description": "Isolated staging-only Firebase Function for mobile moderation reports",
+  "main": "lib/src/index.js",
+  "scripts": {
+    "prepare:source": "node scripts/prepare-source.cjs",
+    "prepare:emulator": "npm run build && node scripts/prepare-emulator-rules.cjs",
+    "build": "npm run prepare:source && tsc",
+    "verify:isolation": "node scripts/verify-isolation.cjs",
+    "test": "npm run build && npm run verify:isolation"
+  },
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "firebase-admin": "12.7.0",
+    "firebase-functions": "5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "typescript": "5.9.3"
+  },
+  "private": true
+}
