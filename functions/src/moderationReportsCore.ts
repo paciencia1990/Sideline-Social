@@ -115,6 +115,38 @@ export function readPositiveIntegerConfiguration(value: unknown, maximum: number
   return Number.isInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : null;
 }
 
+export function coachAiModerationIngestionEnabled(
+  environment: Record<string, string | undefined>,
+) {
+  const approvedStagingProject = "sideline-social-staging-2026";
+  const actualProject = environment.GCLOUD_PROJECT || environment.GOOGLE_CLOUD_PROJECT;
+  return actualProject === approvedStagingProject &&
+    environment.MODERATION_EXPECTED_PROJECT_ID === approvedStagingProject &&
+    environment.MODERATION_SYSTEM_ENABLED === "true" &&
+    environment.MODERATION_REPORTING_V2_ENABLED === "true" &&
+    environment.MODERATION_APP_CHECK_MODE === "monitor" &&
+    readPositiveIntegerConfiguration(
+      environment.MODERATION_REPORT_RATE_LIMIT_WINDOW_HOURS,
+      24 * 30,
+    ) !== null &&
+    readPositiveIntegerConfiguration(
+      environment.MODERATION_REPORT_RATE_LIMIT_MAX,
+      500,
+    ) !== null;
+}
+
+export function mobileModerationReportingEnabled(
+  environment: Record<string, string | undefined>,
+) {
+  const approvedStagingProject = "sideline-social-staging-2026";
+  const actualProject = environment.GCLOUD_PROJECT || environment.GOOGLE_CLOUD_PROJECT;
+  return actualProject === approvedStagingProject &&
+    environment.MODERATION_EXPECTED_PROJECT_ID === approvedStagingProject &&
+    environment.MODERATION_SYSTEM_ENABLED === "true" &&
+    environment.MODERATION_REPORTING_V2_ENABLED === "true" &&
+    environment.MODERATION_APP_CHECK_MODE === "monitor";
+}
+
 export function boundedModerationText(value: unknown, maximum: number) {
   if (typeof value !== "string") return null;
   const normalized = value.normalize("NFKC").replace(/\s+/gu, " ").trim();

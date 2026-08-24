@@ -9,9 +9,11 @@ import { isExplicitConversationParticipant } from "./teamVoiceMessagingCore";
 import {
   boundedModerationText,
   canonicalModerationReason,
+  coachAiModerationIngestionEnabled,
   moderationCaseGroupingKey,
   moderationDedupeId,
   moderationHash,
+  mobileModerationReportingEnabled,
   moderationReceiptNumber,
   MODERATION_TARGET_TYPES,
   readPositiveIntegerConfiguration,
@@ -268,6 +270,7 @@ export async function createCoachAiUnsafeModerationReport(input: {
   requestId: string;
   reporterUserId: string;
 }) {
+  if (!coachAiModerationIngestionEnabled(process.env)) return null;
   const firestore = admin.firestore();
   const reportId = `ai_${moderationHash(`${input.reporterUserId}:${input.requestId}`).slice(0, 60)}`;
   const reportReference = firestore.collection("moderationReports").doc(reportId);
@@ -693,13 +696,7 @@ function configuredReportLimit() {
 
 function requireModerationReportingEnabled() {
   if (isEmulator()) return;
-  const approvedStagingProject = "sideline-social-staging-2026";
-  const actualProject = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
-  if (
-    process.env.MODERATION_REPORTING_V2_ENABLED === "true" &&
-    process.env.MODERATION_EXPECTED_PROJECT_ID === approvedStagingProject &&
-    actualProject === approvedStagingProject
-  ) return;
+  if (mobileModerationReportingEnabled(process.env)) return;
   throw new firebaseFunctions.https.HttpsError(
     "failed-precondition",
     "The new reporting system is not active.",

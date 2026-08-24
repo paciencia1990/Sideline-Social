@@ -6,6 +6,7 @@ import * as firebaseFunctions from 'firebase-functions';
 
 import { validateCoachAiFeedback } from './coachAiFeedbackCore';
 import { requireCoachAiRuntimeEnabled } from './coachAiRuntime';
+import { coachAiModerationIngestionEnabled } from './moderationReportsCore';
 import { createCoachAiUnsafeModerationReport } from './moderationReports';
 import { permanentAccountFunctions } from './permanentAuth';
 
@@ -92,7 +93,7 @@ export const submitCoachAiFeedback = feedbackFunctions.https.onCall(async (data,
       if (feedback.reason === 'unsafe') unsafeReportData = requestData;
       return { category: requestData.category, locale: requestData.locale, reviewStatus: record.reviewStatus };
     });
-    const moderationReceipt = unsafeReportData
+    const moderationReceipt = unsafeReportData && coachAiModerationIngestionEnabled(process.env)
       ? await createCoachAiUnsafeModerationReport({
           comment: feedback.comment ?? null,
           requestData: unsafeReportData,
