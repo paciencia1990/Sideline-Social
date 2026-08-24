@@ -48,6 +48,7 @@ import {
   sendPushToUser,
 } from './pushNotificationDelivery';
 import { assertUserContentAllowed } from './contentSafety';
+import { moderationEvidenceMustBeRetained } from './moderationReportsCore';
 import {
   isSearchablePublicProfileProjection,
   normalizePublicProfileSearchText,
@@ -171,6 +172,10 @@ export { coachAiClaudeGateway } from './coachAiClaudeGateway';
 export { submitCoachAiFeedback } from './coachAiFeedback';
 export { deleteOwnAccount } from './accountDeletion';
 export { reportTeamContent } from './contentModeration';
+export {
+  listMyModerationReports,
+  submitModerationReportV2,
+} from './moderationReports';
 export {
   getMyAccountStanding,
   onAccountStandingChanged,
@@ -2987,6 +2992,7 @@ export const deletePrivateTeamMessage = teamMessagingFunctions.https.onCall(asyn
     const messageRef = conversationRef.collection('messages').doc(messageId);
     let status: 'deleted' | 'alreadyDeleted' = 'alreadyDeleted';
     let voiceStoragePath: string | null = null;
+    let retainMediaForModeration = false;
 
     await firestore.runTransaction(async (transaction) => {
       const [conversationSnapshot, messageSnapshot] = await transaction.getAll(conversationRef, messageRef);
@@ -3016,6 +3022,7 @@ export const deletePrivateTeamMessage = teamMessagingFunctions.https.onCall(asyn
       const deletesLatestMessage = conversation?.lastMessageId === messageId ||
         (!conversation?.lastMessageId && latestDocument?.id === messageId);
       const storedPath = message.voiceMemo?.storagePath;
+      retainMediaForModeration = moderationEvidenceMustBeRetained(message);
       voiceStoragePath = typeof storedPath === 'string' &&
         parseTeamVoiceStoragePath(storedPath)?.messageId === messageId
         ? storedPath
@@ -3074,9 +3081,9 @@ export const deletePrivateTeamMessage = teamMessagingFunctions.https.onCall(asyn
       status = 'deleted';
     });
 
-    const storageCleanup = voiceStoragePath
+    const storageCleanup = voiceStoragePath && !retainMediaForModeration
       ? await deleteTeamVoiceStorageObject(voiceStoragePath)
-      : 'notRequired';
+      : retainMediaForModeration ? 'retainedForModeration' : 'notRequired';
     return { status, storageCleanup };
   } catch (error) {
     throwTeamMessagingError(error);
@@ -4657,6 +4664,7 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
   const announcementRef = teamRef.collection('announcements').doc(announcementId);
   let status: 'deleted' | 'alreadyDeleted' = 'alreadyDeleted';
   let voiceStoragePath: string | null = null;
+  let retainMediaForModeration = false;
 
   await firestore.runTransaction(async (transaction) => {
     const [teamSnapshot, memberSnapshot, announcementSnapshot] = await transaction.getAll(
@@ -4677,6 +4685,7 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
     if (!announcementSnapshot.exists || announcementSnapshot.data()?.isDeleted === true) return;
 
     const storedPath = announcementSnapshot.data()?.voiceMemo?.storagePath;
+    retainMediaForModeration = moderationEvidenceMustBeRetained(announcementSnapshot.data());
     voiceStoragePath = typeof storedPath === 'string' && storedPath.startsWith(`teamVoiceMemos/${teamId}/announcements/`)
       ? storedPath
       : null;
@@ -4694,9 +4703,9 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
     status = 'deleted';
   });
 
-  const storageCleanup = voiceStoragePath
+  const storageCleanup = voiceStoragePath && !retainMediaForModeration
     ? await deleteTeamVoiceStorageObject(voiceStoragePath)
-    : 'notRequired';
+    : retainMediaForModeration ? 'retainedForModeration' : 'notRequired';
 
   return { status, storageCleanup };
 });

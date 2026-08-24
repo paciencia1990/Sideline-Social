@@ -30,7 +30,7 @@ import {
 } from "@/services/teamMessageService";
 import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
-import { reportTeamContent } from "@/services/contentModerationService";
+import { submitModerationReport } from "@/services/moderationReportService";
 
 type MessageActionTarget =
   | { contentId: string; kind: "announcement"; mine: false }
@@ -257,8 +257,13 @@ export default function ParentAnnouncementScreen() {
     kind: "announcement" | "announcementReply",
     contentId: string,
     reason: MessageReportReason,
+    explanation: string | null,
   ) => {
-    await reportTeamContent({ kind, teamId, parentId: announcementId, contentId, reason });
+    return submitModerationReport({
+      explanation,
+      reason,
+      target: { type: "teamContent", kind, teamId, parentId: announcementId, contentId },
+    });
   }, [announcementId, teamId]);
 
   const selectedActions = useMemo<MessageModalAction[]>(() => {
@@ -466,10 +471,11 @@ export default function ParentAnnouncementScreen() {
         report={actionTarget && !actionTarget.mine
           ? {
             errorMessage: t("moderation.reportError"),
-            onSubmit: (reason) => submitReport(
+            onSubmit: ({ explanation, reason }) => submitReport(
               actionTarget.kind,
               actionTarget.kind === "announcement" ? actionTarget.contentId : actionTarget.reply.id,
               reason,
+              explanation,
             ),
             successBody: t("moderation.reportSentBody"),
             successTitle: t("moderation.reportSentTitle"),

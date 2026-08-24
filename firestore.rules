@@ -821,6 +821,65 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
+    match /moderationReports/{reportId} {
+      allow read, create, update, delete: if false;
+      match /{document=**} {
+        allow read, create, update, delete: if false;
+      }
+    }
+
+    match /moderationReporterLinks/{reportId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationReporterIdentityRequests/{requestId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationEvidenceCaptureQueue/{reportId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationDedupKeys/{dedupeId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationAppeals/{appealId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationActionRequests/{actionId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationActionApprovals/{approvalId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationActionOutbox/{outboxId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationLegalHolds/{holdId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationLegalHoldReleaseRequests/{requestId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationLegalHoldReleaseApprovals/{approvalId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationCleanupJobs/{jobId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationFeatureConfig/{documentId} {
+      allow read, create, update, delete: if false;
+    }
+
     match /moderatorDirectory/{userId} {
       allow read, create, update, delete: if false;
     }

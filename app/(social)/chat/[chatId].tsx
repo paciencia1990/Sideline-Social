@@ -46,6 +46,7 @@ import {
   FRIEND_CHAT_REACTIONS,
   FRIEND_CHAT_VOICE_LIMIT_MS,
   FRIEND_CHAT_VOICE_SIZE_LIMIT_BYTES,
+  blockFriendChatUser,
   createChatClientMessageId,
   deleteFriendChatMessageForEveryone,
   deleteFriendChatMessagesForMe,
@@ -59,7 +60,6 @@ import {
   mapFriendChatError,
   markFriendConversationRead,
   pinFriendChatMessage,
-  reportFriendChatMessage,
   reserveFriendChatImageUpload,
   reserveFriendChatVoiceUpload,
   sendFriendChatMessage,
@@ -76,6 +76,7 @@ import {
   type FriendChatReactionEmoji,
   type FriendChatReplyContext,
 } from "@/services/chatService";
+import { submitModerationReport } from "@/services/moderationReportService";
 import {
   clearFriendChatImageCacheForMessages,
   primeFriendChatImageCache,
@@ -860,7 +861,7 @@ export default function FriendConversationScreen() {
 
   const selectedReaction = reactionMessage?.reactions.find((reaction) => reaction.reactedBySelf)?.emoji ?? null;
   const reportAction = actionMessage && !selectedMine && selectedActive && chatId
-    ? { chatId, messageId: actionMessage.messageId }
+    ? { chatId, messageId: actionMessage.messageId, reportedUserId: actionMessage.senderUserId }
     : null;
   const selectedCount = selectedMessages.length;
   const allSelectedStarred = selectedMessages.length > 0 && selectedMessages.every((message) => message.starredBySelf);
@@ -1137,9 +1138,23 @@ export default function FriendConversationScreen() {
         onDismiss={() => setActionMessage(null)}
         report={reportAction
           ? {
+            canBlock: Boolean(reportAction.reportedUserId),
             errorMessage: t("moderation.reportError"),
-            onSubmit: async (reason) => {
-              await reportFriendChatMessage(reportAction.chatId, reportAction.messageId, reason);
+            onSubmit: async ({ blockRequested, explanation, reason }) => {
+              const receipt = await submitModerationReport({
+                blockRequested,
+                explanation,
+                reason,
+                target: {
+                  type: "friendMessage",
+                  conversationId: reportAction.chatId,
+                  messageId: reportAction.messageId,
+                },
+              });
+              if (blockRequested && reportAction.reportedUserId) {
+                await blockFriendChatUser(reportAction.reportedUserId);
+              }
+              return receipt;
             },
             successBody: t("moderation.reportSentBody"),
             successTitle: t("moderation.reportSentTitle"),

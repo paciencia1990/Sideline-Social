@@ -169,7 +169,7 @@ export default function CoachHelpResultScreen() {
     setSubmittingFeedback(true);
     setFeedback(null);
     try {
-      await submitCoachAiFeedback({
+      const feedbackResult = await submitCoachAiFeedback({
         requestId,
         rating,
         ...(reason ? { reason } : {}),
@@ -178,7 +178,9 @@ export default function CoachHelpResultScreen() {
       setFeedbackRating(rating);
       setFeedbackReason(reason ?? null);
       const message = reason === "unsafe"
-        ? t("coach.resources.unsafeReportThanks")
+        ? feedbackResult.moderationReceiptNumber
+          ? t("coach.resources.unsafeReportThanksReceipt", { receipt: feedbackResult.moderationReceiptNumber })
+          : t("coach.resources.unsafeReportThanks")
         : t("coach.resources.feedbackThanks");
       setFeedback(message);
       AccessibilityInfo.announceForAccessibility(message);

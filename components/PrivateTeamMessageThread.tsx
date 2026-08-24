@@ -14,7 +14,7 @@ import { useFocusEffect } from "expo-router";
 import { MoreHorizontal } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
-import { MessageActionsModal, type MessageModalAction } from "@/components/MessageActionsModal";
+import { MessageActionsModal, type MessageModalAction, type MessageReportReason } from "@/components/MessageActionsModal";
 import { VoiceMemoComposer } from "@/components/VoiceMemoComposer";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { Card } from "@/components/Card";
@@ -39,7 +39,7 @@ import { acknowledgeNotificationAfterOpen } from "@/services/notificationService
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import { clearPersistedVoicePlaybackArtifacts } from "@/services/voicePlaybackCleanupService";
-import { reportTeamContent, type TeamContentReportReason } from "@/services/contentModerationService";
+import { submitModerationReport } from "@/services/moderationReportService";
 import { findUnresolvedCoachPlaceholders } from "@/services/coachResourcesService";
 import type { LocalVoiceMemoDraft, TeamPrivateConversation, TeamPrivateMessage } from "@/types/teamVoiceMessaging";
 
@@ -285,14 +285,21 @@ export function PrivateTeamMessageThread({
     }
   }, [caption, conversation, conversationId, readOnly, sending, t, voiceDraft]);
 
-  const submitReport = useCallback(async (messageId: string, reason: TeamContentReportReason) => {
+  const submitReport = useCallback(async (
+    messageId: string,
+    input: { explanation: string | null; reason: MessageReportReason },
+  ) => {
     if (!conversation?.teamId) throw new Error("missing_team");
-    await reportTeamContent({
-      kind: "privateTeamMessage",
-      teamId: conversation.teamId,
-      parentId: conversationId,
-      contentId: messageId,
-      reason,
+    return submitModerationReport({
+      explanation: input.explanation,
+      reason: input.reason,
+      target: {
+        type: "teamContent",
+        kind: "privateTeamMessage",
+        teamId: conversation.teamId,
+        parentId: conversationId,
+        contentId: messageId,
+      },
     });
   }, [conversation?.teamId, conversationId]);
 
@@ -468,7 +475,7 @@ export function PrivateTeamMessageThread({
         report={!selectedMine && actionMessage && !actionMessage.isDeleted
           ? {
             errorMessage: t("moderation.reportError"),
-            onSubmit: (reason) => submitReport(actionMessage.id, reason),
+            onSubmit: ({ explanation, reason }) => submitReport(actionMessage.id, { explanation, reason }),
             successBody: t("moderation.reportSentBody"),
             successTitle: t("moderation.reportSentTitle"),
           }

@@ -50,16 +50,18 @@ async function run() {
     createClient("delete-account-provider-mismatch"),
   ]);
   const unauthenticated = createUnauthenticatedClient("delete-account-unauthenticated");
-  await db.collection("users").doc(providerMismatch.uid).set({ displayName: "Provider Mismatch" });
   await assert.rejects(
     () => unauthenticated.call("deleteOwnAccount"),
     hasCode("unauthenticated"),
   );
-  await assert.rejects(
-    () => providerMismatch.call("deleteOwnAccount", { appleAuthorizationCode: "not-authorized-for-this-account" }),
-    hasCode("failed-precondition"),
-  );
-  assert.equal((await db.collection("users").doc(providerMismatch.uid).get()).exists, true);
+  if (process.env.MODERATION_SKIP_SECRET_DEPENDENT_TESTS !== "true") {
+    await db.collection("users").doc(providerMismatch.uid).set({ displayName: "Provider Mismatch" });
+    await assert.rejects(
+      () => providerMismatch.call("deleteOwnAccount", { appleAuthorizationCode: "not-authorized-for-this-account" }),
+      hasCode("failed-precondition"),
+    );
+    assert.equal((await db.collection("users").doc(providerMismatch.uid).get()).exists, true);
+  }
   const joinRateLimitId = createHash("sha256").update(deletingUser.uid).digest("hex");
   const triviaRateLimitId = joinRateLimitId;
   const triviaCreateRateLimitId = createHash("sha256").update(`create:${deletingUser.uid}`).digest("hex");
@@ -69,12 +71,14 @@ async function run() {
   const friendImagePath = "friendChatMedia/privacy-conversation/message_" + "b".repeat(64) + "/media_" + "2".repeat(64) + "/image.jpg";
   const friendThumbnailPath = "friendChatMedia/privacy-conversation/message_" + "b".repeat(64) + "/media_" + "2".repeat(64) + "/thumbnail.jpg";
   const friendReservedPath = "friendChatMedia/privacy-conversation/message_" + "c".repeat(64) + "/media_" + "3".repeat(64) + "/image.jpg";
+  const heldFriendImagePath = "friendChatMedia/privacy-conversation/message_" + "d".repeat(64) + "/media_" + "4".repeat(64) + "/image.jpg";
 
   await Promise.all([
     bucket.file(friendVoicePath).save(Buffer.from("voice")),
     bucket.file(friendImagePath).save(Buffer.from("image")),
     bucket.file(friendThumbnailPath).save(Buffer.from("thumbnail")),
     bucket.file(friendReservedPath).save(Buffer.from("reserved")),
+    bucket.file(heldFriendImagePath).save(Buffer.from("benign retained evidence")),
     db.collection("users").doc(deletingUser.uid).set({ displayName: "Delete Me", friendIds: [friend.uid] }),
     db.collection("users").doc(deletingUser.uid).collection("children").doc("child-1").set({ firstName: "Child" }),
     db.collection("publicUserProfiles").doc(deletingUser.uid).set({ displayName: "Delete D." }),
@@ -167,6 +171,18 @@ async function run() {
     }),
     db.collection("chatModerationReports").doc("chat-report").set({ reporterUserId: deletingUser.uid, reportedUserId: friend.uid }),
     db.collection("contentModerationReports").doc("team-report").set({ reporterUserId: friend.uid, reportedUserId: deletingUser.uid }),
+    db.collection("moderationReporterLinks").doc("canonical-report").set({
+      reportId: "canonical-report", reporterUserId: deletingUser.uid, reporterHash: "synthetic-hash",
+    }),
+    db.collection("moderationReports").doc("canonical-report").set({
+      reportId: "canonical-report", reporterHash: "synthetic-hash", reportedUserId: deletingUser.uid, legalHoldIds: [],
+    }),
+    db.collection("moderationCases").doc("canonical-case").set({
+      caseId: "canonical-case", reportedUserId: deletingUser.uid, legalHoldIds: [],
+    }),
+    db.collection("moderationAuditEvents").doc("canonical-audit").set({
+      actorId: deletingUser.uid, targetId: deletingUser.uid,
+    }),
     db.collection("squads").doc("privacy-squad").collection("seasons").doc("season-1").set({
       createdBy: deletingUser.uid, closedBy: deletingUser.uid, status: "closed",
     }),
@@ -220,6 +236,19 @@ async function run() {
       text: "",
       visibleToUserIds: [deletingUser.uid, friend.uid],
       voiceMemo: { durationMilliseconds: 1000, mimeType: "audio/mp4", sizeBytes: 5, storagePath: friendVoicePath },
+    }),
+    db.collection("friendConversations").doc("privacy-conversation").collection("messages").doc("retained-authored-media-message").set({
+      caption: "Benign retained report evidence",
+      conversationId: "privacy-conversation",
+      image: { fullPath: heldFriendImagePath, mimeType: "image/jpeg", sizeBytes: 24 },
+      mediaStoragePaths: [heldFriendImagePath],
+      messageType: "image",
+      moderationEvidenceRetained: true,
+      senderDisplayName: "Delete Me",
+      senderUserId: deletingUser.uid,
+      status: "active",
+      text: "",
+      visibleToUserIds: [deletingUser.uid, friend.uid],
     }),
     db.collection("friendConversations").doc("privacy-conversation").collection("messages").doc("friend-message")
       .collection("reactions").doc(deletingUser.uid).set({
@@ -306,6 +335,18 @@ async function run() {
   assert.equal(notification.actorName, "Deleted user");
   assert.equal((await db.collection("chatModerationReports").doc("chat-report").get()).data().reporterUserId, null);
   assert.equal((await db.collection("contentModerationReports").doc("team-report").get()).data().reportedUserId, null);
+  const canonicalReporterLink = (await db.collection("moderationReporterLinks").doc("canonical-report").get()).data();
+  assert.equal(canonicalReporterLink.reporterUserId, null);
+  assert.equal(typeof canonicalReporterLink.deletedReporterKey, "string");
+  const canonicalReport = (await db.collection("moderationReports").doc("canonical-report").get()).data();
+  assert.equal(canonicalReport.reportedUserId, null);
+  assert.equal(canonicalReport.subjectIdentityRetentionState, "pseudonymized");
+  const canonicalCase = (await db.collection("moderationCases").doc("canonical-case").get()).data();
+  assert.equal(canonicalCase.reportedUserId, null);
+  assert.equal(canonicalCase.subjectIdentityRetentionState, "pseudonymized");
+  const canonicalAudit = (await db.collection("moderationAuditEvents").doc("canonical-audit").get()).data();
+  assert.equal(canonicalAudit.actorId, canonicalReporterLink.deletedReporterKey);
+  assert.equal(canonicalAudit.targetId, canonicalReporterLink.deletedReporterKey);
   const season = (await db.collection("squads").doc("privacy-squad").collection("seasons").doc("season-1").get()).data();
   assert.equal(season.createdBy, null);
   assert.equal(season.closedBy, null);
@@ -331,6 +372,12 @@ async function run() {
   assert.equal((await bucket.file(friendImagePath).exists())[0], false);
   assert.equal((await bucket.file(friendThumbnailPath).exists())[0], false);
   assert.equal((await bucket.file(friendReservedPath).exists())[0], false);
+  assert.equal((await bucket.file(heldFriendImagePath).exists())[0], true);
+  const retainedAuthoredMediaMessage = (await db.collection("friendConversations").doc("privacy-conversation")
+    .collection("messages").doc("retained-authored-media-message").get()).data();
+  assert.equal(retainedAuthoredMediaMessage.status, "removed");
+  assert.equal(retainedAuthoredMediaMessage.senderUserId, null);
+  assert.equal(retainedAuthoredMediaMessage.image, null);
   assert.equal((await db.collection("friendChatUploadReservations").doc("delete-media-reservation").get()).exists, false);
   assert.equal((await db.collection("friendChatMediaPlaybackGrants").doc("delete-media-grant").get()).exists, false);
   assert.equal((await db.collection("friendConversations").doc("privacy-conversation").collection("messages").doc("friend-message")

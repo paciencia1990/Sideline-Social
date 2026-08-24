@@ -47,18 +47,19 @@ assert.match(friendThread, /setActionMessage\(selectedMessages\[0\]\)/, "Friend 
 assert.doesNotMatch(friendThread, /style=\{styles\.messageMenu\}/, "Friend Chat no longer renders a permanent per-message overflow button");
 assert.doesNotMatch(parentThread, /reportButton/);
 assert.match(friendThread, /Alert\.alert\(t\("chat\.photoSavedTitle"\)/, "native alerts are limited to explicit Save Photo feedback, not report reason selection");
-assert.match(friendThread, /reportFriendChatMessage\(reportAction\.chatId, reportAction\.messageId, reason\)/);
+assert.match(friendThread, /submitModerationReport\(\{[\s\S]*type: "friendMessage"[\s\S]*conversationId: reportAction\.chatId[\s\S]*messageId: reportAction\.messageId/);
 assert.match(privateThread, /report=\{!selectedMine/);
 assert.match(parentThread, /report=\{actionTarget && !actionTarget\.mine/);
 assert.match(coachThread, /report=\{actionTarget && !actionTarget\.mine/);
 
-const friendFunction = read("functions", "src", "friendChat.ts");
-const reportStart = friendFunction.indexOf("export const reportFriendChatMessage");
-const reportSlice = friendFunction.slice(reportStart, friendFunction.indexOf("async function assertActiveMember", reportStart));
-assert.match(reportSlice, /reason = data\?\.reason == null[\s\S]*\? 'other'/);
-assert.match(reportSlice, /reason, reportType: 'message'/);
-assert.match(reportSlice, /assertActiveMember\(conversationId, uid\)/);
-assert.match(reportSlice, /visibleToUserIds/);
+const canonicalReports = read("functions", "src", "moderationReports.ts");
+assert.match(canonicalReports, /export const submitModerationReportV2/);
+assert.match(canonicalReports, /resolveFriendMessageTarget/);
+assert.match(canonicalReports, /visibleToUserIds/);
+assert.match(canonicalReports, /moderationReporterLinks/);
+assert.match(canonicalReports, /moderationEvidenceCaptureQueue/);
+assert.match(canonicalReports, /moderationDedupKeys/);
+assert.match(canonicalReports, /moderationEvidenceRetained/);
 
 const translations = read("i18n", "index.ts");
 for (const expected of [
@@ -70,11 +71,15 @@ for (const expected of [
   "privacy: 'Private or child information'",
   "harassment: 'Harassment or threats'",
   "offensive: 'Offensive content'",
+  "child_safety: 'Child safety'",
+  "nonconsensual_intimate_image: 'Non-consensual intimate image'",
+  "spam_scam_impersonation: 'Spam, scam, or impersonation'",
   "other: 'Other'",
   "messageActions: 'Acciones del mensaje'",
   "reportMessage: 'Reportar mensaje'",
   "reportQuestion: '\\u00bfPor qu\\u00e9 reportas este mensaje?'",
   "submitReport: 'Enviar reporte'",
+  "child_safety: 'Seguridad infantil'",
 ]) {
   assert.equal(translations.includes(expected), true, `${expected} is localized`);
 }

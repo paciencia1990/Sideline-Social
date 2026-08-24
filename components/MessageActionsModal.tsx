@@ -4,8 +4,11 @@ import {
   Alert,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
+  Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -13,8 +16,13 @@ import { X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import {
+  MODERATION_REASON_CODES,
+  type ModerationReasonCode,
+  type ModerationReportReceipt,
+} from "@/services/moderationReportService";
 
-export type MessageReportReason = "privacy" | "harassment" | "offensive" | "other";
+export type MessageReportReason = ModerationReasonCode;
 
 export type MessageModalAction = {
   confirmation?: {
@@ -39,26 +47,28 @@ type Props = {
     selectedEmoji?: string | null;
   };
   report?: {
+    canBlock?: boolean;
     errorMessage: string;
-    onSubmit: (reason: MessageReportReason) => Promise<void>;
+    onSubmit: (input: {
+      blockRequested: boolean;
+      explanation: string | null;
+      reason: MessageReportReason;
+    }) => Promise<ModerationReportReceipt>;
     successBody: string;
     successTitle: string;
   };
   visible: boolean;
 };
 
-const REPORT_REASONS: MessageReportReason[] = [
-  "privacy",
-  "harassment",
-  "offensive",
-  "other",
-];
+const REPORT_REASONS: readonly MessageReportReason[] = MODERATION_REASON_CODES;
 
 export function MessageActionsModal({ actions, onDismiss, reactions, report, visible }: Props) {
   const { t } = useTranslation();
   const [phase, setPhase] = useState<"actions" | "confirmation" | "report">("actions");
   const [pendingAction, setPendingAction] = useState<MessageModalAction | null>(null);
   const [reason, setReason] = useState<MessageReportReason | null>(null);
+  const [explanation, setExplanation] = useState("");
+  const [blockRequested, setBlockRequested] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const visibleRef = useRef(visible);
@@ -71,6 +81,8 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
     setPhase("actions");
     setPendingAction(null);
     setReason(null);
+    setExplanation("");
+    setBlockRequested(false);
     setSubmitting(false);
     setError(null);
   }, [visible]);
@@ -128,10 +140,19 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
     setSubmitting(true);
     setError(null);
     try {
-      await report.onSubmit(reason);
+      const receipt = await report.onSubmit({
+        blockRequested,
+        explanation: explanation.trim() || null,
+        reason,
+      });
       if (operationIdRef.current !== operationId) return;
       onDismiss();
-      Alert.alert(report.successTitle, report.successBody);
+      Alert.alert(
+        report.successTitle,
+        receipt.receiptNumber
+          ? `${report.successBody}\n\n${t("moderation.receiptNumber", { receipt: receipt.receiptNumber })}`
+          : report.successBody,
+      );
     } catch {
       if (operationIdRef.current === operationId && visibleRef.current) setError(report.errorMessage);
     } finally {
@@ -255,7 +276,7 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
           ) : null}
 
           {phase === "report" ? (
-            <View style={styles.content}>
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
               <Text style={styles.prompt}>{t("moderation.reportQuestion")}</Text>
               <View accessibilityRole="radiogroup" style={styles.reasons}>
                 {REPORT_REASONS.map((option) => {
@@ -277,6 +298,32 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
                   );
                 })}
               </View>
+              <Text style={styles.fieldLabel}>{t("moderation.explanationLabel")}</Text>
+              <TextInput
+                accessibilityLabel={t("moderation.explanationLabel")}
+                maxLength={1500}
+                multiline
+                onChangeText={setExplanation}
+                placeholder={t("moderation.explanationPlaceholder")}
+                placeholderTextColor={Colors.textPrimary}
+                style={styles.explanationInput}
+                textAlignVertical="top"
+                value={explanation}
+              />
+              {report?.canBlock ? (
+                <View style={styles.blockRow}>
+                  <View style={styles.blockText}>
+                    <Text style={styles.fieldLabel}>{t("moderation.blockNow")}</Text>
+                    <Text style={styles.blockHint}>{t("moderation.blockNowHint")}</Text>
+                  </View>
+                  <Switch
+                    accessibilityLabel={t("moderation.blockNow")}
+                    disabled={submitting}
+                    onValueChange={setBlockRequested}
+                    value={blockRequested}
+                  />
+                </View>
+              ) : null}
               <View style={styles.buttonRow}>
                 <TouchableOpacity
                   accessibilityRole="button"
@@ -300,9 +347,9 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
                       </View>
                     )
                     : <Text style={styles.primaryButtonText}>{t("moderation.submitReport")}</Text>}
-                </TouchableOpacity>
+                  </TouchableOpacity>
               </View>
-            </View>
+            </ScrollView>
           ) : null}
 
           {error ? <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
@@ -370,7 +417,7 @@ const styles = StyleSheet.create({
   reactionRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   reactionTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, marginBottom: Spacing.sm },
   prompt: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 22 },
-  reasons: { gap: Spacing.xs },
+  reasons: { gap: Spacing.xs, maxHeight: 320 },
   reason: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, minHeight: 48 },
   reasonText: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodyRegular, fontSize: 15 },
   radio: {
@@ -384,6 +431,19 @@ const styles = StyleSheet.create({
   },
   radioSelected: { borderColor: Colors.primary },
   radioDot: { backgroundColor: Colors.primary, borderRadius: 5, height: 10, width: 10 },
+  fieldLabel: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 14 },
+  explanationInput: {
+    borderColor: Colors.secondary,
+    borderRadius: Radius.button,
+    borderWidth: 1,
+    color: Colors.textHeading,
+    fontFamily: Typography.bodyRegular,
+    minHeight: 96,
+    padding: Spacing.sm,
+  },
+  blockRow: { alignItems: "center", flexDirection: "row", gap: Spacing.md },
+  blockText: { flex: 1, gap: Spacing.xs },
+  blockHint: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12, lineHeight: 17 },
   buttonRow: { flexDirection: "row", gap: Spacing.sm },
   secondaryButton: {
     alignItems: "center",

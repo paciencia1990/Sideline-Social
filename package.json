@@ -59,6 +59,8 @@
     "test:team-message-deletion": "node scripts/test-team-message-deletion.cjs",
     "test:private-message-visibility": "node scripts/test-private-message-visibility.cjs",
     "test:message-reporting-modal": "node scripts/test-message-reporting-modal.cjs",
+    "test:moderation-reports": "npm --prefix functions run build && node scripts/test-moderation-reports-core.cjs && node scripts/test-message-reporting-modal.cjs",
+    "test:emulator:moderation-reports": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-moderation-reports-test --only auth,firestore,storage,functions \"node scripts/test-moderation-reports-emulator.cjs\"",
     "test:message-keyboard-layout": "node scripts/test-message-keyboard-layout.cjs",
     "test:chat-composer-keyboard-layout": "node scripts/test-chat-composer-keyboard-layout.cjs",
     "test:support-contact": "node scripts/test-support-contact.cjs",

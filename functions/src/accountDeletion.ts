@@ -7,6 +7,7 @@ import * as firebaseFunctions from 'firebase-functions';
 import { activeSquadAdminIds, isActiveSquadAdmin } from './squadAdminCore';
 import { hasCoachAccess, isTeamActive } from './teamMembershipCore';
 import { deleteTeamAnnouncementData } from './teamAnnouncementDeletionCore';
+import { moderationEvidenceMustBeRetained, moderationHash } from './moderationReportsCore';
 import { permanentAccountFunctions } from './permanentAuth';
 import {
   APPLE_REVOCATION_SECRET_NAMES,
@@ -307,12 +308,13 @@ async function deleteAuthoredMessagesAndAudio(
     const snapshot = await firestore.collectionGroup('messages').where('senderUserId', '==', uid).limit(100).get();
     if (snapshot.empty) return;
     await Promise.all(snapshot.docs.map(async (message) => {
+      const retainEvidence = moderationEvidenceMustBeRetained(message.data());
       const storagePath = stringValue(message.data()?.voiceMemo?.storagePath);
-      if (storagePath?.startsWith('teamVoiceMemos/')) {
+      if (!retainEvidence && storagePath?.startsWith('teamVoiceMemos/')) {
         await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
-      for (const friendStoragePath of friendChatMediaStoragePaths(message.data())) {
+      for (const friendStoragePath of retainEvidence ? [] : friendChatMediaStoragePaths(message.data())) {
         await admin.storage().bucket().file(friendStoragePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
@@ -349,9 +351,10 @@ async function deleteAuthoredAnnouncements(
       const teamRef = announcement.ref.parent.parent;
       const memberIds = teamRef ? (await teamRef.collection('members').get()).docs.map((member) => member.id) : [];
       const storagePath = stringValue(announcement.data()?.voiceMemo?.storagePath);
+      const retainEvidence = moderationEvidenceMustBeRetained(announcement.data());
       await deleteTeamAnnouncementData(firestore, announcement.ref, memberIds);
       summary.deletedDocuments += 1;
-      if (storagePath?.startsWith('teamVoiceMemos/')) {
+      if (!retainEvidence && storagePath?.startsWith('teamVoiceMemos/')) {
         await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
@@ -369,12 +372,22 @@ async function deleteVoiceUploadReservations(
     if (snapshot.empty) return;
     await Promise.all(snapshot.docs.map(async (reservation) => {
       const storagePath = stringValue(reservation.data()?.storagePath);
-      if (storagePath?.startsWith('teamVoiceMemos/')) {
+      const retainEvidence = await teamVoiceReservationEvidenceRetained(firestore, reservation.data());
+      if (!retainEvidence && storagePath?.startsWith('teamVoiceMemos/')) {
         await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
-      await reservation.ref.delete();
-      summary.deletedDocuments += 1;
+      if (retainEvidence) {
+        await reservation.ref.set({
+          accountDeletedAt: FieldValue.serverTimestamp(),
+          evidenceRetentionState: 'retained',
+          userId: null,
+        }, { merge: true });
+        summary.anonymizedDocuments += 1;
+      } else {
+        await reservation.ref.delete();
+        summary.deletedDocuments += 1;
+      }
     }));
   }
 }
@@ -388,14 +401,60 @@ async function deleteFriendChatMediaUploadReservations(
     const snapshot = await firestore.collection('friendChatUploadReservations').where('userId', '==', uid).limit(100).get();
     if (snapshot.empty) return;
     await Promise.all(snapshot.docs.map(async (reservation) => {
-      for (const storagePath of friendChatMediaStoragePaths(reservation.data())) {
+      const retainEvidence = await friendMediaReservationEvidenceRetained(firestore, reservation.data());
+      for (const storagePath of retainEvidence ? [] : friendChatMediaStoragePaths(reservation.data())) {
         await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
-      await reservation.ref.delete();
-      summary.deletedDocuments += 1;
+      if (retainEvidence) {
+        await reservation.ref.set({
+          accountDeletedAt: FieldValue.serverTimestamp(),
+          evidenceRetentionState: 'retained',
+          userId: null,
+        }, { merge: true });
+        summary.anonymizedDocuments += 1;
+      } else {
+        await reservation.ref.delete();
+        summary.deletedDocuments += 1;
+      }
     }));
   }
+}
+
+async function teamVoiceReservationEvidenceRetained(
+  firestore: FirebaseFirestore.Firestore,
+  data: FirebaseFirestore.DocumentData | undefined,
+) {
+  if (data?.status !== 'finalized') return false;
+  const targetId = stringValue(data.targetId);
+  const teamId = stringValue(data.teamId);
+  if (!targetId || !teamId) return false;
+  if (data.kind === 'announcement') {
+    const announcement = await firestore.collection('teams').doc(teamId)
+      .collection('announcements').doc(targetId).get();
+    return moderationEvidenceMustBeRetained(announcement.data());
+  }
+  if (data.kind === 'privateMessage') {
+    const conversationId = stringValue(data.conversationId);
+    if (!conversationId) return false;
+    const message = await firestore.collection('teamPrivateConversations').doc(conversationId)
+      .collection('messages').doc(targetId).get();
+    return moderationEvidenceMustBeRetained(message.data());
+  }
+  return false;
+}
+
+async function friendMediaReservationEvidenceRetained(
+  firestore: FirebaseFirestore.Firestore,
+  data: FirebaseFirestore.DocumentData | undefined,
+) {
+  if (data?.status !== 'finalized') return false;
+  const conversationId = stringValue(data.conversationId);
+  const targetId = stringValue(data.targetId);
+  if (!conversationId || !targetId) return false;
+  const message = await firestore.collection('friendConversations').doc(conversationId)
+    .collection('messages').doc(targetId).get();
+  return moderationEvidenceMustBeRetained(message.data());
 }
 
 async function removeTeamMemberships(
@@ -725,6 +784,7 @@ async function anonymizeModerationReports(
   uid: string,
   summary: DeletionSummary,
 ) {
+  const deletedAccountKey = `deleted_${moderationHash(`deleted-account:${uid}`).slice(0, 32)}`;
   for (const collectionName of ['chatModerationReports', 'contentModerationReports'] as const) {
     for (const fieldName of ['reporterUserId', 'reportedUserId'] as const) {
       while (true) {
@@ -739,6 +799,106 @@ async function anonymizeModerationReports(
         summary.anonymizedDocuments += snapshot.size;
       }
     }
+  }
+
+  await anonymizeModerationQuery(
+    firestore.collection('moderationReporterLinks').where('reporterUserId', '==', uid),
+    {
+      reporterUserId: null,
+      deletedReporterKey: deletedAccountKey,
+      anonymizedAt: FieldValue.serverTimestamp(),
+    },
+    summary,
+  );
+
+  for (const collectionName of ['moderationReports', 'moderationCases'] as const) {
+    while (true) {
+      const snapshot = await firestore.collection(collectionName)
+        .where('reportedUserId', '==', uid)
+        .limit(200)
+        .get();
+      if (snapshot.empty) break;
+      const writer = firestore.bulkWriter();
+      snapshot.docs.forEach((document) => {
+        const holds = Array.isArray(document.data()?.legalHoldIds)
+          ? document.data()!.legalHoldIds.filter((value: unknown) => typeof value === 'string')
+          : [];
+        writer.set(document.ref, holds.length > 0
+          ? {
+              accountDeletedAt: FieldValue.serverTimestamp(),
+              deletedAccountKey,
+              reportedUserId: null,
+              subjectIdentityRetentionState: 'pseudonymizedLegalHold',
+            }
+          : {
+              accountDeletedAt: FieldValue.serverTimestamp(),
+              deletedAccountKey,
+              reportedUserId: null,
+              subjectIdentityRetentionState: 'pseudonymized',
+            }, { merge: true });
+      });
+      await writer.close();
+      summary.anonymizedDocuments += snapshot.size;
+    }
+  }
+
+  for (const fieldName of ['submittedBy', 'subjectUserId'] as const) {
+    await anonymizeModerationQuery(
+      firestore.collection('moderationAppeals').where(fieldName, '==', uid),
+      {
+        [fieldName]: null,
+        deletedAccountKey,
+        accountDeletedAt: FieldValue.serverTimestamp(),
+      },
+      summary,
+    );
+  }
+  await anonymizeModerationQuery(
+    firestore.collectionGroup('appeals').where('submittedBy', '==', uid),
+    {
+      submittedBy: null,
+      deletedAccountKey,
+      accountDeletedAt: FieldValue.serverTimestamp(),
+    },
+    summary,
+  );
+
+  for (const fieldName of ['actorId', 'targetId'] as const) {
+    await anonymizeModerationQuery(
+      firestore.collection('moderationAuditEvents').where(fieldName, '==', uid),
+      {
+        [fieldName]: deletedAccountKey,
+        accountDeletedAt: FieldValue.serverTimestamp(),
+      },
+      summary,
+    );
+  }
+
+  for (const collectionName of ['accountStanding', 'accountStandingPublic'] as const) {
+    const reference = firestore.collection(collectionName).doc(uid);
+    if ((await reference.get()).exists) {
+      await reference.set({
+        accountDeletedAt: FieldValue.serverTimestamp(),
+        deletedAccountKey,
+        subjectUserId: null,
+      }, { merge: true });
+      summary.anonymizedDocuments += 1;
+    }
+  }
+}
+
+async function anonymizeModerationQuery(
+  query: FirebaseFirestore.Query,
+  update: FirebaseFirestore.DocumentData,
+  summary: DeletionSummary,
+) {
+  while (true) {
+    const snapshot = await query.limit(200).get();
+    if (snapshot.empty) return;
+    const writer = admin.firestore().bulkWriter();
+    snapshot.docs.forEach((document) => writer.set(document.ref, update, { merge: true }));
+    await writer.close();
+    summary.anonymizedDocuments += snapshot.size;
   }
 }
 

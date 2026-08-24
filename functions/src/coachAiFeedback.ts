@@ -6,6 +6,7 @@ import * as firebaseFunctions from 'firebase-functions';
 
 import { validateCoachAiFeedback } from './coachAiFeedbackCore';
 import { requireCoachAiRuntimeEnabled } from './coachAiRuntime';
+import { createCoachAiUnsafeModerationReport } from './moderationReports';
 import { permanentAccountFunctions } from './permanentAuth';
 
 const functions = permanentAccountFunctions(firebaseFunctions, 'communication');
@@ -47,6 +48,7 @@ export const submitCoachAiFeedback = feedbackFunctions.https.onCall(async (data,
   const feedbackRef = firestore.collection('coachAiFeedback').doc(`${uid}_${feedback.requestId}`);
   const rateRef = firestore.collection('coachAiFeedbackRateLimits').doc(uid);
   const now = Date.now();
+  let unsafeReportData: FirebaseFirestore.DocumentData | null = null;
   try {
     const metadata = await firestore.runTransaction(async (transaction) => {
       const [requestSnapshot, existingFeedback, rateSnapshot] = await Promise.all([
@@ -87,10 +89,23 @@ export const submitCoachAiFeedback = feedbackFunctions.https.onCall(async (data,
         ...(existingFeedback.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
       };
       transaction.set(feedbackRef, record, { merge: true });
+      if (feedback.reason === 'unsafe') unsafeReportData = requestData;
       return { category: requestData.category, locale: requestData.locale, reviewStatus: record.reviewStatus };
     });
+    const moderationReceipt = unsafeReportData
+      ? await createCoachAiUnsafeModerationReport({
+          comment: feedback.comment ?? null,
+          requestData: unsafeReportData,
+          requestId: feedback.requestId,
+          reporterUserId: uid,
+        })
+      : null;
     functions.logger.info('coach_ai_feedback_saved', { correlationId, ...metadata, outcome: 'saved' });
-    return { saved: true, reviewStatus: metadata.reviewStatus };
+    return {
+      saved: true,
+      reviewStatus: metadata.reviewStatus,
+      moderationReceiptNumber: moderationReceipt?.receiptNumber ?? null,
+    };
   } catch (error) {
     if (error instanceof Error && error.message === 'request_not_found') {
       throw new functions.https.HttpsError('not-found', 'The related Coach AI request is unavailable.', { reason: 'request_not_found' });

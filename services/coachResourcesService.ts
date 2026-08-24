@@ -135,7 +135,11 @@ export async function generateCoachResourceHelp(request: CoachHelpRequest) {
 
 export async function submitCoachAiFeedback(input: CoachAiFeedbackInput) {
   if (!FEATURE_FLAGS.coachAiEnabled) throw new CoachAiRequestError("access");
-  const callable = httpsCallable<CoachAiFeedbackInput, { saved: true; reviewStatus: "received" | "needs_review" }>(
+  const callable = httpsCallable<CoachAiFeedbackInput, {
+    moderationReceiptNumber: string | null;
+    saved: true;
+    reviewStatus: "received" | "needs_review";
+  }>(
     functions,
     "submitCoachAiFeedback",
     { timeout: 20_000 },
