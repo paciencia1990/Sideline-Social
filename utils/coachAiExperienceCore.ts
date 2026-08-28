@@ -35,6 +35,58 @@ export function resolveKeyboardResponderOffset(revealOffset: number, safeAreaTop
   return safeRevealOffset + safeTop;
 }
 
+export function resolveCoachAiFocusedInputScrollDelta(
+  inputScreenY: number,
+  inputHeight: number,
+  keyboardScreenY: number,
+  revealOffset: number,
+) {
+  if (
+    !Number.isFinite(inputScreenY)
+    || !Number.isFinite(inputHeight)
+    || !Number.isFinite(keyboardScreenY)
+  ) return 0;
+  const safeInputHeight = Math.max(0, inputHeight);
+  const safeKeyboardScreenY = Math.max(0, keyboardScreenY);
+  const safeRevealOffset = Number.isFinite(revealOffset) ? Math.max(0, revealOffset) : 0;
+  return Math.max(
+    0,
+    Math.ceil(inputScreenY + safeInputHeight + safeRevealOffset - safeKeyboardScreenY),
+  );
+}
+
+export function resolveCoachAiVisibleKeyboardViewportBottom(
+  keyboardScreenY: number,
+  scrollViewportScreenY: number,
+  scrollViewportHeight: number,
+) {
+  const viewportBottom = Number.isFinite(scrollViewportScreenY) && Number.isFinite(scrollViewportHeight)
+    ? Math.max(0, scrollViewportScreenY + Math.max(0, scrollViewportHeight))
+    : Number.POSITIVE_INFINITY;
+  const keyboardTop = Number.isFinite(keyboardScreenY) && keyboardScreenY > 0
+    ? keyboardScreenY
+    : Number.POSITIVE_INFINITY;
+  const visibleBottom = Math.min(viewportBottom, keyboardTop);
+  return Number.isFinite(visibleBottom) ? visibleBottom : 0;
+}
+
+export function resolveCoachAiKeyboardViewportSupplement(
+  scrollViewportScreenY: number,
+  scrollViewportHeight: number,
+  visibleViewportBottom: number,
+) {
+  if (
+    !Number.isFinite(scrollViewportScreenY)
+    || !Number.isFinite(scrollViewportHeight)
+    || !Number.isFinite(visibleViewportBottom)
+  ) return 0;
+  const scrollViewportBottom = Math.max(
+    0,
+    scrollViewportScreenY + Math.max(0, scrollViewportHeight),
+  );
+  return Math.max(0, Math.ceil(scrollViewportBottom - Math.max(0, visibleViewportBottom)));
+}
+
 export function resolveCoachAiMultilineInputHeight(
   visibleKeyboardViewportHeight: number,
   revealOffset: number,

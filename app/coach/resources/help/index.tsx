@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AccessibilityInfo, ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { AccessibilityInfo, ActivityIndicator, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { ChevronDown, ChevronRight, ShieldAlert } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -347,11 +347,11 @@ function Field({ keyboardType, label, maxLength, multiline, onChangeText, value 
         multiline={multiline}
         onChangeText={(text) => {
           onChangeText(text);
-          if (multiline) revealInput();
+          if (multiline || Platform.OS === "android") revealInput();
         }}
         onContentSizeChange={multiline ? revealInput : undefined}
         onFocus={revealInput}
-        onSelectionChange={multiline ? revealInput : undefined}
+        onSelectionChange={multiline || Platform.OS === "android" ? revealInput : undefined}
         ref={inputRef}
         scrollEnabled={multiline ? true : undefined}
         style={[styles.input, multiline && styles.textarea, multiline && { height: multilineInputHeight }]}
