@@ -25,6 +25,10 @@ const GENERATED_HELP_KEY_PREFIX = "sidelineSocial.coachGeneratedHelp.v1";
 const SAVED_HELP_KEY_PREFIX = "sidelineSocial.coachSavedHelp.v1";
 const PLACEHOLDER_PATTERN = /\{([a-zA-Z][a-zA-Z0-9]*)\}/g;
 const COACH_AI_DISCLOSURE_KEY_PREFIX = "sidelineSocial.coachAiDisclosure.v1";
+const COACH_HELP_RESULT_TYPES = new Set<CoachHelpResult["resultType"]>([
+  "practice_plan", "message", "talking_points", "step_by_step", "checklist",
+]);
+const savedHelpMutationQueues = new Map<string, Promise<void>>();
 
 export function resolveCoachResourceLocale(language?: string): CoachResourceLocale {
   return language?.toLowerCase().startsWith("es") ? "es" : "en";
@@ -166,7 +170,9 @@ export async function getCachedCoachHelpResult(userId: string, requestId: string
   if (!userId || !requestId) return null;
   try {
     const raw = await AsyncStorage.getItem(generatedHelpKey(userId, requestId));
-    return raw ? JSON.parse(raw) as CoachHelpResult : null;
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isCoachHelpResult(parsed) ? parsed : null;
   } catch (error) {
     logLocalResourceError("read-generated-help", error);
     return null;
@@ -175,20 +181,19 @@ export async function getCachedCoachHelpResult(userId: string, requestId: string
 
 export async function saveCoachHelpResult(userId: string, requestId: string, result: CoachHelpResult) {
   if (!userId) throw new Error("auth_required");
-  const current = await getSavedCoachHelpResults(userId);
-  const entry: SavedCoachHelpResult = { id: requestId, result, createdAt: new Date().toISOString() };
-  const next = [entry, ...current.filter((item) => item.id !== requestId)].slice(0, 25);
-  await AsyncStorage.setItem(savedHelpKey(userId), JSON.stringify(next));
-  return entry;
+  return enqueueSavedHelpMutation(userId, async () => {
+    const current = await readSavedCoachHelpResults(userId);
+    const entry: SavedCoachHelpResult = { id: requestId, result, createdAt: new Date().toISOString() };
+    const next = [entry, ...current.filter((item) => item.id !== requestId)].slice(0, 25);
+    await AsyncStorage.setItem(savedHelpKey(userId), JSON.stringify(next));
+    return entry;
+  });
 }
 
 export async function getSavedCoachHelpResults(userId: string): Promise<SavedCoachHelpResult[]> {
   if (!userId) return [];
   try {
-    const raw = await AsyncStorage.getItem(savedHelpKey(userId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isSavedHelpResult) : [];
+    return await readSavedCoachHelpResults(userId);
   } catch (error) {
     logLocalResourceError("read-saved-help", error);
     return [];
@@ -197,9 +202,32 @@ export async function getSavedCoachHelpResults(userId: string): Promise<SavedCoa
 
 export async function deleteCoachHelpResult(userId: string, requestId: string) {
   if (!userId) throw new Error("auth_required");
-  const next = (await getSavedCoachHelpResults(userId)).filter((item) => item.id !== requestId);
-  await AsyncStorage.setItem(savedHelpKey(userId), JSON.stringify(next));
-  await AsyncStorage.removeItem(generatedHelpKey(userId, requestId));
+  await enqueueSavedHelpMutation(userId, async () => {
+    const next = (await readSavedCoachHelpResults(userId)).filter((item) => item.id !== requestId);
+    await AsyncStorage.removeItem(generatedHelpKey(userId, requestId));
+    await AsyncStorage.setItem(savedHelpKey(userId), JSON.stringify(next));
+  });
+}
+
+function enqueueSavedHelpMutation<T>(userId: string, mutation: () => Promise<T>) {
+  const previous = savedHelpMutationQueues.get(userId) ?? Promise.resolve();
+  const operation = previous.then(mutation);
+  const tail = operation.then(() => undefined, () => undefined);
+  savedHelpMutationQueues.set(userId, tail);
+  void tail.then(() => {
+    if (savedHelpMutationQueues.get(userId) === tail) savedHelpMutationQueues.delete(userId);
+  });
+  return operation;
+}
+
+async function readSavedCoachHelpResults(userId: string): Promise<SavedCoachHelpResult[]> {
+  const raw = await AsyncStorage.getItem(savedHelpKey(userId));
+  if (!raw) return [];
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed) || !parsed.every(isSavedHelpResult)) {
+    throw new Error("invalid_saved_coach_help");
+  }
+  return parsed;
 }
 
 export function formatCoachHelpResultForSharing(result: CoachHelpResult, locale: CoachResourceLocale) {
@@ -237,7 +265,47 @@ function coachAiDisclosureKey(userId: string) {
 }
 
 function isSavedHelpResult(value: unknown): value is SavedCoachHelpResult {
-  return Boolean(value && typeof value === "object" && "id" in value && "result" in value && "createdAt" in value);
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<SavedCoachHelpResult>;
+  return typeof entry.id === "string"
+    && entry.id.length >= 8
+    && entry.id.length <= 128
+    && typeof entry.createdAt === "string"
+    && Number.isFinite(Date.parse(entry.createdAt))
+    && isCoachHelpResult(entry.result);
+}
+
+function isCoachHelpResult(value: unknown): value is CoachHelpResult {
+  if (!value || typeof value !== "object") return false;
+  const result = value as Partial<CoachHelpResult>;
+  return typeof result.resultType === "string"
+    && COACH_HELP_RESULT_TYPES.has(result.resultType as CoachHelpResult["resultType"])
+    && typeof result.title === "string"
+    && result.title.length > 0
+    && typeof result.canSendAsAnnouncement === "boolean"
+    && isOptionalString(result.introduction)
+    && isOptionalString(result.body)
+    && isOptionalString(result.safetyNotice)
+    && isOptionalStringArray(result.phrasesToUse)
+    && isOptionalStringArray(result.phrasesToAvoid)
+    && (result.sections === undefined || (
+      Array.isArray(result.sections)
+      && result.sections.every((section) => (
+        Boolean(section)
+        && typeof section === "object"
+        && typeof section.heading === "string"
+        && Array.isArray(section.items)
+        && section.items.every((item) => typeof item === "string")
+      ))
+    ));
+}
+
+function isOptionalString(value: unknown) {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalStringArray(value: unknown) {
+  return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string"));
 }
 
 function logLocalResourceError(operation: string, error: unknown) {

@@ -1,5 +1,11 @@
 export const COACH_AI_RESULT_RETURN_ROUTE = "/coach/resources/help/result" as const;
 export const COACH_AI_RESULT_RETURN_TTL_MS = 10 * 60 * 1000;
+export const COACH_AI_MULTILINE_INPUT_PREFERRED_HEIGHT = 144;
+export const COACH_AI_MULTILINE_INPUT_MIN_HEIGHT = 64;
+
+const COACH_AI_MULTILINE_FIELD_VERTICAL_RESERVE = 44;
+const COACH_AI_MULTILINE_INPUT_VERTICAL_PADDING = 32;
+const COACH_AI_MULTILINE_INPUT_LINE_HEIGHT = 22;
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
@@ -21,6 +27,46 @@ export function resolveKeyboardRevealOffset(
 ) {
   const safeBottom = Number.isFinite(safeAreaBottom) ? Math.max(0, safeAreaBottom) : 0;
   return platform === "android" ? Math.max(32, safeBottom + 16) : 16;
+}
+
+export function resolveKeyboardResponderOffset(revealOffset: number, safeAreaTop: number) {
+  const safeRevealOffset = Number.isFinite(revealOffset) ? Math.max(0, revealOffset) : 0;
+  const safeTop = Number.isFinite(safeAreaTop) ? Math.max(0, safeAreaTop) : 0;
+  return safeRevealOffset + safeTop;
+}
+
+export function resolveCoachAiMultilineInputHeight(
+  visibleKeyboardViewportHeight: number,
+  revealOffset: number,
+  fontScale = 1,
+) {
+  if (!Number.isFinite(visibleKeyboardViewportHeight)) {
+    return COACH_AI_MULTILINE_INPUT_PREFERRED_HEIGHT;
+  }
+  const safeRevealOffset = Number.isFinite(revealOffset) ? Math.max(0, revealOffset) : 0;
+  const safeFontScale = Number.isFinite(fontScale) ? Math.max(1, fontScale) : 1;
+  const accessibleMinimumHeight = Math.min(
+    COACH_AI_MULTILINE_INPUT_PREFERRED_HEIGHT,
+    Math.ceil(COACH_AI_MULTILINE_INPUT_VERTICAL_PADDING + (COACH_AI_MULTILINE_INPUT_LINE_HEIGHT * safeFontScale) + 2),
+  );
+  const availableHeight = Math.floor(
+    Math.max(0, visibleKeyboardViewportHeight)
+      - safeRevealOffset
+      - COACH_AI_MULTILINE_FIELD_VERTICAL_RESERVE,
+  );
+  return Math.max(
+    COACH_AI_MULTILINE_INPUT_MIN_HEIGHT,
+    accessibleMinimumHeight,
+    Math.min(COACH_AI_MULTILINE_INPUT_PREFERRED_HEIGHT, availableHeight),
+  );
+}
+
+export function resolveCoachAiKeyboardFrameSupplement(
+  shownKeyboardScreenY: number,
+  currentKeyboardScreenY: number,
+) {
+  if (!Number.isFinite(shownKeyboardScreenY) || !Number.isFinite(currentKeyboardScreenY)) return 0;
+  return Math.max(0, Math.ceil(shownKeyboardScreenY - currentKeyboardScreenY));
 }
 
 export async function runCoachAiResultAction<T>({

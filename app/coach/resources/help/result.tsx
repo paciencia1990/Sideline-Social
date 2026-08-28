@@ -1,12 +1,16 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AccessibilityInfo, Alert, AppState, findNodeHandle, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { AccessibilityInfo, Alert, AppState, findNodeHandle, Share, StyleSheet, Text, TextInput, TouchableOpacity, View, type TextInputProps } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Edit3, Save, Send, Share2, ShieldAlert, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
-import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
+import {
+  KeyboardAwareScrollView,
+  useCoachAiMultilineInputHeight,
+  useKeyboardAwareInputReveal,
+} from "@/components/CoachAiKeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -39,18 +43,47 @@ export default function CoachHelpResultScreen() {
   const requestId = Array.isArray(params.requestId) ? params.requestId[0] ?? "" : params.requestId ?? "";
   const locale = resolveCoachResourceLocale(i18n.language);
   const [result, setResult] = useState<CoachHelpResult | null>(null);
+  const [loadedContext, setLoadedContext] = useState<{ locale: string; requestId: string; userId: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editableText, setEditableText] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [feedbackRating, setFeedbackRating] = useState<CoachAiFeedbackRating | null>(null);
   const [feedbackReason, setFeedbackReason] = useState<CoachAiFeedbackReason | null>(null);
   const [feedbackComment, setFeedbackComment] = useState("");
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [persistenceInFlight, setPersistenceInFlight] = useState(false);
   const resultHeadingRef = useRef<Text>(null);
-  const pendingShareReturnRef = useRef<{ requestId: string; userId: string } | null>(null);
+  const activeResultContextKey = JSON.stringify([user?.uid ?? null, requestId, locale]);
+  const activeResultContextKeyRef = useRef(activeResultContextKey);
+  const resultScreenMountedRef = useRef(true);
+  const persistenceInFlightRef = useRef(false);
+  const pendingShareReturnRef = useRef<{ actionContextKey: string; requestId: string; userId: string } | null>(null);
   const shareBackgroundedRef = useRef(false);
+
+  useLayoutEffect(() => {
+    resultScreenMountedRef.current = true;
+    activeResultContextKeyRef.current = activeResultContextKey;
+    return () => { resultScreenMountedRef.current = false; };
+  }, [activeResultContextKey]);
+
+  const isActiveResultContext = useCallback((contextKey: string) => (
+    resultScreenMountedRef.current && activeResultContextKeyRef.current === contextKey
+  ), []);
+
+  const beginPersistence = useCallback(() => {
+    if (!resultScreenMountedRef.current || persistenceInFlightRef.current) return false;
+    persistenceInFlightRef.current = true;
+    setPersistenceInFlight(true);
+    return true;
+  }, []);
+
+  const finishPersistence = useCallback(() => {
+    persistenceInFlightRef.current = false;
+    if (resultScreenMountedRef.current) setPersistenceInFlight(false);
+  }, []);
 
   const clearPendingShareReturn = useCallback(async () => {
     const pendingReturn = pendingShareReturnRef.current;
@@ -58,6 +91,13 @@ export default function CoachHelpResultScreen() {
     shareBackgroundedRef.current = false;
     if (pendingReturn) await clearCoachAiResultReturn(pendingReturn).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    const pendingReturn = pendingShareReturnRef.current;
+    if (pendingReturn && pendingReturn.actionContextKey !== activeResultContextKey) {
+      void clearPendingShareReturn();
+    }
+  }, [activeResultContextKey, clearPendingShareReturn]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
@@ -72,18 +112,40 @@ export default function CoachHelpResultScreen() {
   }, [clearPendingShareReturn]);
 
   useEffect(() => {
+    const userId = user?.uid;
+    const nextContext = userId && requestId ? { locale, requestId, userId } : null;
     let active = true;
-    if (!user?.uid || !requestId) {
+    setLoading(true);
+    setResult(null);
+    setLoadedContext(null);
+    setSaved(false);
+    setEditing(false);
+    setEditableText("");
+    setFeedback(null);
+    setDeleteError(null);
+    setFeedbackRating(null);
+    setFeedbackReason(null);
+    setFeedbackComment("");
+    setSubmittingFeedback(false);
+    if (!nextContext) {
       setLoading(false);
-      return;
+      return () => { active = false; };
     }
-    void Promise.all([getCachedCoachHelpResult(user.uid, requestId), getSavedCoachHelpResults(user.uid)]).then(([cached, savedEntries]) => {
+    void Promise.all([
+      getCachedCoachHelpResult(nextContext.userId, nextContext.requestId),
+      getSavedCoachHelpResults(nextContext.userId),
+    ]).then(([cached, savedEntries]) => {
       if (!active) return;
-      const savedEntry = savedEntries.find((entry) => entry.id === requestId);
-      const next = cached ?? savedEntry?.result ?? null;
+      const savedEntry = savedEntries.find((entry) => entry.id === nextContext.requestId);
+      const next = savedEntry?.result ?? cached ?? null;
       setResult(next);
       setSaved(Boolean(savedEntry));
-      if (next) setEditableText(formatCoachHelpResultForSharing(next, locale));
+      if (next) setEditableText(formatCoachHelpResultForSharing(next, nextContext.locale));
+      setLoadedContext(nextContext);
+      setLoading(false);
+    }).catch(() => {
+      if (!active) return;
+      setLoadedContext(nextContext);
       setLoading(false);
     });
     return () => { active = false; };
@@ -99,7 +161,7 @@ export default function CoachHelpResultScreen() {
   }, [loading, result]);
 
   const applyEdit = useCallback(() => {
-    if (!result || !editableText.trim()) return;
+    if (persistenceInFlightRef.current || !result || !editableText.trim()) return;
     setResult({
       ...result,
       introduction: undefined,
@@ -114,50 +176,78 @@ export default function CoachHelpResultScreen() {
   }, [editableText, result, t]);
 
   const saveResult = useCallback(async () => {
-    if (!result || !user?.uid) return;
+    if (!result || !user?.uid || !beginPersistence()) return;
+    const actionContextKey = activeResultContextKey;
+    const actionRequestId = requestId;
+    const actionUserId = user.uid;
     try {
       await runCoachAiResultAction({
-        clearReturn: () => clearCoachAiResultReturn({ requestId, userId: user.uid }),
-        execute: () => saveCoachHelpResult(user.uid, requestId, result),
-        rememberReturn: () => rememberCoachAiResultReturn({ requestId, userId: user.uid }),
+        clearReturn: () => clearCoachAiResultReturn({ requestId: actionRequestId, userId: actionUserId }),
+        execute: () => saveCoachHelpResult(actionUserId, actionRequestId, result),
+        rememberReturn: () => rememberCoachAiResultReturn({ requestId: actionRequestId, userId: actionUserId }),
       });
+      if (!isActiveResultContext(actionContextKey)) return;
       setSaved(true);
       setFeedback(t("coach.resources.resultSaved"));
     } catch {
-      setFeedback(t("coach.resources.resultSaveError"));
+      if (isActiveResultContext(actionContextKey)) setFeedback(t("coach.resources.resultSaveError"));
+    } finally {
+      finishPersistence();
     }
-  }, [requestId, result, t, user?.uid]);
+  }, [activeResultContextKey, beginPersistence, finishPersistence, isActiveResultContext, requestId, result, t, user?.uid]);
 
   const confirmDelete = useCallback(() => {
     if (!user?.uid) return;
+    const actionContextKey = activeResultContextKey;
+    const actionRequestId = requestId;
+    const actionUserId = user.uid;
+    setDeleteError(null);
     Alert.alert(t("coach.resources.deleteResultTitle"), t("coach.resources.deleteResultBody"), [
       { text: t("common.cancel"), style: "cancel" },
       { text: t("coach.resources.deleteResult"), style: "destructive", onPress: () => {
-        void deleteCoachHelpResult(user.uid, requestId).then(() => router.replace("/coach/resources/help" as never));
+        if (!isActiveResultContext(actionContextKey) || !beginPersistence()) return;
+        void deleteCoachHelpResult(actionUserId, actionRequestId)
+          .then(() => {
+            if (isActiveResultContext(actionContextKey)) router.replace("/coach/resources/help" as never);
+          })
+          .catch(() => {
+            if (isActiveResultContext(actionContextKey)) setDeleteError(t("coach.resources.resultDeleteError"));
+          })
+          .finally(finishPersistence);
       } },
     ]);
-  }, [requestId, t, user?.uid]);
+  }, [activeResultContextKey, beginPersistence, finishPersistence, isActiveResultContext, requestId, t, user?.uid]);
 
   const shareResult = useCallback(async () => {
     if (!result || !user?.uid) return;
-    const returnContext = { requestId, userId: user.uid };
+    const actionContextKey = activeResultContextKey;
+    const returnContext = { actionContextKey, requestId, userId: user.uid };
     try {
       await rememberCoachAiResultReturn(returnContext);
+      if (!isActiveResultContext(actionContextKey)) {
+        await clearCoachAiResultReturn(returnContext).catch(() => undefined);
+        return;
+      }
       pendingShareReturnRef.current = returnContext;
       shareBackgroundedRef.current = AppState.currentState !== "active";
     } catch {
       pendingShareReturnRef.current = null;
       shareBackgroundedRef.current = false;
     }
+    if (!isActiveResultContext(actionContextKey)) return;
     try {
       const response = await Share.share({ message: formatCoachHelpResultForSharing(result, locale), title: result.title });
+      if (!isActiveResultContext(actionContextKey)) {
+        await clearPendingShareReturn();
+        return;
+      }
       if (response.action === Share.dismissedAction) await clearPendingShareReturn();
       if (response.action === Share.sharedAction) setFeedback(t("coach.resources.shareSuccessBody"));
     } catch {
       await clearPendingShareReturn();
-      setFeedback(t("coach.resources.shareError"));
+      if (isActiveResultContext(actionContextKey)) setFeedback(t("coach.resources.shareError"));
     }
-  }, [clearPendingShareReturn, locale, requestId, result, t, user?.uid]);
+  }, [activeResultContextKey, clearPendingShareReturn, isActiveResultContext, locale, requestId, result, t, user?.uid]);
 
   const sendToComposer = useCallback(() => {
     if (!result?.canSendAsAnnouncement) return;
@@ -166,6 +256,7 @@ export default function CoachHelpResultScreen() {
 
   const sendFeedback = useCallback(async (rating: CoachAiFeedbackRating, reason?: CoachAiFeedbackReason) => {
     if (!requestId || submittingFeedback || (rating === "down" && !reason)) return;
+    const actionContextKey = activeResultContextKey;
     setSubmittingFeedback(true);
     setFeedback(null);
     try {
@@ -175,6 +266,7 @@ export default function CoachHelpResultScreen() {
         ...(reason ? { reason } : {}),
         ...(feedbackComment.trim() ? { comment: feedbackComment.trim().slice(0, 500) } : {}),
       });
+      if (!isActiveResultContext(actionContextKey)) return;
       setFeedbackRating(rating);
       setFeedbackReason(reason ?? null);
       const message = reason === "unsafe"
@@ -185,11 +277,11 @@ export default function CoachHelpResultScreen() {
       setFeedback(message);
       AccessibilityInfo.announceForAccessibility(message);
     } catch {
-      setFeedback(t("coach.resources.feedbackError"));
+      if (isActiveResultContext(actionContextKey)) setFeedback(t("coach.resources.feedbackError"));
     } finally {
-      setSubmittingFeedback(false);
+      if (isActiveResultContext(actionContextKey)) setSubmittingFeedback(false);
     }
-  }, [feedbackComment, requestId, submittingFeedback, t]);
+  }, [activeResultContextKey, feedbackComment, isActiveResultContext, requestId, submittingFeedback, t]);
 
   if (!coachAiAccess.canView) {
     return (
@@ -204,8 +296,17 @@ export default function CoachHelpResultScreen() {
     );
   }
 
-  if (loading) return <ScreenWrapper><View style={styles.center}><Text accessibilityLiveRegion="polite" style={styles.body}>{t("common.loading")}</Text></View></ScreenWrapper>;
-  if (!result) return <ScreenWrapper><View style={styles.center}><Text style={styles.error}>{t("coach.resources.resultNotFound")}</Text></View></ScreenWrapper>;
+  const resultContextMatches = Boolean(
+    loadedContext
+      && user?.uid
+      && loadedContext.userId === user.uid
+      && loadedContext.requestId === requestId
+      && loadedContext.locale === locale,
+  );
+  if (loading || (Boolean(user?.uid && requestId) && !resultContextMatches)) {
+    return <ScreenWrapper><View style={styles.center}><Text accessibilityLiveRegion="polite" style={styles.body}>{t("common.loading")}</Text></View></ScreenWrapper>;
+  }
+  if (!resultContextMatches || !result) return <ScreenWrapper><View style={styles.center}><Text style={styles.error}>{t("coach.resources.resultNotFound")}</Text></View></ScreenWrapper>;
 
   return (
     <ScreenWrapper>
@@ -215,8 +316,8 @@ export default function CoachHelpResultScreen() {
 
         {editing ? (
           <Card style={styles.cardGap}>
-            <TextInput accessibilityLabel={t("coach.resources.editResult")} multiline onChangeText={setEditableText} style={styles.editor} textAlignVertical="top" value={editableText} />
-            <TouchableOpacity accessibilityRole="button" onPress={applyEdit} style={styles.primaryButton}><Save color={Colors.surface} size={18} /><Text style={styles.primaryText}>{t("coach.resources.applyEdit")}</Text></TouchableOpacity>
+            <CoachAiMultilineTextInput accessibilityLabel={t("coach.resources.editResult")} editable={!persistenceInFlight} onChangeText={setEditableText} style={styles.editor} textAlignVertical="top" value={editableText} />
+            <TouchableOpacity accessibilityRole="button" accessibilityState={{ disabled: persistenceInFlight }} disabled={persistenceInFlight} onPress={applyEdit} style={[styles.primaryButton, persistenceInFlight && styles.disabled]}><Save color={Colors.surface} size={18} /><Text style={styles.primaryText}>{t("coach.resources.applyEdit")}</Text></TouchableOpacity>
           </Card>
         ) : (
           <Card style={styles.cardGap}>
@@ -288,11 +389,10 @@ export default function CoachHelpResultScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
-              <TextInput
+              <CoachAiMultilineTextInput
                 accessibilityLabel={t("coach.resources.feedbackComment")}
                 editable={!submittingFeedback}
                 maxLength={500}
-                multiline
                 onChangeText={setFeedbackComment}
                 placeholder={t("coach.resources.feedbackCommentPlaceholder")}
                 style={styles.feedbackInput}
@@ -313,15 +413,51 @@ export default function CoachHelpResultScreen() {
         </Card>
 
         {feedback ? <Text accessibilityLiveRegion="polite" style={styles.feedback}>{feedback}</Text> : null}
+        {deleteError ? <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>{deleteError}</Text> : null}
         <View style={styles.actions}>
-          <Action Icon={Edit3} label={t("coach.resources.editResult")} onPress={() => setEditing(true)} primary={false} />
+          <Action disabled={persistenceInFlight} Icon={Edit3} label={t("coach.resources.editResult")} onPress={() => setEditing(true)} primary={false} />
           <Action Icon={Share2} label={t("coach.resources.shareResult")} onPress={() => void shareResult()} primary={false} />
-          <Action Icon={Save} label={saved ? t("coach.resources.saved") : t("coach.resources.saveResult")} onPress={() => void saveResult()} primary />
+          <Action disabled={persistenceInFlight} Icon={Save} label={saved ? t("coach.resources.saved") : t("coach.resources.saveResult")} onPress={() => void saveResult()} primary />
           {result.canSendAsAnnouncement ? <Action Icon={Send} label={t("coach.resources.sendToTeam")} onPress={sendToComposer} primary /> : null}
-          {saved ? <Action Icon={Trash2} label={t("coach.resources.deleteResult")} onPress={confirmDelete} primary={false} /> : null}
+          {saved ? <Action disabled={persistenceInFlight} Icon={Trash2} label={t("coach.resources.deleteResult")} onPress={confirmDelete} primary={false} /> : null}
         </View>
       </KeyboardAwareScrollView>
     </ScreenWrapper>
+  );
+}
+
+function CoachAiMultilineTextInput({
+  onContentSizeChange,
+  onFocus,
+  onSelectionChange,
+  style,
+  ...props
+}: TextInputProps) {
+  const inputRef = useRef<TextInput>(null);
+  const multilineInputHeight = useCoachAiMultilineInputHeight();
+  const requestInputReveal = useKeyboardAwareInputReveal();
+  const revealInput = useCallback(() => requestInputReveal(inputRef.current), [requestInputReveal]);
+
+  return (
+    <TextInput
+      {...props}
+      multiline
+      onContentSizeChange={(event) => {
+        onContentSizeChange?.(event);
+        revealInput();
+      }}
+      onFocus={(event) => {
+        onFocus?.(event);
+        revealInput();
+      }}
+      onSelectionChange={(event) => {
+        onSelectionChange?.(event);
+        revealInput();
+      }}
+      ref={inputRef}
+      scrollEnabled
+      style={[style, { height: multilineInputHeight }]}
+    />
   );
 }
 
@@ -329,9 +465,9 @@ function ResultList({ items, title }: { items: string[]; title: string }) {
   return <View style={styles.section}><Text accessibilityRole="header" style={styles.sectionTitle}>{title}</Text>{items.map((item, index) => <Text key={`${title}-${index}`} style={styles.body}>• {item}</Text>)}</View>;
 }
 
-function Action({ Icon, label, onPress, primary }: { Icon: typeof Edit3; label: string; onPress: () => void; primary: boolean }) {
+function Action({ disabled = false, Icon, label, onPress, primary }: { disabled?: boolean; Icon: typeof Edit3; label: string; onPress: () => void; primary: boolean }) {
   return (
-    <TouchableOpacity accessibilityRole="button" onPress={onPress} style={primary ? styles.primaryButton : styles.outlineButton}>
+    <TouchableOpacity accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[primary ? styles.primaryButton : styles.outlineButton, disabled && styles.disabled]}>
       <Icon color={primary ? Colors.surface : Colors.primary} size={18} />
       <Text style={primary ? styles.primaryText : styles.outlineText}>{label}</Text>
     </TouchableOpacity>
@@ -350,7 +486,7 @@ const styles = StyleSheet.create({
   sectionTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 16, lineHeight: 22 },
   body: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 22 },
   safety: { backgroundColor: Colors.background, borderLeftColor: Colors.accentGold, borderLeftWidth: 4, color: Colors.textPrimary, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 20, padding: Spacing.sm },
-  editor: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 22, minHeight: 260, padding: Spacing.md },
+  editor: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 22, padding: Spacing.md },
   feedback: { color: Colors.accentGreen, fontFamily: Typography.bodySemiBold, fontSize: 13, textAlign: "center" },
   error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
@@ -365,7 +501,7 @@ const styles = StyleSheet.create({
   reasonChoiceSelected: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   reasonText: { color: Colors.textHeading, fontFamily: Typography.bodyMedium, fontSize: 13 },
   reasonTextSelected: { color: Colors.surface },
-  feedbackInput: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 90, padding: Spacing.md },
+  feedbackInput: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, padding: Spacing.md },
   disabled: { opacity: 0.55 },
   primaryButton: { alignItems: "center", backgroundColor: Colors.primary, borderRadius: Radius.button, flexDirection: "row", flexGrow: 1, gap: Spacing.sm, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
   primaryText: { color: Colors.surface, fontFamily: Typography.bodySemiBold, fontSize: 14, textAlign: "center" },

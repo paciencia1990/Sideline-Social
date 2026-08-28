@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AccessibilityInfo, ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { ChevronDown, ChevronRight, ShieldAlert } from "lucide-react-native";
@@ -8,6 +8,7 @@ import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import {
   KeyboardAwareScrollView,
+  useCoachAiMultilineInputHeight,
   useKeyboardAwareInputReveal,
 } from "@/components/CoachAiKeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -50,23 +51,75 @@ export default function CoachResourceHelpScreen() {
   const [error, setError] = useState<string | null>(null);
   const [retryRequest, setRetryRequest] = useState<CoachHelpRequest | null>(null);
   const [saved, setSaved] = useState<SavedCoachHelpResult[]>([]);
+  const [savedOwnerId, setSavedOwnerId] = useState<string | null>(null);
   const [savedExpanded, setSavedExpanded] = useState(false);
   const [disclosureAccepted, setDisclosureAccepted] = useState<boolean | null>(null);
   const [disclosureError, setDisclosureError] = useState(false);
   const generationToken = useRef(0);
   const generationInFlight = useRef(false);
 
+  useLayoutEffect(() => {
+    generationToken.current += 1;
+    generationInFlight.current = false;
+    setCategory(null);
+    setSport("");
+    setAgeGroup("");
+    setSituation("");
+    setDesiredOutcome("");
+    setTone("warm");
+    setPracticeMinutes("");
+    setPlayerCount("");
+    setEquipment("");
+    setGenerating(false);
+    setError(null);
+    setRetryRequest(null);
+    return () => {
+      generationToken.current += 1;
+      generationInFlight.current = false;
+    };
+  }, [user?.uid]);
+
   useEffect(() => {
     setDisclosureAccepted(null);
     setDisclosureError(false);
+    setSaved([]);
+    setSavedOwnerId(null);
     setSavedExpanded(false);
   }, [user?.uid]);
 
   useFocusEffect(useCallback(() => {
-    if (user?.uid) {
-      void getSavedCoachHelpResults(user.uid).then(setSaved);
-      void hasAcceptedCoachAiDisclosure(user.uid).then(setDisclosureAccepted).catch(() => setDisclosureAccepted(false));
-    }
+    const userId = user?.uid;
+    let active = true;
+    generationInFlight.current = false;
+    setGenerating(false);
+    setSaved([]);
+    setSavedOwnerId(null);
+    setSavedExpanded(false);
+    if (!userId) return () => {
+      active = false;
+      generationToken.current += 1;
+    };
+    void getSavedCoachHelpResults(userId).then((entries) => {
+      if (active) {
+        setSaved(entries);
+        setSavedOwnerId(userId);
+      }
+    }).catch(() => {
+      if (active) {
+        setSaved([]);
+        setSavedOwnerId(userId);
+      }
+    });
+    void hasAcceptedCoachAiDisclosure(userId).then((accepted) => {
+      if (active) setDisclosureAccepted(accepted);
+    }).catch(() => {
+      if (active) setDisclosureAccepted(false);
+    });
+    return () => {
+      active = false;
+      generationToken.current += 1;
+      generationInFlight.current = false;
+    };
   }, [user?.uid]));
 
   const acceptDisclosure = useCallback(async () => {
@@ -189,7 +242,7 @@ export default function CoachResourceHelpScreen() {
                 </TouchableOpacity>
               ))}
             </View>
-            {saved.length > 0 ? (
+            {savedOwnerId === user?.uid && saved.length > 0 ? (
               <View style={styles.savedSection}>
                 <TouchableOpacity
                   accessibilityHint={t(savedExpanded ? "coach.resources.savedCollapseHint" : "coach.resources.savedExpandHint")}
@@ -280,6 +333,7 @@ function Field({ keyboardType, label, maxLength, multiline, onChangeText, value 
   keyboardType?: "default" | "number-pad"; label: string; maxLength: number; multiline?: boolean; onChangeText: (value: string) => void; value: string;
 }) {
   const inputRef = useRef<TextInput>(null);
+  const multilineInputHeight = useCoachAiMultilineInputHeight();
   const requestInputReveal = useKeyboardAwareInputReveal();
   const revealInput = useCallback(() => requestInputReveal(inputRef.current), [requestInputReveal]);
 
@@ -296,7 +350,8 @@ function Field({ keyboardType, label, maxLength, multiline, onChangeText, value 
         onFocus={revealInput}
         onSelectionChange={multiline ? revealInput : undefined}
         ref={inputRef}
-        style={[styles.input, multiline && styles.textarea]}
+        scrollEnabled={multiline ? true : undefined}
+        style={[styles.input, multiline && styles.textarea, multiline && { height: multilineInputHeight }]}
         textAlignVertical={multiline ? "top" : "center"}
         value={value}
       />
@@ -323,7 +378,7 @@ const styles = StyleSheet.create({
   field: { gap: Spacing.xs },
   label: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19 },
   input: { backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodyRegular, minHeight: 50, paddingHorizontal: Spacing.md },
-  textarea: { minHeight: 110, paddingTop: Spacing.md },
+  textarea: { paddingTop: Spacing.md },
   tones: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   tone: { borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flexGrow: 1, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.sm },
   toneSelected: { backgroundColor: Colors.primary },
