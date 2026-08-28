@@ -361,6 +361,7 @@ const resources = {
           savedHelp: 'Saved',
           savedExpandHint: 'Shows your saved Coach AI guides.',
           savedCollapseHint: 'Hides your saved Coach AI guides.',
+          savedEmpty: 'No saved guides on this device yet.',
           fields: {
             sport: 'Sport',
             ageGroup: 'General age group',
@@ -2690,6 +2691,7 @@ const resources = {
           savedHelp: 'Guardados',
           savedExpandHint: 'Muestra tus guías guardadas del Coach con IA.',
           savedCollapseHint: 'Oculta tus guías guardadas del Coach con IA.',
+          savedEmpty: 'Aún no hay guías guardadas en este dispositivo.',
           fields: {
             sport: 'Deporte', ageGroup: 'Grupo de edad general', practiceMinutes: 'Duración de la práctica en minutos',
             playerCount: 'Número aproximado de jugadores', skillFocus: 'Habilidad o enfoque para esta práctica',

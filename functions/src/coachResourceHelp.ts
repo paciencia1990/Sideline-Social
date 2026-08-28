@@ -11,6 +11,7 @@ import {
   type ValidatedCoachHelpRequest,
   type ValidatedCoachHelpResult,
 } from './coachResourceHelpCore';
+import { normalizeCoachAiSharedSecret } from './coachAiClaudeGatewayCore';
 import { requireCoachAiRuntimeEnabled } from './coachAiRuntime';
 import { permanentAccountFunctions } from './permanentAuth';
 
@@ -198,7 +199,7 @@ async function reserveRequest(
 
 async function requestProviderResult(request: ValidatedCoachHelpRequest) {
   const endpoint = process.env.COACH_AI_ENDPOINT?.trim();
-  const apiKey = process.env.COACH_AI_API_KEY?.trim();
+  const apiKey = normalizeCoachAiSharedSecret(process.env.COACH_AI_API_KEY ?? '');
   if (!endpoint || !apiKey || !endpoint.startsWith('https://')) {
     throw new functions.https.HttpsError('failed-precondition', 'Coach assistance is not configured.', { reason: 'provider_unavailable' });
   }

@@ -242,33 +242,33 @@ export default function CoachResourceHelpScreen() {
                 </TouchableOpacity>
               ))}
             </View>
-            {savedOwnerId === user?.uid && saved.length > 0 ? (
-              <View style={styles.savedSection}>
-                <TouchableOpacity
-                  accessibilityHint={t(savedExpanded ? "coach.resources.savedCollapseHint" : "coach.resources.savedExpandHint")}
-                  accessibilityLabel={t("coach.resources.savedHelp")}
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: savedExpanded }}
-                  onPress={() => setSavedExpanded(toggleCoachAiSavedExpanded)}
-                  style={styles.savedHeader}
-                >
-                  <Text accessibilityRole="header" style={styles.sectionTitle}>{t("coach.resources.savedHelp")}</Text>
-                  {savedExpanded
-                    ? <ChevronDown color={Colors.textHeading} size={20} />
-                    : <ChevronRight color={Colors.textHeading} size={20} />}
-                </TouchableOpacity>
-                {savedExpanded ? (
-                  <View style={styles.savedList}>
-                    {saved.map((entry) => (
-                      <TouchableOpacity accessibilityRole="button" key={entry.id} onPress={() => router.push({ pathname: "/coach/resources/help/result", params: { requestId: entry.id } } as never)} style={styles.categoryRow}>
-                        <Text style={styles.categoryText}>{entry.result.title}</Text>
-                        <ChevronRight color={Colors.textHeading} size={20} />
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                ) : null}
-              </View>
-            ) : null}
+            <View style={styles.savedSection}>
+              <TouchableOpacity
+                accessibilityHint={t(savedExpanded ? "coach.resources.savedCollapseHint" : "coach.resources.savedExpandHint")}
+                accessibilityLabel={t("coach.resources.savedHelp")}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: savedExpanded }}
+                onPress={() => setSavedExpanded(toggleCoachAiSavedExpanded)}
+                style={styles.savedHeader}
+              >
+                <Text accessibilityRole="header" style={styles.sectionTitle}>{t("coach.resources.savedHelp")}</Text>
+                {savedExpanded
+                  ? <ChevronDown color={Colors.textHeading} size={20} />
+                  : <ChevronRight color={Colors.textHeading} size={20} />}
+              </TouchableOpacity>
+              {savedExpanded ? (
+                <View style={styles.savedList}>
+                  {savedOwnerId === user?.uid && saved.length > 0 ? saved.map((entry) => (
+                    <TouchableOpacity accessibilityRole="button" key={entry.id} onPress={() => router.push({ pathname: "/coach/resources/help/result", params: { requestId: entry.id } } as never)} style={styles.categoryRow}>
+                      <Text style={styles.categoryText}>{entry.result.title}</Text>
+                      <ChevronRight color={Colors.textHeading} size={20} />
+                    </TouchableOpacity>
+                  )) : (
+                    <Text accessibilityLiveRegion="polite" style={styles.savedEmptyText}>{t("coach.resources.savedEmpty")}</Text>
+                  )}
+                </View>
+              ) : null}
+            </View>
           </>
         ) : (
           <>
@@ -345,7 +345,10 @@ function Field({ keyboardType, label, maxLength, multiline, onChangeText, value 
         keyboardType={keyboardType}
         maxLength={maxLength}
         multiline={multiline}
-        onChangeText={onChangeText}
+        onChangeText={(text) => {
+          onChangeText(text);
+          if (multiline) revealInput();
+        }}
         onContentSizeChange={multiline ? revealInput : undefined}
         onFocus={revealInput}
         onSelectionChange={multiline ? revealInput : undefined}
@@ -372,6 +375,7 @@ const styles = StyleSheet.create({
   savedSection: { gap: Spacing.sm, paddingTop: Spacing.md },
   savedHeader: { alignItems: "center", backgroundColor: Colors.surface, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 52, paddingHorizontal: Spacing.md },
   savedList: { gap: Spacing.sm },
+  savedEmptyText: { color: Colors.textPrimary, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 20, paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs },
   reminderCard: { alignItems: "flex-start", borderLeftColor: Colors.accentGold, borderLeftWidth: 4, flexDirection: "row", gap: Spacing.sm },
   disclosureCard: { borderLeftColor: Colors.accentGold, borderLeftWidth: 4, gap: Spacing.md },
   reminderText: { color: Colors.textPrimary, flex: 1, fontFamily: Typography.bodyMedium, fontSize: 13, lineHeight: 20 },

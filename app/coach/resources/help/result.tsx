@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AccessibilityInfo, Alert, AppState, findNodeHandle, Share, StyleSheet, Text, TextInput, TouchableOpacity, View, type TextInputProps } from "react-native";
+import { AccessibilityInfo, Alert, AppState, findNodeHandle, Platform, Share, StyleSheet, Text, TextInput, TouchableOpacity, View, type TextInputProps } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Edit3, Save, Send, Share2, ShieldAlert, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -29,7 +29,11 @@ import {
   rememberCoachAiResultReturn,
 } from "@/services/systemRouteResumeService";
 import type { CoachAiFeedbackRating, CoachAiFeedbackReason, CoachHelpResult } from "@/types/coachResources";
-import { runCoachAiResultAction } from "@/utils/coachAiExperienceCore";
+import {
+  resolveCoachAiShareAppStateTransition,
+  runCoachAiResultAction,
+  shouldRetainCoachAiShareReturnAfterResponse,
+} from "@/utils/coachAiExperienceCore";
 
 const FEEDBACK_REASONS: CoachAiFeedbackReason[] = [
   "inaccurate", "unsafe", "wrong_tone", "not_useful", "technical_problem", "other",
@@ -102,11 +106,9 @@ export default function CoachHelpResultScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
       if (!pendingShareReturnRef.current) return;
-      if (state !== "active") {
-        shareBackgroundedRef.current = true;
-        return;
-      }
-      if (shareBackgroundedRef.current) void clearPendingShareReturn();
+      const transition = resolveCoachAiShareAppStateTransition(shareBackgroundedRef.current, state);
+      shareBackgroundedRef.current = transition.backgrounded;
+      if (transition.shouldClearReturn) void clearPendingShareReturn();
     });
     return () => subscription.remove();
   }, [clearPendingShareReturn]);
@@ -241,7 +243,9 @@ export default function CoachHelpResultScreen() {
         await clearPendingShareReturn();
         return;
       }
-      if (response.action === Share.dismissedAction) await clearPendingShareReturn();
+      if (!shouldRetainCoachAiShareReturnAfterResponse(Platform.OS, response.action, Share.sharedAction)) {
+        await clearPendingShareReturn();
+      }
       if (response.action === Share.sharedAction) setFeedback(t("coach.resources.shareSuccessBody"));
     } catch {
       await clearPendingShareReturn();
@@ -427,6 +431,7 @@ export default function CoachHelpResultScreen() {
 }
 
 function CoachAiMultilineTextInput({
+  onChangeText,
   onContentSizeChange,
   onFocus,
   onSelectionChange,
@@ -442,6 +447,10 @@ function CoachAiMultilineTextInput({
     <TextInput
       {...props}
       multiline
+      onChangeText={(text) => {
+        onChangeText?.(text);
+        revealInput();
+      }}
       onContentSizeChange={(event) => {
         onContentSizeChange?.(event);
         revealInput();

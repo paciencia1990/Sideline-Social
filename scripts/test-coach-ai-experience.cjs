@@ -80,6 +80,21 @@ assert.ok(
   "A taller iOS keyboard frame must add enough last-field scroll extent for the reveal gap.",
 );
 
+let shareTransition = experience.resolveCoachAiShareAppStateTransition(false, "inactive");
+assert.deepEqual(shareTransition, { backgrounded: true, shouldClearReturn: false });
+shareTransition = experience.resolveCoachAiShareAppStateTransition(shareTransition.backgrounded, "background");
+assert.deepEqual(shareTransition, { backgrounded: true, shouldClearReturn: false });
+shareTransition = experience.resolveCoachAiShareAppStateTransition(shareTransition.backgrounded, "active");
+assert.deepEqual(shareTransition, { backgrounded: false, shouldClearReturn: true });
+assert.deepEqual(
+  experience.resolveCoachAiShareAppStateTransition(false, "active"),
+  { backgrounded: false, shouldClearReturn: false },
+  "An active app that never backgrounded must not consume the share return marker early.",
+);
+assert.equal(experience.shouldRetainCoachAiShareReturnAfterResponse("android", "sharedAction", "sharedAction"), true);
+assert.equal(experience.shouldRetainCoachAiShareReturnAfterResponse("android", "dismissedAction", "sharedAction"), false);
+assert.equal(experience.shouldRetainCoachAiShareReturnAfterResponse("ios", "sharedAction", "sharedAction"), false);
+
 const now = Date.now();
 const requestId = "coach_request_12345";
 const userId = "coach_user_123";
@@ -326,6 +341,22 @@ async function run() {
   const resourcesService = read("services", "coachResourcesService.ts");
   const translations = read("i18n", "index.ts");
 
+  const generateStart = help.indexOf("const generate");
+  const generateEnd = help.indexOf("const cancelGeneration", generateStart);
+  const generateSource = help.slice(generateStart, generateEnd);
+  const generateCatchStart = generateSource.indexOf("} catch (requestError)");
+  const generateFinallyStart = generateSource.indexOf("} finally", generateCatchStart);
+  assert.ok(generateStart >= 0 && generateEnd > generateStart && generateCatchStart >= 0 && generateFinallyStart > generateCatchStart);
+  assert.equal((generateSource.match(/router\.push\(/g) ?? []).length, 1, "Generation may navigate exactly once.");
+  assert.match(generateSource, /router\.push\(\{ pathname: "\/coach\/resources\/help\/result", params: \{ requestId: request\.clientRequestId \} \}/);
+  const generateFailureSource = generateSource.slice(generateCatchStart, generateFinallyStart);
+  assert.doesNotMatch(generateFailureSource, /router\./, "A failed generation must remain on the completed form.");
+  assert.doesNotMatch(
+    generateFailureSource,
+    /set(?:Category|Sport|AgeGroup|Situation|DesiredOutcome|Tone|PracticeMinutes|PlayerCount|Equipment)\(/,
+    "A failed generation must preserve every form entry.",
+  );
+
   const saveStart = result.indexOf("const saveResult");
   const saveEnd = result.indexOf("const confirmDelete", saveStart);
   const shareStart = result.indexOf("const shareResult", saveEnd);
@@ -334,10 +365,10 @@ async function run() {
   assert.match(result.slice(saveStart, saveEnd), /runCoachAiResultAction/);
   assert.match(result.slice(shareStart, shareEnd), /rememberCoachAiResultReturn/);
   assert.match(result.slice(shareStart, shareEnd), /Share\.share/);
-  assert.match(result.slice(shareStart, shareEnd), /Share\.dismissedAction[\s\S]*clearPendingShareReturn/);
+  assert.match(result.slice(shareStart, shareEnd), /shouldRetainCoachAiShareReturnAfterResponse\(Platform\.OS, response\.action, Share\.sharedAction\)[\s\S]*clearPendingShareReturn/);
   assert.doesNotMatch(result.slice(saveStart, saveEnd), /router\./, "Saving must not navigate away.");
   assert.doesNotMatch(result.slice(shareStart, shareEnd), /router\./, "Sharing must not navigate away.");
-  assert.match(result, /AppState\.addEventListener\("change"[\s\S]*shareBackgroundedRef\.current[\s\S]*clearPendingShareReturn/);
+  assert.match(result, /AppState\.addEventListener\("change"[\s\S]*resolveCoachAiShareAppStateTransition[\s\S]*transition\.shouldClearReturn[\s\S]*clearPendingShareReturn/);
   assert.match(result, /const next = savedEntry\?\.result \?\? cached \?\? null;/);
   assert.match(result, /deleteCoachHelpResult[\s\S]*resultDeleteError/);
   assert.match(result, /loadedContext\.userId === user\.uid[\s\S]*loadedContext\.requestId === requestId/);
@@ -383,7 +414,9 @@ async function run() {
   assert.match(help, /setSavedExpanded\(toggleCoachAiSavedExpanded\)/);
   assert.match(help, /savedExpanded[\s\S]*saved\.map/);
   assert.match(help, /setSaved\(\[\]\)/);
-  assert.match(help, /savedOwnerId === user\?\.uid && saved\.length > 0/);
+  assert.doesNotMatch(help, /savedOwnerId === user\?\.uid && saved\.length > 0 \? \(\s*<View style=\{styles\.savedSection\}/);
+  assert.match(help, /<View style=\{styles\.savedSection\}>[\s\S]*accessibilityState=\{\{ expanded: savedExpanded \}\}/);
+  assert.match(help, /savedOwnerId === user\?\.uid && saved\.length > 0 \? saved\.map[\s\S]*coach\.resources\.savedEmpty/);
   assert.match(help, /useLayoutEffect\(\(\) => \{[\s\S]*generationToken\.current \+= 1[\s\S]*return \(\) => \{[\s\S]*generationToken\.current \+= 1[\s\S]*\}, \[user\?\.uid\]\)/);
   assert.match(help, /useFocusEffect[\s\S]*return \(\) => \{[\s\S]*generationToken\.current \+= 1[\s\S]*generationInFlight\.current = false/);
   assert.ok((help.match(/operationToken !== generationToken\.current/g) ?? []).length >= 3);
@@ -392,6 +425,7 @@ async function run() {
   assert.match(help, /onContentSizeChange=\{multiline \? revealInput : undefined\}/);
   assert.match(help, /onSelectionChange=\{multiline \? revealInput : undefined\}/);
   assert.match(help, /scrollEnabled=\{multiline \? true : undefined\}/);
+  assert.match(help, /onChangeText=\{\(text\) => \{[\s\S]*onChangeText\(text\);[\s\S]*if \(multiline\) revealInput\(\)/);
   assert.match(keyboard, /useSafeAreaInsets/);
   assert.match(keyboard, /resolveKeyboardRevealOffset\(Platform\.OS, insets\.bottom\)/);
   assert.match(keyboard, /resolveKeyboardResponderOffset\(revealOffset, insets\.top\)/);
@@ -408,11 +442,13 @@ async function run() {
   assert.match(keyboard, /hideSubscription[\s\S]*cancelAnimationFrame\(pendingRevealFrameRef\.current\)/);
   assert.match(result, /from "@\/components\/CoachAiKeyboardAwareScrollView"/);
   assert.equal((result.match(/<CoachAiMultilineTextInput/g) ?? []).length, 2);
+  assert.match(result, /onChangeText=\{\(text\) => \{[\s\S]*onChangeText\?\.\(text\);[\s\S]*revealInput\(\)/);
 
   assert.match(translations, /savedHelp: 'Saved'/);
   assert.match(translations, /savedHelp: 'Guardados'/);
   assert.equal((translations.match(/savedExpandHint:/g) ?? []).length, 2);
   assert.equal((translations.match(/savedCollapseHint:/g) ?? []).length, 2);
+  assert.equal((translations.match(/savedEmpty:/g) ?? []).length, 2);
   assert.equal((translations.match(/resultDeleteError:/g) ?? []).length, 2);
 
   console.log("Coach AI result persistence, Saved accordion, and keyboard-following regressions passed.");

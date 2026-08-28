@@ -34,7 +34,19 @@ async function run() {
     }),
     /cannot both be enabled/,
   );
-  assert.equal(classifyCoachAiRequestError({ code: "functions/failed-precondition", details: { reason: "provider_unavailable" } }).kind, "configuration");
+  for (const reason of [
+    "gateway_authentication_failed",
+    "gateway_credential_misconfigured",
+    "coach_ai_disabled",
+    "provider_unavailable",
+    "server_testing_disabled",
+  ]) {
+    assert.equal(
+      classifyCoachAiRequestError({ code: "functions/failed-precondition", details: { reason } }).kind,
+      "configuration",
+      `${reason} must use the specific Coach AI configuration message.`,
+    );
+  }
   assert.equal(classifyCoachAiRequestError({ code: "functions/resource-exhausted", details: { reason: "rate_limited" } }).kind, "rate_limit");
   assert.equal(classifyCoachAiRequestError({ code: "functions/deadline-exceeded" }).kind, "timeout");
   assert.equal(classifyCoachAiRequestError({ code: "functions/unavailable", details: { reason: "provider_error" } }).kind, "provider");

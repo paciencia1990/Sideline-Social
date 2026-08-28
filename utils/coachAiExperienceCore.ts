@@ -69,6 +69,24 @@ export function resolveCoachAiKeyboardFrameSupplement(
   return Math.max(0, Math.ceil(shownKeyboardScreenY - currentKeyboardScreenY));
 }
 
+export function resolveCoachAiShareAppStateTransition(
+  wasBackgrounded: boolean,
+  nextAppState: string,
+) {
+  if (nextAppState !== "active") {
+    return { backgrounded: true, shouldClearReturn: false } as const;
+  }
+  return { backgrounded: false, shouldClearReturn: wasBackgrounded } as const;
+}
+
+export function shouldRetainCoachAiShareReturnAfterResponse(
+  platform: string,
+  responseAction: string,
+  sharedAction: string,
+) {
+  return platform === "android" && responseAction === sharedAction;
+}
+
 export async function runCoachAiResultAction<T>({
   clearReturn,
   execute,

@@ -14,6 +14,16 @@ export const COACH_AI_MODEL_ID = 'claude-sonnet-5';
 export const COACH_AI_GATEWAY_MAX_REQUEST_BYTES = 32 * 1024;
 export const COACH_AI_GATEWAY_MAX_PROVIDER_BYTES = 128 * 1024;
 export const COACH_AI_GATEWAY_PROVIDER_TIMEOUT_MS = 18_000;
+export const COACH_AI_SHARED_SECRET_MIN_BYTES = 32;
+
+export function normalizeCoachAiSharedSecret(value: string) {
+  const normalized = value.replace(/^[\r\n\t ]+|[\r\n\t ]+$/gu, '');
+  if (
+    Buffer.byteLength(normalized, 'utf8') < COACH_AI_SHARED_SECRET_MIN_BYTES
+    || /\s/u.test(normalized)
+  ) return null;
+  return normalized;
+}
 
 export const COACH_AI_SYSTEM_PROMPT = [
   'You generate practical youth-sports coaching guidance for Sideline Social.',
@@ -127,10 +137,11 @@ export function parseAndAuthorizeCoachAiGatewayRequest(
   if (input.method !== 'POST') throw gatewayError(405, 'method_not_allowed', telemetry);
   const mediaType = input.contentType?.split(';', 1)[0]?.trim().toLowerCase();
   if (mediaType !== 'application/json') throw gatewayError(415, 'content_type_required', telemetry);
-  if (Buffer.byteLength(configuredSharedSecret, 'utf8') < 32) {
+  const normalizedSharedSecret = normalizeCoachAiSharedSecret(configuredSharedSecret);
+  if (!normalizedSharedSecret) {
     throw gatewayError(424, 'gateway_credential_misconfigured', telemetry);
   }
-  if (!secureBearerMatches(input.authorization, configuredSharedSecret)) {
+  if (!secureBearerMatches(input.authorization, normalizedSharedSecret)) {
     throw gatewayError(401, 'gateway_authentication_failed', telemetry);
   }
 
@@ -169,8 +180,10 @@ export function secureBearerMatches(
   if (typeof authorization !== 'string' || authorization.includes(',')) return false;
   const match = /^Bearer ([^\s]+)$/.exec(authorization);
   if (!match) return false;
+  const normalizedSharedSecret = normalizeCoachAiSharedSecret(configuredSharedSecret);
+  if (!normalizedSharedSecret) return false;
   const supplied = createHash('sha256').update(match[1], 'utf8').digest();
-  const expected = createHash('sha256').update(configuredSharedSecret, 'utf8').digest();
+  const expected = createHash('sha256').update(normalizedSharedSecret, 'utf8').digest();
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 

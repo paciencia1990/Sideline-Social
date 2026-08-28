@@ -23,7 +23,7 @@ function envelope(request = baseRequest) {
   return Buffer.from(JSON.stringify({ request }));
 }
 
-function parse(overrides = {}) {
+function parse(overrides = {}, configuredSharedSecret = sharedSecret) {
   return gateway.parseAndAuthorizeCoachAiGatewayRequest({
     method: "POST",
     contentType: "application/json; charset=utf-8",
@@ -31,7 +31,7 @@ function parse(overrides = {}) {
     declaredContentLength: String(envelope().length),
     rawBody: envelope(),
     ...overrides,
-  }, sharedSecret, "correlation-test");
+  }, configuredSharedSecret, "correlation-test");
 }
 
 function response(payload, status = 200, headers = {}) {
@@ -61,6 +61,31 @@ async function expectGatewayError(operation, { code, status, retryable }) {
 
 async function run() {
   assert.equal(parse().clientRequestId, baseRequest.clientRequestId);
+  assert.equal(gateway.normalizeCoachAiSharedSecret(sharedSecret), sharedSecret);
+  assert.equal(gateway.normalizeCoachAiSharedSecret(` \t\r\n${sharedSecret}\r\n\t `), sharedSecret);
+  assert.equal(parse({}, `${sharedSecret}\n`).clientRequestId, baseRequest.clientRequestId);
+  const boundaryPaddedSecret = ` \t${sharedSecret}\r\n `;
+  assert.equal(parse({
+    authorization: `Bearer ${gateway.normalizeCoachAiSharedSecret(boundaryPaddedSecret)}`,
+  }, boundaryPaddedSecret).clientRequestId, baseRequest.clientRequestId);
+
+  for (const configuredSharedSecret of ["", " \t\r\n ", "short", " \tshort\r\n "]) {
+    assert.throws(
+      () => parse({}, configuredSharedSecret),
+      (error) => error.status === 424 && error.code === "gateway_credential_misconfigured",
+    );
+  }
+  for (const embeddedWhitespace of [" ", "\t", "\r", "\n"]) {
+    const configuredSharedSecret = `${sharedSecret.slice(0, 20)}${embeddedWhitespace}${sharedSecret.slice(20)}`;
+    assert.throws(
+      () => parse({}, configuredSharedSecret),
+      (error) => error.status === 424 && error.code === "gateway_credential_misconfigured",
+    );
+    assert.throws(
+      () => parse({ authorization: `Bearer ${configuredSharedSecret}` }),
+      (error) => error.status === 401 && error.code === "gateway_authentication_failed",
+    );
+  }
   for (const [overrides, status] of [
     [{ method: "GET" }, 405],
     [{ contentType: "text/plain" }, 415],
@@ -79,6 +104,23 @@ async function run() {
   assert.throws(() => gateway.parseAndAuthorizeCoachAiGatewayRequest({
     method: "POST", contentType: "application/json", authorization: "Bearer short", rawBody: envelope(),
   }, "short"), (error) => error.code === "gateway_credential_misconfigured");
+
+  const rejectedAuthorization = `Bearer ${sharedSecret}x`;
+  let authenticationFailure;
+  try {
+    parse({ authorization: rejectedAuthorization });
+  } catch (error) {
+    authenticationFailure = error;
+  }
+  assert.equal(authenticationFailure?.status, 401);
+  assert.equal(authenticationFailure?.code, "gateway_authentication_failed");
+  const safeFailureOutput = JSON.stringify({
+    body: gateway.safeGatewayErrorBody(authenticationFailure),
+    message: authenticationFailure.message,
+    telemetry: authenticationFailure.telemetry,
+  });
+  assert.equal(safeFailureOutput.includes(sharedSecret), false);
+  assert.equal(safeFailureOutput.includes(rejectedAuthorization), false);
 
   let calls = 0;
   let captured;
@@ -192,8 +234,12 @@ async function run() {
   }), { code: "provider_timeout", status: 504, retryable: true });
 
   const gatewaySource = fs.readFileSync(path.join(__dirname, "..", "functions", "src", "coachAiClaudeGateway.ts"), "utf8");
+  const callerSource = fs.readFileSync(path.join(__dirname, "..", "functions", "src", "coachResourceHelp.ts"), "utf8");
   assert.equal(/Access-Control-Allow-Origin/iu.test(gatewaySource), false);
-  assert.equal(/logger\.(?:info|warn|error)\([^)]*(?:rawBody|authorization|ANTHROPIC_API_KEY|COACH_AI_API_KEY|situation|result)/su.test(gatewaySource), false);
+  assert.match(callerSource, /normalizeCoachAiSharedSecret\(process\.env\.COACH_AI_API_KEY \?\? ''\)/);
+  for (const source of [gatewaySource, callerSource]) {
+    assert.equal(/logger\.(?:info|warn|error)\([^)]*(?:rawBody|authorization|ANTHROPIC_API_KEY|COACH_AI_API_KEY|apiKey|sharedSecret|situation|result)/su.test(source), false);
+  }
   console.log("Coach AI Claude gateway contract, authentication, safety, failure mapping, timeout, and no-retry tests passed.");
 }
 
