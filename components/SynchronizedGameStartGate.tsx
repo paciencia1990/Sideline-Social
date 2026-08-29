@@ -48,6 +48,7 @@ export default function SynchronizedGameStartGate({
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const preparedAttemptsRef = useRef(new Set<string>());
+  const preparingAttemptsRef = useRef(new Set<string>());
   const acknowledgingAttemptsRef = useRef(new Set<string>());
 
   useEffect(() => {
@@ -78,14 +79,18 @@ export default function SynchronizedGameStartGate({
   }, [isLocal]);
 
   useEffect(() => {
-    if (!state || !sessionId || preparedAttemptsRef.current.has(state.startAttemptId)) return;
+    if (
+      !state ||
+      !sessionId ||
+      preparedAttemptsRef.current.has(state.startAttemptId) ||
+      preparingAttemptsRef.current.has(state.startAttemptId)
+    ) return;
     let active = true;
     const attemptId = state.startAttemptId;
+    preparingAttemptsRef.current.add(attemptId);
     void preloadSynchronizedGameRound(gameType, sessionId)
       .then(async () => {
         if (!active) return;
-        preparedAttemptsRef.current.add(attemptId);
-        setLoaded(true);
         if (
           (state.phase === "preparing" || state.phase === "activating") &&
           !acknowledgingAttemptsRef.current.has(attemptId)
@@ -97,8 +102,18 @@ export default function SynchronizedGameStartGate({
             acknowledgingAttemptsRef.current.delete(attemptId);
           }
         }
+        if (!active) return;
+        preparedAttemptsRef.current.add(attemptId);
+        setLoaded(true);
+        setError(null);
       })
-      .catch(() => active && setError("preload"));
+      .catch(() => {
+        preparedAttemptsRef.current.delete(attemptId);
+        if (!active) return;
+        setLoaded(false);
+        setError("preload");
+      })
+      .finally(() => preparingAttemptsRef.current.delete(attemptId));
     return () => {
       active = false;
     };
@@ -117,12 +132,18 @@ export default function SynchronizedGameStartGate({
     setError(null);
     setLoaded(false);
     try {
-      if (state && (state.phase === "preparing" || state.phase === "activating")) {
-        await acknowledgeSynchronizedGameStart({
-          gameType,
-          sessionId,
-          startAttemptId: state.startAttemptId,
-        });
+      if (state && (state.phase === "preparing" || state.phase === "activating" || state.phase === "scheduled")) {
+        const attemptId = state.startAttemptId;
+        preparedAttemptsRef.current.delete(attemptId);
+        await preloadSynchronizedGameRound(gameType, sessionId);
+        if (state.phase === "preparing" || state.phase === "activating") {
+          await acknowledgeSynchronizedGameStart({
+            gameType,
+            sessionId,
+            startAttemptId: attemptId,
+          });
+        }
+        preparedAttemptsRef.current.add(attemptId);
         setLoaded(true);
         return;
       }

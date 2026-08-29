@@ -118,6 +118,21 @@ async function moveTriviaGameplayWindowToNow(sessionId) {
   ]);
 }
 
+async function moveTriviaGameplayWindowToFuture(sessionId) {
+  const now = Date.now();
+  const timestamp = admin.firestore.Timestamp;
+  await Promise.all([
+    adminFirestore.collection("sessions").doc(sessionId).update({
+      gameplayStartsAt: timestamp.fromMillis(now + 60_000),
+    }),
+    adminFirestore.collection("sessions").doc(sessionId).collection("games").doc("triviaBlitz").update({
+      gameplayStartsAt: timestamp.fromMillis(now + 60_000),
+      questionStartedAt: timestamp.fromMillis(now + 60_000),
+      questionEndsAt: timestamp.fromMillis(now + 75_000),
+    }),
+  ]);
+}
+
 function isPermissionDenied(error) {
   return /permission[-_ ]?denied|unauthenticated/i.test(
     `${String(error?.code)} ${String(error?.message)}`,
@@ -337,6 +352,7 @@ async function run() {
     rejectsCode("permission-denied", "not_authorized"),
   );
   await scheduleSynchronizedStart("triviaBlitz", sessionId, host, [participant, host]);
+  await moveTriviaGameplayWindowToFuture(sessionId);
   await assert.rejects(
     () => host.call("submitTriviaAnswer", {
       sessionId,

@@ -63,6 +63,15 @@ async function openRealtimeGameplayWindow(sessionId) {
   });
 }
 
+async function deferRealtimeGameplayWindow(sessionId) {
+  const now = Date.now();
+  await database.ref(`gameSessions/${sessionId}`).update({
+    countdownStartsAt: now + 60_000,
+    gameplayStartsAt: now + 63_800,
+    startedAt: now + 63_800,
+  });
+}
+
 async function seedMember(client, squadId) {
   await Promise.all([
     firestore.collection('users').doc(client.uid).set({ firstName: client.label, lastName: 'Tester' }),
@@ -482,6 +491,7 @@ async function run() {
     bombHost,
     [bombHost, bombSecond, bombThird, bombFourth],
   );
+  await deferRealtimeGameplayWindow(roleLobby.sessionId);
   await assert.rejects(
     () => bombHost.call('getBombDefusalPlayerView', { sessionId: roleLobby.sessionId }),
     hasReason('game_not_started'),
@@ -710,6 +720,191 @@ async function run() {
   assert.equal(timedOutBombState.rewardEligible, true, 'only a completed server timeout remains reward eligible');
   await bombHost.call('closeGameLobby', { lobbyId: timeoutLobby.lobbyId });
 
+  const unrelatedBeforeDirectory = await soleHost.call('listGameLobbies', {
+    gameType: 'triviaBlitz', squadId: squadA,
+  });
+  const unrelatedBefore = stableLobbySummary(unrelatedBeforeDirectory.lobbies[0]);
+  assert.ok(unrelatedBefore, 'the existing Trivia lobby provides an unrelated control fixture');
+
+  const focusedHost = bombSecond;
+  const focusedParticipant = bombThird;
+  const focusedLobby = await focusedHost.call('createGameLobby', {
+    gameType: 'bombDefusal', squadId: squadA, idempotencyKey: 'focused-two-player-start',
+  });
+  await focusedParticipant.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: focusedLobby.lobbyId,
+  });
+  let focusedPlayers = (await database.ref(`gameSessions/${focusedLobby.sessionId}/players`).get()).val();
+  assert.deepEqual(Object.keys(focusedPlayers).sort(), [focusedHost.uid, focusedParticipant.uid].sort());
+  assert.equal(focusedPlayers[focusedHost.uid].isReady, false);
+  assert.equal(focusedPlayers[focusedParticipant.uid].isReady, false);
+
+  await focusedHost.call('setRealtimeGamePlayerReady', { sessionId: focusedLobby.sessionId, ready: true });
+  focusedPlayers = (await database.ref(`gameSessions/${focusedLobby.sessionId}/players`).get()).val();
+  assert.equal(focusedPlayers[focusedHost.uid].isReady, true);
+  assert.equal(focusedPlayers[focusedParticipant.uid].isReady, false);
+  await assert.rejects(
+    () => focusedHost.call('prepareSynchronizedGameStart', {
+      gameType: 'bombDefusal', sessionId: focusedLobby.sessionId,
+    }),
+    hasReason('participants_not_ready'),
+    'the host cannot start while the participant is not ready',
+  );
+
+  await focusedHost.call('setRealtimeGamePlayerReady', { sessionId: focusedLobby.sessionId, ready: false });
+  await focusedParticipant.call('setRealtimeGamePlayerReady', { sessionId: focusedLobby.sessionId, ready: true });
+  focusedPlayers = (await database.ref(`gameSessions/${focusedLobby.sessionId}/players`).get()).val();
+  assert.equal(focusedPlayers[focusedHost.uid].isReady, false);
+  assert.equal(focusedPlayers[focusedParticipant.uid].isReady, true);
+  await assert.rejects(
+    () => focusedHost.call('prepareSynchronizedGameStart', {
+      gameType: 'bombDefusal', sessionId: focusedLobby.sessionId,
+    }),
+    hasReason('participants_not_ready'),
+    'the host must also be ready',
+  );
+  await assert.rejects(
+    () => focusedParticipant.call('prepareSynchronizedGameStart', {
+      gameType: 'bombDefusal', sessionId: focusedLobby.sessionId,
+    }),
+    hasReason('not_authorized'),
+    'only the host can prepare a synchronized start',
+  );
+
+  await focusedHost.call('setRealtimeGamePlayerReady', { sessionId: focusedLobby.sessionId, ready: true });
+  focusedPlayers = (await database.ref(`gameSessions/${focusedLobby.sessionId}/players`).get()).val();
+  assert.equal(Object.values(focusedPlayers).filter((player) => player.isReady === true).length, 2);
+  const focusedPrepared = await focusedHost.call('prepareSynchronizedGameStart', {
+    gameType: 'bombDefusal', sessionId: focusedLobby.sessionId,
+  });
+  const focusedStateRef = firestore.collection('gameStartStates')
+    .doc(`bombDefusal__${focusedLobby.sessionId}`);
+  const focusedPreparingState = (await focusedStateRef.get()).data();
+  assert.equal(focusedPreparingState.phase, 'preparing');
+  assert.equal(focusedPreparingState.participantCount, 2);
+  assert.equal(focusedPreparingState.acknowledgedCount, 0);
+  assert.deepEqual(
+    [...focusedPreparingState.participantUserIds].sort(),
+    [focusedHost.uid, focusedParticipant.uid].sort(),
+    'the synchronized start freezes the same two canonical participants',
+  );
+
+  const firstAcknowledgement = await focusedParticipant.call('acknowledgeSynchronizedGameStart', {
+    gameType: 'bombDefusal', sessionId: focusedLobby.sessionId,
+    startAttemptId: focusedPrepared.startAttemptId,
+  });
+  assert.equal(firstAcknowledgement.acknowledgedCount, 1);
+  const duplicateAcknowledgement = await focusedParticipant.call('acknowledgeSynchronizedGameStart', {
+    gameType: 'bombDefusal', sessionId: focusedLobby.sessionId,
+    startAttemptId: focusedPrepared.startAttemptId,
+  });
+  assert.equal(duplicateAcknowledgement.acknowledgedCount, 1, 'duplicate acknowledgements are idempotent');
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const focusedActivation = await focusedHost.call('acknowledgeSynchronizedGameStart', {
+    gameType: 'bombDefusal', sessionId: focusedLobby.sessionId,
+    startAttemptId: focusedPrepared.startAttemptId,
+  });
+  assert.equal(focusedActivation.phase, 'scheduled', 'a slower acknowledgement inside the window activates normally');
+  const activatedSession = (await database.ref(`gameSessions/${focusedLobby.sessionId}`).get()).val();
+  assert.equal(activatedSession.status, 'active');
+  assert.equal(activatedSession.startAttemptId, focusedPrepared.startAttemptId);
+  const activatedStartedAt = activatedSession.startedAt;
+  const duplicateActivation = await focusedHost.call('acknowledgeSynchronizedGameStart', {
+    gameType: 'bombDefusal', sessionId: focusedLobby.sessionId,
+    startAttemptId: focusedPrepared.startAttemptId,
+  });
+  assert.equal(duplicateActivation.phase, 'scheduled');
+  const afterDuplicateActivation = (await database.ref(`gameSessions/${focusedLobby.sessionId}`).get()).val();
+  assert.equal(afterDuplicateActivation.startAttemptId, focusedPrepared.startAttemptId);
+  assert.equal(afterDuplicateActivation.startedAt, activatedStartedAt, 'duplicate acknowledgement cannot activate twice');
+
+  await openRealtimeGameplayWindow(focusedLobby.sessionId);
+  const focusedViews = await Promise.all([
+    focusedHost.call('getBombDefusalPlayerView', { sessionId: focusedLobby.sessionId }),
+    focusedParticipant.call('getBombDefusalPlayerView', { sessionId: focusedLobby.sessionId }),
+  ]);
+  assert.deepEqual(focusedViews.map((view) => view.role).sort(), ['defuser', 'expert']);
+  assert.equal(focusedViews.every((view) => view.sessionId === focusedLobby.sessionId), true);
+  await focusedHost.call('closeGameLobby', { lobbyId: focusedLobby.lobbyId });
+
+  const preparationTimeoutHost = bombThird;
+  const preparationTimeoutParticipant = bombFourth;
+  const preparationTimeoutLobby = await preparationTimeoutHost.call('createGameLobby', {
+    gameType: 'bombDefusal', squadId: squadA, idempotencyKey: 'focused-preparation-timeout',
+  });
+  await preparationTimeoutParticipant.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: preparationTimeoutLobby.lobbyId,
+  });
+  await Promise.all([preparationTimeoutHost, preparationTimeoutParticipant].map((client) =>
+    client.call('setRealtimeGamePlayerReady', { sessionId: preparationTimeoutLobby.sessionId, ready: true })));
+  const timeoutPrepared = await preparationTimeoutHost.call('prepareSynchronizedGameStart', {
+    gameType: 'bombDefusal', sessionId: preparationTimeoutLobby.sessionId,
+  });
+  const timeoutStateRef = firestore.collection('gameStartStates')
+    .doc(`bombDefusal__${preparationTimeoutLobby.sessionId}`);
+  await timeoutStateRef.update({ readinessDeadlineAtMs: Date.now() - 1 });
+  await assert.rejects(
+    () => preparationTimeoutParticipant.call('acknowledgeSynchronizedGameStart', {
+      gameType: 'bombDefusal', sessionId: preparationTimeoutLobby.sessionId,
+      startAttemptId: timeoutPrepared.startAttemptId,
+    }),
+    hasReason('preparation_timeout'),
+  );
+  const failedTimeoutState = (await timeoutStateRef.get()).data();
+  assert.equal(failedTimeoutState.phase, 'failed');
+  assert.equal(failedTimeoutState.failureReason, 'ready_timeout');
+  const recoveredTimeoutLobby = await preparationTimeoutHost.call('listGameLobbies', {
+    gameType: 'bombDefusal', squadId: squadA,
+  });
+  assert.equal(
+    recoveredTimeoutLobby.lobbies.find((lobby) => lobby.lobbyId === preparationTimeoutLobby.lobbyId)?.status,
+    'waiting',
+    'a preparation timeout safely returns the lobby to waiting',
+  );
+  assert.equal((await database.ref(`gameSessions/${preparationTimeoutLobby.sessionId}/status`).get()).val(), 'lobby');
+  await preparationTimeoutHost.call('closeGameLobby', { lobbyId: preparationTimeoutLobby.lobbyId });
+
+  const departureHost = bombFourth;
+  const departingParticipant = bombSecond;
+  const departureLobby = await departureHost.call('createGameLobby', {
+    gameType: 'bombDefusal', squadId: squadA, idempotencyKey: 'focused-participant-departure',
+  });
+  await departingParticipant.call('joinGameLobbyById', {
+    gameType: 'bombDefusal', squadId: squadA, lobbyId: departureLobby.lobbyId,
+  });
+  await Promise.all([departureHost, departingParticipant].map((client) =>
+    client.call('setRealtimeGamePlayerReady', { sessionId: departureLobby.sessionId, ready: true })));
+  const departurePrepared = await departureHost.call('prepareSynchronizedGameStart', {
+    gameType: 'bombDefusal', sessionId: departureLobby.sessionId,
+  });
+  await departureHost.call('acknowledgeSynchronizedGameStart', {
+    gameType: 'bombDefusal', sessionId: departureLobby.sessionId,
+    startAttemptId: departurePrepared.startAttemptId,
+  });
+  await departingParticipant.call('leaveGameLobby', { lobbyId: departureLobby.lobbyId });
+  await assert.rejects(
+    () => departingParticipant.call('acknowledgeSynchronizedGameStart', {
+      gameType: 'bombDefusal', sessionId: departureLobby.sessionId,
+      startAttemptId: departurePrepared.startAttemptId,
+    }),
+    hasReason('participants_changed'),
+    'a participant departure immediately before activation fails safely',
+  );
+  const departureState = (await firestore.collection('gameStartStates')
+    .doc(`bombDefusal__${departureLobby.sessionId}`).get()).data();
+  assert.equal(departureState.phase, 'failed');
+  assert.equal(departureState.failureReason, 'participants_changed');
+  assert.equal((await database.ref(`gameSessions/${departureLobby.sessionId}/status`).get()).val(), 'lobby');
+  await departureHost.call('closeGameLobby', { lobbyId: departureLobby.lobbyId });
+
+  const unrelatedAfterDirectory = await soleHost.call('listGameLobbies', {
+    gameType: 'triviaBlitz', squadId: squadA,
+  });
+  const unrelatedAfter = stableLobbySummary(
+    unrelatedAfterDirectory.lobbies.find((lobby) => lobby.lobbyId === unrelatedBefore.lobbyId),
+  );
+  assert.deepEqual(unrelatedAfter, unrelatedBefore, 'Bomb Defusal start attempts cannot mutate an unrelated Trivia lobby');
+
   const rateUser = clients[19];
   let rateError = null;
   for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -746,4 +941,19 @@ async function bombActionForSession(database, sessionId, correct) {
   const wrongOption = command.options.find((option) => option.id !== command.correctOptionId);
   assert.ok(wrongOption?.id, 'every challenge needs a safe incorrect test option');
   return { optionId: wrongOption.id };
+}
+
+function stableLobbySummary(lobby) {
+  if (!lobby) return null;
+  return {
+    lobbyId: lobby.lobbyId,
+    sessionId: lobby.sessionId,
+    gameType: lobby.gameType,
+    status: lobby.status,
+    lobbyNumber: lobby.lobbyNumber,
+    isMain: lobby.isMain,
+    hostUserId: lobby.hostUserId,
+    activePlayerCount: lobby.activePlayerCount,
+    queuedPlayerCount: lobby.queuedPlayerCount,
+  };
 }

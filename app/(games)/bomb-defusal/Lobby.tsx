@@ -26,6 +26,7 @@ export default function BombDefusalLobby() {
     toggleReady,
     startGame,
     startPending,
+    startError,
     showCountdown,
     setShowCountdown,
   } =
@@ -57,6 +58,7 @@ export default function BombDefusalLobby() {
         onReadyToggle={toggleReady}
         onStart={startGame}
         startPending={startPending}
+        startError={startError}
       />
       {showCountdown && <CountdownOverlay onComplete={handleComplete} onCancel={() => setShowCountdown(false)} />}
     </View>

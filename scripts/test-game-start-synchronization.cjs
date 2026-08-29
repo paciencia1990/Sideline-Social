@@ -74,6 +74,11 @@ assert.equal(client.deriveGameStartVisiblePhase(null, 110_000), "updateRequired"
 
 const hook = read("hooks", "useGameLobby.ts");
 const gate = read("components", "SynchronizedGameStartGate.tsx");
+const startService = read("services", "gameStartSynchronizationService.ts");
+const lobbyBase = read("components", "LobbyBase.tsx");
+const bombLobby = read("app", "(games)", "bomb-defusal", "Lobby.tsx");
+const joinCodeService = read("services", "gameJoinCodeService.ts");
+const translations = read("i18n", "index.ts");
 const overlay = read("components", "CountdownOverlay.tsx");
 const joinFunctions = read("functions", "src", "gameJoinCodes.ts");
 const triviaFunctions = read("functions", "src", "triviaGame.ts");
@@ -87,10 +92,50 @@ const routes = [
 
 assert.match(hook, /prepareSynchronizedGameStart/u);
 assert.doesNotMatch(hook, /updateGameJoinCodeStatus\(\{ gameType, sessionId, status: 'started'/u);
+assert.match(
+  hook,
+  /subscribeToSynchronizedGameStart\([\s\S]*?\(error\) => \{[\s\S]*?setStartPending\(false\);[\s\S]*?setStartError\(readGameStartFailureReason\(error\)\)/u,
+  "Lobby start-state subscription failures must be visible and must clear the pending state.",
+);
+assert.match(
+  hook,
+  /prepareSynchronizedGameStart\([\s\S]*?\.catch\(\(error\) => \{[\s\S]*?setStartPending\(false\);[\s\S]*?setStartError\(readGameStartFailureReason\(error\)\)/u,
+  "Preparation failures must be visible and must not strand the Start button.",
+);
+assert.match(lobbyBase, /accessibilityRole="alert"[\s\S]*?lifecycleError \?\? startError/u);
+assert.match(bombLobby, /startError=\{startError\}/u, "Bomb Defusal must render synchronized-start errors.");
+for (const reason of [
+  "minimum_players_required",
+  "participants_not_ready",
+  "participant_unavailable",
+  "preparation_timeout",
+  "stale_start_attempt",
+  "participants_changed",
+  "client_update_required",
+]) {
+  assert.match(joinCodeService, new RegExp(`['\"]${reason}['\"]`, "u"), `${reason} must survive client error parsing.`);
+  assert.ok((translations.match(new RegExp(`${reason}:`, "gu")) ?? []).length >= 2, `${reason} must have English and Spanish UI messages.`);
+}
 assert.match(gate, /\.info\/serverTimeOffset|useFirebaseServerClock/u);
 assert.match(gate, /AppState\.addEventListener/u, "Foregrounding must recompute the shared phase.");
 assert.match(gate, /preloadSynchronizedGameRound/u);
 assert.match(gate, /acknowledgeSynchronizedGameStart/u);
+assert.match(
+  startService,
+  /if \(gameType === "bombDefusal"\) \{[\s\S]*?void require\("\.\.\/assets\/animations\/explosion\.json"\);[\s\S]*?void require\("\.\.\/assets\/animations\/wireCut\.json"\);/u,
+  "Bundled Bomb Defusal animation JSON must be loaded synchronously rather than passed to Expo Asset.",
+);
+assert.doesNotMatch(
+  startService,
+  /Asset\.loadAsync\(\[[\s\S]*?explosion\.json[\s\S]*?wireCut\.json/u,
+  "Android must not treat bundled Lottie JSON as downloadable asset modules.",
+);
+assert.match(
+  gate,
+  /state\.phase === "preparing" \|\| state\.phase === "activating" \|\| state\.phase === "scheduled"[\s\S]*?preloadSynchronizedGameRound\(gameType, sessionId\)[\s\S]*?acknowledgeSynchronizedGameStart/u,
+  "Retry must rerun local preparation before acknowledgement, including when the shared attempt is already scheduled.",
+);
+assert.match(gate, /preparingAttemptsRef/u, "Preparation must deduplicate in-flight work without permanently blocking retry.");
 assert.match(overlay, /phase\?: "3" \| "2" \| "1" \| "go"/u);
 assert.equal((routes.match(/import SynchronizedGameStartGate/gu) ?? []).length, 3, "All three routes must import the gate.");
 assert.equal((routes.match(/<SynchronizedGameStartGate gameType=/gu) ?? []).length, 3, "All three routes must mount the gate.");

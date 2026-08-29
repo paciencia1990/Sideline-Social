@@ -62,6 +62,7 @@ type GameLobbyState = {
   toggleReady: () => void;
   startGame: () => void;
   startPending: boolean;
+  startError: GameJoinCodeFailureReason | null;
   showCountdown: boolean;
   setShowCountdown: (value: boolean) => void;
 };
@@ -111,6 +112,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const [hostUserId, setHostUserId] = useState('');
   const [showCountdown, setShowCountdown] = useState(false);
   const [startPending, setStartPending] = useState(false);
+  const [startError, setStartError] = useState<GameJoinCodeFailureReason | null>(null);
   const [lifecycleAction, setLifecycleAction] = useState<'leaving' | 'closing' | null>(null);
   const [lifecycleError, setLifecycleError] = useState<GameJoinCodeFailureReason | null>(null);
   const [setupAttempt, setSetupAttempt] = useState(0);
@@ -267,23 +269,32 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
 
   useEffect(() => {
     if (isLocal || !sessionId) return;
-    return subscribeToSynchronizedGameStart(gameType, sessionId, (state) => {
-      if (
-        !state ||
-        state.sessionId !== sessionId ||
-        navigatedStartAttemptRef.current === state.startAttemptId
-      ) return;
-      navigatedStartAttemptRef.current = state.startAttemptId;
-      setStartPending(true);
-      router.replace({
-        pathname: playPathForGame(gameId),
-        params: {
-          sessionId,
-          startAttemptId: state.startAttemptId,
-          ...(lobbyId ? { lobbyId } : {}),
-        },
-      } as never);
-    });
+    return subscribeToSynchronizedGameStart(
+      gameType,
+      sessionId,
+      (state) => {
+        if (
+          !state ||
+          state.sessionId !== sessionId ||
+          navigatedStartAttemptRef.current === state.startAttemptId
+        ) return;
+        navigatedStartAttemptRef.current = state.startAttemptId;
+        setStartError(null);
+        setStartPending(true);
+        router.replace({
+          pathname: playPathForGame(gameId),
+          params: {
+            sessionId,
+            startAttemptId: state.startAttemptId,
+            ...(lobbyId ? { lobbyId } : {}),
+          },
+        } as never);
+      },
+      (error) => {
+        setStartPending(false);
+        setStartError(readGameStartFailureReason(error));
+      },
+    );
   }, [gameId, gameType, isLocal, lobbyId, sessionId]);
 
   const activePlayerList = isLocal ? localPlayers : playerList;
@@ -310,6 +321,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   }, []);
 
   const toggleReady = useCallback(() => {
+    setStartError(null);
     if (isLocal) {
       setLocalPlayers((current) => current.map((player) => (
         player.id === effectiveUserId ? { ...player, ready: !player.ready } : player
@@ -326,6 +338,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
 
   const startGame = useCallback(() => {
     if (!players.isHost || startPending) return;
+    setStartError(null);
     if (isLocal) {
       setShowCountdown(true);
       return;
@@ -333,7 +346,10 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     if (!sessionId) return;
     setStartPending(true);
     void prepareSynchronizedGameStart({ gameType, sessionId })
-      .catch(() => setStartPending(false));
+      .catch((error) => {
+        setStartPending(false);
+        setStartError(readGameStartFailureReason(error));
+      });
   }, [gameType, isLocal, players.isHost, sessionId, startPending]);
 
   const performLifecycleAction = useCallback(async (action: 'leaving' | 'closing') => {
@@ -388,6 +404,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     toggleReady,
     startGame,
     startPending,
+    startError,
     showCountdown,
     setShowCountdown,
   };
@@ -472,3 +489,8 @@ function getUserName(
 }
 
 export { COUNTDOWN_DURATION_MS };
+
+function readGameStartFailureReason(error: unknown): GameJoinCodeFailureReason {
+  const reason = readGameJoinCodeFailureReason(error);
+  return reason === 'invalid_or_expired_code' ? 'start_failed' : reason;
+}

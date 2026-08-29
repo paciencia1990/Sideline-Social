@@ -51,6 +51,7 @@ type LobbyBaseProps = {
   onReadyToggle: () => void;
   onStart: () => void;
   startPending?: boolean;
+  startError?: GameJoinCodeFailureReason | null;
 };
 
 export default function LobbyBase({
@@ -70,6 +71,7 @@ export default function LobbyBase({
   onReadyToggle,
   onStart,
   startPending = false,
+  startError = null,
 }: LobbyBaseProps) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -247,14 +249,16 @@ export default function LobbyBase({
           { paddingBottom: getFixedFooterBottomPadding(insets.bottom) },
         ]}
       >
-        {lifecycleError ? (
+        {lifecycleError || startError ? (
           <View style={styles.lifecycleErrorPanel}>
             <Text accessibilityRole="alert" style={styles.lifecycleErrorText}>
-              {t(`games.joinCode.errors.${lifecycleError}`)}
+              {t(`games.joinCode.errors.${lifecycleError ?? startError}`)}
             </Text>
-            <Pressable accessibilityRole="button" onPress={onRetryLifecycle} style={styles.retryLifecycleButton}>
-              <Text style={styles.retryLifecycleText}>{t("common.retry")}</Text>
-            </Pressable>
+            {lifecycleError ? (
+              <Pressable accessibilityRole="button" onPress={onRetryLifecycle} style={styles.retryLifecycleButton}>
+                <Text style={styles.retryLifecycleText}>{t("common.retry")}</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
         <View style={styles.actions}>

@@ -13,6 +13,12 @@ export type GameJoinCodeFailureReason =
   | 'game_already_started'
   | 'game_full'
   | 'minimum_players_required'
+  | 'participants_not_ready'
+  | 'participant_unavailable'
+  | 'preparation_timeout'
+  | 'stale_start_attempt'
+  | 'participants_changed'
+  | 'start_failed'
   | 'not_authorized'
   | 'already_joined'
   | 'host_cannot_join_as_player'
@@ -360,6 +366,12 @@ function isGameJoinCodeFailureReason(value: unknown): value is GameJoinCodeFailu
     'game_already_started',
     'game_full',
     'minimum_players_required',
+    'participants_not_ready',
+    'participant_unavailable',
+    'preparation_timeout',
+    'stale_start_attempt',
+    'participants_changed',
+    'start_failed',
     'not_authorized',
     'already_joined',
     'host_cannot_join_as_player',

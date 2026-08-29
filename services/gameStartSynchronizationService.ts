@@ -47,10 +47,11 @@ export async function preloadSynchronizedGameRound(
   sessionId: string,
 ) {
   if (gameType === "bombDefusal") {
-    await Asset.loadAsync([
-      require("../assets/animations/explosion.json"),
-      require("../assets/animations/wireCut.json"),
-    ]);
+    // Metro bundles Lottie JSON as JavaScript data rather than a downloadable
+    // asset module. Requiring the files is sufficient to make them available;
+    // passing the resulting objects to Expo Asset can reject on Android.
+    void require("../assets/animations/explosion.json");
+    void require("../assets/animations/wireCut.json");
     return;
   }
   if (gameType !== "spotTheDifferences") return;
