@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { Bomb, BookOpen, ShieldCheck, Users } from "lucide-react-native";
@@ -18,6 +21,7 @@ import { GameRewardSummary } from "@/components/GameRewardSummary";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
+import { buildBombChoiceDescription } from "@/src/game/bombDefusalChoiceText";
 import {
   createGameJoinIdempotencyKey,
   getBombDefusalPlayerView,
@@ -290,7 +294,17 @@ export default function BombDefusalScreen() {
 
   return (
     <SafeAreaView edges={["top", "left", "right"]} style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.keyboardAvoidingView}
+      >
+      <ScrollView
+        automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
+        contentContainerStyle={styles.container}
+        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.header}>
           <View style={styles.titleRow}>
             <Bomb color={Colors.primary} size={25} />
@@ -334,13 +348,16 @@ export default function BombDefusalScreen() {
 
         {outcome === "playing" && playerView ? (
           <>
-            <Text accessibilityLiveRegion="polite" style={styles.feedback}>{feedback}</Text>
+            {actionError || playerView.lastResult ? (
+              <Text accessibilityLiveRegion="polite" style={styles.feedback}>{feedback}</Text>
+            ) : null}
             {playerView.role === "expert" ? (
               <ExpertInstruction playerView={playerView} />
             ) : (
               <BombControls
                 actionSubmitting={actionSubmitting}
                 interactive={playerView.role === "defuser"}
+                key={playerView.publicCommand.commandId}
                 onSubmit={submitAction}
                 publicCommand={playerView.publicCommand}
               />
@@ -363,6 +380,7 @@ export default function BombDefusalScreen() {
           />
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -373,11 +391,7 @@ function RoleCard({ playerView }: { playerView: BombDefusalPlayerView }) {
   return (
     <View
       accessible
-      accessibilityLabel={t("bomb.accessibility.roleSummary", {
-        role: t(`bomb.roles.${playerView.role}.title`),
-        defuser: playerView.defuserDisplayName,
-        expert: playerView.expertDisplayName,
-      })}
+      accessibilityLabel={t(`bomb.roles.${playerView.role}.title`)}
       accessibilityLiveRegion="polite"
       style={styles.roleCard}
     >
@@ -390,13 +404,6 @@ function RoleCard({ playerView }: { playerView: BombDefusalPlayerView }) {
           <Text style={styles.roleTitle}>{t(`bomb.roles.${playerView.role}.title`)}</Text>
         </View>
       </View>
-      <Text style={styles.roleBody}>{t(`bomb.roles.${playerView.role}.body`)}</Text>
-      <Text style={styles.assignmentText}>
-        {t("bomb.roleAssignments", {
-          defuser: playerView.defuserDisplayName,
-          expert: playerView.expertDisplayName,
-        })}
-      </Text>
     </View>
   );
 }
@@ -434,8 +441,23 @@ function BombControls({
   onSubmit: (action: Record<string, string | number>) => void | Promise<void>;
   publicCommand: BombPublicCommand;
 }) {
-  const { t } = useTranslation();
-  const title = interactive ? t("bomb.defuserControlsTitle") : t("bomb.supportControlsTitle");
+  const { i18n, t } = useTranslation();
+  const locale = i18n.resolvedLanguage?.toLowerCase().startsWith("es") ? "es" : "en";
+  const title = publicCommand.responseMode === "options"
+    ? interactive ? t("bomb.defuserControlsTitle") : t("bomb.supportControlsTitle")
+    : interactive ? t("bomb.entryControlsTitle") : t("bomb.supportControlsTitle");
+  if (publicCommand.responseMode !== "options") {
+    return (
+      <TextEntryControl
+        actionSubmitting={actionSubmitting}
+        inputMode={publicCommand.responseMode}
+        interactive={interactive}
+        onSubmit={onSubmit}
+        title={title}
+        category={publicCommand.category}
+      />
+    );
+  }
   return (
     <View style={styles.controlsCard}>
       <Text style={styles.controlsTitle}>{title}</Text>
@@ -446,11 +468,14 @@ function BombControls({
             disabled={actionSubmitting || !interactive}
             interactive={interactive}
             key={option.id}
-            label={option.label}
-            marker={t(`bomb.markers.${option.marker}`)}
+            label={buildBombChoiceDescription({
+              label: option.label,
+              locale,
+              marker: option.marker,
+              markerLabel: t(`bomb.markers.${option.marker}`),
+            })}
             number={option.number}
             onPress={() => void onSubmit(actionForOption(option))}
-            swatch={option.color}
           />
         ))}
       </View>
@@ -462,33 +487,25 @@ function OptionControl({
   disabled,
   interactive,
   label,
-  marker,
   number,
   onPress,
-  swatch,
 }: {
   disabled: boolean;
   interactive: boolean;
   label: string;
-  marker: string;
   number: number;
   onPress: () => void;
-  swatch?: string;
 }) {
   const { t } = useTranslation();
   const content = (
-    <>
-      <View style={styles.optionHeader}>
-        <View style={styles.optionNumber}><Text style={styles.optionNumberText}>{number}</Text></View>
-        {swatch ? <View style={[styles.wireSwatch, wireSwatchStyle(swatch)]} /> : null}
-      </View>
+    <View style={styles.optionContent}>
+      <View style={styles.optionNumber}><Text style={styles.optionNumberText}>{number}</Text></View>
       <Text style={styles.optionLabel}>{label}</Text>
-      <Text style={styles.optionMarker}>{marker}</Text>
-    </>
+    </View>
   );
   const accessibilityLabel = interactive
-    ? t("bomb.accessibility.selectableOption", { number, label, marker })
-    : t("bomb.accessibility.readOnlyOption", { number, label, marker });
+    ? t("bomb.accessibility.selectableOption", { number, label })
+    : t("bomb.accessibility.readOnlyOption", { number, label });
   if (!interactive) {
     return <View accessible accessibilityLabel={accessibilityLabel} style={styles.optionControl}>{content}</View>;
   }
@@ -503,6 +520,77 @@ function OptionControl({
     >
       {content}
     </Pressable>
+  );
+}
+
+function TextEntryControl({
+  actionSubmitting,
+  category,
+  inputMode,
+  interactive,
+  onSubmit,
+  title,
+}: {
+  actionSubmitting: boolean;
+  category: BombPublicCommand["category"];
+  inputMode: "text" | "numeric";
+  interactive: boolean;
+  onSubmit: (action: Record<string, string | number>) => void | Promise<void>;
+  title: string;
+}) {
+  const { t } = useTranslation();
+  const [value, setValue] = useState("");
+  const submitInFlightRef = useRef(false);
+  const normalizedValue = value.trim();
+  const label = category === "word" ? t("bomb.wordEntryLabel") : t("bomb.cipherEntryLabel");
+  const submit = () => {
+    if (!interactive || actionSubmitting || submitInFlightRef.current || !normalizedValue) return;
+    submitInFlightRef.current = true;
+    void Promise.resolve(onSubmit({ value: normalizedValue })).finally(() => {
+      submitInFlightRef.current = false;
+    });
+  };
+
+  return (
+    <View style={styles.controlsCard}>
+      <Text style={styles.controlsTitle}>{title}</Text>
+      {!interactive ? (
+        <Text style={styles.readOnlyHint}>{t("bomb.entrySupportHint")}</Text>
+      ) : (
+        <>
+          <Text style={styles.entryLabel}>{label}</Text>
+          <TextInput
+            accessibilityLabel={label}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            editable={!actionSubmitting}
+            keyboardType={inputMode === "numeric" ? "number-pad" : "default"}
+            maxLength={80}
+            onChangeText={setValue}
+            onSubmitEditing={submit}
+            placeholder={t("bomb.entryPlaceholder")}
+            placeholderTextColor={Colors.textPrimary}
+            returnKeyType="done"
+            spellCheck={false}
+            style={styles.entryInput}
+            value={value}
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: actionSubmitting || !normalizedValue }}
+            disabled={actionSubmitting || !normalizedValue}
+            onPress={submit}
+            style={({ pressed }) => [
+              styles.entrySubmitButton,
+              pressed && styles.optionPressed,
+              (actionSubmitting || !normalizedValue) && styles.disabledButton,
+            ]}
+          >
+            <Text style={styles.submitButtonText}>{t("bomb.submitEntry")}</Text>
+          </Pressable>
+        </>
+      )}
+    </View>
   );
 }
 
@@ -607,15 +695,9 @@ function normalizeRouteParam(value?: string | string[]) {
   return raw?.trim() ?? "";
 }
 
-function wireSwatchStyle(color: string) {
-  if (color === "red") return styles.redWire;
-  if (color === "blue") return styles.blueWire;
-  if (color === "yellow") return styles.yellowWire;
-  return styles.greenWire;
-}
-
 const styles = StyleSheet.create({
   safeArea: { backgroundColor: Colors.background, flex: 1 },
+  keyboardAvoidingView: { flex: 1 },
   container: { flexGrow: 1, gap: Spacing.md, padding: Spacing.md, paddingBottom: Spacing.xxl },
   centered: { alignItems: "center", flex: 1, gap: Spacing.md, justifyContent: "center", padding: Spacing.lg },
   header: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, justifyContent: "space-between" },
@@ -629,8 +711,6 @@ const styles = StyleSheet.create({
   roleCopy: { flex: 1, minWidth: 0 },
   roleEyebrow: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, fontSize: 11, textTransform: "uppercase" },
   roleTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 20 },
-  roleBody: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 21 },
-  assignmentText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13, lineHeight: 19 },
   progressCard: { backgroundColor: `${Colors.accentGold}18`, borderColor: Colors.accentGold, borderRadius: Radius.sm, borderWidth: 1, flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, justifyContent: "space-between", padding: Spacing.md },
   progressText: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 14 },
   strikeText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 14 },
@@ -646,18 +726,15 @@ const styles = StyleSheet.create({
   controlsTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 18 },
   readOnlyHint: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 13, lineHeight: 19 },
   optionGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
-  optionControl: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.sm, borderWidth: 1, flexBasis: "47%", flexGrow: 1, gap: Spacing.xs, minHeight: 94, padding: Spacing.sm },
+  optionControl: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.sm, borderWidth: 1, flexBasis: "47%", flexGrow: 1, justifyContent: "center", minHeight: 72, padding: Spacing.sm },
   optionPressed: { backgroundColor: `${Colors.accentGreen}20`, borderColor: Colors.communicationLink },
-  optionHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  optionContent: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
   optionNumber: { alignItems: "center", backgroundColor: Colors.textHeading, borderRadius: 14, height: 28, justifyContent: "center", width: 28 },
   optionNumberText: { color: Colors.surface, fontFamily: Typography.bodyBold, fontSize: 13 },
-  wireSwatch: { borderColor: Colors.textHeading, borderRadius: 4, borderWidth: 1, height: 18, width: 42 },
-  redWire: { backgroundColor: Colors.primary },
-  blueWire: { backgroundColor: "#477A9D" },
-  yellowWire: { backgroundColor: Colors.accentGold },
-  greenWire: { backgroundColor: Colors.accentGreen },
-  optionLabel: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 15 },
-  optionMarker: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12 },
+  optionLabel: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodyBold, fontSize: 15, lineHeight: 21 },
+  entryLabel: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 15, lineHeight: 21 },
+  entryInput: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.sm, borderWidth: 1, color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, minHeight: 52, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm },
+  entrySubmitButton: { alignItems: "center", backgroundColor: Colors.primary, borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 2, justifyContent: "center", minHeight: 50, paddingHorizontal: Spacing.md },
   submitButton: { alignItems: "center", alignSelf: "stretch", backgroundColor: Colors.primary, borderRadius: Radius.button, flex: 1, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },
   submitButtonText: { color: Colors.surface, fontFamily: Typography.bodyBold, fontSize: 15, textAlign: "center" },
   secondaryButton: { alignItems: "center", alignSelf: "stretch", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, flex: 1, justifyContent: "center", minHeight: 48, paddingHorizontal: Spacing.md },

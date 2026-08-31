@@ -17,6 +17,7 @@ require.extensions[".ts"] = (module, filename) => {
 const root = process.cwd();
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), "utf8");
 const {
+  claimTriviaAnswerSubmission,
   createTriviaQuestionKey,
   getTriviaAnswerAccessibilityLabel,
   getTriviaAnswerFeedbackIcon,
@@ -25,6 +26,19 @@ const {
 
 const questionOneKey = createTriviaQuestionKey(0, "question-one");
 const questionTwoKey = createTriviaQuestionKey(1, "question-two");
+
+const firstTap = claimTriviaAnswerSubmission(questionOneKey, "");
+assert.deepEqual(firstTap, { accepted: true, submissionKey: questionOneKey });
+assert.deepEqual(
+  claimTriviaAnswerSubmission(questionOneKey, firstTap.submissionKey),
+  { accepted: false, submissionKey: questionOneKey },
+  "A second tap for the same question must not create another submission.",
+);
+assert.deepEqual(
+  claimTriviaAnswerSubmission(questionTwoKey, firstTap.submissionKey),
+  { accepted: true, submissionKey: questionTwoKey },
+  "The next question must accept its first normal tap.",
+);
 
 function statesFor({
   selectedAnswerIndex,
@@ -161,6 +175,10 @@ assert.match(screen, /lastResult\?\.questionKey === currentQuestionKey/);
 assert.match(screen, /currentResult\?\.correctAnswerIndex \?\? -1/);
 assert.match(screen, /disabled=\{busy \|\| answerLocked\}/);
 assert.match(screen, /if \(hasAlreadyAnswered\)/);
+assert.match(screen, /claimTriviaAnswerSubmission\(questionKey, answerSubmissionKeyRef\.current\)/);
+assert.match(screen, /answerSubmissionKeyRef\.current = claim\.submissionKey/);
+assert.match(screen, /setOptimisticSelection\(\{ answerIndex, questionKey \}\)/);
+assert.match(screen, /session\?\.currentSelection\?\.answerIndex \?\?[\s\S]*optimisticSelection/);
 assert.equal((screen.match(/submitTriviaAnswer\(\{/g) ?? []).length, 1);
 assert.match(screen, /submissionId = createTriviaSessionId\(\)/);
 assert.match(screen, /resolveClientGameAuthority\(\{/);
@@ -173,6 +191,8 @@ assert.match(screen, /AccessibilityInfo\.announceForAccessibility/);
 assert.match(screen, /announcedFeedbackRef\.current === feedbackQuestionKey/);
 assert.match(screen, /announcedFeedbackRef\.current = null/);
 assert.match(styles, /answerContent:[\s\S]*flexDirection: "row"[\s\S]*minHeight: 24/);
+assert.match(styles, /answerButton:[\s\S]*minHeight: 52/);
+assert.match(styles, /answerPressed:[\s\S]*backgroundColor/);
 assert.match(styles, /answerText:[\s\S]*flex: 1[\s\S]*flexShrink: 1/);
 assert.match(styles, /feedbackIconSlot:[\s\S]*flexShrink: 0[\s\S]*minHeight: 24[\s\S]*width: 24/);
 assert.doesNotMatch(screen, /numberOfLines=|adjustsFontSizeToFit=/);

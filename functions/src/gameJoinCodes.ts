@@ -4605,6 +4605,10 @@ function readBombAction(value: unknown): Record<string, string | number> {
   if (keys[0] === 'optionId' && typeof action.optionId === 'string' && /^[a-z0-9-]{4,80}$/.test(action.optionId)) {
     return { optionId: action.optionId };
   }
+  if (keys[0] === 'value' && typeof action.value === 'string') {
+    const value = action.value.trim();
+    if (value.length > 0 && value.length <= 80) return { value };
+  }
   throw safeError('invalid-argument', 'not_authorized');
 }
 

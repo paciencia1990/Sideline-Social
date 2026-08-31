@@ -466,7 +466,7 @@ async function run() {
   const bombSecondJoinOrder = (await database
     .ref(`gameSessions/${roleLobby.sessionId}/players/${bombSecond.uid}/joinOrder`).get()).val();
   const provisionedBombSecret = (await database.ref(`gameSessionSecrets/${roleLobby.sessionId}`).get()).val();
-  assert.equal(provisionedBombSecret.generatorVersion, 1);
+  assert.equal(provisionedBombSecret.generatorVersion, 2);
   assert.match(provisionedBombSecret.generationSeed, /^[a-f0-9]{64}$/);
   assert.equal(provisionedBombSecret.bombSteps.length, 6);
   assert.equal(provisionedBombSecret.challengeFingerprints.length, 6);
@@ -656,7 +656,7 @@ async function run() {
   const rematchSecret = (await database.ref(`gameSessionSecrets/${bombRematch.sessionId}`).get()).val();
   assert.notDeepEqual(rematchSecret.challengeIds, initialBombSecret.challengeIds, 'the complete challenge sequence changes on rematch');
   assert.notEqual(rematchSecret.generationSeed, initialBombSecret.generationSeed, 'a rematch receives a fresh cryptographic seed');
-  assert.equal(rematchSecret.generatorVersion, 1);
+  assert.equal(rematchSecret.generatorVersion, 2);
   assert.equal(rematchSecret.bombSteps.length, 6);
   assert.equal(rematchSecret.challengeFingerprints.length, 6);
   assert.ok(rematchSecret.recentChallengeFingerprints.length <= 30, 'server-only replay history remains bounded to five rounds');
@@ -679,6 +679,12 @@ async function run() {
     ]);
     const defuserClient = hostCommandView.role === 'defuser' ? bombHost : bombFourth;
     const defuserView = hostCommandView.role === 'defuser' ? hostCommandView : fourthCommandView;
+    if (defuserView.publicCommand.responseMode === 'text') {
+      assert.deepEqual(defuserView.publicCommand.options, [], 'typed commands do not reveal multiple-choice answers');
+    } else {
+      assert.equal(defuserView.publicCommand.responseMode, 'options');
+      assert.equal(defuserView.publicCommand.options.length, 4);
+    }
     const result = await defuserClient.call('submitBombDefusalStep', {
       sessionId: bombRematch.sessionId,
       commandId: defuserView.commandId,
@@ -937,6 +943,15 @@ async function bombActionForSession(database, sessionId, correct) {
   const commands = secretSnapshot.val();
   const command = commands?.[state?.currentCommandIndex];
   assert.ok(command?.correctOptionId, 'the emulator needs a server-side canonical answer');
+  if (command.responseMode === 'text') {
+    const localized = command.validation?.kind === 'word'
+      ? command.validation.answer
+      : command.validation?.kind === 'cipher'
+        ? command.validation.decoded
+        : null;
+    assert.ok(localized?.en, 'typed commands need a server-only expected value');
+    return correct ? { value: `  ${localized.en.toLowerCase()}  ` } : { value: 'definitely-wrong' };
+  }
   if (correct) return { optionId: command.correctOptionId };
   const wrongOption = command.options.find((option) => option.id !== command.correctOptionId);
   assert.ok(wrongOption?.id, 'every challenge needs a safe incorrect test option');

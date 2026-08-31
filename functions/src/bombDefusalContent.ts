@@ -69,6 +69,11 @@ export const BOMB_WORD_CONCEPTS: readonly BombWordConcept[] = [
   word('towel', 'TOWEL', 'LWEOT', 'Towel', 'TOALLA', 'LALTOA', 'Toalla'),
   word('pencil', 'PENCIL', 'CLENIP', 'Pencil', 'LAPIZ', 'ZILAP', 'Lápiz', 'medium'),
   word('cup', 'CUP', 'PUC', 'Cup', 'TAZA', 'ZATA', 'Taza'),
+  word('helmet', 'HELMET', 'TLEMEH', 'Helmet', 'CASCO', 'SOCAC', 'Casco', 'medium'),
+  word('compass', 'COMPASS', 'SSPOMAC', 'Compass', 'BRUJULA', 'ALUJURB', 'Brújula', 'medium'),
+  word('stadium', 'STADIUM', 'MUIDTAS', 'Stadium', 'ESTADIO', 'OIDATSE', 'Estadio', 'medium'),
+  word('backpack', 'BACKPACK', 'KCAPKCAB', 'Backpack', 'MOCHILA', 'ALIHCOM', 'Mochila', 'medium'),
+  word('practice', 'PRACTICE', 'CIPTERAC', 'Practice', 'PRACTICA', 'CIPTARAC', 'Práctica', 'medium'),
 ] as const;
 
 const riddle = (

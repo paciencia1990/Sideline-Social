@@ -9,7 +9,7 @@ import {
   type BombRoleAssignment,
   type BombSolution,
 } from './bombDefusalTypes';
-import { validateBombChallenge } from './bombDefusalValidation';
+import { normalizeBombWord, validateBombChallenge } from './bombDefusalValidation';
 
 export {
   BOMB_RIDDLE_CONCEPTS,
@@ -59,6 +59,7 @@ export type {
   BombPublicCommand,
   BombPublicOption,
   BombReasoningCategory,
+  BombResponseMode,
   BombRoleAssignment,
   BombSolution,
 } from './bombDefusalTypes';
@@ -90,19 +91,20 @@ export function roleForBombPlayer(uid: string, assignment: BombRoleAssignment): 
 }
 
 export function createBombPublicCommand(command: BombPrivateCommand, commandIndex: number): BombPublicCommand {
+  const responseMode = command.responseMode ?? 'options';
   return {
     commandId: `command-${commandIndex + 1}`,
     commandIndex,
     stage: command.stage,
     category: command.category,
     controlKind: command.controlKind,
-    options: command.options.map((option) => ({
+    responseMode,
+    options: responseMode === 'options' ? command.options.map((option) => ({
       id: option.id,
       number: option.number,
       marker: option.marker,
       label: { ...option.label },
-      ...(option.color ? { color: option.color } : {}),
-    })),
+    })) : [],
   };
 }
 
@@ -142,7 +144,17 @@ export function isBombPrivateCommand(value: unknown): value is BombPrivateComman
 }
 
 export function bombCommandMatches(command: BombPrivateCommand, action: Record<string, string | number>) {
-  return action.optionId === command.correctOptionId;
+  if ((command.responseMode ?? 'options') === 'options') return action.optionId === command.correctOptionId;
+  if (typeof action.value !== 'string') return false;
+  const normalized = normalizeBombWord(action.value);
+  if (!normalized) return false;
+  if (command.validation.kind === 'word') {
+    return Object.values(command.validation.answer).some((answer) => normalizeBombWord(answer) === normalized);
+  }
+  if (command.validation.kind === 'cipher') {
+    return Object.values(command.validation.decoded).some((answer) => normalizeBombWord(answer) === normalized);
+  }
+  return false;
 }
 
 export function normalizeBombLocale(value: unknown): BombLocale {

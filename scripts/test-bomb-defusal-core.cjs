@@ -2,21 +2,50 @@ const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const ts = require('typescript');
 
 const core = require('../functions/lib/bombDefusalCore.js');
 
 const root = path.resolve(__dirname, '..');
 const source = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const loadTypeScript = (relativePath) => {
+  const output = ts.transpileModule(source(relativePath), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 },
+  }).outputText;
+  const localModule = { exports: {} };
+  Function('require', 'module', 'exports', output)(require, localModule, localModule.exports);
+  return localModule.exports;
+};
+const choiceText = loadTypeScript('src/game/bombDefusalChoiceText.ts');
 const normalize = (value) => core.normalizeBombWord(value);
 const sortedLetters = (value) => [...normalize(value)].sort().join('');
 const seedFor = (locale, index) => createHash('sha256').update(`bomb-defusal:${locale}:${index}`).digest('hex');
+const markerLabels = {
+  en: {
+    solid: 'solid pattern', striped: 'striped pattern', dashed: 'dashed pattern', dotted: 'dotted pattern',
+    circle: 'circle marker', square: 'square marker', triangle: 'triangle marker', diamond: 'diamond marker',
+  },
+  es: {
+    solid: 'patrón sólido', striped: 'patrón de rayas', dashed: 'patrón de guiones', dotted: 'patrón de puntos',
+    circle: 'marca circular', square: 'marca cuadrada', triangle: 'marca triangular', diamond: 'marca de rombo',
+  },
+};
 
 assert.equal(core.BOMB_ROLE_SCHEMA_VERSION, 3);
 assert.equal(core.BOMB_COMMAND_COUNT, 6);
 assert.equal(core.BOMB_MAX_STRIKES, 1);
-assert.equal(core.BOMB_GENERATOR_VERSION, 1);
+assert.equal(core.BOMB_GENERATOR_VERSION, 2);
 assert.equal(core.BOMB_RECENT_FINGERPRINT_LIMIT, 30);
 assert.equal(core.BOMB_GENERATION_MAX_ATTEMPTS, 12);
+
+assert.equal(choiceText.buildBombChoiceDescription({ label: 'Striped panel', locale: 'en', marker: 'striped', markerLabel: 'striped pattern' }), 'Striped panel');
+assert.equal(choiceText.buildBombChoiceDescription({ label: 'Dotted panel', locale: 'en', marker: 'dotted', markerLabel: 'dotted pattern' }), 'Dotted panel');
+assert.equal(choiceText.buildBombChoiceDescription({ label: 'Solid panel', locale: 'en', marker: 'triangle', markerLabel: 'triangle marker' }), 'Solid panel with triangle marker');
+assert.equal(choiceText.buildBombChoiceDescription({ label: 'Dashed panel', locale: 'en', marker: 'circle', markerLabel: 'circle marker' }), 'Dashed panel with circle marker');
+assert.equal(choiceText.buildBombChoiceDescription({ label: 'Panel de rayas', locale: 'es', marker: 'striped', markerLabel: 'patrón de rayas' }), 'Panel de rayas');
+assert.equal(choiceText.buildBombChoiceDescription({ label: 'Panel sólido', locale: 'es', marker: 'triangle', markerLabel: 'marca triangular' }), 'Panel sólido con marca triangular');
+assert.equal(choiceText.buildBombChoiceDescription({ label: 'Red wire with a solid pattern', locale: 'en', marker: 'dotted', markerLabel: 'dotted pattern' }), 'Red wire with a solid pattern and dotted pattern');
+assert.equal(choiceText.buildBombChoiceDescription({ label: 'Cable rojo con patrón sólido', locale: 'es', marker: 'dotted', markerLabel: 'patrón de puntos' }), 'Cable rojo con patrón sólido y patrón de puntos');
 
 assert.ok(core.BOMB_WORD_CONCEPTS.length >= 20, 'at least 20 bilingual word concepts are required');
 assert.ok(core.BOMB_RIDDLE_CONCEPTS.length >= 20, 'at least 20 original bilingual riddles are required');
@@ -117,12 +146,18 @@ for (const locale of ['en', 'es']) {
       assert.equal(new Set(command.options.map((option) => option.marker)).size, 4);
       assert.equal(new Set(command.options.map((option) => normalize(option.label[locale]))).size, 4);
       assert.ok(command.options.every((option) => /^control-[a-f0-9]{16}$/.test(option.id)), 'option IDs must be opaque');
+      assert.ok(command.options.every((option) => !('preview' in option) && !('color' in option)), 'generated choices must be text-only');
       assert.equal(command.options.filter((option) => option.id === command.correctOptionId).length, 1);
       assert.ok(command.prompt[locale].trim());
       assert.ok(command.explanation[locale].trim());
+      if (command.stage === 'reasoning' && (command.category === 'word' || command.category === 'cipher')) {
+        assert.equal(command.responseMode, 'text');
+      } else {
+        assert.equal(command.responseMode, 'options');
+      }
 
       const publicCommand = core.createBombPublicCommand(command, commandIndex);
-      assert.deepEqual(Object.keys(publicCommand).sort(), ['category', 'commandId', 'commandIndex', 'controlKind', 'options', 'stage']);
+      assert.deepEqual(Object.keys(publicCommand).sort(), ['category', 'commandId', 'commandIndex', 'controlKind', 'options', 'responseMode', 'stage']);
       assert.equal(JSON.stringify(publicCommand).includes('correctOptionId'), false);
       assert.equal(JSON.stringify(publicCommand).includes('prompt'), false);
       assert.equal(JSON.stringify(publicCommand).includes('explanation'), false);
@@ -130,6 +165,21 @@ for (const locale of ['en', 'es']) {
       assert.equal(JSON.stringify(publicCommand).includes('challengeId'), false);
       const localizedPublic = core.localizeBombPublicCommand(command, commandIndex, locale);
       assert.ok(localizedPublic.options.every((option) => typeof option.label === 'string' && option.label.trim()));
+      assert.ok(localizedPublic.options.every((option) => !('preview' in option) && !('color' in option)), 'public choices must not expose visual-preview data');
+      if (command.responseMode === 'text') {
+        assert.deepEqual(publicCommand.options, [], 'typed commands must not expose answer choices');
+        assert.equal(JSON.stringify(publicCommand).includes(command.validation.answer?.[locale] ?? command.validation.decoded?.[locale] ?? ''), false);
+      } else {
+        assert.equal(publicCommand.options.length, 4);
+        const descriptions = localizedPublic.options.map((option) => choiceText.buildBombChoiceDescription({
+          label: option.label,
+          locale,
+          marker: option.marker,
+          markerLabel: markerLabels[locale][option.marker],
+        }));
+        assert.ok(descriptions.every((description) => description.trim() && !/[\r\n]/u.test(description)), 'each choice must have one concise text description');
+        assert.equal(new Set(descriptions.map(normalize)).size, 4, 'text-only descriptions must keep every choice distinguishable');
+      }
 
       const expertInstruction = core.createBombExpertInstruction(command, locale);
       assert.ok(expertInstruction.prompt.trim());
@@ -139,8 +189,17 @@ for (const locale of ['en', 'es']) {
       assert.equal(solution.correctOptionId, command.correctOptionId);
       assert.ok(solution.correctOptionLabel.trim());
       assert.ok(solution.explanation.trim());
-      assert.equal(core.bombCommandMatches(command, { optionId: command.correctOptionId }), true);
-      assert.equal(core.bombCommandMatches(command, { optionId: command.options.find((option) => option.id !== command.correctOptionId).id }), false);
+      if (command.responseMode === 'text') {
+        const expected = command.validation.kind === 'word'
+          ? command.validation.answer[locale]
+          : command.validation.decoded[locale];
+        assert.equal(core.bombCommandMatches(command, { value: `  ${expected.toLowerCase()}  ` }), true);
+        assert.equal(core.bombCommandMatches(command, { value: 'definitely-wrong' }), false);
+        assert.equal(core.bombCommandMatches(command, { value: '   ' }), false);
+      } else {
+        assert.equal(core.bombCommandMatches(command, { optionId: command.correctOptionId }), true);
+        assert.equal(core.bombCommandMatches(command, { optionId: command.options.find((option) => option.id !== command.correctOptionId).id }), false);
+      }
 
       const validation = command.validation;
       if (validation.kind === 'direct') coverage.directTemplates.add(validation.template);
@@ -207,6 +266,18 @@ const malformed = deterministicA.commands[0];
 assert.equal(core.validateBombChallenge({ ...malformed, validation: undefined }), false, 'malformed stored commands fail closed');
 assert.equal(core.validateBombChallenge({ ...malformed, options: malformed.options.slice(0, 3) }), false);
 assert.equal(core.validateBombChallenge({ ...malformed, correctOptionId: 'control-ffffffffffffffff' }), false);
+const legacyOptionsCommand = { ...malformed };
+delete legacyOptionsCommand.responseMode;
+assert.equal(core.validateBombChallenge(legacyOptionsCommand), true, 'stored option commands from generator v1 remain playable');
+assert.equal(core.bombCommandMatches(legacyOptionsCommand, { optionId: malformed.correctOptionId }), true);
+const legacyVisualCommand = {
+  ...malformed,
+  options: malformed.options.map((option, index) => index === 0
+    ? { ...option, color: 'red', preview: { kind: 'wire', pattern: 'solid' } }
+    : option),
+};
+assert.equal(core.validateBombChallenge(legacyVisualCommand), true, 'legacy command data with preview fields remains playable');
+assert.ok(core.createBombPublicCommand(legacyVisualCommand, 0).options.every((option) => !('preview' in option) && !('color' in option)), 'legacy preview fields must not reach the client');
 const ordinalCommand = Array.from({ length: 100 }, (_, index) => core.createBombGeneratedRound(seedFor('ordinal', index)).commands[1])
   .find((command) => command.validation.kind === 'position' && command.validation.template === 'ordinal');
 assert.ok(ordinalCommand);
@@ -221,6 +292,8 @@ const functionSource = source('functions/src/gameJoinCodes.ts');
 const generatorSource = source('functions/src/bombDefusalGenerator.ts');
 const serviceSource = source('services/gameJoinCodeService.ts');
 const screenSource = source('src/game/BombDefusalScreen.tsx');
+const choiceTextSource = source('src/game/bombDefusalChoiceText.ts');
+const translationSource = source('i18n/index.ts');
 const rulesSource = source('database.rules.json');
 const rewardSource = source('functions/src/sidelineStarsCore.ts');
 
@@ -236,16 +309,32 @@ assert.match(functionSource, /const nextCommandIndex = correct \? currentCommand
 assert.match(functionSource, /roleRevision:[\s\S]*\+ \(correct && outcome === 'playing' \? 1 : 0\)/);
 assert.match(functionSource, /processedSubmissions/);
 assert.match(functionSource, /validateBombChallengeSequence/);
+assert.match(functionSource, /keys\[0\] === 'value'/, 'typed responses must cross the same validated callable boundary');
 assert.match(functionSource, /rewardEligible: false/, 'abandoned rounds remain ineligible');
 assert.match(functionSource, /completionReason: 'timeout'[\s\S]*strikeCount: BOMB_MAX_STRIKES/);
 assert.doesNotMatch(generatorSource, /\bwhile\b/, 'generation must not contain an unbounded retry loop');
 assert.match(generatorSource, /attempt < BOMB_GENERATION_MAX_ATTEMPTS/);
+assert.match(generatorSource, /category: 'word'[\s\S]*responseMode: 'text'/);
+assert.match(generatorSource, /category: 'cipher'[\s\S]*responseMode: 'text'/);
 assert.doesNotMatch(generatorSource, /fetch\(|axios|openai|https?:\/\//i, 'generation must not call external services');
 assert.doesNotMatch(serviceSource, /generationSeed|challengeFingerprints|recentChallengeFingerprints/, 'server generation metadata must not enter the client contract');
 assert.doesNotMatch(serviceSource, /nextStep\??:/, 'submission responses never return a private next command');
 assert.match(screenSource, /playerView\.role === "defuser"/);
 assert.match(screenSource, /playerView\.role === "expert"/);
 assert.match(screenSource, /interactive=\{playerView\.role === "defuser"\}/);
+assert.match(screenSource, /KeyboardAvoidingView/);
+assert.match(screenSource, /TextInput/);
+assert.match(screenSource, /publicCommand\.responseMode !== "options"/);
+assert.match(screenSource, /buildBombChoiceDescription/);
+assert.doesNotMatch(screenSource, /OptionPreview|PatternPreview|ShapePreview|optionPreview|markerBadge|patternStripe|patternDash|patternDot/);
+assert.doesNotMatch(generatorSource, /\bpreview\b|\bcolor\b/);
+assert.doesNotMatch(serviceSource, /\bpreview\??:|\bcolor\??:/);
+assert.match(choiceTextSource, /alreadyCompound[\s\S]*\? "y" : "con"[\s\S]*\? "and" : "with"/);
+const optionControlSource = screenSource.slice(screenSource.indexOf('function OptionControl'), screenSource.indexOf('function TextEntryControl'));
+assert.equal((optionControlSource.match(/<Text\b/gu) ?? []).length, 2, 'choice cards render only their number and one text description');
+assert.doesNotMatch(translationSource, /selectableOption:[^\n]*\{\{marker\}\}|readOnlyOption:[^\n]*\{\{marker\}\}/u, 'choice accessibility copy must not repeat a second marker description');
+assert.match(screenSource, /submitInFlightRef\.current \|\| !normalizedValue/);
+assert.doesNotMatch(screenSource, /styles\.roleBody|styles\.assignmentText/);
 assert.match(screenSource, /solution\.correctOptionLabel[\s\S]*solution\.explanation/);
 assert.doesNotMatch(screenSource, /generateBombPattern|validateStep|currentStep/);
 assert.match(rulesSource, /roleSchemaVersion'\)\.val\(\) == 3/);

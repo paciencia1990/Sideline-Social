@@ -276,9 +276,8 @@ export type BombPrivateInstruction = {
 export type BombPublicOption = {
   id: string;
   number: number;
-  marker: string;
+  marker: 'solid' | 'striped' | 'dashed' | 'dotted' | 'circle' | 'square' | 'triangle' | 'diamond';
   label: string;
-  color?: 'red' | 'blue' | 'yellow' | 'green';
 };
 
 export type BombPublicCommand = {
@@ -287,6 +286,7 @@ export type BombPublicCommand = {
   stage: BombChallengeStage;
   category: BombChallengeCategory;
   controlKind: 'wire' | 'symbol' | 'number' | 'word' | 'mixed';
+  responseMode: 'options' | 'text' | 'numeric';
   options: BombPublicOption[];
 };
 

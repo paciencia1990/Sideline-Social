@@ -31,7 +31,6 @@ import {
 type SemanticOption = {
   conceptId: string;
   label: BombLocalizedText;
-  color?: BombChallengeOption['color'];
 };
 
 type MaterializedOptions = {
@@ -58,10 +57,10 @@ const SHAPE_OPTIONS: readonly SemanticOption[] = [
   { conceptId: 'shape-diamond', label: bombText('Diamond', 'Rombo') },
 ];
 const WIRE_OPTIONS: readonly SemanticOption[] = [
-  { conceptId: 'wire-red-solid', label: bombText('Red wire with a solid pattern', 'Cable rojo con patrón sólido'), color: 'red' },
-  { conceptId: 'wire-blue-striped', label: bombText('Blue wire with a striped pattern', 'Cable azul con patrón de rayas'), color: 'blue' },
-  { conceptId: 'wire-yellow-dashed', label: bombText('Yellow wire with a dashed pattern', 'Cable amarillo con patrón de guiones'), color: 'yellow' },
-  { conceptId: 'wire-green-dotted', label: bombText('Green wire with a dotted pattern', 'Cable verde con patrón de puntos'), color: 'green' },
+  { conceptId: 'wire-red-solid', label: bombText('Red wire with a solid pattern', 'Cable rojo con patrón sólido') },
+  { conceptId: 'wire-blue-striped', label: bombText('Blue wire with a striped pattern', 'Cable azul con patrón de rayas') },
+  { conceptId: 'wire-yellow-dashed', label: bombText('Yellow wire with a dashed pattern', 'Cable amarillo con patrón de guiones') },
+  { conceptId: 'wire-green-dotted', label: bombText('Green wire with a dotted pattern', 'Cable verde con patrón de puntos') },
 ];
 const PATTERN_OPTIONS: readonly SemanticOption[] = [
   { conceptId: 'panel-solid', label: bombText('Solid panel', 'Panel sólido') },
@@ -230,8 +229,8 @@ function generateWord(random: BombSeededRandom, context: string): BombPrivateCom
   const materialized = materializeConceptOptions(concept, random, context);
   const correctOptionId = requiredOptionId(materialized, concept.id);
   return command({
-    context, stage: 'reasoning', category: 'word', controlKind: 'word',
-    prompt: bombText(`Unscramble ${concept.scramble.en}, then select the matching object.`, `Ordena las letras ${concept.scramble.es} y selecciona el objeto correspondiente.`),
+    context, stage: 'reasoning', category: 'word', controlKind: 'word', responseMode: 'text',
+    prompt: bombText(`Unscramble these letters: ${concept.scramble.en}. Tell the Defuser the complete word.`, `Ordena estas letras: ${concept.scramble.es}. Dile al Desactivador la palabra completa.`),
     explanation: bombText(`${concept.scramble.en} unscrambles to ${concept.answer.en}.`, `${concept.scramble.es} forma ${concept.answer.es}.`),
     options: materialized.options, correctOptionId,
     validation: { kind: 'word', conceptId: concept.id, answer: concept.answer, scramble: concept.scramble },
@@ -256,8 +255,8 @@ function generateCipher(random: BombSeededRandom, context: string): BombPrivateC
   const encoded = bombText(requiredEncoded(concept.answer.en, shift), requiredEncoded(concept.answer.es, shift));
   const materialized = materializeConceptOptions(concept, random, context);
   return command({
-    context, stage: 'reasoning', category: 'cipher', controlKind: 'word',
-    prompt: bombText(`Decode ${encoded.en}, then select the matching object.`, `Descifra ${encoded.es} y selecciona el objeto correspondiente.`),
+    context, stage: 'reasoning', category: 'cipher', controlKind: 'word', responseMode: 'text',
+    prompt: bombText(`Encoded payload: ${encoded.en}. Decode it and tell the Defuser the complete value.`, `Carga cifrada: ${encoded.es}. Descífrala y dile al Desactivador el valor completo.`),
     key: bombText(`Caesar key: move each letter back ${shift}; the alphabet wraps from A to Z.`, `Clave César: retrocede ${shift} letra${shift === 1 ? '' : 's'}; el alfabeto continúa de A a Z.`),
     explanation: bombText(`Moving each letter back ${shift} decodes ${encoded.en} as ${concept.answer.en}.`, `Al retroceder ${shift} letra${shift === 1 ? '' : 's'}, ${encoded.es} se descifra como ${concept.answer.es}.`),
     options: materialized.options, correctOptionId: requiredOptionId(materialized, concept.id),
@@ -434,14 +433,24 @@ function materializeOptions(semanticOptions: SemanticOption[], random: BombSeede
     const id = `control-${digest(`${context}:${semantic.conceptId}:${index}`).slice(0, 16)}`;
     optionIdByConcept.set(semantic.conceptId, id);
     conceptByOptionId.set(id, semantic.conceptId);
-    return { id, number: index + 1, marker: markers[index], label: { ...semantic.label }, ...(semantic.color ? { color: semantic.color } : {}) };
+    return {
+      id,
+      number: index + 1,
+      marker: markers[index],
+      label: { ...semantic.label },
+    };
   });
   return { options, optionIdByConcept, conceptByOptionId };
 }
 
-function command(input: Omit<BombPrivateCommand, 'challengeId'> & { context: string }): BombPrivateCommand {
-  const { context, ...commandInput } = input;
-  return { ...commandInput, challengeId: `${commandInput.category}-${digest(context).slice(0, 16)}` };
+function command(
+  input: Omit<BombPrivateCommand, 'challengeId' | 'responseMode'> & {
+    context: string;
+    responseMode?: BombPrivateCommand['responseMode'];
+  },
+): BombPrivateCommand {
+  const { context, responseMode = 'options', ...commandInput } = input;
+  return { ...commandInput, responseMode, challengeId: `${commandInput.category}-${digest(context).slice(0, 16)}` };
 }
 
 function wordSemantic(concept: BombWordConcept): SemanticOption {

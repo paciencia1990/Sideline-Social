@@ -28,12 +28,14 @@ export function validateBombChallengeSequence(commands: BombPrivateCommand[]) {
 }
 
 export function validateBombChallenge(command: BombPrivateCommand) {
+  const responseMode = command.responseMode ?? 'options';
   if (
     !command ||
     typeof command !== 'object' ||
     !(['direct', 'interpretation', 'reasoning', 'combined'] as const).includes(command.stage) ||
     !(['direct', 'position', 'math', 'word', 'riddle', 'cipher', 'combined'] as const).includes(command.category) ||
     !(['wire', 'symbol', 'number', 'word', 'mixed'] as const).includes(command.controlKind) ||
+    !(['options', 'text', 'numeric'] as const).includes(responseMode) ||
     !ID_PATTERN.test(command.challengeId) ||
     !ID_PATTERN.test(command.correctOptionId) ||
     !isLocalizedText(command.prompt, MAX_PROMPT_LENGTH) ||
@@ -42,6 +44,11 @@ export function validateBombChallenge(command: BombPrivateCommand) {
     !Array.isArray(command.options) ||
     command.options.length !== 4 ||
     !validateOptions(command.options, command.correctOptionId)
+  ) return false;
+
+  if (
+    (responseMode !== 'options' && !(['word', 'cipher'] as const).includes(command.category as 'word' | 'cipher')) ||
+    (responseMode === 'numeric' && command.category !== 'cipher')
   ) return false;
 
   if (
@@ -134,7 +141,10 @@ export function cloneBombChallenge(command: BombPrivateCommand): BombPrivateComm
     prompt: { ...command.prompt },
     explanation: { ...command.explanation },
     ...(command.key ? { key: { ...command.key } } : {}),
-    options: command.options.map((option) => ({ ...option, label: { ...option.label } })),
+    options: command.options.map((option) => ({
+      ...option,
+      label: { ...option.label },
+    })),
     validation: JSON.parse(JSON.stringify(command.validation)) as BombChallengeValidation,
   };
 }
@@ -150,8 +160,7 @@ function validateOptions(options: BombChallengeOption[], correctOptionId: string
   if (
     options.some((option) => !option || !ID_PATTERN.test(option.id) || !Number.isInteger(option.number) ||
       !(['solid', 'striped', 'dashed', 'dotted', 'circle', 'square', 'triangle', 'diamond'] as const).includes(option.marker) ||
-      !isLocalizedText(option.label, MAX_LABEL_LENGTH) ||
-      (option.color !== undefined && !(['red', 'blue', 'yellow', 'green'] as const).includes(option.color))) ||
+      !isLocalizedText(option.label, MAX_LABEL_LENGTH)) ||
     new Set(ids).size !== 4 ||
     new Set(numbers).size !== 4 ||
     new Set(markers).size !== 4 ||

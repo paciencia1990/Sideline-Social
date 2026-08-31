@@ -1,7 +1,7 @@
 export const BOMB_ROLE_SCHEMA_VERSION = 3;
 export const BOMB_COMMAND_COUNT = 6;
 export const BOMB_MAX_STRIKES = 1;
-export const BOMB_GENERATOR_VERSION = 1;
+export const BOMB_GENERATOR_VERSION = 2;
 export const BOMB_RECENT_FINGERPRINT_LIMIT = 30;
 export const BOMB_GENERATION_MAX_ATTEMPTS = 12;
 
@@ -14,6 +14,7 @@ export type BombReasoningCategory = (typeof BOMB_REASONING_CATEGORIES)[number];
 export type BombChallengeCategory = 'direct' | 'position' | BombReasoningCategory | 'combined';
 export type BombControlKind = 'wire' | 'symbol' | 'number' | 'word' | 'mixed';
 export type BombMarker = 'solid' | 'striped' | 'dashed' | 'dotted' | 'circle' | 'square' | 'triangle' | 'diamond';
+export type BombResponseMode = 'options' | 'text' | 'numeric';
 export type BombMathOperation =
   | 'addition'
   | 'subtraction'
@@ -31,7 +32,6 @@ export type BombChallengeOption = {
   number: number;
   marker: BombMarker;
   label: BombLocalizedText;
-  color?: 'red' | 'blue' | 'yellow' | 'green';
 };
 
 export type BombMathValidation = {
@@ -91,6 +91,7 @@ export type BombPrivateCommand = {
   stage: BombChallengeStage;
   category: BombChallengeCategory;
   controlKind: BombControlKind;
+  responseMode: BombResponseMode;
   prompt: BombLocalizedText;
   explanation: BombLocalizedText;
   key?: BombLocalizedText;
@@ -106,6 +107,7 @@ export type BombPublicCommand = {
   stage: BombChallengeStage;
   category: BombChallengeCategory;
   controlKind: BombControlKind;
+  responseMode: BombResponseMode;
   options: BombPublicOption[];
 };
 export type BombLocalizedPublicCommand = Omit<BombPublicCommand, 'options'> & {

@@ -16,6 +16,21 @@ export type TriviaAnswerAccessibilityLabels = {
   notSelected: string;
 };
 
+export type TriviaAnswerSubmissionClaim = {
+  accepted: boolean;
+  submissionKey: string;
+};
+
+export function claimTriviaAnswerSubmission(
+  questionKey: string,
+  inFlightQuestionKey: string,
+): TriviaAnswerSubmissionClaim {
+  if (!questionKey || inFlightQuestionKey === questionKey) {
+    return { accepted: false, submissionKey: inFlightQuestionKey };
+  }
+  return { accepted: true, submissionKey: questionKey };
+}
+
 type ResolveTriviaAnswerVisualStateInput = {
   answerIndex: number;
   selectedAnswerIndex: number | null;

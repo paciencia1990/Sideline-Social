@@ -42,6 +42,7 @@ import { finalizeGameReward, type GameRewardResult } from "@/services/sidelineSt
 import { startGameLobbyRematch, updateGameJoinCodeStatus } from "@/services/gameJoinCodeService";
 import { resolveClientGameAuthority } from "@/utils/authIdentity";
 import {
+  claimTriviaAnswerSubmission,
   createTriviaQuestionKey,
   getTriviaAnswerAccessibilityLabel,
   getTriviaAnswerFeedbackIcon,
@@ -73,6 +74,11 @@ type QuestionScoreResult = ScoreResult & {
   questionKey: string;
 };
 
+type OptimisticTriviaSelection = {
+  answerIndex: number;
+  questionKey: string;
+};
+
 export default function TriviaBlitzScreen() {
   const { i18n, t } = useTranslation();
   const { user, firebaseUser, loading: authLoading } = useAuth();
@@ -95,6 +101,7 @@ export default function TriviaBlitzScreen() {
   const [players, setPlayers] = useState<TriviaPlayer[]>([]);
   const [secondsRemaining, setSecondsRemaining] = useState(QUESTION_SECONDS);
   const [lastResult, setLastResult] = useState<QuestionScoreResult | null>(null);
+  const [optimisticSelection, setOptimisticSelection] = useState<OptimisticTriviaSelection | null>(null);
   const [busy, setBusy] = useState(false);
   const [settingUp, setSettingUp] = useState(false);
   const [setupError, setSetupError] = useState<TriviaErrorKey | null>(null);
@@ -109,6 +116,7 @@ export default function TriviaBlitzScreen() {
   const rewardRequestKeyRef = useRef("");
   const lifecycleEndedRef = useRef("");
   const rematchInFlightRef = useRef(false);
+  const answerSubmissionKeyRef = useRef("");
   const fallbackPlayerName = t("games.playerFallback");
 
   const resolvedPlayerName = useMemo(
@@ -211,7 +219,8 @@ export default function TriviaBlitzScreen() {
   const currentResult =
     synchronizedResult ??
     (lastResult?.questionKey === currentQuestionKey ? lastResult : null);
-  const selectedAnswerIndex = session?.currentSelection?.answerIndex ?? null;
+  const selectedAnswerIndex = session?.currentSelection?.answerIndex ??
+    (optimisticSelection?.questionKey === currentQuestionKey ? optimisticSelection.answerIndex : null);
   const feedbackQuestionKey = currentResult ? currentQuestionKey : null;
   const answerResultKnown = Boolean(currentQuestion && feedbackQuestionKey && currentResult);
   const correctAnswerIndex = currentResult?.correctAnswerIndex ?? -1;
@@ -229,6 +238,11 @@ export default function TriviaBlitzScreen() {
   const correctAnswerText = currentQuestion
     ? currentAnswerOptions[correctAnswerIndex] ?? ""
     : "";
+
+  useEffect(() => {
+    answerSubmissionKeyRef.current = "";
+    setOptimisticSelection(null);
+  }, [currentQuestionKey]);
   const selectionBelongsToSelf = Boolean(
     self && session?.currentSelection?.playerId === self.id,
   );
@@ -460,7 +474,10 @@ export default function TriviaBlitzScreen() {
 
   const handleSelectAnswer = useCallback(
     (answerIndex: number) => {
-      const hasAlreadyAnswered = Boolean(session?.currentSelection || session?.answerResult);
+      const hasAlreadyAnswered = Boolean(
+        session?.currentSelection ||
+        synchronizedResult,
+      );
 
       if (!sessionId) {
         return;
@@ -492,28 +509,43 @@ export default function TriviaBlitzScreen() {
 
       const questionIndex = session.questionIndex;
       const questionKey = currentQuestionKey;
+      const claim = claimTriviaAnswerSubmission(questionKey, answerSubmissionKeyRef.current);
+      if (!claim.accepted) return;
       const submissionId = createTriviaSessionId();
-      runAction(async () => {
-        const result = await submitTriviaAnswer({
+      answerSubmissionKeyRef.current = claim.submissionKey;
+      setOptimisticSelection({ answerIndex, questionKey });
+      setBusy(true);
+      void submitTriviaAnswer({
           sessionId,
           questionIndex,
           answerIndex,
           submissionId,
-        });
+        })
+        .then((result) => {
         setLastResult({ ...result, questionKey });
-      });
+        })
+        .catch((error) => {
+          if (answerSubmissionKeyRef.current === questionKey) {
+            answerSubmissionKeyRef.current = "";
+            setOptimisticSelection(null);
+          }
+          Alert.alert(
+            t("games.triviaBlitz.title"),
+            t(getTriviaErrorTranslationKey(error)),
+          );
+        })
+        .finally(() => setBusy(false));
     },
     [
       currentQuestion,
       currentQuestionKey,
       isActiveTurn,
-      runAction,
       self,
-      session?.answerResult,
       session?.currentSelection,
       session?.questionIndex,
       session?.status,
       sessionId,
+      synchronizedResult,
       t,
     ],
   );
@@ -705,13 +737,16 @@ export default function TriviaBlitzScreen() {
                 visualState === "selected-pending" || visualState === "selected-incorrect";
               const usesCorrectStyle =
                 visualState === "selected-correct" || visualState === "revealed-correct";
-              const answerLocked = Boolean(session.currentSelection);
+              const answerLocked = selectedAnswerIndex !== null || answerResultKnown;
 
               return (
                 <Pressable
+                  android_ripple={{ color: `${Colors.accentGreen}30` }}
                   key={`${currentQuestionKey}:${index}`}
-                  style={[
+                  hitSlop={2}
+                  style={({ pressed }) => [
                     styles.answerButton,
+                    pressed && !answerLocked && styles.answerPressed,
                     usesSelectedStyle && styles.selectedAnswer,
                     usesCorrectStyle && styles.correctAnswer,
                   ]}
@@ -1017,7 +1052,13 @@ const styles = StyleSheet.create({
     borderColor: Colors.secondary,
     borderRadius: 8,
     borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 52,
     padding: Spacing.md,
+  },
+  answerPressed: {
+    backgroundColor: `${Colors.accentGreen}20`,
+    borderColor: Colors.communicationLink,
   },
   answerContent: {
     alignItems: "center",

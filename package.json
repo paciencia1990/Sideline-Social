@@ -101,6 +101,7 @@
     "coach-ai:eval": "node scripts/coach-ai-eval/run.cjs",
     "test:coach-ai-eval": "node scripts/test-coach-ai-eval.cjs",
     "test:coach-ai-environment": "tsx scripts/test-coach-ai-environment.ts && node scripts/test-coach-ai-native-config.cjs && node scripts/test-coach-ai-compiled-environment.cjs",
+    "test:firebase-emulator-policy": "tsx scripts/test-firebase-emulator-policy.ts",
     "test:coach-ai-preview-bundle": "npx.cmd eas-cli@latest env:exec preview scripts\\run-coach-ai-preview-bundle.cmd --non-interactive",
     "test:coach-ai-production-beta-bundle": "npx.cmd eas-cli@latest env:exec production scripts\\run-coach-ai-production-beta-bundle.cmd --non-interactive",
     "test:coach-ai-normal-production-bundle": "npx.cmd eas-cli@latest env:exec production scripts\\run-coach-ai-normal-production-bundle.cmd --non-interactive",
