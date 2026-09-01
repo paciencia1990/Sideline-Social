@@ -88,14 +88,19 @@ export const submitMyModerationAppeal = safetyFunctions.https.onCall(
     const rateReference = firestore
       .collection("moderationRateLimits")
       .doc(hashId(`${uid}:mobile-appeal`));
+    const standingReference = firestore.collection("accountStanding").doc(uid);
+    const auditReference = firestore.collection("moderationAuditEvents")
+      .doc(hashId(`appeal-submitted:${caseSnapshot.id}:${uid}:${standing.revision}`));
     const now = Timestamp.now();
     let alreadySubmitted = false;
 
     await firestore.runTransaction(async (transaction) => {
-      const [currentCase, existingAppeal, rateSnapshot] = await Promise.all([
+      const [currentCase, currentStanding, existingAppeal, rateSnapshot, auditSnapshot] = await Promise.all([
         transaction.get(caseSnapshot.ref),
+        transaction.get(standingReference),
         transaction.get(appealReference),
         transaction.get(rateReference),
+        transaction.get(auditReference),
       ]);
       if (
         !currentCase.exists ||
@@ -106,7 +111,48 @@ export const submitMyModerationAppeal = safetyFunctions.https.onCall(
           "Eligible moderation case not found.",
         );
       }
+      const currentStandingCaseId = typeof currentStanding.data()?.caseId === "string"
+        ? currentStanding.data()?.caseId
+        : caseIdFromActionReference(currentStanding.data()?.actionReference);
+      const originalActionPath = actionReferenceForCase(
+        currentStanding.data()?.actionReference,
+        caseSnapshot.id,
+      );
+      if (
+        !currentStanding.exists ||
+        currentStandingCaseId !== caseSnapshot.id ||
+        !originalActionPath ||
+        Number(currentStanding.data()?.revision) !== standing.revision ||
+        (
+          currentStanding.data()?.status === "active" &&
+          currentStanding.data()?.messagingRestricted !== true
+        )
+      ) {
+        throw new firebaseFunctions.https.HttpsError(
+          "aborted",
+          "The account restriction changed. Refresh and try again.",
+          { reason: "standing_changed" },
+        );
+      }
+      const originalAction = await transaction.get(firestore.doc(originalActionPath));
+      if (!originalAction.exists || originalAction.data()?.outcome !== "completed") {
+        throw new firebaseFunctions.https.HttpsError(
+          "failed-precondition",
+          "The completed enforcement is unavailable.",
+          { reason: "original_enforcement_unavailable" },
+        );
+      }
       if (existingAppeal.exists) {
+        if (
+          existingAppeal.data()?.submittedBy !== uid ||
+          existingAppeal.data()?.standingRevision !== standing.revision
+        ) {
+          throw new firebaseFunctions.https.HttpsError(
+            "failed-precondition",
+            "The existing appeal conflicts with this restriction.",
+            { reason: "appeal_conflict" },
+          );
+        }
         alreadySubmitted = true;
         return;
       }
@@ -125,6 +171,14 @@ export const submitMyModerationAppeal = safetyFunctions.https.onCall(
           "Too many appeal attempts. Try again later.",
         );
       }
+      const currentCaseVersion = storedCaseVersion(currentCase.data()?.caseVersion);
+      if (currentCaseVersion === null || currentCaseVersion === Number.MAX_SAFE_INTEGER) {
+        throw new firebaseFunctions.https.HttpsError(
+          "failed-precondition",
+          "Case version metadata is unavailable.",
+          { reason: "partial_case_metadata" },
+        );
+      }
 
       transaction.set(rateReference, {
         uidHash: hashId(uid),
@@ -140,6 +194,10 @@ export const submitMyModerationAppeal = safetyFunctions.https.onCall(
         submittedBy: uid,
         explanation,
         standingRevision: standing.revision,
+        originalActionReference: originalActionPath,
+        originalActionType: typeof originalAction.data()?.type === "string"
+          ? originalAction.data()?.type
+          : null,
         status: "submitted",
         source: "mobile",
         createdAt: now,
@@ -147,24 +205,23 @@ export const submitMyModerationAppeal = safetyFunctions.https.onCall(
       transaction.update(caseSnapshot.ref, {
         status: "appealed",
         appealState: "submitted",
+        caseVersion: currentCaseVersion + 1,
         updatedAt: now,
       });
+      if (!auditSnapshot.exists) {
+        transaction.create(auditReference, {
+          eventId: auditReference.id,
+          actorId: uid,
+          eventType: "appealSubmitted",
+          caseId: caseSnapshot.id,
+          targetId: uid,
+          reasonCode: null,
+          outcome: "submitted",
+          metadata: { source: "mobile", standingRevision: standing.revision },
+          createdAt: now,
+        });
+      }
     });
-
-    if (!alreadySubmitted) {
-      const auditReference = firestore.collection("moderationAuditEvents").doc();
-      await auditReference.create({
-        eventId: auditReference.id,
-        actorId: uid,
-        eventType: "appealSubmitted",
-        caseId: caseSnapshot.id,
-        targetId: uid,
-        reasonCode: null,
-        outcome: "submitted",
-        metadata: { source: "mobile", standingRevision: standing.revision },
-        createdAt: now,
-      });
-    }
 
     return {
       appealStatus: "submitted" as const,
@@ -265,24 +322,12 @@ async function findAppealCase(uid: string) {
   const caseId = typeof data.caseId === "string"
     ? data.caseId
     : caseIdFromActionReference(data.actionReference);
-  if (caseId) {
+  const actionReference = caseId ? actionReferenceForCase(data.actionReference, caseId) : null;
+  if (caseId && actionReference) {
     const direct = await firestore.collection("moderationCases").doc(caseId).get();
     if (direct.exists && direct.data()?.reportedUserId === uid) return direct;
   }
-
-  const snapshot = await firestore
-    .collection("moderationCases")
-    .where("reportedUserId", "==", uid)
-    .limit(50)
-    .get();
-  return snapshot.docs
-    .filter((entry) => ["actioned", "closed", "appealed"].includes(
-      String(entry.data()?.status),
-    ))
-    .sort((left, right) =>
-      (timestampMillis(right.data()?.updatedAt) ?? 0) -
-      (timestampMillis(left.data()?.updatedAt) ?? 0),
-    )[0] ?? null;
+  return null;
 }
 
 async function cancelRestrictedArtifacts(
@@ -400,6 +445,17 @@ function timestampMillis(value: unknown) {
   if (value instanceof Timestamp) return value.toMillis();
   if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
   return null;
+}
+
+function actionReferenceForCase(value: unknown, caseId: string) {
+  if (typeof value !== "string") return null;
+  const match = /^moderationCases\/([^/]+)\/actions\/[^/]+$/u.exec(value);
+  return match?.[1] === caseId ? value : null;
+}
+
+function storedCaseVersion(value: unknown) {
+  if (value == null) return 0;
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
 }
 
 function hashId(value: string) {

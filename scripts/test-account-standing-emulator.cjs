@@ -107,9 +107,9 @@ async function setStanding(client, input) {
     expiresAt: input.expiresAt ?? null,
     reasonCode: "communityGuidelines",
     caseId: input.caseId ?? null,
-    actionReference: input.caseId
+    actionReference: input.actionReference ?? (input.caseId
       ? `moderationCases/${input.caseId}/actions/action-1`
-      : null,
+      : null),
     revision: input.revision ?? 1,
     updatedAt: admin.firestore.Timestamp.now(),
     updatedBy: "moderation-admin",
@@ -608,13 +608,24 @@ async function run() {
     caseId: "appeal-case",
     reportedUserId: messagingRestricted.uid,
     status: "actioned",
+    caseVersion: 0,
     appealState: "none",
     updatedAt: admin.firestore.Timestamp.now(),
+  });
+  const originalAppealAction = adminDb.collection("moderationCases").doc("appeal-case")
+    .collection("actions").doc("original-messaging-restriction");
+  await originalAppealAction.set({
+    actionId: originalAppealAction.id,
+    type: "restrictMessaging",
+    outcome: "completed",
+    createdAt: admin.firestore.Timestamp.now(),
+    completedAt: admin.firestore.Timestamp.now(),
   });
   await setStanding(messagingRestricted, {
     status: "active",
     messagingRestricted: true,
     caseId: "appeal-case",
+    actionReference: originalAppealAction.path,
     revision: 2,
   });
   const explanation = "Please review this restriction because I believe relevant context was missed.";
@@ -628,6 +639,15 @@ async function run() {
     revision: 2,
   });
   assert.equal(duplicateAppeal.alreadySubmitted, true);
+  const [appealedCase, appealAudits] = await Promise.all([
+    adminDb.collection("moderationCases").doc("appeal-case").get(),
+    adminDb.collection("moderationAuditEvents")
+      .where("caseId", "==", "appeal-case")
+      .where("eventType", "==", "appealSubmitted")
+      .get(),
+  ]);
+  assert.equal(appealedCase.data()?.caseVersion, 1);
+  assert.equal(appealAudits.size, 1, "appeal and immutable audit must commit exactly once");
 
   await adminDb.collection("userBlocks").doc(activeParent.uid)
     .collection("blockedUsers").doc(blocked.uid).set({
