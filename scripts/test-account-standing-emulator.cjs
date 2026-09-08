@@ -120,7 +120,7 @@ async function setStanding(client, input) {
       admin.database().ref(`accountStanding/${client.uid}`).get(),
     ]);
     return projection.data()?.revision === (input.revision ?? 1) &&
-      mirror.val()?.revision === (input.revision ?? 1);
+      mirror.val()?.revision === (input.revision ?? 1) && mirror.val()?.deleted !== true;
   });
 }
 
@@ -725,7 +725,26 @@ async function run() {
     assert.equal((await client.call("getMyAccountStanding")).status, "active");
   }
 
-  console.log("Account-standing callable, stale-session, moderator identity, restoration, appeal, block/report safety, artifact cancellation, Firestore, RTDB, Storage, and anonymous enforcement emulator tests passed.");
+  // Deleting the canonical source must retain a non-enforcing ordering marker.
+  // A later canonical document can restart its revision without losing ordering.
+  const deletedStanding = adminDb.collection('accountStanding').doc(messagingRestricted.uid);
+  const beforeDelete = await deletedStanding.get();
+  await deletedStanding.delete();
+  await waitFor(async () => {
+    const [publicView, realtime] = await Promise.all([
+      adminDb.collection('accountStandingPublic').doc(messagingRestricted.uid).get(),
+      admin.database().ref(`accountStanding/${messagingRestricted.uid}`).get(),
+    ]);
+    return !publicView.exists && realtime.val()?.deleted === true && realtime.val()?.messagingRestricted === false;
+  });
+  const retained = (await admin.database().ref(`accountStanding/${messagingRestricted.uid}`).get()).val();
+  assert.equal(retained.version, `${beforeDelete.updateTime.seconds}:${beforeDelete.updateTime.nanoseconds}`);
+  await setStanding(messagingRestricted, { status: 'active', revision: 1 });
+  const recreated = (await admin.database().ref(`accountStanding/${messagingRestricted.uid}`).get()).val();
+  assert.notEqual(recreated.version, retained.version);
+  assert.equal(recreated.deleted, undefined);
+
+  console.log("Account-standing callable, stale-session, moderator identity, restoration, appeal, block/report safety, artifact cancellation, Firestore, RTDB, Storage, anonymous enforcement, deletion markers and generation recovery emulator tests passed.");
 }
 
 run()

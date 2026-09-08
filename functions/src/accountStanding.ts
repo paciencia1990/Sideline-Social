@@ -1,3 +1,5 @@
+import { orderedStandingProjection, deleteStandingProjection } from './standingProjection';
+import { observeStandingDelivery } from './standingObservation';
 import { createHash } from "node:crypto";
 
 import * as admin from "firebase-admin";
@@ -8,6 +10,7 @@ import {
   permanentAccountFunctions,
   requirePermanentUid,
   resolveAccountStanding,
+  resolveAccountStandingData,
 } from "./permanentAuth";
 import { parseFriendChatMediaStoragePath } from "./friendChatCore";
 
@@ -234,47 +237,54 @@ export const onAccountStandingChanged = firebaseFunctions
   .region("us-central1")
   .firestore.document("accountStanding/{uid}")
   .onWrite(async (change, context) => {
+    return observeStandingDelivery(context.eventId, context.params.uid, async () => {
     const uid = context.params.uid;
     const firestore = admin.firestore();
     const publicReference = firestore
       .collection("accountStandingPublic")
       .doc(uid);
 
-    if (!change.after.exists) {
-      await Promise.all([
-        publicReference.delete(),
-        admin.database().ref(`accountStanding/${uid}`).remove(),
-      ]);
+    // Read authoritative standing inside the same transaction that writes the
+    // Firestore projection; event payloads can be arbitrarily old or reordered.
+    const snapshot = await firestore.runTransaction(async transaction => {
+      const current = await transaction.get(firestore.collection('accountStanding').doc(uid));
+      const publicSnapshot = await transaction.get(publicReference);
+      if (!current.exists) {
+        if (publicSnapshot.exists) transaction.delete(publicReference);
+        return null;
+      }
+      const data = current.data() ?? {};
+      const standing = resolveAccountStandingData(data);
+      // The canonical read participates in this transaction. Its server version,
+      // not a possibly stale projection revision, fences concurrent writes and
+      // correctly handles a new canonical document whose revision restarts at 1.
+        transaction.set(publicReference, {
+          status: standing.effective,
+          effectiveAt: timestampValue(data.effectiveAt) ?? timestampValue(data.updatedAt) ?? Timestamp.now(),
+          expiresAt: timestampValue(data.expiresAt), publicReasonCode: readPublicReasonCode(data.reasonCode),
+          revision: standing.revision, updatedAt: FieldValue.serverTimestamp(),
+        });
+      if (!current.updateTime) throw new Error('standing_version_missing');
+      return { data, standing, version: `${current.updateTime.seconds}:${current.updateTime.nanoseconds}` };
+    });
+    if (!snapshot) {
+      const beforeRevision = Number(change.before.data()?.revision);
+      if (Number.isSafeInteger(beforeRevision) && beforeRevision > 0) {
+        if (!change.before.updateTime) throw new Error('standing_version_missing');
+        const deletedVersion = `${change.before.updateTime.seconds}:${change.before.updateTime.nanoseconds}`;
+        await admin.database().ref(`accountStanding/${uid}`).transaction(
+          current => deleteStandingProjection(current, beforeRevision, deletedVersion), undefined, false,
+        );
+      }
       return;
     }
-
-    const data = change.after.data() ?? {};
-    const standing = await resolveAccountStanding(uid);
-    const publicReasonCode = readPublicReasonCode(data.reasonCode);
-    const effectiveAt = timestampValue(data.effectiveAt) ??
-      timestampValue(data.updatedAt) ??
-      Timestamp.now();
-    const expiresAt = timestampValue(data.expiresAt);
-    const revision = standing.revision;
-    const projection = {
+    const { standing } = snapshot;
+    await admin.database().ref(`accountStanding/${uid}`).transaction(current => orderedStandingProjection(current, {
       status: standing.effective,
-      effectiveAt,
-      expiresAt,
-      publicReasonCode,
-      revision,
-      updatedAt: FieldValue.serverTimestamp(),
-    };
-
-    await Promise.all([
-      publicReference.set(projection),
-      admin.database().ref(`accountStanding/${uid}`).set({
-        status: standing.effective,
-        expiresAt: standing.expiresAtMillis,
-        revision,
-        updatedAt: Date.now(),
-      }),
-      cancelRestrictedArtifacts(uid, standing.effective),
-    ]);
+      messagingRestricted: standing.effective === 'messagingRestricted',
+      expiresAt: standing.expiresAtMillis, revision: standing.revision, updatedAt: Date.now(), version: snapshot.version,
+    }), undefined, false);
+    await cancelRestrictedArtifacts(uid, standing.effective);
 
     if (
       standing.effective === "suspended" ||
@@ -282,6 +292,7 @@ export const onAccountStandingChanged = firebaseFunctions
     ) {
       await admin.auth().revokeRefreshTokens(uid);
     }
+    });
   });
 
 async function readSafeStanding(uid: string) {

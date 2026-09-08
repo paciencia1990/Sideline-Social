@@ -62,7 +62,10 @@ export async function resolveAccountStanding(
   const snapshot = await admin.firestore().collection("accountStanding").doc(uid).get();
   if (!snapshot.exists) return activeStanding();
 
-  const data = snapshot.data() ?? {};
+  return resolveAccountStandingData(snapshot.data() ?? {}, nowMillis);
+}
+
+export function resolveAccountStandingData(data: FirebaseFirestore.DocumentData, nowMillis = Date.now()): ResolvedAccountStanding {
   const expiresAtMillis = timestampMillis(data.expiresAt);
   const expired = expiresAtMillis !== null && expiresAtMillis <= nowMillis;
   const status = data.status === "banned"
