@@ -28,10 +28,12 @@ const firebaseClientEnvironment = {
   EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID: process.env.EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID,
 };
 const coachAiBetaBuildValue = process.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD;
+const coachAiProductionBetaBuildValue = process.env.EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD;
 const firebaseConfig: FirebaseOptions = resolveFirebaseClientConfig(
   firebaseClientEnvironment,
   firebasePlatform,
   coachAiBetaBuildValue,
+  coachAiProductionBetaBuildValue,
 ).options;
 
 export const firebaseApp = getApps().length

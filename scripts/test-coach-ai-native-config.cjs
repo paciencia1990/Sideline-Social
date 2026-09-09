@@ -7,6 +7,66 @@ const {
   shouldDeferStagingNativeFirebaseValidation,
 } = require("../config/firebaseNativeConfig");
 
+const appConfigPath = require.resolve("../app.config.js");
+const appConfigEnvironmentNames = [
+  "APP_VARIANT",
+  "EAS_BUILD",
+  "EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION",
+  "EXPO_PUBLIC_AI_COACH_TESTING_ENABLED",
+  "EXPO_PUBLIC_AI_COACH_BETA_BUILD",
+  "EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD",
+  "EXPO_PUBLIC_FIREBASE_ENVIRONMENT",
+  "REQUIRE_PRODUCTION_LEGAL_CONFIG",
+];
+
+assert.doesNotThrow(() => evaluateAppConfig({
+  APP_VARIANT: "production",
+  EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "production",
+}));
+assert.doesNotThrow(() => evaluateAppConfig({
+  APP_VARIANT: "production",
+  EXPO_PUBLIC_AI_COACH_TESTING_ENABLED: "true",
+  EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD: "true",
+  EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "production",
+}));
+assert.doesNotThrow(() => evaluateAppConfig({
+  APP_VARIANT: "production",
+  EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION: "true",
+  EXPO_PUBLIC_AI_COACH_TESTING_ENABLED: "true",
+  EXPO_PUBLIC_AI_COACH_BETA_BUILD: "true",
+  EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "staging",
+}));
+assert.throws(() => evaluateAppConfig({
+  APP_VARIANT: "production",
+  EXPO_PUBLIC_AI_COACH_TESTING_ENABLED: "true",
+  EXPO_PUBLIC_AI_COACH_BETA_BUILD: "true",
+  EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD: "true",
+  EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "production",
+}), /cannot both be enabled/);
+assert.throws(() => evaluateAppConfig({
+  APP_VARIANT: "production",
+  EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD: "true",
+  EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "production",
+}), /requires release JavaScript, the exact testing flag, and production Firebase/);
+assert.throws(() => evaluateAppConfig({
+  APP_VARIANT: "development",
+  EXPO_PUBLIC_AI_COACH_TESTING_ENABLED: "true",
+  EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD: "true",
+  EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "production",
+}), /requires release JavaScript/);
+assert.throws(() => evaluateAppConfig({
+  APP_VARIANT: "production",
+  EXPO_PUBLIC_AI_COACH_TESTING_ENABLED: "true",
+  EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD: "true",
+  EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "staging",
+}), /requires release JavaScript, the exact testing flag, and production Firebase/);
+assert.throws(() => evaluateAppConfig({
+  APP_VARIANT: "production",
+  EXPO_PUBLIC_AI_COACH_TESTING_ENABLED: "true",
+  EXPO_PUBLIC_AI_COACH_BETA_BUILD: "true",
+  EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "production",
+}), /requires the exact testing flag and staging Firebase/);
+
 const localBetaResolution = {
   requested: true,
   isEasBuild: false,
@@ -50,4 +110,20 @@ try {
   fs.rmSync(temporaryDirectory, { recursive: true, force: true });
 }
 
-console.log("Coach AI staging native Firebase file consistency tests passed.");
+console.log("Coach AI native Firebase consistency and mutually exclusive build-gate tests passed.");
+
+function evaluateAppConfig(environment) {
+  const previous = new Map(appConfigEnvironmentNames.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of appConfigEnvironmentNames) delete process.env[name];
+    Object.assign(process.env, environment);
+    delete require.cache[appConfigPath];
+    return require(appConfigPath);
+  } finally {
+    delete require.cache[appConfigPath];
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}

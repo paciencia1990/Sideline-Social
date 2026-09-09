@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import {
+  COACH_AI_PRODUCTION_FIREBASE_PROJECT_ID,
   COACH_AI_STAGING_FIREBASE_PROJECT_ID,
   resolveFirebaseClientConfig,
 } from "../config/firebaseEnvironment";
@@ -22,14 +23,14 @@ const stagingEnvironment = {
   EXPO_PUBLIC_FIREBASE_APP_ID_IOS: "1:123456789012:ios:abcdef123456",
   EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID: "1:123456789012:android:abcdef123456",
 };
-const staging = resolveFirebaseClientConfig(stagingEnvironment, "android", "true");
+const staging = resolveFirebaseClientConfig(stagingEnvironment, "android", "true", undefined);
 assert.equal(staging.environment, "staging");
 assert.equal(staging.options.projectId, COACH_AI_STAGING_FIREBASE_PROJECT_ID);
 assert.equal(String(staging.options.appId).includes(":android:"), true);
 
 assert.throws(
   () => resolveFirebaseClientConfig({}, "ios", "true"),
-  /Coach AI beta Firebase configuration must resolve to staging project sideline-social-staging-2026/,
+  /Coach AI staging-beta Firebase configuration must resolve to staging project sideline-social-staging-2026/,
 );
 const alternateStagingProject = "sideline-social-alternate";
 assert.throws(
@@ -40,7 +41,31 @@ assert.throws(
     EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: `${alternateStagingProject}.firebasestorage.app`,
     EXPO_PUBLIC_FIREBASE_DATABASE_URL: `https://${alternateStagingProject}-default-rtdb.firebaseio.com`,
   }, "android", "true"),
-  /Coach AI beta Firebase configuration must resolve to staging project sideline-social-staging-2026/,
+  /Coach AI staging-beta Firebase configuration must resolve to staging project sideline-social-staging-2026/,
+);
+
+const productionBeta = resolveFirebaseClientConfig({}, "android", undefined, "true");
+assert.equal(productionBeta.environment, "production");
+assert.equal(productionBeta.options.projectId, COACH_AI_PRODUCTION_FIREBASE_PROJECT_ID);
+assert.throws(
+  () => resolveFirebaseClientConfig(stagingEnvironment, "android", undefined, "true"),
+  /Coach AI production-beta Firebase configuration must resolve to production project sideline-squad/,
+);
+const alternateProductionProject = "sideline-prod-alternate";
+assert.throws(
+  () => resolveFirebaseClientConfig({
+    ...stagingEnvironment,
+    EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "production",
+    EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: `${alternateProductionProject}.firebaseapp.com`,
+    EXPO_PUBLIC_FIREBASE_PROJECT_ID: alternateProductionProject,
+    EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: `${alternateProductionProject}.firebasestorage.app`,
+    EXPO_PUBLIC_FIREBASE_DATABASE_URL: `https://${alternateProductionProject}-default-rtdb.firebaseio.com`,
+  }, "android", undefined, "true"),
+  /Coach AI production-beta Firebase configuration must resolve to production project sideline-squad/,
+);
+assert.throws(
+  () => resolveFirebaseClientConfig({}, "ios", "true", "true"),
+  /cannot both be enabled/,
 );
 
 assert.throws(() => resolveFirebaseClientConfig({ EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "staging" }, "ios"), /required/);
@@ -48,4 +73,4 @@ assert.throws(() => resolveFirebaseClientConfig({ ...stagingEnvironment, EXPO_PU
 assert.throws(() => resolveFirebaseClientConfig({ ...stagingEnvironment, EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: "wrong.firebasestorage.app" }, "ios"), /does not match/);
 assert.throws(() => resolveFirebaseClientConfig({ EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "preview" }, "ios"), /must be development, staging, or production/);
 
-console.log("Coach AI Firebase production fallback, staging selection, and fail-closed consistency tests passed.");
+console.log("Coach AI normal-production, staging-beta, production-beta, and fail-closed Firebase isolation tests passed.");
