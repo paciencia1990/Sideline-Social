@@ -13,12 +13,10 @@ import {
   unlink,
   updateProfile,
 } from "firebase/auth";
-import { doc, getDoc, serverTimestamp, setDoc, type DocumentData } from "firebase/firestore";
+import { doc, getDoc, type DocumentData } from "firebase/firestore";
 
 import { auth, db } from "@/config/firebase";
-import { CURRENT_LEGAL_ASSENT_VERSION } from "@/constants/legalAssent";
-import i18n from "@/i18n";
-import { ensureFederatedUserProfile } from "@/services/authProfileService";
+import { createPasswordUserProfile, ensureFederatedUserProfile } from "@/services/authProfileService";
 import {
   clearPendingProviderConflict,
   getPendingProviderConflict,
@@ -326,7 +324,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [refreshProfile, runExclusiveAuthOperation]);
 
-  const signUp = useCallback(async (email: string, password: string, profile: SignUpProfile = {}) => {
+  const signUp = useCallback(async (email: string, password: string, profile: SignUpProfile = {}) => runExclusiveAuthOperation(async (operationId) => {
     if (!profile.policiesAccepted || !profile.adultEligibilityConfirmed) {
       throw codedError("auth/account-onboarding-incomplete");
     }
@@ -336,33 +334,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const displayName = [firstName, lastName].filter(Boolean).join(" ");
     if (displayName) await updateProfile(credential.user, { displayName });
 
-    await setDoc(doc(db, "users", credential.user.uid), {
-      userId: credential.user.uid,
+    await createPasswordUserProfile(credential.user, {
+      adultEligibilityConfirmed: profile.adultEligibilityConfirmed,
       firstName,
       lastName,
-      displayName: displayName || null,
-      email: email.trim(),
-      zipCode: profile.zipCode?.trim() ?? "",
-      sports: profile.sports ?? [],
-      phoneNumber: profile.phoneNumber ?? null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      tier: "member",
-      totalStars: 0,
-      sidelineStars: 0,
-      squadIds: [],
-      friendIds: [],
-      preferredLanguage: i18n.resolvedLanguage?.startsWith("es") ? "es" : "en",
-      profileVisibility: "squad_only",
-      accountOnboardingCompleted: true,
-      accountOnboardingCompletedAt: serverTimestamp(),
-      adultEligibilityConfirmed: true,
-      legalAssentVersion: CURRENT_LEGAL_ASSENT_VERSION,
-      privacyPolicyAcceptedAt: serverTimestamp(),
-      termsOfUseAcceptedAt: serverTimestamp(),
-      communityGuidelinesAcceptedAt: serverTimestamp(),
-      modeOnboardingCompleted: false,
-    }, { merge: true });
+      policiesAccepted: profile.policiesAccepted,
+      phoneNumber: profile.phoneNumber,
+      sports: profile.sports,
+      zipCode: profile.zipCode,
+    });
+    if (!authOperationGuard.current.isCurrent(operationId)) throw codedError("auth/stale-response");
 
     const userDoc = await getDoc(doc(db, "users", credential.user.uid));
     const nextUser = mapUser(credential.user, userDoc.exists(), userDoc.data());
@@ -371,7 +352,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(nextUser);
     setLoading(false);
     return nextUser;
-  }, []);
+  }), [runExclusiveAuthOperation]);
 
   const reauthenticateWithPassword = useCallback(async (password: string) => {
     await runExclusiveAuthOperation(async () => {

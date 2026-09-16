@@ -11,6 +11,20 @@ import { auth, db } from "@/config/firebase";
 import { CURRENT_LEGAL_ASSENT_VERSION } from "@/constants/legalAssent";
 import i18n from "@/i18n";
 import type { FederatedCredentialResult } from "@/services/federatedAuthService";
+import {
+  buildAccountCompletionFields,
+  buildCanonicalAccountProfile,
+} from "@/utils/accountProfileCore";
+
+export type PasswordAccountProfile = {
+  adultEligibilityConfirmed: boolean;
+  firstName: string;
+  lastName: string;
+  policiesAccepted: boolean;
+  sports?: string[];
+  zipCode?: string;
+  phoneNumber?: string | null;
+};
 
 export async function ensureFederatedUserProfile(
   user: User,
@@ -49,6 +63,22 @@ export async function ensureFederatedUserProfile(
   });
 }
 
+export async function createPasswordUserProfile(user: User, profile: PasswordAccountProfile) {
+  const timestamp = serverTimestamp();
+  const fields = buildCanonicalAccountProfile({
+    ...profile,
+    email: user.email,
+    phoneNumber: profile.phoneNumber ?? user.phoneNumber,
+    preferredLanguage: i18n.resolvedLanguage?.startsWith("es") ? "es" : "en",
+    userId: user.uid,
+  }, {
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }, CURRENT_LEGAL_ASSENT_VERSION);
+  await setDoc(doc(db, "users", user.uid), fields);
+  return fields;
+}
+
 export async function completeAccountOnboarding(input: {
   adultEligibilityConfirmed: boolean;
   firstName: string;
@@ -64,20 +94,34 @@ export async function completeAccountOnboarding(input: {
     throw error;
   }
 
+  const userRef = doc(db, "users", user.uid);
   await updateProfile(user, { displayName: `${firstName} ${lastName}` });
-  await setDoc(doc(db, "users", user.uid), {
-    firstName,
-    lastName,
-    displayName: `${firstName} ${lastName}`,
-    accountOnboardingCompleted: true,
-    accountOnboardingCompletedAt: serverTimestamp(),
-    adultEligibilityConfirmed: true,
-    legalAssentVersion: CURRENT_LEGAL_ASSENT_VERSION,
-    privacyPolicyAcceptedAt: serverTimestamp(),
-    termsOfUseAcceptedAt: serverTimestamp(),
-    communityGuidelinesAcceptedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  }, { merge: true });
+  await runTransaction(db, async (transaction) => {
+    const existing = await transaction.get(userRef);
+    const updatedAt = serverTimestamp();
+    if (!existing.exists()) {
+      transaction.set(userRef, buildCanonicalAccountProfile({
+        adultEligibilityConfirmed: input.adultEligibilityConfirmed,
+        email: user.email,
+        firstName,
+        lastName,
+        phoneNumber: user.phoneNumber,
+        policiesAccepted: input.policiesAccepted,
+        preferredLanguage: i18n.resolvedLanguage?.startsWith("es") ? "es" : "en",
+        userId: user.uid,
+      }, {
+        createdAt: updatedAt,
+        updatedAt,
+      }, CURRENT_LEGAL_ASSENT_VERSION));
+      return;
+    }
+    transaction.set(userRef, buildAccountCompletionFields({
+      adultEligibilityConfirmed: input.adultEligibilityConfirmed,
+      firstName,
+      lastName,
+      policiesAccepted: input.policiesAccepted,
+    }, updatedAt, CURRENT_LEGAL_ASSENT_VERSION), { merge: true });
+  });
 }
 
 export async function userProfileExists(uid: string) {

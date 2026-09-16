@@ -15,6 +15,7 @@ const IS_STAGING_FIREBASE = FIREBASE_ENVIRONMENT === "staging";
 const COACH_AI_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD === "true";
 const COACH_AI_PRODUCTION_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD === "true";
 const COACH_AI_TESTING_BUILD = process.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED === "true";
+const STAGING_ACCEPTANCE_BUILD = process.env.EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD === "true";
 const DEFER_STAGING_NATIVE_FIREBASE_VALIDATION = shouldDeferStagingNativeFirebaseValidation({
   requested: process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true",
   isEasBuild: process.env.EAS_BUILD === "true",
@@ -49,7 +50,11 @@ const GOOGLE_SIGN_IN_PLUGIN = IOS_GOOGLE_SERVICES_FILE
   : GOOGLE_IOS_URL_SCHEME
     ? ["react-native-nitro-google-signin", { iosUrlScheme: GOOGLE_IOS_URL_SCHEME }]
     : null;
-const APP_NAME = IS_DEVELOPMENT ? "Sideline Social Dev" : "Sideline Social";
+const APP_NAME = STAGING_ACCEPTANCE_BUILD
+  ? "Sideline Social Staging"
+  : IS_DEVELOPMENT
+    ? "Sideline Social Dev"
+    : "Sideline Social";
 const APP_SCHEME = IS_DEVELOPMENT ? "sidelinesquad-dev" : "sidelinesquad";
 const IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION = "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.";
 const IOS_MICROPHONE_USAGE_DESCRIPTION = "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.";
@@ -81,6 +86,14 @@ if (
   && (!COACH_AI_TESTING_BUILD || IS_DEVELOPMENT || FIREBASE_ENVIRONMENT !== "production")
 ) {
   throw new Error("A Coach AI production-beta build requires release JavaScript, the exact testing flag, and production Firebase.");
+}
+if (STAGING_ACCEPTANCE_BUILD && (!IS_DEVELOPMENT || !IS_STAGING_FIREBASE || !GOOGLE_AUTH_ENABLED)) {
+  throw new Error(
+    "A staging acceptance build requires the separate development app identity, staging Firebase, and Google authentication.",
+  );
+}
+if (STAGING_ACCEPTANCE_BUILD && process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true") {
+  throw new Error("A staging acceptance build cannot defer native Firebase configuration validation.");
 }
 
 if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {

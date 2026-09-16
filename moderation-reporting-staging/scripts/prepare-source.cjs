@@ -25,6 +25,14 @@ function replaceSingle(source, search, replacement, label) {
   return source.replace(search, replacement);
 }
 
+function replaceSinglePattern(source, pattern, replacement, label) {
+  const matches = source.match(pattern) ?? [];
+  if (matches.length !== 1) {
+    throw new Error(`Expected one ${label} marker in the tested reporting source.`);
+  }
+  return source.replace(pattern, replacement);
+}
+
 function removeRange(source, startMarker, endMarker, label) {
   const start = source.indexOf(startMarker);
   const end = source.indexOf(endMarker, start + startMarker.length);
@@ -66,9 +74,9 @@ reportSource = replaceAllRequired(
   "getFirestore()",
   "Firebase Admin namespaced Firestore call",
 );
-reportSource = replaceSingle(
+reportSource = replaceSinglePattern(
   reportSource,
-  "  coachAiModerationIngestionEnabled,\n",
+  /  coachAiModerationIngestionEnabled,\r?\n/gu,
   "",
   "Coach AI ingestion import",
 );
@@ -84,9 +92,9 @@ reportSource = removeRange(
   "function objectValue",
   "report-history response helper",
 );
-reportSource = replaceSingle(
+reportSource = replaceSinglePattern(
   reportSource,
-  "  memory: \"256MB\",\n  timeoutSeconds: 60,",
+  /  memory: "256MB",\r?\n  timeoutSeconds: 60,/gu,
   "  memory: \"256MB\",\n  serviceAccount: \"moderation-runtime-stg@sideline-social-staging-2026.iam.gserviceaccount.com\",\n  timeoutSeconds: 60,",
   "staging runtime identity insertion",
 );

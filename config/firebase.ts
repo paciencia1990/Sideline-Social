@@ -6,13 +6,13 @@ import {
   getAuth,
   initializeAuth,
   type Auth,
-  type Persistence,
 } from "firebase/auth";
 import { connectDatabaseEmulator, getDatabase } from "firebase/database";
 import { connectFirestoreEmulator, getFirestore } from "firebase/firestore";
 import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 import { getStorage } from "firebase/storage";
 import { Platform } from "react-native";
+import { createAsyncStoragePersistence } from "@/utils/firebaseAuthPersistence";
 
 import { resolveFirebaseClientConfig } from "@/config/firebaseEnvironment";
 import {
@@ -114,50 +114,9 @@ function connectConfiguredFirebaseEmulators() {
 function initializeReactNativeAuth(firebaseAppInstance: typeof firebaseApp): Auth {
   try {
     return initializeAuth(firebaseAppInstance, {
-      persistence: getAsyncStoragePersistence(ReactNativeAsyncStorage),
+      persistence: createAsyncStoragePersistence(ReactNativeAsyncStorage),
     });
   } catch {
     return getAuth(firebaseAppInstance);
   }
-}
-
-function getAsyncStoragePersistence(storage: typeof ReactNativeAsyncStorage): Persistence {
-  class AsyncStoragePersistence {
-    static type = "LOCAL";
-    readonly type = "LOCAL";
-
-    async _isAvailable() {
-      try {
-        if (!storage) {
-          return false;
-        }
-
-        const testKey = "firebase:auth:storageTest";
-        await storage.setItem(testKey, "1");
-        await storage.removeItem(testKey);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-
-    _set(key: string, value: unknown) {
-      return storage.setItem(key, JSON.stringify(value));
-    }
-
-    async _get(key: string) {
-      const value = await storage.getItem(key);
-      return value ? JSON.parse(value) : null;
-    }
-
-    _remove(key: string) {
-      return storage.removeItem(key);
-    }
-
-    _addListener() {}
-
-    _removeListener() {}
-  }
-
-  return AsyncStoragePersistence as unknown as Persistence;
 }

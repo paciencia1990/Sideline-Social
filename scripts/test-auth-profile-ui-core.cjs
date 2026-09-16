@@ -378,7 +378,9 @@ assert.ok(authContext.includes("displayName: resolveDisplayName(profile, firebas
 assert.ok(authContext.includes("const profileLoadVersion = useRef(0)"), "Profile hydration must reject stale account results.");
 assert.ok(authContext.includes("setUser(null);"), "Sign-out and account changes must clear the previous profile.");
 assert.ok(authContext.includes("await updateProfile(credential.user, { displayName })"), "Sign-up must await Firebase displayName persistence.");
-assert.ok(authContext.includes('await setDoc(doc(db, "users", credential.user.uid)'), "Sign-up must await the Firestore profile write.");
+assert.ok(authContext.includes("await createPasswordUserProfile(credential.user"), "Sign-up must await canonical Firestore profile creation.");
+const authProfileService = read("services", "authProfileService.ts");
+assert.ok(authProfileService.includes('await setDoc(doc(db, "users", user.uid), fields);'), "Canonical password profile creation must await the Firestore write.");
 
 const home = read("app", "(tabs)", "index.tsx");
 assert.equal(home.includes("getFirstName"), false, "Home must not retain first-name greeting logic.");

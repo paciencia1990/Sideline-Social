@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "createdAtUtc": "2026-09-16T16:38:39.1971571Z",
+  "inventoryOrder": "path",
+  "candidate": {
+    "path": "C:\\Dev\\Sideline_Social_Cumulative_RC_20260916",
+    "branch": "release/cumulative-rc-20260916",
+    "baseCommit": "df8af744538b034306e8eca71bb861a87a478c62",
+    "sourceCandidateDigest": "72dbc7615cc4a0edcc8bbf34bf19f1e85433a8194ac5a0a1c199b46460c24826",
+    "committed": false
+  },
+  "dependencyPolicy": {
+    "downloadsPerformed": false,
+    "lockfilesChanged": false,
+    "pinnedInstallationsReused": true
+  },
+  "files": [
+    {
+      "path": "app.config.js",
+      "gitStatus": " M",
+      "sha256": "2d27c985f633262dbaf01c38e1cc5f6308de9a183c0b470b7c3fc49e89a0090c",
+      "bytes": 11146
+    },
+    {
+      "path": "config/firebase.ts",
+      "gitStatus": " M",
+      "sha256": "756645ce6676f1adbd87170baca3fd97fe30461cf6e42a7e6d88353c97940f28",
+      "bytes": 5445
+    },
+    {
+      "path": "context/AuthContext.tsx",
+      "gitStatus": " M",
+      "sha256": "c6b747ebb8e0c9483087d84b92cb7e5c14c68b4e8c333d6ed44379cd200857c7",
+      "bytes": 17927
+    },
+    {
+      "path": "docs/cumulative-release-candidate-20260916.md",
+      "gitStatus": "??",
+      "sha256": "e8aa9b4efd3b737949bd856261f26bf94557483dd841c5be324b2699270cd3d0",
+      "bytes": 11360
+    },
+    {
+      "path": "docs/cumulative-release-real-device-checklist.md",
+      "gitStatus": "??",
+      "sha256": "6a60f27fa993477bb7d409ea5fc8499bae7111552fee7fc5205411877cccd39f",
+      "bytes": 4613
+    },
+    {
+      "path": "eas.json",
+      "gitStatus": " M",
+      "sha256": "db8b5a072d2af78ef38ed28ae1af624306a43ea23907aaaf3bb614bae5603e34",
+      "bytes": 3194
+    },
+    {
+      "path": "moderation-reporting-staging/scripts/prepare-source.cjs",
+      "gitStatus": " M",
+      "sha256": "35c35f101a1f36b366a3b747421ec84286eb01c1632e40d8494eea8f125ce1d9",
+      "bytes": 5900
+    },
+    {
+      "path": "package.json",
+      "gitStatus": " M",
+      "sha256": "d42e299e2fe5690c408766e8b482d101f786014a6a8540e59296aad945557139",
+      "bytes": 19885
+    },
+    {
+      "path": "scripts/test-account-friend-chat-journey-emulator.cjs",
+      "gitStatus": "??",
+      "sha256": "a3b2299cb67b0ed3d2ad083e70a99cce01813507399e8fde697b5c1d34b9fc6f",
+      "bytes": 5168
+    },
+    {
+      "path": "scripts/test-account-profile-recovery.cjs",
+      "gitStatus": "??",
+      "sha256": "9e1fca3f14ecbbc21d55900f0e969a3678436b88aa2081786c22dfe27aca2979",
+      "bytes": 3277
+    },
+    {
+      "path": "scripts/test-auth-profile-ui-core.cjs",
+      "gitStatus": " M",
+      "sha256": "5777333f723131903e5983f30b4a24dea36bf5ebd15746f17d6f3e4ed8a19349",
+      "bytes": 22175
+    },
+    {
+      "path": "scripts/test-firebase-auth-persistence.cjs",
+      "gitStatus": "??",
+      "sha256": "f96f972b5e62483c25c7c1151337554b78bed789a44e4df7c22ffdc490c6f36b",
+      "bytes": 2006
+    },
+    {
+      "path": "scripts/test-staging-acceptance-config.cjs",
+      "gitStatus": "??",
+      "sha256": "f96cf48829a39d85db588aaf23352a12862fdf90712304c576832e6eb6e425fb",
+      "bytes": 3271
+    },
+    {
+      "path": "services/authProfileService.ts",
+      "gitStatus": " M",
+      "sha256": "8f4d8ea2386090f9893d8cb2e1c2b36c33f76df86c003c97e18893fcbcd9fd72",
+      "bytes": 4325
+    },
+    {
+      "path": "utils/accountProfileCore.ts",
+      "gitStatus": "??",
+      "sha256": "1a1de7079321dc4c97189e57e938100ceb5ae066d7bdf3b8cd537b188fc2604c",
+      "bytes": 3179
+    },
+    {
+      "path": "utils/firebaseAuthPersistence.ts",
+      "gitStatus": "??",
+      "sha256": "12734b4243a018c3a62b33a59db7a98464920e537df2911d10b332e2737581c4",
+      "bytes": 1110
+    }
+  ],
+  "validation": [
+    "typecheck",
+    "lint",
+    "account_profile_recovery",
+    "firebase_auth_persistence",
+    "auth_navigation",
+    "auth_profile_ui",
+    "federated_auth",
+    "local_user_state",
+    "account_friend_chat_emulator",
+    "friend_requests_emulator",
+    "friend_chat_emulator",
+    "parent_teams",
+    "home_squad",
+    "team_history",
+    "squad_admin",
+    "squad_admin_emulator",
+    "coach_ai_experience",
+    "coach_ai_environment",
+    "keyboard_layouts",
+    "bomb_defusal_20000_rounds",
+    "game_start_synchronization",
+    "trivia_feedback",
+    "moderation_reporting_emulator",
+    "moderation_reporting_isolation",
+    "account_standing_emulator",
+    "standing_projection",
+    "staging_acceptance_config"
+  ]
+}
