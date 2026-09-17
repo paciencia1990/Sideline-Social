@@ -16,14 +16,33 @@ if (localEnvironmentFile.exists()) {
 }
 def googleMapsApiKey = System.getenv("GOOGLE_MAPS_API_KEY") ?: localEnvironment.getProperty("GOOGLE_MAPS_API_KEY", "")
 def requestedGradleTasks = gradle.startParameter.taskNames.collect { it.toLowerCase() }
-def isDevelopmentAndroidBuild = System.getenv("APP_VARIANT") == "development" || requestedGradleTasks.any { it.contains("debug") }
+def easBuildProfile = System.getenv("EAS_BUILD_PROFILE")
+def easBuildPlatform = System.getenv("EAS_BUILD_PLATFORM")
+def stagingAcceptanceMarker = System.getenv("EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD")
+def stagingAcceptanceRequested = easBuildProfile == "staging-acceptance" || stagingAcceptanceMarker == "true"
+def isStagingAcceptanceAndroidBuild =
+    easBuildProfile == "staging-acceptance" &&
+    easBuildPlatform == "android" &&
+    stagingAcceptanceMarker == "true" &&
+    System.getenv("APP_VARIANT") == "development" &&
+    System.getenv("EXPO_PUBLIC_FIREBASE_ENVIRONMENT") == "staging"
+
+if (stagingAcceptanceRequested && !isStagingAcceptanceAndroidBuild) {
+    throw new GradleException("The staging-acceptance Android build context is incomplete or conflicting.")
+}
+
+def isDevelopmentAndroidBuild =
+    !isStagingAcceptanceAndroidBuild &&
+    (System.getenv("APP_VARIANT") == "development" || requestedGradleTasks.any { it.contains("debug") })
 def developmentGoogleServicesTarget = file("src/debug/google-services.json")
 def developmentGoogleServicesSource = System.getenv("GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT")
+def stagingGoogleServicesTarget = file("src/release/google-services.json")
+def stagingGoogleServicesSource = System.getenv("GOOGLE_SERVICES_JSON_ANDROID_STAGING")
 
 if (isDevelopmentAndroidBuild && developmentGoogleServicesSource) {
     def sourceFile = file(developmentGoogleServicesSource)
     if (!sourceFile.exists()) {
-        throw new GradleException("GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT points to a missing file: ${sourceFile}")
+        throw new GradleException("GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT points to a missing file.")
     }
     copy {
         from sourceFile
@@ -34,6 +53,68 @@ if (isDevelopmentAndroidBuild && developmentGoogleServicesSource) {
 
 if (isDevelopmentAndroidBuild && !developmentGoogleServicesTarget.exists()) {
     throw new GradleException("Register com.sidelinesquad.app.dev in Firebase, then provide its google-services.json through GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT.")
+}
+
+if (isStagingAcceptanceAndroidBuild) {
+    if (!stagingGoogleServicesSource) {
+        throw new GradleException("GOOGLE_SERVICES_JSON_ANDROID_STAGING is required for staging-acceptance.")
+    }
+    def sourceFile = file(stagingGoogleServicesSource)
+    if (!sourceFile.exists() || !sourceFile.isFile()) {
+        throw new GradleException("GOOGLE_SERVICES_JSON_ANDROID_STAGING points to a missing or invalid file.")
+    }
+    def stagingConfig
+    try {
+        stagingConfig = new groovy.json.JsonSlurper().parse(sourceFile)
+    } catch (Exception ignored) {
+        throw new GradleException("GOOGLE_SERVICES_JSON_ANDROID_STAGING is not valid JSON.")
+    }
+    if (stagingConfig?.project_info?.project_id != "sideline-social-staging-2026") {
+        throw new GradleException("The staging Android Firebase project attribution is invalid.")
+    }
+    def matchingClients = stagingConfig?.client instanceof Collection
+        ? stagingConfig.client.findAll { client ->
+            client?.client_info?.android_client_info?.package_name == "com.sidelinesquad.app.dev"
+        }
+        : []
+    if (matchingClients.size() != 1) {
+        throw new GradleException("The staging Android Firebase package attribution is invalid.")
+    }
+    def expectedAppId = System.getenv("EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID")
+    if (!expectedAppId || matchingClients[0]?.client_info?.mobilesdk_app_id != expectedAppId) {
+        throw new GradleException("The staging Android Firebase app identity is invalid.")
+    }
+    def oauthClients = matchingClients[0]?.oauth_client instanceof Collection
+        ? matchingClients[0].oauth_client
+        : []
+    def normalizedApprovedSha1 = "81eab57c24356385d1565575c904ec403b7023ce"
+    def matchingAndroidOauth = oauthClients.findAll { oauthClient ->
+        def certificateHash = oauthClient?.android_info?.certificate_hash
+        oauthClient?.client_type == 1 &&
+            oauthClient?.android_info?.package_name == "com.sidelinesquad.app.dev" &&
+            certificateHash instanceof String &&
+            certificateHash.replace(":", "").trim().toLowerCase() == normalizedApprovedSha1
+    }
+    if (matchingAndroidOauth.size() != 1) {
+        throw new GradleException("The staging Android OAuth package and signing association is invalid.")
+    }
+    def webOauth = oauthClients.findAll { oauthClient ->
+        oauthClient?.client_type == 3 && oauthClient?.client_id instanceof String && oauthClient.client_id.length() > 0
+    }
+    if (webOauth.size() != 1) {
+        throw new GradleException("The staging web OAuth association is invalid.")
+    }
+    def expectedWebClientId = System.getenv("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID")
+    if (expectedWebClientId && webOauth[0].client_id != expectedWebClientId) {
+        throw new GradleException("The staging web OAuth client does not match the approved configuration.")
+    }
+    copy {
+        from sourceFile
+        into stagingGoogleServicesTarget.parentFile
+        rename { "google-services.json" }
+    }
+} else if (stagingGoogleServicesTarget.exists()) {
+    throw new GradleException("A generated staging Firebase file is present outside the staging-acceptance build context.")
 }
 
 /**
@@ -160,8 +241,15 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
             crunchPngs enablePngCrunchInRelease.toBoolean()
-            manifestPlaceholders.APP_SCHEME = "sidelinesquad"
-            manifestPlaceholders.EXPO_SCHEME = "exp+sideline-squad"
+            if (isStagingAcceptanceAndroidBuild) {
+                applicationIdSuffix ".dev"
+                resValue "string", "app_name", "Sideline Social Staging"
+                manifestPlaceholders.APP_SCHEME = "sidelinesquad-dev"
+                manifestPlaceholders.EXPO_SCHEME = "exp+sideline-squad-dev"
+            } else {
+                manifestPlaceholders.APP_SCHEME = "sidelinesquad"
+                manifestPlaceholders.EXPO_SCHEME = "exp+sideline-squad"
+            }
         }
     }
     packagingOptions {
