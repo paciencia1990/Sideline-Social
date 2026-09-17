@@ -111,6 +111,7 @@ assert.equal(eas.build["coach-ai-production-beta"].env.EXPO_PUBLIC_AI_COACH_TEST
 assert.equal(eas.build["coach-ai-production-beta"].env.EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD, "true");
 assert.equal(eas.build["coach-ai-production-beta"].env.EXPO_PUBLIC_AI_COACH_BETA_BUILD, undefined);
 assert.equal(eas.build["coach-ai-production-beta"].android.buildType, "app-bundle");
+assert.equal(eas.build["coach-ai-production-beta"].android.gradleCommand, ":app:bundleProductionRelease");
 assert.deepEqual(eas.submit["coach-ai-production-beta"], {});
 assert.equal(eas.build.production.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED, undefined);
 assert.equal(eas.build.production.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD, undefined);

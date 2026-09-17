@@ -7,7 +7,9 @@
 | `development` | Sideline Social Dev | `com.sidelinesquad.app.dev` | APK | Yes |
 | `production` | Sideline Social | `com.sidelinesquad.app` | Android App Bundle | No |
 
-The debug build uses `applicationIdSuffix ".dev"`, its own label, and its own deep-link schemes. Release keeps the existing application ID, app label, and signing path. Because Android treats the package name as the installed-app identity, the two builds can be installed together. The development profile does not enable build-number auto-increment, so it cannot consume or change the Google Play production versionCode.
+The Android project uses explicit `production`, `development`, and `staging` product flavors. Production resolves to `com.sidelinesquad.app`; development and staging resolve to the separate `com.sidelinesquad.app.dev` identity with their own labels and deep-link schemes. EAS profiles name their exact Gradle variant so the CLI resolves the full application ID before selecting remote signing credentials. Because Android treats the package name as the installed-app identity, the staging app can be installed beside production. The development profile does not enable build-number auto-increment, so it cannot consume or change the Google Play production versionCode.
+
+The `staging-acceptance` profile builds `assembleStagingRelease`. Its remote credential must be the default credential attached to `com.sidelinesquad.app.dev`; production profiles build the explicit `ProductionRelease` variant and retain the production credential association.
 
 ## Firebase separation
 
@@ -16,9 +18,10 @@ The existing Firebase project now contains a separate Android app named `Sidelin
 - Production continues to use the tracked root `google-services.json` for `com.sidelinesquad.app`.
 - Local development uses `android/app/src/debug/google-services.json`. This generated file is ignored and must not be committed.
 - EAS development uses the secret file variable `GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT`. Gradle copies the injected file into the debug source set on the ephemeral builder.
+- Staging acceptance uses `GOOGLE_SERVICES_JSON_ANDROID_STAGING`. Gradle validates it and copies it only into the staging flavor source set on the ephemeral builder.
 - If the development Firebase file is absent, the debug Gradle build stops with an explicit setup error instead of silently using production credentials for the wrong package.
 
-Firebase email/password authentication does not require an Android SHA certificate. If Google sign-in, App Check, or another SHA-bound Firebase feature is added later, register the EAS development signing fingerprints on the development Firebase app only.
+Firebase email/password authentication does not require an Android SHA certificate. Staging Google sign-in uses the approved EAS staging signing fingerprints registered only on the staging Firebase Android app; production keeps its separate package, OAuth clients, and signing association.
 
 ## Build and run
 

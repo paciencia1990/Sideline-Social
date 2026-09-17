@@ -10,6 +10,7 @@ const eas = JSON.parse(fs.readFileSync(path.join(root, "eas.json"), "utf8"));
 const profile = eas.build["staging-acceptance"];
 assert.equal(profile.distribution, "internal");
 assert.equal(profile.android.buildType, "apk");
+assert.equal(profile.android.gradleCommand, ":app:assembleStagingRelease");
 assert.equal(profile.env.APP_VARIANT, "development");
 assert.equal(profile.env.EXPO_PUBLIC_FIREBASE_ENVIRONMENT, "staging");
 assert.equal(profile.env.EXPO_PUBLIC_GOOGLE_AUTH_ENABLED, "true");

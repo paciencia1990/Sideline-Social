@@ -13,14 +13,18 @@
         "APP_VARIANT": "development"
       },
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDevelopmentDebug"
       }
     },
     "preview": {
       "developmentClient": false,
       "distribution": "internal",
       "environment": "preview",
-      "node": "24.16.0"
+      "node": "24.16.0",
+      "android": {
+        "gradleCommand": ":app:assembleProductionRelease"
+      }
     },
     "staging-acceptance": {
       "autoIncrement": true,
@@ -36,7 +40,8 @@
         "EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD": "true"
       },
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleStagingRelease"
       }
     },
     "coach-ai-beta": {
@@ -57,7 +62,8 @@
         "EXPO_PUBLIC_FIREBASE_ENVIRONMENT": "staging"
       },
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "app-bundle",
+        "gradleCommand": ":app:bundleProductionRelease"
       }
     },
     "coach-ai-production-beta": {
@@ -77,7 +83,8 @@
         "EXPO_PUBLIC_FIREBASE_ENVIRONMENT": "production"
       },
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "app-bundle",
+        "gradleCommand": ":app:bundleProductionRelease"
       }
     },
     "production": {
@@ -91,7 +98,8 @@
         "REQUIRE_PRODUCTION_LEGAL_CONFIG": "true"
       },
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "app-bundle",
+        "gradleCommand": ":app:bundleProductionRelease"
       }
     }
   },

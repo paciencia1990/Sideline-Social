@@ -86,10 +86,12 @@ const providerButtons = read("components", "FederatedAuthButtons.tsx");
 const providerAvailability = read("utils", "authProviderAvailability.ts");
 assert.equal(eas.build.development.developmentClient, true);
 assert.equal(eas.build.development.android.buildType, "apk");
+assert.equal(eas.build.development.android.gradleCommand, ":app:assembleDevelopmentDebug");
 assert.equal(eas.build.development.env.APP_VARIANT, "development");
 assert.equal(eas.build.development.autoIncrement, undefined);
 assert.equal(eas.build.production.developmentClient, false);
 assert.equal(eas.build.production.android.buildType, "app-bundle");
+assert.equal(eas.build.production.android.gradleCommand, ":app:bundleProductionRelease");
 assert.equal(eas.build.production.env.APP_VARIANT, "production");
 assert.equal(eas.build.production.env.REQUIRE_PRODUCTION_LEGAL_CONFIG, "true");
 assert.equal(eas.build.development.env.REQUIRE_PRODUCTION_LEGAL_CONFIG, undefined);
@@ -100,7 +102,9 @@ assert.equal(providerButtons.includes('title={t("auth.continueWithApple")}'), fa
 
 const gradle = read("android", "app", "build.gradle");
 assert.equal(gradle.includes('applicationId \'com.sidelinesquad.app\''), true);
-assert.equal(gradle.includes('applicationIdSuffix ".dev"'), true);
+assert.equal(gradle.includes("applicationId 'com.sidelinesquad.app.dev'"), true);
+assert.equal(gradle.includes('applicationIdSuffix ".dev"'), false);
+assert.equal(gradle.includes('flavorDimensions "environment"'), true);
 assert.equal(gradle.includes('resValue "string", "app_name", "Sideline Social Dev"'), true);
 assert.equal(gradle.includes("GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT"), true);
 

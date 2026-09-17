@@ -310,7 +310,9 @@ async function assertAndroidNativeParity() {
   const gradle = read("android/app/build.gradle");
   assert.match(gradle, /namespace 'com\.sidelinesquad\.app'/u);
   assert.match(gradle, /applicationId 'com\.sidelinesquad\.app'/u);
-  assert.match(gradle, /applicationIdSuffix "\.dev"/u);
+  assert.match(gradle, /applicationId 'com\.sidelinesquad\.app\.dev'/u);
+  assert.match(gradle, /flavorDimensions "environment"/u);
+  assert.doesNotMatch(gradle, /applicationIdSuffix "\.dev"/u);
   assert.match(gradle, /versionCode 5/u);
   assert.match(gradle, /versionName "1\.0\.0"/u);
   assert.match(gradle, /resValue "string", "app_name", "Sideline Social Dev"/u);

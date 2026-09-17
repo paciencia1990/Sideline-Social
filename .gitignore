@@ -32,8 +32,8 @@ tree.txt
 functions/lib/
 
 /moderation-reporting-staging/.env.sideline-social-staging-2026
-# Firebase Android development and staging-release configs are injected from EAS file variables.
+# Firebase Android development and staging-flavor configs are injected from EAS file variables.
 android/app/src/debug/google-services.json
 GoogleService-Info.ios.plist
-android/app/src/release/google-services.json
+android/app/src/staging/google-services.json
 

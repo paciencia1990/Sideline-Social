@@ -10,7 +10,7 @@ const root = path.resolve(__dirname, "..");
 const gradlePath = path.join(root, "android", "app", "build.gradle");
 const gradle = fs.readFileSync(gradlePath, "utf8");
 const gitignore = fs.readFileSync(path.join(root, ".gitignore"), "utf8");
-const releaseTarget = path.join(root, "android", "app", "src", "release", "google-services.json");
+const releaseTarget = path.join(root, "android", "app", "src", "staging", "google-services.json");
 const debugTarget = path.join(root, "android", "app", "src", "debug", "google-services.json");
 const releaseTargetExisted = fs.existsSync(releaseTarget);
 const debugTargetExisted = fs.existsSync(debugTarget);
@@ -121,9 +121,10 @@ try {
   assert.ok(gradle.includes('easBuildProfile == "staging-acceptance"'));
   assert.ok(gradle.includes('easBuildPlatform == "android"'));
   assert.ok(gradle.includes('System.getenv("GOOGLE_SERVICES_JSON_ANDROID_STAGING")'));
-  assert.ok(gradle.includes('file("src/release/google-services.json")'));
-  assert.ok(gradle.includes('applicationIdSuffix ".dev"'));
-  assert.match(gitignore, /^android\/app\/src\/release\/google-services\.json$/mu);
+  assert.ok(gradle.includes('file("src/staging/google-services.json")'));
+  assert.ok(gradle.includes("applicationId 'com.sidelinesquad.app.dev'"));
+  assert.equal(gradle.includes('applicationIdSuffix ".dev"'), false);
+  assert.match(gitignore, /^android\/app\/src\/staging\/google-services\.json$/mu);
 
   const valid = writeConfig("valid.json", firebaseConfig());
   const wrongProject = writeConfig("wrong-project.json", firebaseConfig({ projectId: "wrong-project" }));
@@ -149,16 +150,16 @@ try {
     /build context is incomplete or conflicting/u,
   );
 
-  const staging = runGradle([":app:processReleaseGoogleServices"], {
+  const staging = runGradle([":app:processStagingReleaseGoogleServices"], {
     GOOGLE_SERVICES_JSON_ANDROID_STAGING: valid,
   });
   assert.equal(staging.status, 0, combinedOutput(staging));
-  assert.match(combinedOutput(staging), /processReleaseGoogleServices/u);
+  assert.match(combinedOutput(staging), /processStagingReleaseGoogleServices/u);
   assert.ok(fs.existsSync(releaseTarget), "The release variant did not receive the selected staging file.");
   assert.deepEqual(fs.readFileSync(releaseTarget), fs.readFileSync(valid));
 
   removeGeneratedTarget(releaseTarget, releaseTargetExisted);
-  const production = runGradle([":app:processReleaseGoogleServices"], {
+  const production = runGradle([":app:processProductionReleaseGoogleServices"], {
     EAS_BUILD: undefined,
     EAS_BUILD_PLATFORM: undefined,
     EAS_BUILD_PROFILE: undefined,
@@ -171,7 +172,7 @@ try {
   });
   assert.equal(production.status, 0, combinedOutput(production));
 
-  const development = runGradle([":app:processDebugGoogleServices"], {
+  const development = runGradle([":app:processDevelopmentDebugGoogleServices"], {
     EAS_BUILD: undefined,
     EAS_BUILD_PLATFORM: undefined,
     EAS_BUILD_PROFILE: "development",

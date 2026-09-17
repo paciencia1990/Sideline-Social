@@ -43,11 +43,14 @@ try {
 
   const baselineEas = JSON.parse(readBaselineFile("eas.json"));
   const combinedEas = JSON.parse(fs.readFileSync(easPath, "utf8"));
+  const productionProfileWithoutVariantCommand = structuredClone(combinedEas.build.production);
+  delete productionProfileWithoutVariantCommand.android.gradleCommand;
   assert.deepEqual(
-    combinedEas.build.production,
+    productionProfileWithoutVariantCommand,
     baselineEas.build.production,
-    "The normal production EAS build profile must remain identical to 665ccd3.",
+    "The normal production EAS build profile must remain identical to 665ccd3 apart from the explicit supported native variant.",
   );
+  assert.equal(combinedEas.build.production.android.gradleCommand, ":app:bundleProductionRelease");
   assert.deepEqual(
     combinedEas.submit.production,
     baselineEas.submit.production,
@@ -60,6 +63,7 @@ try {
   assert.equal(combinedEas.build["coach-ai-production-beta"].developmentClient, false);
   assert.equal(combinedEas.build["coach-ai-production-beta"].distribution, "store");
   assert.equal(combinedEas.build["coach-ai-production-beta"].android.buildType, "app-bundle");
+  assert.equal(combinedEas.build["coach-ai-production-beta"].android.gradleCommand, ":app:bundleProductionRelease");
   assert.equal(combinedEas.build["coach-ai-production-beta"].env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED, "true");
   assert.equal(combinedEas.build["coach-ai-production-beta"].env.EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD, "true");
   assert.equal(combinedEas.build["coach-ai-production-beta"].env.EXPO_PUBLIC_AI_COACH_BETA_BUILD, undefined);
