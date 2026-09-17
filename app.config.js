@@ -4,6 +4,7 @@ const {
 } = require("./config/legalConfig");
 const {
   assertStagingNativeFirebaseConfig,
+  resolveStagingNativeFirebaseTarget,
   shouldDeferStagingNativeFirebaseValidation,
 } = require("./config/firebaseNativeConfig");
 
@@ -37,7 +38,24 @@ const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
 const GOOGLE_AUTH_ENABLED = process.env.EXPO_PUBLIC_GOOGLE_AUTH_ENABLED === "true";
 const APPLE_AUTH_ENABLED = process.env.EXPO_PUBLIC_APPLE_AUTH_ENABLED === "true";
-const GOOGLE_SIGN_IN_PLUGIN = IOS_GOOGLE_SERVICES_FILE
+const STAGING_NATIVE_FIREBASE_TARGET = resolveStagingNativeFirebaseTarget({
+  stagingAcceptanceBuild: STAGING_ACCEPTANCE_BUILD,
+  easBuildPlatform: process.env.EAS_BUILD_PLATFORM,
+  easBuildProfile: process.env.EAS_BUILD_PROFILE,
+});
+const ANDROID_ONLY_STAGING_ACCEPTANCE =
+  STAGING_ACCEPTANCE_BUILD && STAGING_NATIVE_FIREBASE_TARGET === "android";
+const EFFECTIVE_IOS_GOOGLE_SERVICES_FILE = ANDROID_ONLY_STAGING_ACCEPTANCE
+  ? undefined
+  : IOS_GOOGLE_SERVICES_FILE;
+const GOOGLE_SIGN_IN_PLUGIN = ANDROID_ONLY_STAGING_ACCEPTANCE
+  ? ANDROID_GOOGLE_SERVICES_FILE
+    ? [
+        "react-native-nitro-google-signin",
+        { androidGoogleServicesFile: ANDROID_GOOGLE_SERVICES_FILE },
+      ]
+    : null
+  : IOS_GOOGLE_SERVICES_FILE
   ? [
       "react-native-nitro-google-signin",
       {
@@ -101,8 +119,13 @@ if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {
     androidFile: ANDROID_GOOGLE_SERVICES_FILE,
     iosFile: IOS_GOOGLE_SERVICES_FILE,
     projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+    authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
     androidPackage: ANDROID_PACKAGE,
+    androidAppId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID,
+    androidSha1: "81eab57c24356385d1565575c904ec403b7023ce",
+    webClientId: GOOGLE_WEB_CLIENT_ID,
     iosBundleIdentifier: IOS_BUNDLE_IDENTIFIER,
+    targetPlatform: STAGING_NATIVE_FIREBASE_TARGET,
   });
 }
 
@@ -113,7 +136,8 @@ if (GOOGLE_AUTH_ENABLED && !GOOGLE_SIGN_IN_PLUGIN) {
 }
 if (
   GOOGLE_AUTH_ENABLED &&
-  !IOS_GOOGLE_SERVICES_FILE &&
+  STAGING_NATIVE_FIREBASE_TARGET !== "android" &&
+  !EFFECTIVE_IOS_GOOGLE_SERVICES_FILE &&
   (!GOOGLE_IOS_CLIENT_ID || !GOOGLE_WEB_CLIENT_ID)
 ) {
   throw new Error(
@@ -145,8 +169,8 @@ module.exports = ({ config }) => ({
     bundleIdentifier: IOS_BUNDLE_IDENTIFIER,
     usesAppleSignIn: true,
     icon: "./assets/images/icon-ios.png",
-    ...(IOS_GOOGLE_SERVICES_FILE
-      ? { googleServicesFile: IOS_GOOGLE_SERVICES_FILE }
+    ...(EFFECTIVE_IOS_GOOGLE_SERVICES_FILE
+      ? { googleServicesFile: EFFECTIVE_IOS_GOOGLE_SERVICES_FILE }
       : {}),
     infoPlist: {
       CFBundleAllowMixedLocalizations: true,
