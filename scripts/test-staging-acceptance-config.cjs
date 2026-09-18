@@ -12,6 +12,9 @@ assert.equal(profile.distribution, "internal");
 assert.equal(profile.android.buildType, "apk");
 assert.equal(profile.android.gradleCommand, ":app:assembleStagingRelease");
 assert.equal(profile.env.APP_VARIANT, "development");
+assert.equal(profile.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD, "true");
+assert.equal(profile.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED, "true");
+assert.equal(profile.env.EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD, undefined);
 assert.equal(profile.env.EXPO_PUBLIC_FIREBASE_ENVIRONMENT, "staging");
 assert.equal(profile.env.EXPO_PUBLIC_GOOGLE_AUTH_ENABLED, "true");
 assert.equal(profile.env.EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD, "true");
@@ -55,6 +58,8 @@ function load(overrides = {}) {
     EAS_BUILD_PROFILE: "staging-acceptance",
     EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION: "false",
     EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID: "1:123456789:android:staging",
+    EXPO_PUBLIC_AI_COACH_BETA_BUILD: "true",
+    EXPO_PUBLIC_AI_COACH_TESTING_ENABLED: "true",
     EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: "sideline-social-staging-2026.firebaseapp.com",
     EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "staging",
     EXPO_PUBLIC_FIREBASE_PROJECT_ID: "sideline-social-staging-2026",
@@ -123,6 +128,18 @@ assert.throws(
   /iOS staging Firebase configuration is required/u,
 );
 assert.throws(() => load({ EXPO_PUBLIC_GOOGLE_AUTH_ENABLED: "false" }), /requires.*Google authentication/u);
+assert.throws(
+  () => load({ EXPO_PUBLIC_AI_COACH_BETA_BUILD: undefined }),
+  /Coach AI.*staging|staging.*Coach AI/u,
+);
+assert.throws(
+  () => load({ EXPO_PUBLIC_AI_COACH_TESTING_ENABLED: undefined }),
+  /Coach AI.*staging|staging.*Coach AI/u,
+);
+assert.throws(
+  () => load({ EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD: "true" }),
+  /cannot both be enabled|staging-beta and production-beta/u,
+);
 assert.throws(() => load({ EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "production" }), /requires.*staging Firebase/u);
 assert.throws(() => load({ EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION: "true" }), /cannot defer/u);
 
@@ -132,6 +149,8 @@ const productionUrlScheme = load({
   EAS_BUILD_PLATFORM: undefined,
   EAS_BUILD_PROFILE: undefined,
   EXPO_PUBLIC_FIREBASE_ENVIRONMENT: "production",
+  EXPO_PUBLIC_AI_COACH_BETA_BUILD: undefined,
+  EXPO_PUBLIC_AI_COACH_TESTING_ENABLED: undefined,
   EXPO_PUBLIC_GOOGLE_AUTH_ENABLED: "true",
   EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: "production-ios.apps.googleusercontent.com",
   EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD: "false",

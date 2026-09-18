@@ -110,6 +110,14 @@ if (STAGING_ACCEPTANCE_BUILD && (!IS_DEVELOPMENT || !IS_STAGING_FIREBASE || !GOO
     "A staging acceptance build requires the separate development app identity, staging Firebase, and Google authentication.",
   );
 }
+if (
+  STAGING_ACCEPTANCE_BUILD
+  && (!COACH_AI_BETA_BUILD || !COACH_AI_TESTING_BUILD || COACH_AI_PRODUCTION_BETA_BUILD)
+) {
+  throw new Error(
+    "A staging acceptance build requires the Coach AI staging-beta and testing flags, without the production-beta flag.",
+  );
+}
 if (STAGING_ACCEPTANCE_BUILD && process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true") {
   throw new Error("A staging acceptance build cannot defer native Firebase configuration validation.");
 }
