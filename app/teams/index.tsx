@@ -156,9 +156,14 @@ export default function ParentTeamsScreen() {
             <Users color={Colors.secondary} size={34} />
             <Text style={styles.stateTitle}>{t("myTeams.noTeams")}</Text>
             <Text style={styles.cardText}>{t("myTeams.noTeamsBody")}</Text>
-            <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/teams/join" as never)} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>{t("myTeams.joinTeam")}</Text>
-            </TouchableOpacity>
+            <View style={styles.emptyActions}>
+              <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/coach/create-team" as never)} style={styles.primaryButton}>
+                <Text style={styles.primaryButtonText}>{t("myTeams.createTeam")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/teams/join" as never)} style={styles.outlineButton}>
+                <Text style={styles.outlineButtonText}>{t("myTeams.joinTeam")}</Text>
+              </TouchableOpacity>
+            </View>
           </Card>
         ) : null}
 
@@ -446,6 +451,7 @@ const styles = StyleSheet.create({
   stateTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17, textAlign: "center" },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 17, textAlign: "center" },
   cardText: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, lineHeight: 20, textAlign: "center" },
+  emptyActions: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, justifyContent: "center" },
   primaryButton: { backgroundColor: Colors.primary, borderRadius: Radius.button, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm },
   primaryButtonText: { color: Colors.surface, fontFamily: Typography.bodySemiBold },
   outlineButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm },

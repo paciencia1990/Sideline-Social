@@ -13,6 +13,20 @@ function loadTypeScript(relativePath) {
   return loaded.exports;
 }
 
+function loadTypeScriptWithDependencies(relativePath, dependencies) {
+  const source = fs.readFileSync(path.join(process.cwd(), relativePath), "utf8");
+  const output = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 },
+  }).outputText;
+  const loaded = { exports: {} };
+  const localRequire = (specifier) => {
+    if (specifier in dependencies) return dependencies[specifier];
+    throw new Error(`Unexpected dependency: ${specifier}`);
+  };
+  new Function("module", "exports", "require", output)(loaded, loaded.exports, localRequire);
+  return loaded.exports;
+}
+
 const { buildParentHomeTeamRows, groupTeamsByChild, summarizeTeamUpdates } = loadTypeScript("utils/parentTeamCore.ts");
 const {
   activeLinkReferencesChild,
@@ -292,6 +306,7 @@ const parentAnnouncementSource = fs.readFileSync(path.join(process.cwd(), "app",
 const coachAnnouncementSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "messages", "[announcementId].tsx"), "utf8");
 const coachAnnouncementListSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "messages.tsx"), "utf8");
 const parentTeamServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "parentTeamService.ts"), "utf8");
+const parentTeamsScreenSource = fs.readFileSync(path.join(process.cwd(), "app", "teams", "index.tsx"), "utf8");
 assert.equal(rosterServiceSource.includes("getPublicUserProfiles"), true);
 assert.equal(rosterServiceSource.includes("documentId()"), false);
 assert.equal(rosterServiceSource.includes("looksLikeEmailAddress"), true);
@@ -318,6 +333,37 @@ assert.equal(parentAnnouncementSource.includes("reply.isDeleted"), true);
 assert.equal(parentAnnouncementSource.includes("listenToTeamAnnouncement"), true);
 assert.equal(coachAnnouncementListSource.includes("listenToNewestTeamAnnouncementsPage"), true);
 assert.equal(parentTeamServiceSource.includes("latestAnnouncement: announcements[0] ?? null"), true);
+assert.match(parentTeamsScreenSource, /router\.push\("\/coach\/create-team"/);
+assert.match(parentTeamsScreenSource, /router\.push\("\/teams\/join"/);
+assert.match(parentTeamsScreenSource, /t\("myTeams\.createTeam"\)/);
+
+let membershipReads = 0;
+let childReads = 0;
+let inboxReads = 0;
+let childLinkReads = 0;
+const emptyAccountParentTeamService = loadTypeScriptWithDependencies("services/parentTeamService.ts", {
+  "firebase/firestore": {
+    getDocs: async () => { childLinkReads += 1; return { docs: [] }; },
+  },
+  "firebase/functions": {},
+  "@/config/firebase": {},
+  "@/constants/teamHistoryPagination": { TEAM_HISTORY_PAGE_SIZES: {} },
+  "@/utils/parentTeamCore": {},
+  "@/services/childService": {
+    getCurrentUserChildren: async () => { childReads += 1; return []; },
+  },
+  "@/services/teamMessageService": {},
+  "@/services/teamService": {
+    getParentTeams: async () => { membershipReads += 1; return []; },
+  },
+  "@/utils/friendPrivacy": {},
+  "@/services/teamPrivateMessageService": {
+    getTeamPrivateMessageInbox: async () => { inboxReads += 1; return []; },
+  },
+  "@/services/publicProfileService": {},
+  "@/types/teamVoiceMessaging": {},
+  "@/utils/voiceMessageNormalizer": {},
+});
 
 const coachRosterSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "team.tsx"), "utf8");
 assert.equal(coachRosterSource.includes("member.displayName"), false);
@@ -387,4 +433,26 @@ assert.equal(translations.includes("This announcement and its replies will be pe
 assert.equal(translations.includes("¿Eliminar anuncio?"), true);
 assert.equal(translations.includes("Este anuncio y sus respuestas se eliminarán permanentemente del equipo."), true);
 
-console.log("Parent Teams lifecycle, multi-role, stable-child, privacy, archive, and staff-role core tests passed.");
+void (async () => {
+  assert.deepEqual(await emptyAccountParentTeamService.getParentHomeTeamsSummary(), {
+    rows: [],
+    totalTeams: 0,
+  });
+  assert.deepEqual(await emptyAccountParentTeamService.getParentTeamsOverview(), {
+    teams: [],
+    totalTeams: 0,
+    unreadCount: 0,
+    unreadCountKnown: true,
+    latestTeam: null,
+    latestAnnouncement: null,
+    privateUnreadCount: 0,
+  });
+  assert.equal(membershipReads, 2);
+  assert.equal(childReads, 0, "an account with no teams must not load child records");
+  assert.equal(inboxReads, 0, "an account with no teams must not require the private-message callable");
+  assert.equal(childLinkReads, 0, "an account with no teams must not load team-child links");
+  console.log("Parent Teams lifecycle, empty-state, multi-role, stable-child, privacy, archive, and staff-role core tests passed.");
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

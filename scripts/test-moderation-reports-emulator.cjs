@@ -170,7 +170,7 @@ async function main() {
 
   const profileReport = await reporter.call("submitModerationReportV2", reportInput(
     "synthetic_profile_001",
-    { type: "userProfile", reportedUserId: subject.uid, conversationId },
+    { type: "userProfile", reportedUserId: subject.uid },
     "spam_scam_impersonation",
   ));
   assert.match(profileReport.receiptNumber, /^SS-/u);

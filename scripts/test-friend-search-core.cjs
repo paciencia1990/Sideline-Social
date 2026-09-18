@@ -131,6 +131,14 @@ assert.ok(screen.includes("searchParentsByName(normalizedSearchText)"));
 assert.ok(screen.includes("setSearchResults([])"));
 assert.ok(screen.includes("searchRequestSequence.current !== requestSequence"));
 assert.ok(screen.includes("setSuggestedUsers(await searchUsers(searchText))") === false);
+const searchResultReport = screen.slice(
+  screen.indexOf("onReport={() => router.push"),
+  screen.indexOf("onRespond={() => respondToSearchResult(profile)}"),
+);
+assert.ok(searchResultReport.includes('pathname: "/settings/safety"'));
+assert.ok(searchResultReport.includes("reportedUserId: profile.id"));
+assert.equal(searchResultReport.includes("conversationId"), false, "profile reporting must not require a friendship or conversation");
+assert.ok(screen.includes('t("friends.reportUser")'));
 const renderedSectionOrder = [
   't("friends.requests")',
   't("friends.outgoing")',
@@ -162,6 +170,7 @@ for (const key of [
   "searchRelationshipIncoming",
   "searchRelationshipFriends",
   "respondToRequest",
+  "reportSearchResult",
 ]) {
   assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length, 2, `${key} needs English and Spanish copy`);
 }

@@ -120,8 +120,12 @@ export type ChildTeamGroup = {
 };
 
 export async function getParentHomeTeamsSummary(): Promise<ParentHomeTeamsSummary> {
-  const [memberships, childProfiles, childLinkRecords] = await Promise.all([
-    getParentTeams({ throwOnError: true }),
+  const memberships = await getParentTeams({ throwOnError: true });
+  if (memberships.length === 0) {
+    return { rows: [], totalTeams: 0 };
+  }
+
+  const [childProfiles, childLinkRecords] = await Promise.all([
     getCurrentUserChildren(),
     loadActiveTeamChildLinkRecords(),
   ]);
@@ -150,8 +154,20 @@ export async function isParentHomeTeamAvailable(teamId: string): Promise<boolean
 }
 
 export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
-  const [memberships, childProfiles, privateConversations] = await Promise.all([
-    getParentTeams({ throwOnError: true }),
+  const memberships = await getParentTeams({ throwOnError: true });
+  if (memberships.length === 0) {
+    return {
+      teams: [],
+      totalTeams: 0,
+      unreadCount: 0,
+      unreadCountKnown: true,
+      latestTeam: null,
+      latestAnnouncement: null,
+      privateUnreadCount: 0,
+    };
+  }
+
+  const [childProfiles, privateConversations] = await Promise.all([
     getCurrentUserChildren(),
     getTeamPrivateMessageInbox("parent"),
   ]);

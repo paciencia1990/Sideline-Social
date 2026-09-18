@@ -11,7 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { Check, ChevronDown, Heart, MessageCircle, Search, UserMinus, UserPlus, Users, X } from "lucide-react-native";
+import { Check, ChevronDown, Flag, Heart, MessageCircle, Search, UserMinus, UserPlus, Users, X } from "lucide-react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
@@ -221,6 +221,7 @@ function SearchResultRow({
   error,
   onAdd,
   onMessage,
+  onReport,
   onRespond,
 }: {
   profile: FriendSearchResult;
@@ -228,6 +229,7 @@ function SearchResultRow({
   error?: string | null;
   onAdd: () => void;
   onMessage: () => void;
+  onReport: () => void;
   onRespond: () => void;
 }) {
   const { t } = useTranslation();
@@ -261,25 +263,37 @@ function SearchResultRow({
         <Text style={styles.personMeta}>{relationshipLabel}</Text>
         {error ? <Text accessibilityLiveRegion="polite" style={styles.inlineActionError}>{error}</Text> : null}
       </View>
-      <TouchableOpacity
-        accessibilityLabel={t("friends.searchResultAction", { action: actionLabel, name: displayName })}
-        accessibilityRole="button"
-        accessibilityState={{ busy, disabled }}
-        activeOpacity={0.82}
-        disabled={disabled}
-        onPress={onPress}
-        style={[styles.searchActionButton, disabled && styles.disabledButton]}
-      >
-        {busy ? (
-          <ActivityIndicator color={Colors.surface} size="small" />
-        ) : (
-          <>
-            {profile.relationship === "friends" ? <MessageCircle size={16} color={Colors.surface} /> : null}
-            {profile.relationship === "none" ? <UserPlus size={16} color={Colors.surface} /> : null}
-            <Text style={styles.searchActionText}>{actionLabel}</Text>
-          </>
-        )}
-      </TouchableOpacity>
+      <View style={styles.searchActions}>
+        <TouchableOpacity
+          accessibilityLabel={t("friends.searchResultAction", { action: actionLabel, name: displayName })}
+          accessibilityRole="button"
+          accessibilityState={{ busy, disabled }}
+          activeOpacity={0.82}
+          disabled={disabled}
+          onPress={onPress}
+          style={[styles.searchActionButton, disabled && styles.disabledButton]}
+        >
+          {busy ? (
+            <ActivityIndicator color={Colors.surface} size="small" />
+          ) : (
+            <>
+              {profile.relationship === "friends" ? <MessageCircle size={16} color={Colors.surface} /> : null}
+              {profile.relationship === "none" ? <UserPlus size={16} color={Colors.surface} /> : null}
+              <Text style={styles.searchActionText}>{actionLabel}</Text>
+            </>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
+          accessibilityLabel={t("friends.reportSearchResult", { name: displayName })}
+          accessibilityRole="button"
+          activeOpacity={0.82}
+          onPress={onReport}
+          style={styles.searchReportButton}
+        >
+          <Flag color={Colors.primary} size={15} />
+          <Text style={styles.searchReportText}>{t("friends.reportUser")}</Text>
+        </TouchableOpacity>
+      </View>
     </Card>
   );
 }
@@ -867,6 +881,10 @@ export default function FriendsScreen() {
                   t("friends.friendRequestError"),
                 )}
                 onMessage={() => void openDirectChat(profile)}
+                onReport={() => router.push({
+                  pathname: "/settings/safety",
+                  params: { reportedUserId: profile.id },
+                })}
                 onRespond={() => respondToSearchResult(profile)}
               />
             ))}
@@ -1194,11 +1212,32 @@ const styles = StyleSheet.create({
     maxWidth: 142,
     paddingHorizontal: Spacing.sm,
   },
+  searchActions: {
+    alignItems: "stretch",
+    gap: Spacing.xs,
+    maxWidth: 142,
+  },
   searchActionText: {
     color: Colors.surface,
     fontFamily: Typography.bodySemiBold,
     fontSize: 12,
     textAlign: "center",
+  },
+  searchReportButton: {
+    alignItems: "center",
+    borderColor: Colors.primary,
+    borderRadius: Radius.button,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: Spacing.xs,
+    justifyContent: "center",
+    minHeight: 36,
+    paddingHorizontal: Spacing.sm,
+  },
+  searchReportText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 12,
   },
   errorCard: {
     borderColor: Colors.primary,
