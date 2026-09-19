@@ -56,6 +56,10 @@ const resources = {
           errorBody: 'Review your explanation and try again. You may also contact support.',
           pending: 'Your appeal is pending review.',
           resolved: 'Your appeal has been reviewed.',
+          eligibilityPending: 'Appeal availability is still being confirmed.',
+          refreshStatus: 'Refresh account status',
+          refreshing: 'Refreshing account status…',
+          refreshError: 'Account status could not be refreshed. Your current restriction remains in effect.',
         },
       },
       tabs: {
@@ -2426,6 +2430,10 @@ const resources = {
           errorBody: 'Revisa tu explicaciÃ³n e intÃ©ntalo otra vez. TambiÃ©n puedes contactar a soporte.',
           pending: 'Tu apelaciÃ³n estÃ¡ pendiente de revisiÃ³n.',
           resolved: 'Tu apelaciÃ³n ha sido revisada.',
+          eligibilityPending: 'AÃºn se estÃ¡ confirmando la disponibilidad de la apelaciÃ³n.',
+          refreshStatus: 'Actualizar estado de la cuenta',
+          refreshing: 'Actualizando el estado de la cuentaâ€¦',
+          refreshError: 'No se pudo actualizar el estado de la cuenta. Tu restricciÃ³n actual sigue vigente.',
         },
       },
       tabs: {

@@ -21,6 +21,7 @@ import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAccountStanding } from "@/context/AccountStandingContext";
 import { useAuth } from "@/context/AuthContext";
 import { submitAccountStandingAppeal } from "@/services/accountStandingService";
+import { needsAppealEligibilityRefresh } from "@/context/accountStandingRefreshCore";
 
 export function AccountStandingBoundary({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -91,6 +92,7 @@ function StandingNotice({
         timeStyle: "short",
       }).format(new Date(standing.expiresAt))
     : null;
+  const appealEligibilityPending = needsAppealEligibilityRefresh(standing);
 
   const submitAppeal = async () => {
     if (!standing) return;
@@ -131,6 +133,25 @@ function StandingNotice({
             {t("accountStanding.appeal.resolved")}
           </Text>
         ) : null}
+        {appealEligibilityPending ? (
+          <View style={styles.card}>
+            <Text accessibilityLiveRegion="polite" style={styles.status}>
+              {t("accountStanding.appeal.eligibilityPending")}
+            </Text>
+            {standingState.refreshError ? (
+              <Text accessibilityLiveRegion="assertive" style={styles.error}>
+                {t("accountStanding.appeal.refreshError")}
+              </Text>
+            ) : null}
+            <ActionButton
+              disabled={standingState.refreshing}
+              label={standingState.refreshing
+                ? t("accountStanding.appeal.refreshing")
+                : t("accountStanding.appeal.refreshStatus")}
+              onPress={() => void standingState.refresh()}
+            />
+          </View>
+        ) : null}
         {standing?.appeal.available ? (
           <View style={styles.card}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>
@@ -155,7 +176,11 @@ function StandingNotice({
         ) : null}
 
         {kind === "refresh" ? (
-          <ActionButton label={t("common.retry")} onPress={() => void standingState.refresh()} />
+          <ActionButton
+            disabled={standingState.refreshing}
+            label={standingState.refreshing ? t("accountStanding.appeal.refreshing") : t("common.retry")}
+            onPress={() => void standingState.refresh()}
+          />
         ) : null}
         {kind === "messagingRestricted" ? (
           <ActionButton label={t("accountStanding.continue")} onPress={standingState.acknowledge} />
@@ -213,6 +238,7 @@ const styles = StyleSheet.create({
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xl },
   detail: { color: Colors.textPrimary, fontFamily: Typography.bodySemiBold, lineHeight: 22 },
   disabled: { opacity: 0.5 },
+  error: { color: "#B42318", fontFamily: Typography.bodySemiBold, lineHeight: 22 },
   input: { borderColor: Colors.secondary, borderRadius: Radius.sm, borderWidth: 1, color: Colors.textPrimary, fontFamily: Typography.bodyRegular, minHeight: 120, padding: Spacing.md },
   link: { alignItems: "center", minHeight: 48, justifyContent: "center" },
   linkText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center", textDecorationLine: "underline" },
