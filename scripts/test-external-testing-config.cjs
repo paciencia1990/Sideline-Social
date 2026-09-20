@@ -74,6 +74,8 @@ const baseEnvironment = {
   EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: "web.apps.googleusercontent.com",
   GOOGLE_SERVICES_INFO_PLIST_STAGING: iosFile,
   GOOGLE_SERVICES_JSON_ANDROID_STAGING: androidFile,
+  GOOGLE_MAPS_API_KEY_ANDROID_STAGING: "synthetic-android-maps-key",
+  GOOGLE_MAPS_API_KEY_IOS_STAGING: "synthetic-ios-maps-key",
 };
 
 function load(platform, overrides = {}) {
@@ -105,6 +107,7 @@ const android = load("android", { GOOGLE_SERVICES_INFO_PLIST_STAGING: undefined 
 assert.equal(android.name, "Sideline Social");
 assert.equal(android.android.package, "com.sidelinesquad.app");
 assert.equal(android.android.googleServicesFile, androidFile);
+assert.equal(android.android.config.googleMaps.apiKey, "synthetic-android-maps-key");
 assert.equal(android.ios.googleServicesFile, undefined);
 assert.deepEqual(
   android.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === "react-native-nitro-google-signin"),
@@ -114,6 +117,7 @@ assert.deepEqual(
 const ios = load("ios", { GOOGLE_SERVICES_JSON_ANDROID_STAGING: undefined });
 assert.equal(ios.ios.bundleIdentifier, "com.sidelinesocial.app");
 assert.equal(ios.ios.googleServicesFile, iosFile);
+assert.equal(ios.ios.config.googleMapsApiKey, "synthetic-ios-maps-key");
 assert.deepEqual(
   ios.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === "react-native-nitro-google-signin"),
   ["react-native-nitro-google-signin", { iosGoogleServicesFile: iosFile }],
@@ -124,6 +128,8 @@ assert.throws(() => load("ios", { GOOGLE_SERVICES_INFO_PLIST_STAGING: undefined 
 assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_SHA1: undefined }), /approved Play signing client/u);
 assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: undefined }), /approved Play signing client/u);
 assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: "wrong.apps.googleusercontent.com" }), /approved Play signing client/u);
+assert.throws(() => load("android", { GOOGLE_MAPS_API_KEY_ANDROID_STAGING: undefined }), /Android build requires.*Maps API key/u);
+assert.throws(() => load("ios", { GOOGLE_MAPS_API_KEY_IOS_STAGING: undefined }), /iOS build requires.*Maps API key/u);
 assert.throws(() => load("android", { EAS_BUILD_PROFILE: "production" }), /profile context is conflicting/u);
 assert.throws(() => load("web"), /supports only Android and iOS/u);
 assert.throws(() => load("android", { APP_VARIANT: "development" }), /requires release app identity/u);

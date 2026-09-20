@@ -36,6 +36,13 @@ def isExternalTestingAndroidBuild =
     System.getenv("APP_VARIANT") == "production" &&
     System.getenv("EXPO_PUBLIC_FIREBASE_ENVIRONMENT") == "staging"
 
+if (isExternalTestingAndroidBuild) {
+    googleMapsApiKey = System.getenv("GOOGLE_MAPS_API_KEY_ANDROID_STAGING") ?: ""
+    if (googleMapsApiKey.trim().isEmpty()) {
+        throw new GradleException("The external-testing Android build requires its staging-only Maps API key.")
+    }
+}
+
 if (stagingAcceptanceRequested && !isStagingAcceptanceAndroidBuild) {
     throw new GradleException("The staging-acceptance Android build context is incomplete or conflicting.")
 }

@@ -50,6 +50,12 @@ const STAGING_NATIVE_FIREBASE_TARGET = resolveStagingNativeFirebaseTarget({
 });
 const ANDROID_ONLY_STAGING_BUILD =
   (STAGING_ACCEPTANCE_BUILD || EXTERNAL_TESTING_BUILD) && STAGING_NATIVE_FIREBASE_TARGET === "android";
+const ANDROID_MAPS_API_KEY = EXTERNAL_TESTING_BUILD
+  ? process.env.GOOGLE_MAPS_API_KEY_ANDROID_STAGING
+  : process.env.GOOGLE_MAPS_API_KEY;
+const IOS_MAPS_API_KEY = EXTERNAL_TESTING_BUILD
+  ? process.env.GOOGLE_MAPS_API_KEY_IOS_STAGING
+  : process.env.GOOGLE_MAPS_API_KEY;
 const EFFECTIVE_IOS_GOOGLE_SERVICES_FILE = ANDROID_ONLY_STAGING_BUILD
   ? undefined
   : IOS_GOOGLE_SERVICES_FILE;
@@ -154,6 +160,20 @@ if (
 ) {
   throw new Error("The external testing Android OAuth association does not match the approved Play signing client.");
 }
+if (
+  EXTERNAL_TESTING_BUILD &&
+  STAGING_NATIVE_FIREBASE_TARGET === "android" &&
+  !ANDROID_MAPS_API_KEY
+) {
+  throw new Error("The external testing Android build requires its staging-only Maps API key.");
+}
+if (
+  EXTERNAL_TESTING_BUILD &&
+  STAGING_NATIVE_FIREBASE_TARGET === "ios" &&
+  !IOS_MAPS_API_KEY
+) {
+  throw new Error("The external testing iOS build requires its staging-only Maps API key.");
+}
 
 if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {
   assertStagingNativeFirebaseConfig({
@@ -220,6 +240,9 @@ module.exports = ({ config }) => ({
     bundleIdentifier: IOS_BUNDLE_IDENTIFIER,
     usesAppleSignIn: true,
     icon: "./assets/images/icon-ios.png",
+    ...(IOS_MAPS_API_KEY
+      ? { config: { googleMapsApiKey: IOS_MAPS_API_KEY } }
+      : {}),
     ...(EFFECTIVE_IOS_GOOGLE_SERVICES_FILE
       ? { googleServicesFile: EFFECTIVE_IOS_GOOGLE_SERVICES_FILE }
       : {}),
@@ -266,7 +289,7 @@ module.exports = ({ config }) => ({
     permissions: ["android.permission.RECORD_AUDIO"],
     config: {
       googleMaps: {
-        apiKey: process.env.GOOGLE_MAPS_API_KEY,
+        apiKey: ANDROID_MAPS_API_KEY,
       },
     },
     adaptiveIcon: {
