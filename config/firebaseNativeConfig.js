@@ -53,6 +53,7 @@ function assertStagingNativeFirebaseConfig({
   androidPackage,
   androidAppId,
   androidSha1,
+  externalAndroidOauthAssociation,
   webClientId,
   iosBundleIdentifier,
   targetPlatform = "all",
@@ -100,8 +101,22 @@ function assertStagingNativeFirebaseConfig({
       oauthClient?.android_info?.package_name === androidPackage &&
       normalizeFingerprint(oauthClient?.android_info?.certificate_hash) === normalizedSha1
     );
-    if (matchingAndroidOauthClients.length !== 1) {
-      throw new Error("Android staging Firebase configuration must contain exactly one approved package and SHA-1 OAuth client.");
+    if (matchingAndroidOauthClients.length > 1) {
+      throw new Error("Android staging Firebase configuration contains duplicate approved package and SHA-1 OAuth clients.");
+    }
+    if (matchingAndroidOauthClients.length === 0) {
+      const association = externalAndroidOauthAssociation;
+      if (
+        !association ||
+        association.packageName !== androidPackage ||
+        normalizeFingerprint(association.sha1) !== normalizedSha1 ||
+        typeof association.clientId !== "string" ||
+        !association.clientId.endsWith(".apps.googleusercontent.com") ||
+        typeof association.ownerProjectId !== "string" ||
+        association.ownerProjectId.length === 0
+      ) {
+        throw new Error("Android staging Firebase configuration is missing the approved package and SHA-1 OAuth association.");
+      }
     }
     const webOauthClients = oauthClients.filter((oauthClient) =>
       oauthClient?.client_type === 3 && typeof oauthClient?.client_id === "string" && oauthClient.client_id.length > 0

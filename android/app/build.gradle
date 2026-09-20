@@ -118,8 +118,16 @@ if (isStagingAcceptanceAndroidBuild || isExternalTestingAndroidBuild) {
             certificateHash instanceof String &&
             certificateHash.replace(":", "").trim().toLowerCase() == normalizedApprovedSha1
     }
-    if (matchingAndroidOauth.size() != 1) {
-        throw new GradleException("The staging Android OAuth package and signing association is invalid.")
+    if (matchingAndroidOauth.size() > 1) {
+        throw new GradleException("The staging Android OAuth package and signing association is duplicated.")
+    }
+    if (matchingAndroidOauth.isEmpty()) {
+        def externalClientId = System.getenv("EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID")
+        def approvedExternalClientId = "903830626771-cgoqfbjs7qect7o09e516bbdh2kgcsa3.apps.googleusercontent.com"
+        def approvedPlaySha1 = "62747fe51f3b85c4f129fea0d8769f283345a1b0"
+        if (!isExternalTestingAndroidBuild || externalClientId != approvedExternalClientId || normalizedApprovedSha1 != approvedPlaySha1) {
+            throw new GradleException("The staging Android OAuth package and signing association is invalid.")
+        }
     }
     def webOauth = oauthClients.findAll { oauthClient ->
         oauthClient?.client_type == 3 && oauthClient?.client_id instanceof String && oauthClient.client_id.length() > 0

@@ -18,6 +18,9 @@ const COACH_AI_PRODUCTION_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_PRODUCTI
 const COACH_AI_TESTING_BUILD = process.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED === "true";
 const STAGING_ACCEPTANCE_BUILD = process.env.EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD === "true";
 const EXTERNAL_TESTING_BUILD = process.env.EXPO_PUBLIC_EXTERNAL_TESTING_BUILD === "true";
+const PLAY_SIGNING_SHA1 = "62:74:7F:E5:1F:3B:85:C4:F1:29:FE:A0:D8:76:9F:28:33:45:A1:B0";
+const PLAY_ANDROID_OAUTH_CLIENT_ID = "903830626771-cgoqfbjs7qect7o09e516bbdh2kgcsa3.apps.googleusercontent.com";
+const PLAY_ANDROID_OAUTH_OWNER_PROJECT_ID = "sideline-squad";
 const DEFER_STAGING_NATIVE_FIREBASE_VALIDATION = shouldDeferStagingNativeFirebaseValidation({
   requested: process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true",
   isEasBuild: process.env.EAS_BUILD === "true",
@@ -142,6 +145,15 @@ if (
 if (EXTERNAL_TESTING_BUILD && process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true") {
   throw new Error("An external testing build cannot defer native Firebase configuration validation.");
 }
+if (
+  EXTERNAL_TESTING_BUILD &&
+  (
+    process.env.EXPO_PUBLIC_ANDROID_OAUTH_SHA1 !== PLAY_SIGNING_SHA1 ||
+    process.env.EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID !== PLAY_ANDROID_OAUTH_CLIENT_ID
+  )
+) {
+  throw new Error("The external testing Android OAuth association does not match the approved Play signing client.");
+}
 
 if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {
   assertStagingNativeFirebaseConfig({
@@ -154,6 +166,14 @@ if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {
     androidSha1: EXTERNAL_TESTING_BUILD
       ? process.env.EXPO_PUBLIC_ANDROID_OAUTH_SHA1
       : "81eab57c24356385d1565575c904ec403b7023ce",
+    externalAndroidOauthAssociation: EXTERNAL_TESTING_BUILD
+      ? {
+          clientId: process.env.EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID,
+          ownerProjectId: PLAY_ANDROID_OAUTH_OWNER_PROJECT_ID,
+          packageName: ANDROID_PACKAGE,
+          sha1: process.env.EXPO_PUBLIC_ANDROID_OAUTH_SHA1,
+        }
+      : undefined,
     webClientId: GOOGLE_WEB_CLIENT_ID,
     iosBundleIdentifier: IOS_BUNDLE_IDENTIFIER,
     targetPlatform: STAGING_NATIVE_FIREBASE_TARGET,

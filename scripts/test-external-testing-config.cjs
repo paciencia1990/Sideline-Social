@@ -10,7 +10,8 @@ const root = path.resolve(__dirname, "..");
 const eas = JSON.parse(fs.readFileSync(path.join(root, "eas.json"), "utf8"));
 const profile = eas.build["external-testing"];
 const appId = profile.env.EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID;
-const sha1 = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD";
+const sha1 = "62:74:7F:E5:1F:3B:85:C4:F1:29:FE:A0:D8:76:9F:28:33:45:A1:B0";
+const androidOauthClientId = "903830626771-cgoqfbjs7qect7o09e516bbdh2kgcsa3.apps.googleusercontent.com";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "sideline-external-testing-"));
 const androidFile = path.join(temp, "google-services.json");
 const iosFile = path.join(temp, "GoogleService-Info.plist");
@@ -27,6 +28,8 @@ assert.equal(profile.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD, "true");
 assert.equal(profile.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED, "true");
 assert.equal(profile.env.EXPO_PUBLIC_GOOGLE_AUTH_ENABLED, "true");
 assert.equal(profile.env.EXPO_PUBLIC_APPLE_AUTH_ENABLED, "true");
+assert.equal(profile.env.EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID, androidOauthClientId);
+assert.equal(profile.env.EXPO_PUBLIC_ANDROID_OAUTH_SHA1, sha1);
 assert.equal(profile.android.buildType, "app-bundle");
 assert.equal(profile.android.gradleCommand, ":app:bundleProductionRelease");
 assert.deepEqual(eas.submit["external-testing"], {});
@@ -42,17 +45,7 @@ fs.writeFileSync(androidFile, JSON.stringify({
       mobilesdk_app_id: appId,
       android_client_info: { package_name: "com.sidelinesquad.app" },
     },
-    oauth_client: [
-      {
-        client_id: "android.apps.googleusercontent.com",
-        client_type: 1,
-        android_info: {
-          package_name: "com.sidelinesquad.app",
-          certificate_hash: sha1,
-        },
-      },
-      { client_id: "web.apps.googleusercontent.com", client_type: 3 },
-    ],
+    oauth_client: [{ client_id: "web.apps.googleusercontent.com", client_type: 3 }],
     api_key: [{ current_key: "synthetic-test-key" }],
     services: {
       appinvite_service: {
@@ -75,6 +68,7 @@ const baseEnvironment = {
   EAS_BUILD: "true",
   EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION: "false",
   EXPO_PUBLIC_ANDROID_OAUTH_SHA1: sha1,
+  EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: androidOauthClientId,
   EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: "sideline-social-staging-2026.firebaseapp.com",
   EXPO_PUBLIC_FIREBASE_PROJECT_ID: "sideline-social-staging-2026",
   EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: "web.apps.googleusercontent.com",
@@ -127,7 +121,9 @@ assert.deepEqual(
 
 assert.throws(() => load("android", { GOOGLE_SERVICES_JSON_ANDROID_STAGING: undefined }), /Android staging Firebase configuration is required/u);
 assert.throws(() => load("ios", { GOOGLE_SERVICES_INFO_PLIST_STAGING: undefined }), /iOS staging Firebase configuration is required/u);
-assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_SHA1: undefined }), /signing SHA-1/u);
+assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_SHA1: undefined }), /approved Play signing client/u);
+assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: undefined }), /approved Play signing client/u);
+assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: "wrong.apps.googleusercontent.com" }), /approved Play signing client/u);
 assert.throws(() => load("android", { EAS_BUILD_PROFILE: "production" }), /profile context is conflicting/u);
 assert.throws(() => load("web"), /supports only Android and iOS/u);
 assert.throws(() => load("android", { APP_VARIANT: "development" }), /requires release app identity/u);
@@ -189,6 +185,11 @@ try {
   const missingSha = runGradle({ EXPO_PUBLIC_ANDROID_OAUTH_SHA1: undefined });
   assert.notEqual(missingSha.status, 0);
   assert.match(output(missingSha), /OAuth signing SHA-1 is required/u);
+
+  removeGeneratedTarget();
+  const wrongClient = runGradle({ EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: "wrong.apps.googleusercontent.com" });
+  assert.notEqual(wrongClient.status, 0);
+  assert.match(output(wrongClient), /OAuth package and signing association is invalid/u);
 } finally {
   removeGeneratedTarget();
   fs.rmSync(temp, { recursive: true, force: true });
