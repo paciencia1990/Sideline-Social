@@ -143,12 +143,34 @@ async function main() {
     explanation: "too short",
   }), "invalid-argument");
 
+  await expectRejected(reporter.call(reportInput(
+    "isolated_profile_nonfriend_001",
+    { type: "userProfile", reportedUserId: subject.uid, conversationId },
+  )), "permission-denied");
+  await adminDb.collection("friendRequests").doc("isolated_pending_profile_report").set({
+    fromUserId: reporter.uid,
+    status: "pending",
+    toUserId: subject.uid,
+  });
+  await expectRejected(reporter.call(reportInput(
+    "isolated_profile_pending_001",
+    { type: "userProfile", reportedUserId: subject.uid, conversationId },
+  )), "permission-denied");
+  await Promise.all([
+    adminDb.collection("users").doc(reporter.uid).set({ friendIds: [subject.uid] }, { merge: true }),
+    adminDb.collection("users").doc(subject.uid).set({ friendIds: [reporter.uid] }, { merge: true }),
+  ]);
   const profileReport = await reporter.call(reportInput(
     "isolated_profile_001",
     { type: "userProfile", reportedUserId: subject.uid, conversationId },
     "spam_scam_impersonation",
   ));
   assert.match(profileReport.receiptNumber, /^SS-/u);
+  await adminDb.collection("users").doc(reporter.uid).set({ friendIds: [] }, { merge: true });
+  await expectRejected(reporter.call(reportInput(
+    "isolated_profile_removed_001",
+    { type: "userProfile", reportedUserId: subject.uid, conversationId },
+  )), "permission-denied");
 
   await adminDb.collection("accountStanding").doc(reporter.uid).set({ status: "suspended", updatedAt: now });
   await expectRejected(

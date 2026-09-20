@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const {
   canonicalModerationReason,
   coachAiModerationIngestionEnabled,
@@ -12,6 +14,11 @@ const {
   mobileModerationReportingEnabled,
   safeModerationEvidenceSourcePath,
 } = require("../functions/lib/moderationReportsCore.js");
+const { isAcceptedFriend } = require("../functions/lib/friendChatCore.js");
+
+function read(...segments) {
+  return fs.readFileSync(path.join(process.cwd(), ...segments), "utf8");
+}
 
 assert.equal(canonicalModerationReason("harassment_bullying"), "harassment_bullying");
 assert.equal(canonicalModerationReason("harassment"), "harassment_bullying");
@@ -102,5 +109,17 @@ assert.equal(coachAiModerationIngestionEnabled({
   ...enabledCoachAiIngestion,
   MODERATION_REPORT_RATE_LIMIT_MAX: "501",
 }), false);
+
+assert.equal(isAcceptedFriend({ friendIds: ["subject"] }, { friendIds: ["reporter"] }, "reporter", "subject"), true);
+assert.equal(isAcceptedFriend({ friendIds: ["subject"] }, { friendIds: [] }, "reporter", "subject"), false, "one-sided or removed friendships are rejected");
+assert.equal(isAcceptedFriend({ friendIds: [] }, { friendIds: [] }, "reporter", "subject"), false, "pending requests are not accepted friendships");
+const reportSource = read("functions", "src", "moderationReports.ts");
+assert.match(reportSource, /isAcceptedFriend\(reporter\.data\(\), reportedUser\.data\(\), reporterUserId, reportedUserId\)/);
+assert.match(reportSource, /accepted_friendship_required/);
+const friendsUi = read("app", "(tabs)", "friends.tsx");
+assert.match(friendsUi, /profile\.relationship === "friends" \? \([\s\S]*friends\.reportSearchResult/);
+const chatManageUi = read("app", "(social)", "chat", "manage.tsx");
+assert.match(chatManageUi, /friendIds\.has\(member\.userId\)/, "group member profile reporting requires a current friendship");
+assert.match(chatManageUi, /access\.directFriendshipActive \? <TouchableOpacity[\s\S]*chat\.reportUser/, "stale direct conversations do not bypass friendship checks");
 
 console.log("Canonical moderation reasons, receipts, dedupe, evidence paths, and retention gates passed.");

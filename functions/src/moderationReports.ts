@@ -4,6 +4,7 @@ import * as admin from "firebase-admin";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import * as firebaseFunctions from "firebase-functions";
 
+import { isAcceptedFriend } from "./friendChatCore";
 import { canAccessTeamAnnouncement, isTeamActive } from "./teamMembershipCore";
 import { isExplicitConversationParticipant } from "./teamVoiceMessagingCore";
 import {
@@ -555,9 +556,26 @@ async function resolveUserProfileTarget(
   if (reportedUserId === reporterUserId) {
     throw new firebaseFunctions.https.HttpsError("failed-precondition", "You cannot report your own profile.");
   }
+  const reporterReference = admin.firestore().collection("users").doc(reporterUserId);
+  const reportedUserReference = admin.firestore().collection("users").doc(reportedUserId);
   const profileReference = admin.firestore().collection("publicUserProfiles").doc(reportedUserId);
-  const profile = await transaction.get(profileReference);
+  const [reporter, reportedUser, profile] = await Promise.all([
+    transaction.get(reporterReference),
+    transaction.get(reportedUserReference),
+    transaction.get(profileReference),
+  ]);
   if (!profile.exists) throw new firebaseFunctions.https.HttpsError("not-found", "The profile is unavailable.");
+  if (
+    !reporter.exists ||
+    !reportedUser.exists ||
+    !isAcceptedFriend(reporter.data(), reportedUser.data(), reporterUserId, reportedUserId)
+  ) {
+    throw new firebaseFunctions.https.HttpsError(
+      "permission-denied",
+      "A current accepted friendship is required to report this profile.",
+      { reason: "accepted_friendship_required" },
+    );
+  }
   const conversationId = readOptionalDocumentId(target.conversationId);
   if (conversationId) {
     const conversationReference = admin.firestore().collection("friendConversations").doc(conversationId);

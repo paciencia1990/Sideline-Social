@@ -283,16 +283,18 @@ function SearchResultRow({
             </>
           )}
         </TouchableOpacity>
-        <TouchableOpacity
-          accessibilityLabel={t("friends.reportSearchResult", { name: displayName })}
-          accessibilityRole="button"
-          activeOpacity={0.82}
-          onPress={onReport}
-          style={styles.searchReportButton}
-        >
-          <Flag color={Colors.primary} size={15} />
-          <Text style={styles.searchReportText}>{t("friends.reportUser")}</Text>
-        </TouchableOpacity>
+        {profile.relationship === "friends" ? (
+          <TouchableOpacity
+            accessibilityLabel={t("friends.reportSearchResult", { name: displayName })}
+            accessibilityRole="button"
+            activeOpacity={0.82}
+            onPress={onReport}
+            style={styles.searchReportButton}
+          >
+            <Flag color={Colors.primary} size={15} />
+            <Text style={styles.searchReportText}>{t("friends.reportUser")}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     </Card>
   );

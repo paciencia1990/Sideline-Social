@@ -168,12 +168,43 @@ async function main() {
     "invalid-argument",
   );
 
+  await expectRejected(
+    reporter.call("submitModerationReportV2", reportInput(
+      "synthetic_profile_nonfriend_001",
+      { type: "userProfile", reportedUserId: subject.uid, conversationId },
+    )),
+    "permission-denied",
+  );
+  await adminDb.collection("friendRequests").doc("synthetic_pending_profile_report").set({
+    fromUserId: reporter.uid,
+    status: "pending",
+    toUserId: subject.uid,
+  });
+  await expectRejected(
+    reporter.call("submitModerationReportV2", reportInput(
+      "synthetic_profile_pending_001",
+      { type: "userProfile", reportedUserId: subject.uid, conversationId },
+    )),
+    "permission-denied",
+  );
+  await Promise.all([
+    adminDb.collection("users").doc(reporter.uid).set({ friendIds: [subject.uid] }, { merge: true }),
+    adminDb.collection("users").doc(subject.uid).set({ friendIds: [reporter.uid] }, { merge: true }),
+  ]);
   const profileReport = await reporter.call("submitModerationReportV2", reportInput(
     "synthetic_profile_001",
-    { type: "userProfile", reportedUserId: subject.uid },
+    { type: "userProfile", reportedUserId: subject.uid, conversationId },
     "spam_scam_impersonation",
   ));
   assert.match(profileReport.receiptNumber, /^SS-/u);
+  await adminDb.collection("users").doc(subject.uid).set({ friendIds: [] }, { merge: true });
+  await expectRejected(
+    reporter.call("submitModerationReportV2", reportInput(
+      "synthetic_profile_removed_001",
+      { type: "userProfile", reportedUserId: subject.uid, conversationId },
+    )),
+    "permission-denied",
+  );
 
   const deletion = await subject.call("removeOwnFriendChatMessage", { conversationId, messageId });
   assert.equal(deletion.storageCleanup, "retainedForModeration");
