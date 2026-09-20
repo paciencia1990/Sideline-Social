@@ -255,6 +255,24 @@ export default function CoachHomeScreen() {
               </View>
             </Card>
 
+            <Card style={styles.resourceCard}>
+              <View style={styles.resourceHeading}>
+                <Shield color={Colors.primary} size={24} />
+                <View style={styles.resourceCopy}>
+                  <Text style={styles.cardTitle}>{t("coach.home.resources")}</Text>
+                  <Text style={styles.cardText}>{t("coach.resources.subtitle")}</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                accessibilityRole="button"
+                activeOpacity={0.86}
+                onPress={() => router.push("/coach/resources" as never)}
+                style={styles.primaryButton}
+              >
+                <Text style={styles.primaryButtonText}>{t("coach.home.resources")}</Text>
+              </TouchableOpacity>
+            </Card>
+
             {selectedTeam ? (
               <Card style={styles.cardGap}>
                 <Text style={styles.cardTitle}>{selectedTeam.name}</Text>
@@ -268,7 +286,6 @@ export default function CoachHomeScreen() {
                   <QuickAction label={t("coach.home.sendMessage")} Icon={MessageCircle} onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: selectedTeam.id } } as never)} />
                   <QuickAction label={t("schedule.title")} Icon={CalendarDays} onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId: selectedTeam.id } } as never)} />
                   {showPrivateMessages ? <QuickAction badge={privateInbox.unreadCount > 0 ? t("teamMessages.unread", { count: privateInbox.unreadCount }) : undefined} label={t("teamMessages.title")} Icon={MessagesSquare} onPress={() => router.push("/coach/team-messages" as never)} /> : null}
-                  <QuickAction label={t("coach.home.resources")} Icon={Shield} onPress={() => router.push("/coach/resources" as never)} />
                 </View>
               </Card>
             ) : null}
@@ -415,6 +432,9 @@ const styles = StyleSheet.create({
   archivedScheduleButton: { alignItems: "center", borderColor: Colors.communicationLink, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.xs, justifyContent: "center", minHeight: 42, paddingHorizontal: Spacing.sm },
   archivedScheduleText: { color: Colors.communicationLink, fontFamily: Typography.bodySemiBold, fontSize: 12 },
   modeCard: { gap: Spacing.md, borderLeftColor: Colors.accentGreen, borderLeftWidth: 4 },
+  resourceCard: { gap: Spacing.md },
+  resourceCopy: { flex: 1, gap: Spacing.xs },
+  resourceHeading: { alignItems: "flex-start", flexDirection: "row", gap: Spacing.sm },
   centerCard: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.lg },
   centerInline: { alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.sm },
   cardTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 18, textAlign: "center" },

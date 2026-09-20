@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Redirect, router, useLocalSearchParams } from "expo-router";
 import { Send, Share2 } from "lucide-react-native";
@@ -18,6 +18,7 @@ import {
   resolveCoachResourceLocale,
 } from "@/services/coachResourcesService";
 import { getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive, type TeamMembership } from "@/services/teamService";
+import { resolveCoachCommunicationTeamDraft } from "@/utils/coachCommunicationDraftCore";
 
 export default function CoachCommunicationTemplateScreen() {
   const { i18n, t } = useTranslation();
@@ -28,8 +29,15 @@ export default function CoachCommunicationTemplateScreen() {
   const locale = resolveCoachResourceLocale(i18n.language);
   const [memberships, setMemberships] = useState<TeamMembership[]>([]);
   const [selectedTeamId, setSelectedTeamId] = useState("");
-  const [message, setMessage] = useState(() => template ? personalizeCoachTemplate(template, locale, { coachName: user?.displayName ?? undefined }) : "");
+  const initialMessage = useMemo(
+    () => template ? personalizeCoachTemplate(template, locale, { coachName: user?.displayName ?? undefined }) : "",
+    [locale, template, user?.displayName],
+  );
+  const [message, setMessage] = useState(initialMessage);
   const [validation, setValidation] = useState<string | null>(null);
+  const activeDraftKey = useRef("");
+  const currentMessage = useRef(initialMessage);
+  const draftsByTeam = useRef(new Map<string, string>([["", initialMessage]]));
 
   useEffect(() => {
     let active = true;
@@ -37,19 +45,38 @@ export default function CoachCommunicationTemplateScreen() {
       if (!active) return;
       const coachTeams = results.filter((entry) => hasCoachAccess(entry) && isTeamActive(entry.team));
       setMemberships(coachTeams);
-      if (coachTeams.length === 1) setSelectedTeamId(coachTeams[0].teamId);
+      if (coachTeams.length === 1) selectTeam(coachTeams[0], coachTeams);
     });
     return () => { active = false; };
+  // Memberships are loaded once for this template screen. Team switching below
+  // remains local and never sends a message.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selectedMembership = memberships.find((entry) => entry.teamId === selectedTeamId) ?? null;
 
-  useEffect(() => {
-    if (!template || !selectedMembership?.team) return;
-    setMessage((current) => current
-      .replaceAll("{teamName}", selectedMembership.team?.name ?? "{teamName}")
-      .replaceAll("{coachName}", user?.displayName ?? "{coachName}"));
-  }, [selectedMembership, template, user?.displayName]);
+  const selectTeam = useCallback((entry: TeamMembership, availableMemberships = memberships) => {
+    if (!template || !entry.team || !availableMemberships.some((membership) => membership.teamId === entry.teamId)) return;
+    const resolution = resolveCoachCommunicationTeamDraft({
+      coachName: user?.displayName ?? undefined,
+      currentKey: activeDraftKey.current,
+      currentMessage: currentMessage.current,
+      drafts: draftsByTeam.current,
+      targetGeneratedMessage: personalizeCoachTemplate(template, locale, {
+        coachName: user?.displayName ?? undefined,
+        teamName: entry.team.name,
+      }),
+      targetKey: entry.teamId,
+      targetTeamName: entry.team.name,
+    });
+
+    activeDraftKey.current = entry.teamId;
+    draftsByTeam.current = resolution.drafts;
+    currentMessage.current = resolution.message;
+    setSelectedTeamId(entry.teamId);
+    setMessage(resolution.message);
+    setValidation(null);
+  }, [locale, memberships, template, user?.displayName]);
 
   const unresolved = useMemo(() => findUnresolvedCoachPlaceholders(message), [message]);
   const validate = useCallback(() => {
@@ -112,7 +139,7 @@ export default function CoachCommunicationTemplateScreen() {
                 accessibilityRole="radio"
                 accessibilityState={{ checked: selectedTeamId === entry.teamId }}
                 key={entry.teamId}
-                onPress={() => setSelectedTeamId(entry.teamId)}
+                onPress={() => selectTeam(entry)}
                 style={[styles.teamOption, selectedTeamId === entry.teamId && styles.teamOptionSelected]}
               >
                 <Text style={styles.teamText}>{entry.team?.name}</Text>
@@ -126,7 +153,12 @@ export default function CoachCommunicationTemplateScreen() {
           <TextInput
             accessibilityLabel={t("coach.resources.editMessage")}
             multiline
-            onChangeText={(value) => { setMessage(value); setValidation(null); }}
+            onChangeText={(value) => {
+              currentMessage.current = value;
+              draftsByTeam.current.set(activeDraftKey.current, value);
+              setMessage(value);
+              setValidation(null);
+            }}
             style={styles.editor}
             textAlignVertical="top"
             value={message}

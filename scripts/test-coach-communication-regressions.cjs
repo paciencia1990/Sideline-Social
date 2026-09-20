@@ -56,15 +56,53 @@ const coachHome = read("app", "coach", "index.tsx");
 const viewTeamIndex = coachHome.indexOf('label={t("coach.home.viewTeam")}');
 const sendTeamMessageIndex = coachHome.indexOf('label={t("coach.home.sendMessage")}');
 const privateMessagesIndex = coachHome.indexOf('label={t("teamMessages.title")}');
-const resourcesIndex = coachHome.indexOf('label={t("coach.home.resources")}');
+const resourcesIndex = coachHome.indexOf('style={styles.resourceCard}');
+const teamCardIndex = coachHome.indexOf('{selectedTeam ? (');
 assert.ok(viewTeamIndex >= 0 && viewTeamIndex < sendTeamMessageIndex, "View Team must be first");
 assert.ok(sendTeamMessageIndex < privateMessagesIndex, "Send Team Message must be second");
-assert.ok(privateMessagesIndex < resourcesIndex, "Private Messages must precede Coach Resources when shown");
+assert.ok(resourcesIndex > coachHome.indexOf('style={styles.modeCard}') && resourcesIndex < teamCardIndex, "Coach Resources must be standalone below Coach mode and above team cards");
+assert.equal(coachHome.includes('label={t("coach.home.resources")}'), false, "team cards must not duplicate Coach Resources");
+assert.equal((coachHome.match(/router\.push\("\/coach\/resources"/g) ?? []).length, 1, "Coach Resources must have one team-independent home entry point");
 assert.equal((coachHome.match(/label=\{t\("coach\.home\.viewTeam"\)\}/g) ?? []).length, 1, "View Team must not be duplicated");
 assert.match(coachHome, /showPrivateMessages \? <QuickAction/);
 assert.match(coachHome, /hasActiveTeam: Boolean\(selectedTeam\)/);
 assert.match(coachHome, /loadState: "loading"/);
 assert.match(coachHome, /loadState: "error"/);
+
+const communicationTemplate = read("app", "coach", "resources", "communication", "[templateId].tsx");
+const communicationDraftCore = loadTypeScript("utils/coachCommunicationDraftCore.ts");
+const initialDrafts = new Map([["team-a", "Custom Devil Rays draft"]]);
+const teamB = communicationDraftCore.resolveCoachCommunicationTeamDraft({
+  currentKey: "team-a",
+  currentMessage: "Custom Devil Rays draft",
+  drafts: initialDrafts,
+  targetGeneratedMessage: "Hello UNC – Southern!",
+  targetKey: "team-b",
+  targetTeamName: "UNC – Southern",
+});
+assert.equal(teamB.message, "Hello UNC – Southern!", "a new team receives its own generated draft");
+const restoredTeamA = communicationDraftCore.resolveCoachCommunicationTeamDraft({
+  currentKey: "team-b",
+  currentMessage: "Edited UNC – Southern draft",
+  drafts: teamB.drafts,
+  targetGeneratedMessage: "Hello Devil Rays!",
+  targetKey: "team-a",
+  targetTeamName: "Devil Rays",
+});
+assert.equal(restoredTeamA.message, "Custom Devil Rays draft", "switching back restores the associated team draft");
+const firstTeam = communicationDraftCore.resolveCoachCommunicationTeamDraft({
+  coachName: "Coach",
+  currentKey: "",
+  currentMessage: "Hello {teamName}; bring {equipment}. — {coachName}",
+  drafts: new Map(),
+  targetGeneratedMessage: "unused",
+  targetKey: "team-b",
+  targetTeamName: "UNC – Southern",
+});
+assert.equal(firstTeam.message, "Hello UNC – Southern; bring {equipment}. — Coach", "first team selection updates only known automatic placeholders");
+assert.match(communicationTemplate, /resolveCoachCommunicationTeamDraft/);
+assert.match(communicationTemplate, /teamId: selectedMembership\.teamId[\s\S]*draftBody: message/);
+assert.match(communicationTemplate, /if \(!validate\(\)\) return;[\s\S]*if \(!selectedMembership\?\.team\)/, "sending still requires explicit validation and an authorized team");
 
 const inbox = read("app", "coach", "team-messages", "index.tsx");
 assert.match(inbox, /teamMessages\.inboxEmptyTitle/);
