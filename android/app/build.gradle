@@ -19,24 +19,40 @@ def requestedGradleTasks = gradle.startParameter.taskNames.collect { it.toLowerC
 def easBuildProfile = System.getenv("EAS_BUILD_PROFILE")
 def easBuildPlatform = System.getenv("EAS_BUILD_PLATFORM")
 def stagingAcceptanceMarker = System.getenv("EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD")
+def externalTestingMarker = System.getenv("EXPO_PUBLIC_EXTERNAL_TESTING_BUILD")
 def stagingAcceptanceRequested = easBuildProfile == "staging-acceptance" || stagingAcceptanceMarker == "true"
+def externalTestingRequested = easBuildProfile == "external-testing" || externalTestingMarker == "true"
 def isStagingAcceptanceAndroidBuild =
     easBuildProfile == "staging-acceptance" &&
     easBuildPlatform == "android" &&
     stagingAcceptanceMarker == "true" &&
     System.getenv("APP_VARIANT") == "development" &&
     System.getenv("EXPO_PUBLIC_FIREBASE_ENVIRONMENT") == "staging"
+def isExternalTestingAndroidBuild =
+    easBuildProfile == "external-testing" &&
+    easBuildPlatform == "android" &&
+    externalTestingMarker == "true" &&
+    stagingAcceptanceMarker != "true" &&
+    System.getenv("APP_VARIANT") == "production" &&
+    System.getenv("EXPO_PUBLIC_FIREBASE_ENVIRONMENT") == "staging"
 
 if (stagingAcceptanceRequested && !isStagingAcceptanceAndroidBuild) {
     throw new GradleException("The staging-acceptance Android build context is incomplete or conflicting.")
 }
+if (externalTestingRequested && !isExternalTestingAndroidBuild) {
+    throw new GradleException("The external-testing Android build context is incomplete or conflicting.")
+}
+if (stagingAcceptanceRequested && externalTestingRequested) {
+    throw new GradleException("Staging acceptance and external testing build contexts cannot overlap.")
+}
 
 def isDevelopmentAndroidBuild =
-    !isStagingAcceptanceAndroidBuild &&
+    !isStagingAcceptanceAndroidBuild && !isExternalTestingAndroidBuild &&
     (System.getenv("APP_VARIANT") == "development" || requestedGradleTasks.any { it.contains("debug") })
 def developmentGoogleServicesTarget = file("src/debug/google-services.json")
 def developmentGoogleServicesSource = System.getenv("GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT")
-def stagingGoogleServicesTarget = file("src/staging/google-services.json")
+def stagingAcceptanceGoogleServicesTarget = file("src/staging/google-services.json")
+def externalTestingGoogleServicesTarget = file("src/production/google-services.json")
 def stagingGoogleServicesSource = System.getenv("GOOGLE_SERVICES_JSON_ANDROID_STAGING")
 
 if (isDevelopmentAndroidBuild && developmentGoogleServicesSource) {
@@ -55,9 +71,9 @@ if (isDevelopmentAndroidBuild && !developmentGoogleServicesTarget.exists()) {
     throw new GradleException("Register com.sidelinesquad.app.dev in Firebase, then provide its google-services.json through GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT.")
 }
 
-if (isStagingAcceptanceAndroidBuild) {
+if (isStagingAcceptanceAndroidBuild || isExternalTestingAndroidBuild) {
     if (!stagingGoogleServicesSource) {
-        throw new GradleException("GOOGLE_SERVICES_JSON_ANDROID_STAGING is required for staging-acceptance.")
+        throw new GradleException("GOOGLE_SERVICES_JSON_ANDROID_STAGING is required for a staging-backed Android build.")
     }
     def sourceFile = file(stagingGoogleServicesSource)
     if (!sourceFile.exists() || !sourceFile.isFile()) {
@@ -72,9 +88,10 @@ if (isStagingAcceptanceAndroidBuild) {
     if (stagingConfig?.project_info?.project_id != "sideline-social-staging-2026") {
         throw new GradleException("The staging Android Firebase project attribution is invalid.")
     }
+    def expectedPackage = isExternalTestingAndroidBuild ? "com.sidelinesquad.app" : "com.sidelinesquad.app.dev"
     def matchingClients = stagingConfig?.client instanceof Collection
         ? stagingConfig.client.findAll { client ->
-            client?.client_info?.android_client_info?.package_name == "com.sidelinesquad.app.dev"
+            client?.client_info?.android_client_info?.package_name == expectedPackage
         }
         : []
     if (matchingClients.size() != 1) {
@@ -87,11 +104,17 @@ if (isStagingAcceptanceAndroidBuild) {
     def oauthClients = matchingClients[0]?.oauth_client instanceof Collection
         ? matchingClients[0].oauth_client
         : []
-    def normalizedApprovedSha1 = "81eab57c24356385d1565575c904ec403b7023ce"
+    def approvedSha1 = isExternalTestingAndroidBuild
+        ? System.getenv("EXPO_PUBLIC_ANDROID_OAUTH_SHA1")
+        : "81eab57c24356385d1565575c904ec403b7023ce"
+    if (!(approvedSha1 instanceof String) || approvedSha1.trim().isEmpty()) {
+        throw new GradleException("The external testing Android OAuth signing SHA-1 is required.")
+    }
+    def normalizedApprovedSha1 = approvedSha1.replace(":", "").trim().toLowerCase()
     def matchingAndroidOauth = oauthClients.findAll { oauthClient ->
         def certificateHash = oauthClient?.android_info?.certificate_hash
         oauthClient?.client_type == 1 &&
-            oauthClient?.android_info?.package_name == "com.sidelinesquad.app.dev" &&
+            oauthClient?.android_info?.package_name == expectedPackage &&
             certificateHash instanceof String &&
             certificateHash.replace(":", "").trim().toLowerCase() == normalizedApprovedSha1
     }
@@ -108,13 +131,16 @@ if (isStagingAcceptanceAndroidBuild) {
     if (expectedWebClientId && webOauth[0].client_id != expectedWebClientId) {
         throw new GradleException("The staging web OAuth client does not match the approved configuration.")
     }
+    def selectedGoogleServicesTarget = isExternalTestingAndroidBuild
+        ? externalTestingGoogleServicesTarget
+        : stagingAcceptanceGoogleServicesTarget
     copy {
         from sourceFile
-        into stagingGoogleServicesTarget.parentFile
+        into selectedGoogleServicesTarget.parentFile
         rename { "google-services.json" }
     }
-} else if (stagingGoogleServicesTarget.exists()) {
-    throw new GradleException("A generated staging Firebase file is present outside the staging-acceptance build context.")
+} else if (stagingAcceptanceGoogleServicesTarget.exists() || externalTestingGoogleServicesTarget.exists()) {
+    throw new GradleException("A generated staging Firebase file is present outside its approved build context.")
 }
 
 /**

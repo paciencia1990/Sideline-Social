@@ -16,21 +16,33 @@ function shouldDeferStagingNativeFirebaseValidation({
   );
 }
 
-function resolveStagingNativeFirebaseTarget({ stagingAcceptanceBuild, easBuildPlatform, easBuildProfile }) {
-  if (!stagingAcceptanceBuild) return "all";
+function resolveStagingNativeFirebaseTarget({
+  stagingAcceptanceBuild,
+  externalTestingBuild,
+  easBuildPlatform,
+  easBuildProfile,
+}) {
+  if (!stagingAcceptanceBuild && !externalTestingBuild) return "all";
+  if (stagingAcceptanceBuild && externalTestingBuild) {
+    throw new Error("Staging acceptance and external testing build markers cannot both be enabled.");
+  }
   const platform = easBuildPlatform || null;
   const profile = easBuildProfile || null;
   if (!platform && !profile) return "all";
   if (!platform || !profile) {
-    throw new Error("Staging acceptance build platform context is incomplete.");
+    throw new Error("Staging build platform context is incomplete.");
   }
-  if (profile !== "staging-acceptance") {
-    throw new Error("Staging acceptance build profile context is conflicting.");
+  const expectedProfile = stagingAcceptanceBuild ? "staging-acceptance" : "external-testing";
+  if (profile !== expectedProfile) {
+    throw new Error("Staging build profile context is conflicting.");
   }
-  if (platform !== "android") {
+  if (stagingAcceptanceBuild && platform !== "android") {
     throw new Error("The staging-acceptance profile is authorized only for Android native configuration.");
   }
-  return "android";
+  if (!new Set(["android", "ios"]).has(platform)) {
+    throw new Error("The external-testing profile supports only Android and iOS native configuration.");
+  }
+  return platform;
 }
 
 function assertStagingNativeFirebaseConfig({

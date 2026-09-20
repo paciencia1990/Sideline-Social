@@ -17,6 +17,7 @@ const COACH_AI_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD === "tru
 const COACH_AI_PRODUCTION_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD === "true";
 const COACH_AI_TESTING_BUILD = process.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED === "true";
 const STAGING_ACCEPTANCE_BUILD = process.env.EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD === "true";
+const EXTERNAL_TESTING_BUILD = process.env.EXPO_PUBLIC_EXTERNAL_TESTING_BUILD === "true";
 const DEFER_STAGING_NATIVE_FIREBASE_VALIDATION = shouldDeferStagingNativeFirebaseValidation({
   requested: process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true",
   isEasBuild: process.env.EAS_BUILD === "true",
@@ -40,15 +41,16 @@ const GOOGLE_AUTH_ENABLED = process.env.EXPO_PUBLIC_GOOGLE_AUTH_ENABLED === "tru
 const APPLE_AUTH_ENABLED = process.env.EXPO_PUBLIC_APPLE_AUTH_ENABLED === "true";
 const STAGING_NATIVE_FIREBASE_TARGET = resolveStagingNativeFirebaseTarget({
   stagingAcceptanceBuild: STAGING_ACCEPTANCE_BUILD,
+  externalTestingBuild: EXTERNAL_TESTING_BUILD,
   easBuildPlatform: process.env.EAS_BUILD_PLATFORM,
   easBuildProfile: process.env.EAS_BUILD_PROFILE,
 });
-const ANDROID_ONLY_STAGING_ACCEPTANCE =
-  STAGING_ACCEPTANCE_BUILD && STAGING_NATIVE_FIREBASE_TARGET === "android";
-const EFFECTIVE_IOS_GOOGLE_SERVICES_FILE = ANDROID_ONLY_STAGING_ACCEPTANCE
+const ANDROID_ONLY_STAGING_BUILD =
+  (STAGING_ACCEPTANCE_BUILD || EXTERNAL_TESTING_BUILD) && STAGING_NATIVE_FIREBASE_TARGET === "android";
+const EFFECTIVE_IOS_GOOGLE_SERVICES_FILE = ANDROID_ONLY_STAGING_BUILD
   ? undefined
   : IOS_GOOGLE_SERVICES_FILE;
-const GOOGLE_SIGN_IN_PLUGIN = ANDROID_ONLY_STAGING_ACCEPTANCE
+const GOOGLE_SIGN_IN_PLUGIN = ANDROID_ONLY_STAGING_BUILD
   ? ANDROID_GOOGLE_SERVICES_FILE
     ? [
         "react-native-nitro-google-signin",
@@ -121,6 +123,25 @@ if (
 if (STAGING_ACCEPTANCE_BUILD && process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true") {
   throw new Error("A staging acceptance build cannot defer native Firebase configuration validation.");
 }
+if (
+  EXTERNAL_TESTING_BUILD
+  && (IS_DEVELOPMENT || !IS_STAGING_FIREBASE || !GOOGLE_AUTH_ENABLED || !APPLE_AUTH_ENABLED)
+) {
+  throw new Error(
+    "An external testing build requires release app identity, staging Firebase, and Google and Apple authentication.",
+  );
+}
+if (
+  EXTERNAL_TESTING_BUILD
+  && (!COACH_AI_BETA_BUILD || !COACH_AI_TESTING_BUILD || COACH_AI_PRODUCTION_BETA_BUILD)
+) {
+  throw new Error(
+    "An external testing build requires the entitled Coach AI staging-beta configuration.",
+  );
+}
+if (EXTERNAL_TESTING_BUILD && process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true") {
+  throw new Error("An external testing build cannot defer native Firebase configuration validation.");
+}
 
 if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {
   assertStagingNativeFirebaseConfig({
@@ -130,7 +151,9 @@ if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {
     authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
     androidPackage: ANDROID_PACKAGE,
     androidAppId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID,
-    androidSha1: "81eab57c24356385d1565575c904ec403b7023ce",
+    androidSha1: EXTERNAL_TESTING_BUILD
+      ? process.env.EXPO_PUBLIC_ANDROID_OAUTH_SHA1
+      : "81eab57c24356385d1565575c904ec403b7023ce",
     webClientId: GOOGLE_WEB_CLIENT_ID,
     iosBundleIdentifier: IOS_BUNDLE_IDENTIFIER,
     targetPlatform: STAGING_NATIVE_FIREBASE_TARGET,

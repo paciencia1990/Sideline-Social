@@ -36,4 +36,5 @@ functions/lib/
 android/app/src/debug/google-services.json
 GoogleService-Info.ios.plist
 android/app/src/staging/google-services.json
+android/app/src/production/google-services.json
 
