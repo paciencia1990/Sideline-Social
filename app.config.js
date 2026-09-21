@@ -20,7 +20,9 @@ const STAGING_ACCEPTANCE_BUILD = process.env.EXPO_PUBLIC_STAGING_ACCEPTANCE_BUIL
 const EXTERNAL_TESTING_BUILD = process.env.EXPO_PUBLIC_EXTERNAL_TESTING_BUILD === "true";
 const PLAY_SIGNING_SHA1 = "62:74:7F:E5:1F:3B:85:C4:F1:29:FE:A0:D8:76:9F:28:33:45:A1:B0";
 const PLAY_ANDROID_OAUTH_CLIENT_ID = "903830626771-cgoqfbjs7qect7o09e516bbdh2kgcsa3.apps.googleusercontent.com";
+const PLAY_WEB_OAUTH_CLIENT_ID = "903830626771-k2unc5kb7ddg83g28ie29ho6jnc9tj34.apps.googleusercontent.com";
 const PLAY_ANDROID_OAUTH_OWNER_PROJECT_ID = "sideline-squad";
+const PLAY_ANDROID_OAUTH_OWNER_PROJECT_NUMBER = "903830626771";
 const DEFER_STAGING_NATIVE_FIREBASE_VALIDATION = shouldDeferStagingNativeFirebaseValidation({
   requested: process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true",
   isEasBuild: process.env.EAS_BUILD === "true",
@@ -48,6 +50,10 @@ const STAGING_NATIVE_FIREBASE_TARGET = resolveStagingNativeFirebaseTarget({
   easBuildPlatform: process.env.EAS_BUILD_PLATFORM,
   easBuildProfile: process.env.EAS_BUILD_PROFILE,
 });
+const EFFECTIVE_GOOGLE_WEB_CLIENT_ID =
+  EXTERNAL_TESTING_BUILD && STAGING_NATIVE_FIREBASE_TARGET === "android"
+    ? process.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID
+    : GOOGLE_WEB_CLIENT_ID;
 const ANDROID_ONLY_STAGING_BUILD =
   (STAGING_ACCEPTANCE_BUILD || EXTERNAL_TESTING_BUILD) && STAGING_NATIVE_FIREBASE_TARGET === "android";
 const ANDROID_MAPS_API_KEY = EXTERNAL_TESTING_BUILD
@@ -155,10 +161,11 @@ if (
   EXTERNAL_TESTING_BUILD &&
   (
     process.env.EXPO_PUBLIC_ANDROID_OAUTH_SHA1 !== PLAY_SIGNING_SHA1 ||
-    process.env.EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID !== PLAY_ANDROID_OAUTH_CLIENT_ID
+    process.env.EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID !== PLAY_ANDROID_OAUTH_CLIENT_ID ||
+    process.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID !== PLAY_WEB_OAUTH_CLIENT_ID
   )
 ) {
-  throw new Error("The external testing Android OAuth association does not match the approved Play signing client.");
+  throw new Error("The external testing Android OAuth association does not match the approved Play signing client and same-project web client.");
 }
 if (
   EXTERNAL_TESTING_BUILD &&
@@ -189,12 +196,14 @@ if (IS_STAGING_FIREBASE && !DEFER_STAGING_NATIVE_FIREBASE_VALIDATION) {
     externalAndroidOauthAssociation: EXTERNAL_TESTING_BUILD
       ? {
           clientId: process.env.EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID,
+          webClientId: process.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID,
           ownerProjectId: PLAY_ANDROID_OAUTH_OWNER_PROJECT_ID,
+          ownerProjectNumber: PLAY_ANDROID_OAUTH_OWNER_PROJECT_NUMBER,
           packageName: ANDROID_PACKAGE,
           sha1: process.env.EXPO_PUBLIC_ANDROID_OAUTH_SHA1,
         }
       : undefined,
-    webClientId: GOOGLE_WEB_CLIENT_ID,
+    webClientId: EFFECTIVE_GOOGLE_WEB_CLIENT_ID,
     iosBundleIdentifier: IOS_BUNDLE_IDENTIFIER,
     targetPlatform: STAGING_NATIVE_FIREBASE_TARGET,
   });
@@ -371,7 +380,7 @@ module.exports = ({ config }) => ({
       appleEnabled: APPLE_AUTH_ENABLED,
       googleEnabled: GOOGLE_AUTH_ENABLED,
       googleIosClientId: GOOGLE_IOS_CLIENT_ID || null,
-      googleWebClientId: GOOGLE_WEB_CLIENT_ID || "autoDetect",
+      googleWebClientId: EFFECTIVE_GOOGLE_WEB_CLIENT_ID || "autoDetect",
     },
     eas: {
       ...((config.extra && config.extra.eas) || {}),

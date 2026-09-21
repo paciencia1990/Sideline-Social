@@ -130,10 +130,20 @@ if (isStagingAcceptanceAndroidBuild || isExternalTestingAndroidBuild) {
     }
     if (matchingAndroidOauth.isEmpty()) {
         def externalClientId = System.getenv("EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID")
+        def externalWebClientId = System.getenv("EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID")
         def approvedExternalClientId = "903830626771-cgoqfbjs7qect7o09e516bbdh2kgcsa3.apps.googleusercontent.com"
+        def approvedExternalWebClientId = "903830626771-k2unc5kb7ddg83g28ie29ho6jnc9tj34.apps.googleusercontent.com"
         def approvedPlaySha1 = "62747fe51f3b85c4f129fea0d8769f283345a1b0"
-        if (!isExternalTestingAndroidBuild || externalClientId != approvedExternalClientId || normalizedApprovedSha1 != approvedPlaySha1) {
-            throw new GradleException("The staging Android OAuth package and signing association is invalid.")
+        def externalClientMatch = externalClientId instanceof String ? (externalClientId =~ /^(\d+)-/) : null
+        def externalWebMatch = externalWebClientId instanceof String ? (externalWebClientId =~ /^(\d+)-/) : null
+        def externalClientProject = externalClientMatch != null && externalClientMatch.find() ? externalClientMatch.group(1) : null
+        def externalWebProject = externalWebMatch != null && externalWebMatch.find() ? externalWebMatch.group(1) : null
+        if (!isExternalTestingAndroidBuild ||
+            externalClientId != approvedExternalClientId ||
+            externalWebClientId != approvedExternalWebClientId ||
+            externalClientProject != externalWebProject ||
+            normalizedApprovedSha1 != approvedPlaySha1) {
+            throw new GradleException("The staging Android OAuth package, signing, and same-project web-client association is invalid.")
         }
     }
     def webOauth = oauthClients.findAll { oauthClient ->
@@ -143,7 +153,7 @@ if (isStagingAcceptanceAndroidBuild || isExternalTestingAndroidBuild) {
         throw new GradleException("The staging web OAuth association is invalid.")
     }
     def expectedWebClientId = System.getenv("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID")
-    if (expectedWebClientId && webOauth[0].client_id != expectedWebClientId) {
+    if (!matchingAndroidOauth.isEmpty() && expectedWebClientId && webOauth[0].client_id != expectedWebClientId) {
         throw new GradleException("The staging web OAuth client does not match the approved configuration.")
     }
     def selectedGoogleServicesTarget = isExternalTestingAndroidBuild

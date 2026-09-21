@@ -24,6 +24,7 @@ import {
 } from "@/services/teamService";
 import { getTeamPrivateMessageInboxPage } from "@/services/teamPrivateMessageService";
 import { shouldShowPrivateMessagesCard, type PrivateInboxLoadState } from "@/utils/coachCommunicationCore";
+import { createCoachHomeTeamCards } from "@/utils/coachHomeTeamCards";
 
 export default function CoachHomeScreen() {
   const { t } = useTranslation();
@@ -128,14 +129,13 @@ export default function CoachHomeScreen() {
   const parentTeams = memberships.filter((membership) =>
     hasTeamRole(membership, "parent") && isTeamActive(membership.team),
   );
-  const selectedMembership = coachTeams[0] ?? null;
-  const selectedTeam = selectedMembership?.team ?? null;
+  const teamCards = createCoachHomeTeamCards(coachTeams);
   const hasTeams = coachTeams.length > 0;
   const teamSectionTitle = hasTeams ? t("coach.home.addTeam") : t("coach.home.getStarted");
   const teamActionLabel = hasTeams ? t("coach.home.addTeam") : t("coach.team.createTeam");
   const showPrivateMessages = shouldShowPrivateMessagesCard({
     ...privateInbox,
-    hasActiveTeam: Boolean(selectedTeam),
+    hasActiveTeam: teamCards.length > 0,
   });
 
   useEffect(() => {
@@ -273,22 +273,22 @@ export default function CoachHomeScreen() {
               </TouchableOpacity>
             </Card>
 
-            {selectedTeam ? (
-              <Card style={styles.cardGap}>
-                <Text style={styles.cardTitle}>{selectedTeam.name}</Text>
-                <Text style={styles.cardText}>{[selectedTeam.sport, selectedTeam.ageRange, selectedTeam.division].filter(Boolean).join(" - ")}</Text>
+            {teamCards.map((teamCard) => (
+              <Card key={teamCard.teamId} style={styles.cardGap}>
+                <Text style={styles.cardTitle}>{teamCard.name}</Text>
+                <Text style={styles.cardText}>{[teamCard.sport, teamCard.ageRange, teamCard.division].filter(Boolean).join(" - ")}</Text>
                 <View style={styles.inviteBlock}>
                   <Text style={styles.inviteLabel}>{t("coach.team.inviteCode")}</Text>
-                  <Text maxFontSizeMultiplier={1.4} style={styles.inviteCode}>{selectedTeam.inviteCode}</Text>
+                  <Text maxFontSizeMultiplier={1.4} style={styles.inviteCode}>{teamCard.inviteCode}</Text>
                 </View>
                 <View style={styles.quickGrid}>
-                  <QuickAction label={t("coach.home.viewTeam")} Icon={Users} onPress={() => router.push({ pathname: "/coach/team", params: { teamId: selectedTeam.id } } as never)} />
-                  <QuickAction label={t("coach.home.sendMessage")} Icon={MessageCircle} onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: selectedTeam.id } } as never)} />
-                  <QuickAction label={t("schedule.title")} Icon={CalendarDays} onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId: selectedTeam.id } } as never)} />
-                  {showPrivateMessages ? <QuickAction badge={privateInbox.unreadCount > 0 ? t("teamMessages.unread", { count: privateInbox.unreadCount }) : undefined} label={t("teamMessages.title")} Icon={MessagesSquare} onPress={() => router.push("/coach/team-messages" as never)} /> : null}
+                  <QuickAction label={t("coach.home.viewTeam")} Icon={Users} onPress={() => router.push({ pathname: "/coach/team", params: { teamId: teamCard.teamId } } as never)} />
+                  <QuickAction label={t("coach.home.sendMessage")} Icon={MessageCircle} onPress={() => router.push({ pathname: "/coach/messages", params: { teamId: teamCard.teamId } } as never)} />
+                  <QuickAction label={t("schedule.title")} Icon={CalendarDays} onPress={() => router.push({ pathname: "/teams/[teamId]/schedule", params: { teamId: teamCard.teamId } } as never)} />
+                  {showPrivateMessages ? <QuickAction badge={privateInbox.unreadCount > 0 ? t("teamMessages.unread", { count: privateInbox.unreadCount }) : undefined} label={t("teamMessages.title")} Icon={MessagesSquare} onPress={() => router.push({ pathname: "/coach/team-messages", params: { teamId: teamCard.teamId } } as never)} /> : null}
                 </View>
               </Card>
-            ) : null}
+            ))}
 
             {archivedCount > 0 ? (
               <Card style={styles.cardGap}>

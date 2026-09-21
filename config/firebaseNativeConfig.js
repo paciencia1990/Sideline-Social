@@ -112,10 +112,18 @@ function assertStagingNativeFirebaseConfig({
         normalizeFingerprint(association.sha1) !== normalizedSha1 ||
         typeof association.clientId !== "string" ||
         !association.clientId.endsWith(".apps.googleusercontent.com") ||
+        typeof association.webClientId !== "string" ||
+        !association.webClientId.endsWith(".apps.googleusercontent.com") ||
         typeof association.ownerProjectId !== "string" ||
-        association.ownerProjectId.length === 0
+        association.ownerProjectId.length === 0 ||
+        typeof association.ownerProjectNumber !== "string" ||
+        !/^\d+$/u.test(association.ownerProjectNumber) ||
+        oauthClientProjectNumber(association.clientId) !== association.ownerProjectNumber ||
+        oauthClientProjectNumber(association.webClientId) !== association.ownerProjectNumber ||
+        association.clientId === association.webClientId ||
+        webClientId !== association.webClientId
       ) {
-        throw new Error("Android staging Firebase configuration is missing the approved package and SHA-1 OAuth association.");
+        throw new Error("Android staging Firebase configuration is missing the approved same-project Android and web OAuth association.");
       }
     }
     const webOauthClients = oauthClients.filter((oauthClient) =>
@@ -124,7 +132,7 @@ function assertStagingNativeFirebaseConfig({
     if (webOauthClients.length !== 1) {
       throw new Error("Android staging Firebase configuration must contain exactly one web OAuth client.");
     }
-    if (webClientId && webOauthClients[0].client_id !== webClientId) {
+    if (matchingAndroidOauthClients.length > 0 && webClientId && webOauthClients[0].client_id !== webClientId) {
       throw new Error("Android staging Firebase configuration does not match the explicit web OAuth client.");
     }
   }
@@ -145,6 +153,10 @@ function assertStagingNativeFirebaseConfig({
 
 function normalizeFingerprint(value) {
   return typeof value === "string" ? value.replace(/:/gu, "").trim().toLowerCase() : "";
+}
+
+function oauthClientProjectNumber(clientId) {
+  return typeof clientId === "string" ? /^(\d+)-/u.exec(clientId)?.[1] ?? null : null;
 }
 
 function readJson(file, label) {

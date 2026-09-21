@@ -57,17 +57,35 @@ const viewTeamIndex = coachHome.indexOf('label={t("coach.home.viewTeam")}');
 const sendTeamMessageIndex = coachHome.indexOf('label={t("coach.home.sendMessage")}');
 const privateMessagesIndex = coachHome.indexOf('label={t("teamMessages.title")}');
 const resourcesIndex = coachHome.indexOf('style={styles.resourceCard}');
-const teamCardIndex = coachHome.indexOf('{selectedTeam ? (');
+const teamCardIndex = coachHome.indexOf('{teamCards.map((teamCard) => (');
 assert.ok(viewTeamIndex >= 0 && viewTeamIndex < sendTeamMessageIndex, "View Team must be first");
 assert.ok(sendTeamMessageIndex < privateMessagesIndex, "Send Team Message must be second");
 assert.ok(resourcesIndex > coachHome.indexOf('style={styles.modeCard}') && resourcesIndex < teamCardIndex, "Coach Resources must be standalone below Coach mode and above team cards");
 assert.equal(coachHome.includes('label={t("coach.home.resources")}'), false, "team cards must not duplicate Coach Resources");
 assert.equal((coachHome.match(/router\.push\("\/coach\/resources"/g) ?? []).length, 1, "Coach Resources must have one team-independent home entry point");
-assert.equal((coachHome.match(/label=\{t\("coach\.home\.viewTeam"\)\}/g) ?? []).length, 1, "View Team must not be duplicated");
+assert.equal((coachHome.match(/label=\{t\("coach\.home\.viewTeam"\)\}/g) ?? []).length, 1, "one mapped template renders View Team for every active coached team");
 assert.match(coachHome, /showPrivateMessages \? <QuickAction/);
-assert.match(coachHome, /hasActiveTeam: Boolean\(selectedTeam\)/);
+assert.match(coachHome, /hasActiveTeam: teamCards\.length > 0/);
+assert.match(coachHome, /pathname: "\/coach\/team-messages", params: \{ teamId: teamCard\.teamId \}/, "private messages stay bound to the rendered team");
 assert.match(coachHome, /loadState: "loading"/);
 assert.match(coachHome, /loadState: "error"/);
+
+const coachHomeCards = loadTypeScript("utils/coachHomeTeamCards.ts");
+const devilRays = {
+  teamId: "devil-rays",
+  team: { id: "devil-rays", name: "Devil Rays", sport: "Baseball", ageRange: "10U", division: "A", inviteCode: "DEVIL1" },
+};
+const uncSouthern = {
+  teamId: "unc-southern",
+  team: { id: "unc-southern", name: "UNC - Southern", sport: "Basketball", ageRange: "12U", division: "South", inviteCode: "UNC123" },
+};
+assert.deepEqual(coachHomeCards.createCoachHomeTeamCards([]), [], "zero teams render zero team cards");
+assert.deepEqual(coachHomeCards.createCoachHomeTeamCards([devilRays]).map((card) => card.teamId), ["devil-rays"], "one team renders one correctly bound card");
+assert.deepEqual(
+  coachHomeCards.createCoachHomeTeamCards([devilRays, uncSouthern]).map((card) => [card.name, card.teamId]),
+  [["Devil Rays", "devil-rays"], ["UNC - Southern", "unc-southern"]],
+  "multiple teams retain their own names and navigation identifiers",
+);
 
 const communicationTemplate = read("app", "coach", "resources", "communication", "[templateId].tsx");
 const communicationDraftCore = loadTypeScript("utils/coachCommunicationDraftCore.ts");

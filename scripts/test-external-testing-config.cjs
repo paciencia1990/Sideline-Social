@@ -12,6 +12,8 @@ const profile = eas.build["external-testing"];
 const appId = profile.env.EXPO_PUBLIC_FIREBASE_APP_ID_ANDROID;
 const sha1 = "62:74:7F:E5:1F:3B:85:C4:F1:29:FE:A0:D8:76:9F:28:33:45:A1:B0";
 const androidOauthClientId = "903830626771-cgoqfbjs7qect7o09e516bbdh2kgcsa3.apps.googleusercontent.com";
+const androidWebClientId = "903830626771-k2unc5kb7ddg83g28ie29ho6jnc9tj34.apps.googleusercontent.com";
+const stagingWebClientId = "3090643405-staging-web.apps.googleusercontent.com";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "sideline-external-testing-"));
 const androidFile = path.join(temp, "google-services.json");
 const iosFile = path.join(temp, "GoogleService-Info.plist");
@@ -29,6 +31,7 @@ assert.equal(profile.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED, "true");
 assert.equal(profile.env.EXPO_PUBLIC_GOOGLE_AUTH_ENABLED, "true");
 assert.equal(profile.env.EXPO_PUBLIC_APPLE_AUTH_ENABLED, "true");
 assert.equal(profile.env.EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID, androidOauthClientId);
+assert.equal(profile.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID, androidWebClientId);
 assert.equal(profile.env.EXPO_PUBLIC_ANDROID_OAUTH_SHA1, sha1);
 assert.equal(profile.android.buildType, "app-bundle");
 assert.equal(profile.android.gradleCommand, ":app:bundleProductionRelease");
@@ -45,11 +48,11 @@ fs.writeFileSync(androidFile, JSON.stringify({
       mobilesdk_app_id: appId,
       android_client_info: { package_name: "com.sidelinesquad.app" },
     },
-    oauth_client: [{ client_id: "web.apps.googleusercontent.com", client_type: 3 }],
+    oauth_client: [{ client_id: stagingWebClientId, client_type: 3 }],
     api_key: [{ current_key: "synthetic-test-key" }],
     services: {
       appinvite_service: {
-        other_platform_oauth_client: [{ client_id: "web.apps.googleusercontent.com", client_type: 3 }],
+        other_platform_oauth_client: [{ client_id: stagingWebClientId, client_type: 3 }],
       },
     },
   }],
@@ -69,9 +72,10 @@ const baseEnvironment = {
   EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION: "false",
   EXPO_PUBLIC_ANDROID_OAUTH_SHA1: sha1,
   EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: androidOauthClientId,
+  EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID: androidWebClientId,
   EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: "sideline-social-staging-2026.firebaseapp.com",
   EXPO_PUBLIC_FIREBASE_PROJECT_ID: "sideline-social-staging-2026",
-  EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: "web.apps.googleusercontent.com",
+  EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: stagingWebClientId,
   GOOGLE_SERVICES_INFO_PLIST_STAGING: iosFile,
   GOOGLE_SERVICES_JSON_ANDROID_STAGING: androidFile,
   GOOGLE_MAPS_API_KEY_ANDROID_STAGING: "synthetic-android-maps-key",
@@ -108,6 +112,7 @@ assert.equal(android.name, "Sideline Social");
 assert.equal(android.android.package, "com.sidelinesquad.app");
 assert.equal(android.android.googleServicesFile, androidFile);
 assert.equal(android.android.config.googleMaps.apiKey, "synthetic-android-maps-key");
+assert.equal(android.extra.authProviders.googleWebClientId, androidWebClientId, "Android uses the web client from the Play Android client's Google project");
 assert.equal(android.ios.googleServicesFile, undefined);
 assert.deepEqual(
   android.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === "react-native-nitro-google-signin"),
@@ -118,6 +123,7 @@ const ios = load("ios", { GOOGLE_SERVICES_JSON_ANDROID_STAGING: undefined });
 assert.equal(ios.ios.bundleIdentifier, "com.sidelinesocial.app");
 assert.equal(ios.ios.googleServicesFile, iosFile);
 assert.equal(ios.ios.config.googleMapsApiKey, "synthetic-ios-maps-key");
+assert.equal(ios.extra.authProviders.googleWebClientId, stagingWebClientId, "iOS preserves its staging-project client pairing");
 assert.deepEqual(
   ios.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === "react-native-nitro-google-signin"),
   ["react-native-nitro-google-signin", { iosGoogleServicesFile: iosFile }],
@@ -128,6 +134,8 @@ assert.throws(() => load("ios", { GOOGLE_SERVICES_INFO_PLIST_STAGING: undefined 
 assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_SHA1: undefined }), /approved Play signing client/u);
 assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: undefined }), /approved Play signing client/u);
 assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: "wrong.apps.googleusercontent.com" }), /approved Play signing client/u);
+assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID: undefined }), /same-project web client/u);
+assert.throws(() => load("android", { EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID: "3090643405-wrong.apps.googleusercontent.com" }), /same-project web client/u);
 assert.throws(() => load("android", { GOOGLE_MAPS_API_KEY_ANDROID_STAGING: undefined }), /Android build requires.*Maps API key/u);
 assert.throws(() => load("ios", { GOOGLE_MAPS_API_KEY_IOS_STAGING: undefined }), /iOS build requires.*Maps API key/u);
 assert.throws(() => load("android", { EAS_BUILD_PROFILE: "production" }), /profile context is conflicting/u);
@@ -195,7 +203,12 @@ try {
   removeGeneratedTarget();
   const wrongClient = runGradle({ EXPO_PUBLIC_ANDROID_OAUTH_CLIENT_ID: "wrong.apps.googleusercontent.com" });
   assert.notEqual(wrongClient.status, 0);
-  assert.match(output(wrongClient), /OAuth package and signing association is invalid/u);
+  assert.match(output(wrongClient), /OAuth package, signing, and same-project web-client association is invalid/u);
+
+  removeGeneratedTarget();
+  const mismatchedWebClient = runGradle({ EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID: "3090643405-wrong.apps.googleusercontent.com" });
+  assert.notEqual(mismatchedWebClient.status, 0);
+  assert.match(output(mismatchedWebClient), /OAuth package, signing, and same-project web-client association is invalid/u);
 } finally {
   removeGeneratedTarget();
   fs.rmSync(temp, { recursive: true, force: true });
