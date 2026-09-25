@@ -20,6 +20,26 @@ def easBuildProfile = System.getenv("EAS_BUILD_PROFILE")
 def easBuildPlatform = System.getenv("EAS_BUILD_PLATFORM")
 def stagingAcceptanceMarker = System.getenv("EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD")
 def externalTestingMarker = System.getenv("EXPO_PUBLIC_EXTERNAL_TESTING_BUILD")
+def stagingDevelopmentRequested =
+    easBuildProfile == "staging-development" || System.getenv("EXPO_PUBLIC_STAGING_DEVELOPMENT_BUILD") == "true"
+def isStagingDevelopmentAndroidBuild =
+    easBuildProfile == "staging-development" && easBuildPlatform == "android" &&
+    System.getenv("EXPO_PUBLIC_STAGING_DEVELOPMENT_BUILD") == "true" &&
+    stagingAcceptanceMarker != "true" && externalTestingMarker != "true" &&
+    System.getenv("APP_VARIANT") == "development" &&
+    System.getenv("EXPO_PUBLIC_FIREBASE_ENVIRONMENT") == "staging"
+if (stagingDevelopmentRequested && !isStagingDevelopmentAndroidBuild) {
+    throw new GradleException("Staging development context is incomplete or conflicting.")
+}
+if (isStagingDevelopmentAndroidBuild) {
+    googleMapsApiKey = System.getenv("GOOGLE_MAPS_API_KEY_ANDROID_STAGING_DEVELOPMENT") ?: ""
+    if (googleMapsApiKey.trim().isEmpty()) {
+        throw new GradleException("A separately verified staging development Maps key is required.")
+    }
+    if (requestedGradleTasks.any { !it.contains("stagingdebug") }) {
+        throw new GradleException("Staging development may build only the stagingDebug variant.")
+    }
+}
 def stagingAcceptanceRequested = easBuildProfile == "staging-acceptance" || stagingAcceptanceMarker == "true"
 def externalTestingRequested = easBuildProfile == "external-testing" || externalTestingMarker == "true"
 def isStagingAcceptanceAndroidBuild =
@@ -54,7 +74,7 @@ if (stagingAcceptanceRequested && externalTestingRequested) {
 }
 
 def isDevelopmentAndroidBuild =
-    !isStagingAcceptanceAndroidBuild && !isExternalTestingAndroidBuild &&
+    !isStagingAcceptanceAndroidBuild && !isExternalTestingAndroidBuild && !isStagingDevelopmentAndroidBuild &&
     (System.getenv("APP_VARIANT") == "development" || requestedGradleTasks.any { it.contains("debug") })
 def developmentGoogleServicesTarget = file("src/debug/google-services.json")
 def developmentGoogleServicesSource = System.getenv("GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT")
@@ -78,7 +98,7 @@ if (isDevelopmentAndroidBuild && !developmentGoogleServicesTarget.exists()) {
     throw new GradleException("Register com.sidelinesquad.app.dev in Firebase, then provide its google-services.json through GOOGLE_SERVICES_JSON_ANDROID_DEVELOPMENT.")
 }
 
-if (isStagingAcceptanceAndroidBuild || isExternalTestingAndroidBuild) {
+if (isStagingAcceptanceAndroidBuild || isExternalTestingAndroidBuild || isStagingDevelopmentAndroidBuild) {
     if (!stagingGoogleServicesSource) {
         throw new GradleException("GOOGLE_SERVICES_JSON_ANDROID_STAGING is required for a staging-backed Android build.")
     }
@@ -375,3 +395,35 @@ dependencies {
 }
 
 apply plugin: 'com.google.gms.google-services'
+
+// Local development uses the existing staging signing key, never the bundled debug key.
+if (isStagingDevelopmentAndroidBuild) {
+    def credentialsPath = System.getenv("SIDELINE_STAGING_SIGNING_CREDENTIALS")
+    if (!credentialsPath || !file(credentialsPath).isFile()) {
+        throw new GradleException("Existing staging signing credentials are required; no new key is generated.")
+    }
+    def signingData
+    try {
+        signingData = new groovy.json.JsonSlurper().parse(file(credentialsPath))?.android?.keystore
+        def keyFile = new File(signingData.keystorePath)
+        if (!keyFile.isAbsolute()) keyFile = new File(file(credentialsPath).parentFile, signingData.keystorePath)
+        def keyStore = java.security.KeyStore.getInstance(keyFile, signingData.keystorePassword.toCharArray())
+        def certificate = keyStore.getCertificate(signingData.keyAlias)
+        def fingerprint = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(certificate.encoded).encodeHex().toString()
+        if (fingerprint != "dcaeb844f874b548fe0f49eadc07438ff9d58ffb3a4ed3b475f955817dc89116") {
+            throw new Exception("signer mismatch")
+        }
+        android.signingConfigs.create("stagingDevelopment") {
+            storeFile keyFile
+            storePassword signingData.keystorePassword
+            keyAlias signingData.keyAlias
+            keyPassword signingData.keyPassword ?: signingData.keystorePassword
+        }
+        android.buildTypes.debug.signingConfig = android.signingConfigs.stagingDevelopment
+        android.productFlavors.staging.versionCode = 9
+        android.productFlavors.staging.resValue "string", "app_name", "Sideline Social Staging Dev"
+    } catch (Exception ignored) {
+        throw new GradleException("Staging signing validation failed. Preserve the installed app; do not uninstall it.")
+    }
+}

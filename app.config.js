@@ -17,6 +17,7 @@ const COACH_AI_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD === "tru
 const COACH_AI_PRODUCTION_BETA_BUILD = process.env.EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD === "true";
 const COACH_AI_TESTING_BUILD = process.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED === "true";
 const STAGING_ACCEPTANCE_BUILD = process.env.EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD === "true";
+const STAGING_DEVELOPMENT_BUILD = process.env.EXPO_PUBLIC_STAGING_DEVELOPMENT_BUILD === "true";
 const EXTERNAL_TESTING_BUILD = process.env.EXPO_PUBLIC_EXTERNAL_TESTING_BUILD === "true";
 const PLAY_SIGNING_SHA1 = "62:74:7F:E5:1F:3B:85:C4:F1:29:FE:A0:D8:76:9F:28:33:45:A1:B0";
 const PLAY_ANDROID_OAUTH_CLIENT_ID = "903830626771-cgoqfbjs7qect7o09e516bbdh2kgcsa3.apps.googleusercontent.com";
@@ -46,6 +47,7 @@ const GOOGLE_AUTH_ENABLED = process.env.EXPO_PUBLIC_GOOGLE_AUTH_ENABLED === "tru
 const APPLE_AUTH_ENABLED = process.env.EXPO_PUBLIC_APPLE_AUTH_ENABLED === "true";
 const STAGING_NATIVE_FIREBASE_TARGET = resolveStagingNativeFirebaseTarget({
   stagingAcceptanceBuild: STAGING_ACCEPTANCE_BUILD,
+  stagingDevelopmentBuild: STAGING_DEVELOPMENT_BUILD,
   externalTestingBuild: EXTERNAL_TESTING_BUILD,
   easBuildPlatform: process.env.EAS_BUILD_PLATFORM,
   easBuildProfile: process.env.EAS_BUILD_PROFILE,
@@ -55,11 +57,13 @@ const EFFECTIVE_GOOGLE_WEB_CLIENT_ID =
     ? process.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID
     : GOOGLE_WEB_CLIENT_ID;
 const ANDROID_ONLY_STAGING_BUILD =
-  (STAGING_ACCEPTANCE_BUILD || EXTERNAL_TESTING_BUILD) && STAGING_NATIVE_FIREBASE_TARGET === "android";
-const ANDROID_MAPS_API_KEY = EXTERNAL_TESTING_BUILD
+  (STAGING_ACCEPTANCE_BUILD || STAGING_DEVELOPMENT_BUILD || EXTERNAL_TESTING_BUILD) && STAGING_NATIVE_FIREBASE_TARGET === "android";
+const ANDROID_MAPS_API_KEY = STAGING_DEVELOPMENT_BUILD
+  ? process.env.GOOGLE_MAPS_API_KEY_ANDROID_STAGING_DEVELOPMENT
+  : EXTERNAL_TESTING_BUILD
   ? process.env.GOOGLE_MAPS_API_KEY_ANDROID_STAGING
   : process.env.GOOGLE_MAPS_API_KEY;
-const IOS_MAPS_API_KEY = EXTERNAL_TESTING_BUILD
+const IOS_MAPS_API_KEY = STAGING_DEVELOPMENT_BUILD ? undefined : EXTERNAL_TESTING_BUILD
   ? process.env.GOOGLE_MAPS_API_KEY_IOS_STAGING
   : process.env.GOOGLE_MAPS_API_KEY;
 const EFFECTIVE_IOS_GOOGLE_SERVICES_FILE = ANDROID_ONLY_STAGING_BUILD
@@ -85,7 +89,7 @@ const GOOGLE_SIGN_IN_PLUGIN = ANDROID_ONLY_STAGING_BUILD
   : GOOGLE_IOS_URL_SCHEME
     ? ["react-native-nitro-google-signin", { iosUrlScheme: GOOGLE_IOS_URL_SCHEME }]
     : null;
-const APP_NAME = STAGING_ACCEPTANCE_BUILD
+const APP_NAME = STAGING_DEVELOPMENT_BUILD ? "Sideline Social Staging Dev" : STAGING_ACCEPTANCE_BUILD
   ? "Sideline Social Staging"
   : IS_DEVELOPMENT
     ? "Sideline Social Dev"
@@ -137,6 +141,17 @@ if (
 }
 if (STAGING_ACCEPTANCE_BUILD && process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true") {
   throw new Error("A staging acceptance build cannot defer native Firebase configuration validation.");
+}
+if (STAGING_DEVELOPMENT_BUILD) {
+  if (!IS_DEVELOPMENT || !IS_STAGING_FIREBASE || !GOOGLE_AUTH_ENABLED ||
+      !COACH_AI_BETA_BUILD || !COACH_AI_TESTING_BUILD || COACH_AI_PRODUCTION_BETA_BUILD ||
+      process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID !== "sideline-social-staging-2026" ||
+      process.env.EAS_DEFER_STAGING_NATIVE_FIREBASE_VALIDATION === "true") {
+    throw new Error("Staging development requires staging Firebase, Google sign-in, entitled Coach beta, and native validation.");
+  }
+  if (!ANDROID_MAPS_API_KEY) {
+    throw new Error("Staging development requires its separately verified package/signing-restricted Maps key.");
+  }
 }
 if (
   EXTERNAL_TESTING_BUILD

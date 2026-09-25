@@ -22,4 +22,11 @@ allprojects {
 }
 
 apply plugin: "expo-root-project"
+
+// Keep native dependency intermediates short only for the local staging client.
+if (System.getenv("EXPO_PUBLIC_STAGING_DEVELOPMENT_BUILD") == "true") {
+  apply from: "staging-native-paths.gradle"
+}
+
+// Register path callbacks before React Native starts evaluating Android projects.
 apply plugin: "com.facebook.react.rootproject"

@@ -1,0 +1,65 @@
+// Libraries reached through node_modules junctions otherwise write CMake/Prefab
+// intermediates beneath their long physical source paths. Use AGP's supported
+// buildStagingDirectory setting; never patch or delete shared dependency sources.
+def allowedContext =
+    System.getProperty("os.name").toLowerCase().contains("windows") &&
+    System.getenv("EAS_BUILD_PROFILE") == "staging-development" &&
+    System.getenv("EAS_BUILD_PLATFORM") == "android" &&
+    System.getenv("APP_VARIANT") == "development" &&
+    System.getenv("EXPO_PUBLIC_FIREBASE_ENVIRONMENT") == "staging" &&
+    System.getenv("EXPO_PUBLIC_STAGING_DEVELOPMENT_BUILD") == "true" &&
+    System.getenv("EXPO_PUBLIC_STAGING_ACCEPTANCE_BUILD") != "true" &&
+    System.getenv("EXPO_PUBLIC_EXTERNAL_TESTING_BUILD") != "true"
+if (!allowedContext) {
+    throw new GradleException("Native short paths require the exclusive Windows staging-development context.")
+}
+
+def nativeCacheRoot = rootProject.file(".cxx-staging-libs").absoluteFile
+if (nativeCacheRoot.absolutePath.length() > 64) {
+    throw new GradleException("Use the staging development helper's short-path mapping for native dependency builds.")
+}
+def configuredNativeLibraries = [:]
+subprojects { libraryProject ->
+    libraryProject.plugins.withId("com.android.library") {
+        libraryProject.extensions.getByName("androidComponents").finalizeDsl { library ->
+            if (library.externalNativeBuild.cmake.path != null) {
+                // Hash the full Gradle path to avoid collisions and keep module names short.
+                def moduleId = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(libraryProject.path.getBytes("UTF-8")).encodeHex().toString().substring(0, 12)
+                def destination = new File(nativeCacheRoot, moduleId)
+                library.externalNativeBuild.cmake.buildStagingDirectory = destination
+                configuredNativeLibraries[libraryProject.path] = destination
+            }
+        }
+    }
+}
+
+// Diagnostic task: evaluates configuration only. No native compilation, APK
+// assembly, install, cleanup, or cloud request is a dependency of this task.
+tasks.register("verifyStagingDebugNativePaths") {
+    doLast {
+        if (!configuredNativeLibraries.containsKey(":react-native-nitro-google-signin")) {
+            throw new GradleException("The Google sign-in native library did not receive a short staging directory.")
+        }
+        configuredNativeLibraries.each { projectPath, expectedDirectory ->
+            def actualDirectory = project(projectPath).android.externalNativeBuild.cmake.buildStagingDirectory
+            if (actualDirectory.absoluteFile != expectedDirectory.absoluteFile) {
+                throw new GradleException("A native library overrode its staging build directory.")
+            }
+            // Include the previously failing Prefab suffix and a conservative ABI/hash layout.
+            def probe = new File(actualDirectory,
+                "Debug/12345678/arm64-v8a/../prefab/arm64-v8a/prefab/lib/aarch64-linux-android/cmake/react-native-nitro-modules/react-native-nitro-modulesConfig.cmake")
+            if (probe.absolutePath.length() >= 240) {
+                throw new GradleException("A native Prefab path still exceeds the conservative Windows path budget.")
+            }
+            logger.lifecycle("Staging native path verified: " + projectPath + " -> " + actualDirectory)
+        }
+    }
+}
+
+// Check the resolved DSL before a normal staging development build compiles.
+project(":app").tasks.configureEach { task ->
+    if (task.name == "preStagingDebugBuild") {
+        task.dependsOn(rootProject.tasks.named("verifyStagingDebugNativePaths"))
+    }
+}

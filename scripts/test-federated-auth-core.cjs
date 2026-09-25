@@ -157,10 +157,12 @@ for (const forbidden of ["contacts", "calendar", "drive.file", "accessToken:", "
 }
 
 const profileService = read("services", "authProfileService.ts");
+const accountProfileCore = read("utils", "accountProfileCore.ts");
 assert.match(profileService, /runTransaction/u);
-assert.match(profileService, /if \(existing\.exists\(\)\) return \{ created: false \}/u, "Provider profile creation must be idempotent.");
-assert.match(profileService, /accountOnboardingCompleted: false/u);
-assert.match(profileService, /modeOnboardingCompleted: false/u);
+assert.match(profileService, /initializeAccountProfileIfMissing/u, "Provider profile creation must use the shared idempotent initializer.");
+assert.match(accountProfileCore, /if \(await input\.readExists\(\)\) return \{ created: false \}/u, "Provider profile creation must be idempotent.");
+assert.match(accountProfileCore, /accountOnboardingCompleted: false/u);
+assert.match(accountProfileCore, /modeOnboardingCompleted: false/u);
 assert.equal(profileService.includes("photoURL"), false, "Provider photos must not be copied silently.");
 
 const auth = read("context", "AuthContext.tsx");

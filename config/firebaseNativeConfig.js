@@ -18,10 +18,18 @@ function shouldDeferStagingNativeFirebaseValidation({
 
 function resolveStagingNativeFirebaseTarget({
   stagingAcceptanceBuild,
+  stagingDevelopmentBuild = false,
   externalTestingBuild,
   easBuildPlatform,
   easBuildProfile,
 }) {
+  if (stagingDevelopmentBuild) {
+    if (stagingAcceptanceBuild || externalTestingBuild ||
+        easBuildProfile !== "staging-development" || easBuildPlatform !== "android") {
+      throw new Error("Staging development requires its exclusive Android profile context.");
+    }
+    return "android";
+  }
   if (!stagingAcceptanceBuild && !externalTestingBuild) return "all";
   if (stagingAcceptanceBuild && externalTestingBuild) {
     throw new Error("Staging acceptance and external testing build markers cannot both be enabled.");
