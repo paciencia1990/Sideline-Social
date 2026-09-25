@@ -45,6 +45,7 @@ import { getTeamPrivateMessageInbox } from "@/services/teamPrivateMessageService
 import { getPublicUserProfiles } from "@/services/publicProfileService";
 import type { TeamPrivateConversation } from "@/types/teamVoiceMessaging";
 import { normalizeVoiceMessageFields } from "@/utils/voiceMessageNormalizer";
+import { loadSupplementaryTeamInbox } from "@/utils/parentTeamInboxCore";
 
 export type ParentTeamAnnouncement = TeamAnnouncement & {
   createdAtDate: Date | null;
@@ -70,6 +71,7 @@ export type ParentTeamSummary = {
   unreadCountKnown: boolean;
   latestAnnouncement: ParentTeamAnnouncement | null;
   privateConversations: TeamPrivateConversation[];
+  privateInboxAvailable: boolean;
   privateUnreadCount: number;
 };
 
@@ -80,6 +82,7 @@ export type ParentTeamsOverview = {
   unreadCountKnown: boolean;
   latestTeam: ParentTeamSummary | null;
   latestAnnouncement: ParentTeamAnnouncement | null;
+  privateInboxAvailable: boolean;
   privateUnreadCount: number;
 };
 
@@ -163,13 +166,14 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
       unreadCountKnown: true,
       latestTeam: null,
       latestAnnouncement: null,
+      privateInboxAvailable: true,
       privateUnreadCount: 0,
     };
   }
 
-  const [childProfiles, privateConversations] = await Promise.all([
+  const [childProfiles, privateInbox] = await Promise.all([
     getCurrentUserChildren(),
-    getTeamPrivateMessageInbox("parent"),
+    loadParentPrivateInbox(),
   ]);
   const announcementSummaryStates = await getTeamAnnouncementSummaryStates(memberships.map((membership) => membership.teamId));
   const childLinksByTeam = await loadChildLinksByTeam(childProfiles);
@@ -179,7 +183,8 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
       .map((membership) => loadParentTeamSummary(
         membership,
         resolveMembershipChildren(membership, childProfiles, childLinksByTeam),
-        privateConversations.filter((conversation) => conversation.teamId === membership.teamId),
+        privateInbox.items.filter((conversation) => conversation.teamId === membership.teamId),
+        privateInbox.available,
         announcementSummaryStates.get(membership.teamId),
         1,
       )),
@@ -194,15 +199,15 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
     unreadCountKnown: teams.every((team) => team.unreadCountKnown),
     latestTeam,
     latestAnnouncement: latestTeam?.latestAnnouncement ?? null,
+    privateInboxAvailable: privateInbox.available,
     privateUnreadCount: teams.reduce((total, team) => total + team.privateUnreadCount, 0),
   };
 }
 
 export async function getParentTeamSummary(teamId: string): Promise<ParentTeamSummary> {
-  const [memberships, childProfiles, privateConversations] = await Promise.all([
+  const [memberships, childProfiles] = await Promise.all([
     getParentTeams({ throwOnError: true }),
     getCurrentUserChildren(),
-    getTeamPrivateMessageInbox("parent", teamId),
   ]);
   const membership = memberships.find((item) => item.teamId === teamId && item.team)
     ?? await getCurrentUserTeamMembershipById(teamId);
@@ -211,14 +216,16 @@ export async function getParentTeamSummary(teamId: string): Promise<ParentTeamSu
     (error as { code?: string }).code = "membership-missing";
     throw error;
   }
-  const [childLinksByTeam, summaryStates] = await Promise.all([
+  const [childLinksByTeam, privateInbox, summaryStates] = await Promise.all([
     loadChildLinksByTeam(childProfiles),
+    loadParentPrivateInbox(teamId),
     getTeamAnnouncementSummaryStates([teamId]),
   ]);
   return loadParentTeamSummary(
     membership,
     resolveMembershipChildren(membership, childProfiles, childLinksByTeam),
-    privateConversations,
+    privateInbox.items,
+    privateInbox.available,
     summaryStates.get(teamId),
     TEAM_HISTORY_PAGE_SIZES.announcements,
   );
@@ -280,6 +287,7 @@ async function loadParentTeamSummary(
   membership: TeamMembership,
   childResolution: ResolvedMembershipChildren,
   privateConversations: TeamPrivateConversation[],
+  privateInboxAvailable: boolean,
   announcementSummaryState?: AnnouncementSummaryState,
   announcementPageSize: number = TEAM_HISTORY_PAGE_SIZES.announcements,
 ): Promise<ParentTeamSummary> {
@@ -317,8 +325,20 @@ async function loadParentTeamSummary(
     unreadCountKnown: announcementSummaryState?.available === true || (announcements.length === 0 && !announcementPage.hasMore),
     latestAnnouncement: announcements[0] ?? null,
     privateConversations,
+    privateInboxAvailable,
     privateUnreadCount: privateConversations.reduce((total, conversation) => total + conversation.unreadCount, 0),
   };
+}
+
+async function loadParentPrivateInbox(teamId?: string) {
+  const result = await loadSupplementaryTeamInbox(
+    () => getTeamPrivateMessageInbox("parent", teamId),
+    Boolean(auth.currentUser),
+  );
+  if (!result.available) {
+    console.info("[ParentTeams] private inbox unavailable", { code: "supplementary-read-failed" });
+  }
+  return result;
 }
 
 type AnnouncementSummaryState = {

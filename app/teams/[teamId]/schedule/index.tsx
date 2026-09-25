@@ -18,7 +18,7 @@ import {
   type TeamScheduleEvent,
 } from "@/services/teamScheduleService";
 import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
-import { groupScheduleEvents, splitScheduleEvents, type ScheduleMonthGroup } from "@/utils/teamScheduleCore";
+import { groupScheduleEvents, scheduleEventsForDisplay, splitScheduleEvents, type ScheduleMonthGroup } from "@/utils/teamScheduleCore";
 
 export default function TeamScheduleScreen() {
   const { i18n, t } = useTranslation();
@@ -83,8 +83,10 @@ export default function TeamScheduleScreen() {
     };
   }, [reloadKey, t, teamId]);
 
-  const upcomingGroups = useMemo(() => groupScheduleEvents(upcomingEvents), [upcomingEvents]);
-  const pastGroups = useMemo(() => groupScheduleEvents(pastEvents), [pastEvents]);
+  const visibleUpcomingEvents = useMemo(() => scheduleEventsForDisplay(upcomingEvents), [upcomingEvents]);
+  const visiblePastEvents = useMemo(() => scheduleEventsForDisplay(pastEvents), [pastEvents]);
+  const upcomingGroups = useMemo(() => groupScheduleEvents(visibleUpcomingEvents), [visibleUpcomingEvents]);
+  const pastGroups = useMemo(() => groupScheduleEvents(visiblePastEvents), [visiblePastEvents]);
   const canManage = access?.canManage === true && access.teamStatus === "active";
   const refresh = useCallback(() => {
     setPastEvents([]);
@@ -202,7 +204,7 @@ export default function TeamScheduleScreen() {
           </Card>
         ) : null}
 
-        {!loading && !error && upcomingEvents.length === 0 ? (
+        {!loading && !error && visibleUpcomingEvents.length === 0 ? (
           <Card style={styles.stateCard}>
             <CalendarPlus color={Colors.accentGreen} size={30} />
             <Text style={styles.stateTitle}>{t("schedule.emptyTitle")}</Text>
@@ -225,7 +227,7 @@ export default function TeamScheduleScreen() {
         {!loading && !error ? (
           <View style={styles.section}>
             <TouchableOpacity accessibilityRole="button" accessibilityState={{ expanded: pastExpanded }} onPress={togglePast} style={styles.pastHeader}>
-              <Text accessibilityRole="header" style={styles.sectionTitle}>{t("schedule.pastEvents", { count: pastEvents.length })}</Text>
+              <Text accessibilityRole="header" style={styles.sectionTitle}>{t("schedule.pastEvents", { count: visiblePastEvents.length })}</Text>
               {pastExpanded ? <ChevronUp color={Colors.textHeading} size={22} /> : <ChevronDown color={Colors.textHeading} size={22} />}
             </TouchableOpacity>
             {pastExpanded ? (

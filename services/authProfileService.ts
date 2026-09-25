@@ -14,6 +14,8 @@ import type { FederatedCredentialResult } from "@/services/federatedAuthService"
 import {
   buildAccountCompletionFields,
   buildCanonicalAccountProfile,
+  buildFederatedAccountProfile,
+  initializeAccountProfileIfMissing,
 } from "@/utils/accountProfileCore";
 
 export type PasswordAccountProfile = {
@@ -32,34 +34,21 @@ export async function ensureFederatedUserProfile(
 ) {
   const userRef = doc(db, "users", user.uid);
   return runTransaction(db, async (transaction) => {
-    const existing = await transaction.get(userRef);
-    if (existing.exists()) return { created: false } as const;
-
-    const firstName = providerProfile.firstName?.trim() || "";
-    const lastName = providerProfile.lastName?.trim() || "";
-    const suggestedDisplayName = [firstName, lastName].filter(Boolean).join(" ");
-    transaction.set(userRef, {
-      userId: user.uid,
-      firstName,
-      lastName,
-      displayName: suggestedDisplayName || null,
-      email: user.email ?? providerProfile.email ?? null,
-      zipCode: "",
-      sports: [],
-      phoneNumber: user.phoneNumber ?? null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      tier: "member",
-      totalStars: 0,
-      sidelineStars: 0,
-      squadIds: [],
-      friendIds: [],
-      preferredLanguage: i18n.resolvedLanguage?.startsWith("es") ? "es" : "en",
-      profileVisibility: "squad_only",
-      accountOnboardingCompleted: false,
-      modeOnboardingCompleted: false,
+    return initializeAccountProfileIfMissing({
+      createFields: () => {
+        const timestamp = serverTimestamp();
+        return buildFederatedAccountProfile({
+          email: user.email ?? providerProfile.email ?? null,
+          firstName: providerProfile.firstName ?? "",
+          lastName: providerProfile.lastName ?? "",
+          phoneNumber: user.phoneNumber ?? null,
+          preferredLanguage: i18n.resolvedLanguage?.startsWith("es") ? "es" : "en",
+          userId: user.uid,
+        }, { createdAt: timestamp, updatedAt: timestamp });
+      },
+      readExists: async () => (await transaction.get(userRef)).exists(),
+      write: (fields) => transaction.set(userRef, fields),
     });
-    return { created: true } as const;
   });
 }
 

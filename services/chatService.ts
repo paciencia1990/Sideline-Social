@@ -24,6 +24,18 @@ import {
   cancelFriendChatImageUploadTasks,
   type FriendChatImageUploadCancelResult,
 } from "@/utils/friendChatUploadCancellation";
+import {
+  createFriendChatPhotoUploadDiagnostic,
+  withFriendChatPhotoUploadDiagnostic,
+  type FriendChatPhotoUploadStage,
+} from "@/utils/friendChatPhotoUploadDiagnostic";
+import {
+  observeFriendChatUploadTask,
+  closeFriendChatPhotoUploadBlob,
+  readFriendChatPhotoUploadBlob,
+  settleFriendChatPhotoUploadPair,
+} from "@/utils/friendChatPhotoUploadTransfer";
+import { prepareFriendChatPhotoUploadAuth } from "@/utils/friendChatPhotoUploadAuth";
 import { normalizeVoicePlaybackUrlResponse } from "@/utils/voicePlaybackCore";
 import {
   measureDevelopmentPerformance,
@@ -167,6 +179,7 @@ export type FriendChatVoiceUploadReservation = {
 };
 
 export type FriendChatImageUploadReservation = {
+  clientOwnerUserId: string;
   expiresAtMillis: number;
   fullPath: string;
   reservationId: string;
@@ -838,7 +851,10 @@ export async function reserveFriendChatImageUpload(input: {
   image: LocalFriendChatImageDraft;
   replyToMessageId?: string | null;
 }) {
-  return call<
+  return withFriendChatPhotoUploadDiagnostic("authentication", async () => {
+    const clientOwnerUserId = currentUserId();
+    await prepareFriendChatPhotoUploadAuth(() => auth.currentUser, clientOwnerUserId);
+    const reservation = await withFriendChatPhotoUploadDiagnostic("reservation", () => call<
     {
       caption?: string | null;
       clientMessageId: string;
@@ -865,6 +881,8 @@ export async function reserveFriendChatImageUpload(input: {
       thumbnail: stripImageDraftUri(input.image.thumbnail),
     },
     replyToMessageId: input.replyToMessageId ?? null,
+    }));
+    return { ...reservation, clientOwnerUserId };
   });
 }
 
@@ -873,6 +891,8 @@ export async function uploadReservedFriendChatImage(
   draft: LocalFriendChatImageDraft,
   onProgress?: (progress: number) => void,
 ): Promise<{ cancel: () => FriendChatImageUploadCancelResult; completion: Promise<void> }> {
+  await withFriendChatPhotoUploadDiagnostic("authentication", () =>
+    prepareFriendChatPhotoUploadAuth(() => auth.currentUser, reservation.clientOwnerUserId));
   if (!/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/image\.jpg$/u.test(reservation.fullPath) ||
     !/^friendChatMedia\/[^/]+\/message_[a-f0-9]{64}\/media_[a-f0-9]{64}\/thumbnail\.jpg$/u.test(reservation.thumbnailPath)) {
     throw new Error("invalid_image_storage_path");
@@ -885,7 +905,7 @@ export async function uploadReservedFriendChatImage(
     full = await uploadBlobToReservedPath(reservation.fullPath, draft.full.uri, draft.full.sizeBytes, draft.full.mimeType, (progress) => {
       progressState.full = progress;
       onProgress?.((progressState.full * 0.8) + (progressState.thumbnail * 0.2));
-    });
+    }, "main");
   } catch (error) {
     completeUploadTrace();
     throw error;
@@ -901,6 +921,7 @@ export async function uploadReservedFriendChatImage(
         progressState.thumbnail = progress;
         onProgress?.((progressState.full * 0.8) + (progressState.thumbnail * 0.2));
       },
+      "thumbnail",
     );
   } catch (error) {
     cancelFriendChatImageUploadTasks(full.task, null);
@@ -913,7 +934,11 @@ export async function uploadReservedFriendChatImage(
       canceled = true;
       return cancelFriendChatImageUploadTasks(full.task, thumbnail.task);
     },
-    completion: Promise.all([full.completion, thumbnail.completion])
+    completion: settleFriendChatPhotoUploadPair(
+      full.completion,
+      thumbnail.completion,
+      () => { cancelFriendChatImageUploadTasks(full.task, thumbnail.task); },
+    )
       .then(() => {
         if (canceled) throw new Error("media_upload_canceled");
       })
@@ -926,13 +951,13 @@ export async function uploadReservedFriendChatImage(
 }
 
 export async function finalizeFriendChatImageMessage(reservationId: string) {
-  return measureDevelopmentPerformance(
+  return withFriendChatPhotoUploadDiagnostic("finalization", () => measureDevelopmentPerformance(
     "friend-chat.image-finalization",
     () => call<{ reservationId: string }, { messageId: string; status: "alreadyFinalized" | "sent" }>(
       "finalizeFriendChatImageMessage",
       { reservationId },
     ),
-  );
+  ));
 }
 
 export async function toggleFriendChatReaction(
@@ -1076,34 +1101,51 @@ async function uploadBlobToReservedPath(
   expectedSizeBytes: number,
   contentType: string,
   onProgress?: (progress: number) => void,
+  diagnosticVariant?: "main" | "thumbnail",
 ): Promise<{ completion: Promise<void>; task: UploadTask }> {
-  if (!/^(?:file|content|cache):/iu.test(uri)) throw new Error("invalid_local_media_uri");
-  const blob = await (await fetch(uri)).blob();
-  if (blob.size < 1 || blob.size !== expectedSizeBytes) {
-    const closable = blob as unknown as { close?: () => void };
-    if (typeof closable.close === "function") closable.close();
-    throw new Error("media_upload_size_mismatch");
+  const stage = (part: "local-read" | "transfer" | "verification") =>
+    `${diagnosticVariant}-${part}` as FriendChatPhotoUploadStage;
+  if (!/^(?:file|content|cache):/iu.test(uri)) {
+    const error = new Error("invalid_local_media_uri");
+    throw diagnosticVariant ? createFriendChatPhotoUploadDiagnostic(stage("local-read"), error) : error;
   }
-  const task = uploadBytesResumable(ref(storage, storagePath), blob, { contentType });
-  const completion = new Promise<void>((resolve, reject) => {
-    task.on("state_changed", (snapshot) => {
-      onProgress?.(snapshot.totalBytes ? snapshot.bytesTransferred / snapshot.totalBytes : 0);
-    }, reject, () => {
-      const snapshot = task.snapshot;
-      if (
-        snapshot.bytesTransferred !== expectedSizeBytes ||
-        snapshot.totalBytes !== expectedSizeBytes ||
-        snapshot.metadata.contentType !== contentType
-      ) {
-        reject(new Error("media_upload_verification_failed"));
-        return;
-      }
-      resolve();
-    });
-  }).finally(() => {
-    const closable = blob as unknown as { close?: () => void };
+  let uploadData: Blob;
+  try {
+    uploadData = diagnosticVariant
+      ? await readFriendChatPhotoUploadBlob(uri, expectedSizeBytes)
+      : await (await fetch(uri)).blob();
+  } catch (error) {
+    throw diagnosticVariant ? createFriendChatPhotoUploadDiagnostic(stage("local-read"), error) : error;
+  }
+  const uploadSize = uploadData.size;
+  if (uploadSize < 1 || uploadSize !== expectedSizeBytes) {
+    const closable = uploadData as unknown as { close?: () => void };
     if (typeof closable.close === "function") closable.close();
-  });
+    const error = new Error("media_upload_size_mismatch");
+    throw diagnosticVariant ? createFriendChatPhotoUploadDiagnostic(stage("local-read"), error) : error;
+  }
+  let task: UploadTask;
+  try {
+    task = uploadBytesResumable(ref(storage, storagePath), uploadData, { contentType });
+  } catch (error) {
+    if (diagnosticVariant) closeFriendChatPhotoUploadBlob(uploadData);
+    throw diagnosticVariant ? createFriendChatPhotoUploadDiagnostic(stage("transfer"), error) : error;
+  }
+  const completion = observeFriendChatUploadTask(task, expectedSizeBytes, contentType, onProgress)
+    .catch((error) => {
+      if (!diagnosticVariant) throw error;
+      const part = error instanceof Error && error.message === "media_upload_verification_failed"
+        ? "verification"
+        : "transfer";
+      throw createFriendChatPhotoUploadDiagnostic(stage(part), error);
+    })
+    .finally(() => {
+      const closable = uploadData as unknown as { close?: () => void };
+      if (typeof closable.close === "function") closable.close();
+    });
+  // Main transfer can fail while the caller awaits the thumbnail's local read.
+  // Mark it handled now without changing the rejecting promise returned to UI.
+  if (diagnosticVariant) void completion.catch(() => undefined);
   return { completion, task };
 }
 

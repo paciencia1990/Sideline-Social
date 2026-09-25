@@ -33,7 +33,15 @@ assert.equal(resolveInitialMode({}, "coach"), "coach", "Existing local mode must
 assert.equal(resolveInitialMode({ activeMode: "invalid" }, "invalid"), "parent", "Invalid mode state must fall back safely.");
 
 const auth = read("context", "AuthContext.tsx");
-assert.ok(auth.includes("modeOnboardingCompleted: false"), "New account profiles must be explicitly incomplete.");
+const authProfileService = read("services", "authProfileService.ts");
+const accountProfileCore = read("utils", "accountProfileCore.ts");
+assert.ok(auth.includes("createPasswordUserProfile(credential.user"), "Password sign-up must use the canonical profile initializer.");
+assert.ok(auth.includes("ensureFederatedUserProfile(credentialResult.user"), "First federated sign-in must use the guarded profile initializer.");
+assert.ok(authProfileService.includes("buildFederatedAccountProfile"), "Federated new-account profiles must use the shared initializer.");
+assert.ok(accountProfileCore.includes("accountOnboardingCompleted: false"), "Federated new accounts must complete account setup first.");
+assert.ok(accountProfileCore.includes("modeOnboardingCompleted: false"), "Password new-account profiles must be explicitly incomplete.");
+assert.ok(authProfileService.includes("initializeAccountProfileIfMissing"), "Repeated federated initialization must preserve the existing profile.");
+assert.match(authProfileService, /runTransaction\(db/u, "Missing-profile initialization must remain atomic under interruption or concurrent first sign-in.");
 assert.ok(auth.includes("readModeOnboardingState(profile)"), "Auth hydration must apply existing-user compatibility logic.");
 assert.ok(auth.includes("refreshProfile"), "The saved onboarding choice must refresh authenticated profile state.");
 

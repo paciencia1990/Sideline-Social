@@ -21,6 +21,13 @@ export function navigateBackOrReplace(fallbackRoute: string) {
   router.replace(fallbackRoute as never);
 }
 
+export function replaceAfterOptionalDismiss(targetRoute: string) {
+  if (router.canDismiss()) {
+    router.dismissAll();
+  }
+  router.replace(targetRoute as never);
+}
+
 export function NestedBackButton({ accessibilityLabel, fallbackRoute, style }: NestedBackButtonProps) {
   const { t } = useTranslation();
 

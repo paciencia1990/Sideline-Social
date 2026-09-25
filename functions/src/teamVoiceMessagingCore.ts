@@ -90,6 +90,28 @@ export function teamPrivateMessageId(conversationId: string, senderUserId: strin
   return `tpm_${createHash('sha256').update(`${conversationId}\u001f${senderUserId}\u001f${clientMessageId}`).digest('hex')}`;
 }
 
+export function teamAnnouncementId(teamId: string, senderUserId: string, clientMessageId: string) {
+  return `ta_${createHash('sha256').update(`${teamId}\u001f${senderUserId}\u001f${clientMessageId}`).digest('hex')}`;
+}
+
+export function teamAnnouncementReplyId(
+  teamId: string,
+  announcementId: string,
+  senderUserId: string,
+  clientReplyId: string,
+) {
+  return `tar_${createHash('sha256').update(`${teamId}\u001f${announcementId}\u001f${senderUserId}\u001f${clientReplyId}`).digest('hex')}`;
+}
+
+export function teamVoiceReservationId(
+  kind: TeamVoiceUploadKind,
+  teamId: string,
+  senderUserId: string,
+  clientMessageId: string,
+) {
+  return `tvr_${createHash('sha256').update(`${kind}\u001f${teamId}\u001f${senderUserId}\u001f${clientMessageId}`).digest('hex')}`;
+}
+
 export function teamVoiceStoragePath(input: {
   announcementId?: string;
   conversationId?: string;

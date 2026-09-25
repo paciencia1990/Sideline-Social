@@ -105,14 +105,20 @@ export function parseTeamCalendarIcs(text: string): ParsedCalendar {
 
   const expanded: RawEvent[] = [];
   masters.forEach((master) => {
-    const occurrences = expandRecurringEvent(master, warnings);
-    occurrences.forEach((occurrence) => {
-      const override = occurrence.recurrenceId
-        ? overrides.get(`${occurrence.uid}|${occurrence.recurrenceId}`)
-        : undefined;
-      expanded.push(override ?? occurrence);
-      if (override) overrides.delete(`${occurrence.uid}|${occurrence.recurrenceId}`);
-    });
+    try {
+      const occurrences = expandRecurringEvent(master);
+      occurrences.forEach((occurrence) => {
+        const override = occurrence.recurrenceId
+          ? overrides.get(`${occurrence.uid}|${occurrence.recurrenceId}`)
+          : undefined;
+        expanded.push(override ?? occurrence);
+        if (override) overrides.delete(`${occurrence.uid}|${occurrence.recurrenceId}`);
+      });
+    }
+    catch (error) {
+      rejectedCount += 1;
+      warnings.add(safeReason(error));
+    }
   });
   overrides.forEach((override) => expanded.push(override));
   if (expanded.length > MAX_ICS_EVENTS) throw calendarCoreError('ics_event_limit');
@@ -146,34 +152,70 @@ export function normalizeCalendarFeedUrl(input: unknown) {
   if (url.username || url.password) throw calendarCoreError('feed_embedded_credentials');
   if (url.port && url.port !== '443') throw calendarCoreError('feed_port_unsupported');
   if (url.hash) throw calendarCoreError('feed_fragment_unsupported');
-  if (!url.hostname || url.hostname.length > 253 || url.href.length > MAX_FEED_URL_LENGTH) throw calendarCoreError('feed_url_invalid');
+  const hostname = url.hostname.toLocaleLowerCase('en-US').replace(/^\[|\]$/gu, '').replace(/\.$/u, '');
+  if (!hostname || hostname.length > 253 || url.href.length > MAX_FEED_URL_LENGTH) throw calendarCoreError('feed_url_invalid');
   return {
     url,
-    hostname: url.hostname.toLocaleLowerCase('en-US'),
+    hostname,
     fingerprint: createHash('sha256').update(url.href).digest('hex'),
   };
 }
 
+export function isBlockedCalendarHostname(hostname: string) {
+  const normalized = hostname.trim().toLocaleLowerCase('en-US').replace(/^\[|\]$/gu, '').replace(/\.$/u, '');
+  if (!normalized) return true;
+  if (isIP(normalized)) return isBlockedCalendarAddress(normalized);
+  if (!normalized.includes('.')) return true;
+  return normalized === 'metadata.google.internal' ||
+    normalized === 'metadata.azure.internal' ||
+    normalized === 'instance-data.ec2.internal' ||
+    normalized.endsWith('.localhost') ||
+    normalized.endsWith('.local') ||
+    normalized.endsWith('.internal') ||
+    normalized.endsWith('.home.arpa') ||
+    normalized.endsWith('.onion') ||
+    normalized.endsWith('.invalid') ||
+    normalized.endsWith('.test') ||
+    normalized.endsWith('.example');
+}
+
 export function isBlockedCalendarAddress(address: string) {
   const normalized = address.trim().toLocaleLowerCase('en-US').replace(/^\[|\]$/gu, '');
-  if (!normalized || normalized === 'localhost' || normalized.endsWith('.localhost')) return true;
+  if (!normalized) return true;
   const version = isIP(normalized);
   if (version === 4) {
     const parts = normalized.split('.').map(Number);
-    const [a, b] = parts;
+    const [a, b, c] = parts;
     return a === 0 || a === 10 || a === 127 || a >= 224 ||
       (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 0) ||
-      (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19));
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+      (a === 192 && b === 168) ||
+      (a === 192 && b === 88 && c === 99) ||
+      (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+      (a === 203 && b === 0 && c === 113);
   }
   if (version === 6) {
-    return normalized === '::' || normalized === '::1' || normalized.startsWith('fe8') ||
-      normalized.startsWith('fe9') || normalized.startsWith('fea') || normalized.startsWith('feb') ||
-      normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('ff') ||
-      normalized.startsWith('2001:db8:') || normalized.startsWith('::ffff:127.') ||
-      normalized.startsWith('::ffff:10.') || normalized.startsWith('::ffff:192.168.');
+    const words = ipv6Words(normalized);
+    if (!words) return true;
+    const allZero = words.every((word) => word === 0);
+    const loopback = words.slice(0, 7).every((word) => word === 0) && words[7] === 1;
+    const mappedIpv4 = words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff;
+    if (mappedIpv4) {
+      return isBlockedCalendarAddress(`${words[6] >> 8}.${words[6] & 0xff}.${words[7] >> 8}.${words[7] & 0xff}`);
+    }
+    return allZero || loopback ||
+      (words[0] & 0xfe00) === 0xfc00 ||
+      (words[0] & 0xffc0) === 0xfe80 ||
+      (words[0] & 0xffc0) === 0xfec0 ||
+      (words[0] & 0xff00) === 0xff00 ||
+      (words[0] === 0x0064 && words[1] === 0xff9b && words.slice(2, 6).every((word) => word === 0)) ||
+      (words[0] === 0x0100 && words.slice(1, 4).every((word) => word === 0)) ||
+      (words[0] === 0x2001 && (words[1] === 0 || words[1] === 2 || words[1] === 0x0db8 ||
+        (words[1] & 0xfff0) === 0x0010 || (words[1] & 0xfff0) === 0x0020)) ||
+      words[0] === 0x2002;
   }
-  return false;
+  return true;
 }
 
 export function serializeTeamScheduleIcs(input: {
@@ -261,7 +303,7 @@ function normalizeEventBlock(properties: Property[]): RawEvent {
   };
 }
 
-function expandRecurringEvent(master: RawEvent, warnings: Set<string>) {
+function expandRecurringEvent(master: RawEvent) {
   if (!master.rrule && master.rdates.length === 0) return [master];
   const duration = master.end.millis - master.start.millis;
   const occurrences = new Map<string, RawEvent>();
@@ -284,23 +326,29 @@ function expandRecurringEvent(master: RawEvent, warnings: Set<string>) {
       const [key, ...rest] = part.split('=');
       return [key?.toUpperCase(), rest.join('=')];
     }));
-    const frequency = rule.FREQ;
-    if (frequency !== 'DAILY' && frequency !== 'WEEKLY') {
-      warnings.add('ics_recurrence_unsupported');
-      return Array.from(occurrences.values());
-    }
-    const interval = boundedInteger(rule.INTERVAL, 1, 52, 1);
-    const count = boundedInteger(rule.COUNT, 1, MAX_ICS_EVENTS, MAX_ICS_EVENTS);
+    const supportedParts = new Set(['FREQ', 'INTERVAL', 'COUNT', 'UNTIL', 'BYDAY', 'WKST']);
+    if (Object.keys(rule).some((key) => !supportedParts.has(key))) throw calendarCoreError('ics_recurrence_unsupported');
+    const frequency = rule.FREQ?.toUpperCase();
+    if (frequency !== 'DAILY' && frequency !== 'WEEKLY') throw calendarCoreError('ics_recurrence_unsupported');
+    const interval = strictBoundedInteger(rule.INTERVAL, 1, 52, 1);
+    const count = strictBoundedInteger(rule.COUNT, 1, MAX_ICS_EVENTS, MAX_ICS_EVENTS);
     const until = rule.UNTIL ? parseIcsDate({ name: 'UNTIL', params: {}, value: rule.UNTIL }).millis : master.start.millis + 366 * 2 * 24 * 60 * 60 * 1000;
-    const byDays = new Set((rule.BYDAY ?? '').split(',').filter(Boolean).map(weekdayNumber));
+    const byDayValues = (rule.BYDAY ?? '').split(',').filter(Boolean);
+    if (byDayValues.some((value) => !/^(SU|MO|TU|WE|TH|FR|SA)$/u.test(value.toUpperCase()))) {
+      throw calendarCoreError('ics_recurrence_unsupported');
+    }
+    const byDays = new Set(byDayValues.map(weekdayNumber));
+    const weekStart = rule.WKST ? weekdayNumber(rule.WKST) : 1;
+    if (weekStart < 0) throw calendarCoreError('ics_recurrence_unsupported');
     const startDate = utcDate(master.start.localDate);
+    const startWeekOffset = (startDate.getUTCDay() - weekStart + 7) % 7;
     let emitted = 1;
     for (let offset = 1; emitted < count && offset <= 366 * 2 && occurrences.size <= MAX_ICS_EVENTS; offset += 1) {
       const candidateDate = new Date(startDate.getTime());
       candidateDate.setUTCDate(candidateDate.getUTCDate() + offset);
-      const weeks = Math.floor(offset / 7);
+      const weeks = Math.floor((startWeekOffset + offset) / 7);
       const matchesFrequency = frequency === 'DAILY'
-        ? offset % interval === 0
+        ? offset % interval === 0 && (byDays.size === 0 || byDays.has(candidateDate.getUTCDay()))
         : weeks % interval === 0 && (byDays.size === 0 ? candidateDate.getUTCDay() === startDate.getUTCDay() : byDays.has(candidateDate.getUTCDay()));
       if (!matchesFrequency) continue;
       const localDate = isoDate(candidateDate);
@@ -422,6 +470,24 @@ function dateParts(date: Date, timezone: string) {
   return { year: values.year, month: values.month, day: values.day, hour: values.hour, minute: values.minute };
 }
 
+function ipv6Words(value: string): number[] | null {
+  if (value.includes('%') || value.split('::').length > 2) return null;
+  let normalized = value;
+  const ipv4Match = /(?:^|:)(\d{1,3}(?:\.\d{1,3}){3})$/u.exec(normalized);
+  if (ipv4Match) {
+    const bytes = ipv4Match[1].split('.').map(Number);
+    if (bytes.length !== 4 || bytes.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)) return null;
+    normalized = `${normalized.slice(0, normalized.length - ipv4Match[1].length)}${((bytes[0] << 8) | bytes[1]).toString(16)}:${((bytes[2] << 8) | bytes[3]).toString(16)}`;
+  }
+  const [leftValue, rightValue = ''] = normalized.split('::');
+  const left = leftValue ? leftValue.split(':') : [];
+  const right = rightValue ? rightValue.split(':') : [];
+  if (left.some((part) => !/^[0-9a-f]{1,4}$/iu.test(part)) || right.some((part) => !/^[0-9a-f]{1,4}$/iu.test(part))) return null;
+  const omitted = 8 - left.length - right.length;
+  if ((normalized.includes('::') && omitted < 1) || (!normalized.includes('::') && omitted !== 0)) return null;
+  return [...left, ...Array.from({ length: omitted }, () => '0'), ...right].map((part) => Number.parseInt(part, 16));
+}
+
 function compareVersion(a: RawEvent, b: RawEvent) { return a.sequence - b.sequence || (a.lastModifiedMillis ?? 0) - (b.lastModifiedMillis ?? 0); }
 function cleanText(value: string, maximum: number) { const cleaned = value.trim().replace(/\s+/gu, ' '); return cleaned ? cleaned.slice(0, maximum) : null; }
 function unescapeIcs(value: string) { return value.replace(/\\n/giu, '\n').replace(/\\,/gu, ',').replace(/\\;/gu, ';').replace(/\\\\/gu, '\\'); }
@@ -430,7 +496,7 @@ function compactDate(value: string) { const result = `${value.slice(0, 4)}-${val
 function utcDate(value: string) { const [year, month, day] = value.split('-').map(Number); return new Date(Date.UTC(year, month - 1, day)); }
 function isoDate(value: Date) { return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`; }
 function weekdayNumber(value: string) { return ({ SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 } as Record<string, number>)[value.slice(-2).toUpperCase()] ?? -1; }
-function boundedInteger(value: string | undefined, minimum: number, maximum: number, fallback: number) { const parsed = Number.parseInt(value ?? '', 10); return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback; }
+function strictBoundedInteger(value: string | undefined, minimum: number, maximum: number, fallback: number) { if (value === undefined || value === '') return fallback; const parsed = Number.parseInt(value, 10); if (!Number.isInteger(parsed) || String(parsed) !== value || parsed < minimum || parsed > maximum) throw calendarCoreError('ics_recurrence_unsupported'); return parsed; }
 function safeReason(error: unknown) { return error instanceof Error && /^ics_[a-z_]+$/u.test(error.message) ? error.message : 'ics_event_invalid'; }
 function calendarCoreError(code: string) { const error = new Error(code); (error as { code?: string }).code = code; return error; }
 function escapeIcs(value: string) { return value.replace(/\\/gu, '\\\\').replace(/\r?\n/gu, '\\n').replace(/,/gu, '\\,').replace(/;/gu, '\\;'); }

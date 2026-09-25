@@ -90,7 +90,22 @@ async function call<TInput, TResult>(name: string, input: TInput): Promise<TResu
 export function calendarIntegrationErrorReason(error: unknown) {
   if (!error || typeof error !== "object") return "unexpected";
   if ("details" in error && error.details && typeof error.details === "object" && "reason" in error.details && typeof error.details.reason === "string") {
-    return error.details.reason;
+    if (SAFE_CALENDAR_REASONS.has(error.details.reason)) return error.details.reason;
   }
+  const code = "code" in error && typeof error.code === "string" ? error.code.replace(/^functions\//u, "") : "";
+  if (code === "unauthenticated") return "authentication_required";
+  if (code === "permission-denied") return "calendar_access_denied";
+  if (code === "not-found") return "calendar_service_unavailable";
+  if (code === "deadline-exceeded" || code === "unavailable") return "calendar_service_unavailable";
   return "unexpected";
 }
+
+const SAFE_CALENDAR_REASONS = new Set([
+  "automatic_sync_not_approved", "calendar_rate_limited", "feed_address_blocked", "feed_content_encoding_invalid",
+  "feed_content_encoding_unsupported", "feed_content_type_invalid", "feed_dns_failed", "feed_embedded_credentials",
+  "feed_credential_invalid", "feed_empty", "feed_encryption_not_configured", "feed_fetch_failed", "feed_fragment_unsupported", "feed_host_not_approved", "feed_http_error",
+  "feed_https_required", "feed_not_connected", "feed_port_unsupported", "feed_redirect_invalid", "feed_redirect_limit",
+  "feed_response_too_large", "feed_timeout", "feed_tls_invalid", "feed_transport_configuration", "feed_unreachable", "feed_url_invalid",
+  "ics_event_limit", "ics_file_too_large", "ics_invalid_calendar", "import_authorization_changed", "no_events_selected",
+  "sync_in_progress",
+]);

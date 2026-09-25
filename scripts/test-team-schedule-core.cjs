@@ -56,6 +56,18 @@ const normalizedAllDay = server.normalizeScheduleInput(allDay);
 assert.equal(normalizedAllDay.endAtMillis - normalizedAllDay.startAtMillis, 23 * 60 * 60 * 1000, "all-day events retain local calendar boundaries across spring DST");
 assert.equal(client.buildScheduleFingerprint(allDay), server.scheduleFingerprintCanonical(normalizedAllDay));
 
+const displayEvents = [
+  { id: "active-feed", startAt: new Date(0), endAt: new Date(1), timezone: "UTC", status: "scheduled", source: "ics-feed" },
+  { id: "cancelled-feed", startAt: new Date(0), endAt: new Date(1), timezone: "UTC", status: "cancelled", source: "ics-feed" },
+  { id: "cancelled-manual", startAt: new Date(0), endAt: new Date(1), timezone: "UTC", status: "cancelled", source: "manual" },
+  { id: "cancelled-file", startAt: new Date(0), endAt: new Date(1), timezone: "UTC", status: "cancelled", source: "ics-file" },
+];
+assert.deepEqual(
+  client.scheduleEventsForDisplay(displayEvents).map((event) => event.id),
+  ["active-feed", "cancelled-manual", "cancelled-file"],
+  "connected-feed cancellation tombstones stay stored but do not clutter the schedule",
+);
+
 assert.deepEqual(
   client.generateWeeklyRecurrenceDates("2027-03-01", [1, 3, 1], "2027-03-10"),
   ["2027-03-01", "2027-03-03", "2027-03-08", "2027-03-10"],

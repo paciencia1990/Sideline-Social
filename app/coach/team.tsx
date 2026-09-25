@@ -213,7 +213,14 @@ export default function CoachTeamScreen() {
     setLifecycleAction(archived ? "archive" : "restore");
     setFeedback(null);
     try {
-      await setTeamArchived(selectedTeam.id, archived);
+      const result = await setTeamArchived(selectedTeam.id, archived);
+      if (!result.reconciliationComplete) {
+        setFeedback({
+          isError: true,
+          message: t(archived ? "coach.team.archiveReconciliationPending" : "coach.team.restoreReconciliationPending"),
+        });
+        return;
+      }
       if (archived) {
         Alert.alert(
           t("coach.team.archiveSuccessTitle"),

@@ -20,7 +20,7 @@ import {
   type TeamAnnouncementRecipientCounts,
 } from "@/services/teamMessageService";
 import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
-import { finalizeVoiceAnnouncement, reserveVoiceUpload, uploadReservedVoiceMemo } from "@/services/teamPrivateMessageService";
+import { createClientMessageId, finalizeVoiceAnnouncement, reserveVoiceUpload, uploadReservedVoiceMemo } from "@/services/teamPrivateMessageService";
 import { getCurrentUserTeamMembershipById, getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive, type TeamMembership } from "@/services/teamService";
 import { isTeamVoiceAudioAvailable } from "@/services/teamVoiceAudioCapability";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
@@ -66,6 +66,7 @@ export default function CoachMessagesScreen() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submissionInFlight = useRef(false);
+  const clientMessageId = useRef(createClientMessageId());
   const voiceAudioAvailable = isTeamVoiceAudioAvailable();
 
   useEffect(() => {
@@ -193,6 +194,7 @@ export default function CoachMessagesScreen() {
           summary: body,
           audience,
           allowReplies,
+          clientMessageId: clientMessageId.current,
           voiceMemo: voiceDraft,
         });
         voicePhase = "uploading";
@@ -202,16 +204,24 @@ export default function CoachMessagesScreen() {
         voicePhase = "finalizing";
         setSendPhase("finalizing");
         await finalizeVoiceAnnouncement(reservation.reservationId);
-        await deleteLocalVoiceMemo(voiceDraft.uri);
+        let localCleanupFailed = false;
+        try {
+          await deleteLocalVoiceMemo(voiceDraft.uri);
+        } catch {
+          localCleanupFailed = true;
+          console.warn("[CoachMessages] finalized voice local cleanup", "local_cleanup_failed");
+        }
         setVoiceDraft(null);
         setVoiceComposerKey((value) => value + 1);
+        if (localCleanupFailed) setError(t("voiceMemo.localCleanupWarning"));
       } else {
-        await createTeamAnnouncement(selectedTeam.id, { title, body, audience, allowReplies });
+        await createTeamAnnouncement(selectedTeam.id, { title, body, audience, allowReplies }, clientMessageId.current);
       }
       setTitle("");
       setBody("");
       setAudience("all");
       setAllowReplies(true);
+      clientMessageId.current = createClientMessageId();
     } catch (nextError) {
       console.warn("[CoachMessages] create error:", getSafeErrorCode(nextError));
       setError(
@@ -286,7 +296,7 @@ export default function CoachMessagesScreen() {
           </Card>
         ) : null}
 
-        {!selectedTeam && !loading && memberships.length > 1 ? (
+        {!loading && memberships.length > 1 && !hasDraft ? (
           <Card style={styles.cardGap}>
             <Text style={styles.cardTitle}>{t("coach.resources.chooseTeam")}</Text>
             <Text style={styles.cardText}>{t("coach.resources.selectTeamBeforeComposer")}</Text>

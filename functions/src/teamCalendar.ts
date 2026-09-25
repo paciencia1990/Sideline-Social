@@ -1,6 +1,4 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { lookup } from 'node:dns/promises';
-import * as https from 'node:https';
 
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -9,7 +7,12 @@ import * as firebaseFunctions from 'firebase-functions';
 import { permanentAccountFunctions, resolveAccountStanding } from './permanentAuth';
 import { notifyScheduleMembers } from './teamSchedule';
 import {
-  isBlockedCalendarAddress,
+  calendarFetchReason,
+  fetchPublicCalendar,
+  type CalendarConditionalHeaders,
+  type CalendarFetchResult,
+} from './teamCalendarFetch';
+import {
   MAX_ICS_BYTES,
   normalizeCalendarFeedUrl,
   parseTeamCalendarIcs,
@@ -19,6 +22,10 @@ import {
 
 const functions = permanentAccountFunctions(firebaseFunctions, 'communication');
 const calendarFunctions = functions.region('us-central1').runWith({
+  timeoutSeconds: 60,
+  memory: '256MB',
+});
+const calendarFeedFunctions = functions.region('us-central1').runWith({
   timeoutSeconds: 60,
   memory: '256MB',
   secrets: ['TEAM_CALENDAR_FEED_ENCRYPTION_KEY'],
@@ -36,8 +43,6 @@ const PREVIEW_TTL_MS = 15 * 60 * 1000;
 const MAX_FEEDS_PER_JOB = 10;
 
 type Manager = { teamRef: FirebaseFirestore.DocumentReference; teamName: string };
-type FetchResult = { body: string | null; etag: string | null; lastModified: string | null; notModified: boolean };
-
 function firestore() { return admin.firestore(); }
 
 export const previewTeamScheduleIcs = calendarFunctions.https.onCall(async (data, context) => {
@@ -84,13 +89,12 @@ export const importTeamScheduleIcs = calendarFunctions.https.onCall(async (data,
   return { ...result, rejected: parsed.rejectedCount + (parsed.events.length - selected.length) };
 });
 
-export const connectTeamCalendarFeed = calendarFunctions.https.onCall(async (data, context) => {
+export const connectTeamCalendarFeed = calendarFeedFunctions.https.onCall(async (data, context) => {
   const userId = authenticatedUserId(context);
   const teamId = readId(data?.teamId);
   await assertScheduleManager(teamId, userId);
   await enforceRateLimit(userId, 'feed-connect', 5, 60 * 60 * 1000);
   const normalized = normalizeCalendarFeedUrl(data?.url);
-  assertAllowedHostname(normalized.hostname);
   const fetched = await fetchCalendar(normalized.url, {});
   if (!fetched.body) throw failedPrecondition('feed_empty');
   const parsed = parseTeamCalendarIcs(fetched.body);
@@ -198,7 +202,7 @@ export const getTeamCalendarConnection = calendarFunctions.https.onCall(async (d
   };
 });
 
-export const syncTeamCalendarFeedNow = calendarFunctions.https.onCall(async (data, context) => {
+export const syncTeamCalendarFeedNow = calendarFeedFunctions.https.onCall(async (data, context) => {
   const userId = authenticatedUserId(context);
   const teamId = readId(data?.teamId);
   const integrationId = readId(data?.integrationId);
@@ -322,7 +326,7 @@ export const teamCalendarSubscription = rawCalendarFunctions.https.onRequest(asy
   if (request.method === 'HEAD') response.status(200).end(); else response.status(200).send(body);
 });
 
-export const syncTeamCalendarFeeds = calendarFunctions.pubsub.schedule('every 4 hours').onRun(async () => {
+export const syncTeamCalendarFeeds = calendarFeedFunctions.pubsub.schedule('every 4 hours').onRun(async () => {
   if (!automaticSyncFeatureEnabled()) return null;
   const due = await firestore().collection(INTEGRATIONS)
     .where('automaticSyncEnabled', '==', true)
@@ -475,39 +479,13 @@ function externalEventFields(input: { teamId: string; actorUserId: string; integ
   };
 }
 
-async function fetchCalendar(initialUrl: URL, conditional: { etag?: string; lastModified?: string }, redirects = 0): Promise<FetchResult> {
-  const normalized = normalizeCalendarFeedUrl(initialUrl.href);
-  assertAllowedHostname(normalized.hostname);
-  const addresses = await lookup(normalized.hostname, { all: true, verbatim: true });
-  if (addresses.length === 0 || addresses.some((entry) => isBlockedCalendarAddress(entry.address))) throw failedPrecondition('feed_address_blocked');
-  const pinned = addresses[0];
-  const result = await requestPinned(normalized.url, pinned.address, pinned.family, conditional);
-  if (result.redirect) {
-    if (redirects >= 2) throw failedPrecondition('feed_redirect_limit');
-    return fetchCalendar(new URL(result.redirect, normalized.url), conditional, redirects + 1);
+async function fetchCalendar(initialUrl: URL, conditional: CalendarConditionalHeaders): Promise<CalendarFetchResult> {
+  try {
+    return await fetchPublicCalendar(initialUrl, conditional);
   }
-  if (result.status === 304) return { body: null, etag: result.etag, lastModified: result.lastModified, notModified: true };
-  if (result.status < 200 || result.status >= 300) throw failedPrecondition('feed_http_error');
-  const contentType = result.contentType.toLocaleLowerCase('en-US');
-  if (!contentType.includes('text/calendar') && !contentType.includes('application/ics') && !/^\s*BEGIN:VCALENDAR/iu.test(result.body)) throw failedPrecondition('feed_content_type_invalid');
-  return { body: result.body, etag: result.etag, lastModified: result.lastModified, notModified: false };
-}
-
-function requestPinned(url: URL, address: string, family: number, conditional: { etag?: string; lastModified?: string }): Promise<{ status: number; body: string; contentType: string; etag: string | null; lastModified: string | null; redirect: string | null }> {
-  return new Promise((resolve, reject) => {
-    const request = https.request({
-      protocol: 'https:', hostname: url.hostname, servername: url.hostname, port: 443, path: `${url.pathname}${url.search}`, method: 'GET',
-      headers: { Accept: 'text/calendar, application/ics;q=0.9', 'User-Agent': 'Sideline-Social-Calendar/1.0', ...(conditional.etag ? { 'If-None-Match': conditional.etag } : {}), ...(conditional.lastModified ? { 'If-Modified-Since': conditional.lastModified } : {}) },
-      lookup: (_hostname, _options, callback) => callback(null, address, family as 4 | 6),
-    }, (response) => {
-      const chunks: Buffer[] = []; let bytes = 0;
-      response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > MAX_ICS_BYTES) { request.destroy(calendarError('feed_response_too_large')); return; } chunks.push(chunk); });
-      response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8'), contentType: safeHeader(response.headers['content-type']), etag: safeHeader(response.headers.etag) || null, lastModified: safeHeader(response.headers['last-modified']) || null, redirect: safeHeader(response.headers.location) || null }));
-    });
-    request.setTimeout(10_000, () => request.destroy(calendarError('feed_timeout')));
-    request.on('error', reject);
-    request.end();
-  });
+  catch (error) {
+    throw failedPrecondition(calendarFetchReason(error) ?? 'feed_fetch_failed');
+  }
 }
 
 function encryptSecret(value: string) {
@@ -555,21 +533,18 @@ async function recordSyncAudit(integrationId: string, teamId: unknown, classific
 function selectedKeys(value: unknown, events: ExternalCalendarEvent[]) { const allowed = new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []); if (allowed.size === 0 || allowed.size > events.length) throw invalidArgument('no_events_selected'); return events.filter((event) => allowed.has(event.key)); }
 function previewEvents(events: ExternalCalendarEvent[]) { return events.map((event) => ({ key: event.key, title: event.title, startAtMillis: event.startAtMillis, endAtMillis: event.endAtMillis, timezone: event.timezone, isAllDay: event.isAllDay, location: event.location, status: event.status, type: event.type })); }
 function readIcsText(value: unknown) { if (typeof value !== 'string') throw invalidArgument('ics_invalid_calendar'); if (Buffer.byteLength(value, 'utf8') > MAX_ICS_BYTES) throw invalidArgument('ics_file_too_large'); return value; }
-function assertAllowedHostname(hostname: string) { const hosts = (process.env.TEAM_CALENDAR_FEED_ALLOWED_HOSTS ?? '').split(',').map((value) => value.trim().toLocaleLowerCase('en-US')).filter(Boolean); if (!hosts.includes(hostname)) throw failedPrecondition('feed_host_not_approved'); }
 function automaticSyncFeatureEnabled() { return process.env.TEAM_CALENDAR_AUTOMATIC_SYNC_ENABLED === 'true'; }
 function subscriptionUrl(token: string) { const project = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT; if (!project) throw failedPrecondition('subscription_endpoint_unavailable'); return `https://us-central1-${project}.cloudfunctions.net/teamCalendarSubscription?token=${encodeURIComponent(token)}`; }
 function jitteredSyncInterval(seed: string) { const jitter = Number.parseInt(hash(seed).slice(0, 8), 16) % (30 * 60 * 1000); return SYNC_INTERVAL_MS + jitter; }
 function retryDelay(failures: number, seed: string) { return Math.min(24 * 60 * 60 * 1000, (2 ** Math.min(failures, 6)) * 15 * 60 * 1000) + (Number.parseInt(hash(`${seed}|${failures}`).slice(0, 6), 16) % (10 * 60 * 1000)); }
-function safeSyncError(error: unknown) { const value = error instanceof Error ? error.message : ''; return /^(feed|ics|automatic|sync)_[a-z_]+$/u.test(value) ? value : 'feed_sync_failed'; }
+function safeSyncError(error: unknown) { const details = error && typeof error === 'object' && 'details' in error && isRecord(error.details) ? error.details : null; const value = safeString(details?.reason) || (error instanceof Error ? error.message : ''); return /^(feed|ics|automatic|sync)_[a-z_]+$/u.test(value) ? value : 'feed_sync_failed'; }
 function authenticatedUserId(context: firebaseFunctions.https.CallableContext) { const userId = context.auth?.uid; if (!userId) throw new firebaseFunctions.https.HttpsError('unauthenticated', 'Sign in is required.'); return userId; }
 function readId(value: unknown) { if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(value)) throw invalidArgument('invalid_identifier'); return value; }
 function safeString(value: unknown, fallback = '') { return typeof value === 'string' && value.trim() ? value.trim() : fallback; }
-function safeHeader(value: string | string[] | undefined) { return Array.isArray(value) ? value[0] ?? '' : value ?? ''; }
 function timestampMillis(value: unknown) { if (value instanceof Timestamp) return value.toMillis(); if (value && typeof value === 'object' && 'toMillis' in value && typeof value.toMillis === 'function') return value.toMillis(); return 0; }
 function formatDate(value: number, timezone: string) { const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value)); const map = Object.fromEntries(parts.map((part) => [part.type, part.value])); return `${map.year}-${map.month}-${map.day}`; }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
 function hash(value: string) { return createHash('sha256').update(value).digest('hex'); }
-function calendarError(code: string) { const error = new Error(code); (error as { code?: string }).code = code; return error; }
 function invalidArgument(reason: string) { return new firebaseFunctions.https.HttpsError('invalid-argument', 'Calendar request is invalid.', { reason }); }
 function failedPrecondition(reason: string) { return new firebaseFunctions.https.HttpsError('failed-precondition', 'Calendar operation is unavailable.', { reason }); }
 function permissionDenied(reason: string) { return new firebaseFunctions.https.HttpsError('permission-denied', 'Calendar access denied.', { reason }); }

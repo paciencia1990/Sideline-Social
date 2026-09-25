@@ -5,11 +5,13 @@ import { Archive, CalendarDays, ChevronDown, ChevronUp, MessageCircle, MessagesS
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { replaceAfterOptionalDismiss } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { PARENT_PROFILE_ROUTE } from "@/constants/routes";
 import { TEAM_HISTORY_PAGE_SIZES } from "@/constants/teamHistoryPagination";
 import { Colors, Radius, Shadow, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
+import { useAuth } from "@/context/AuthContext";
 import {
   canManageTeamRoles,
   getArchivedCoachTeamCount,
@@ -25,10 +27,12 @@ import {
 import { getTeamPrivateMessageInboxPage } from "@/services/teamPrivateMessageService";
 import { shouldShowPrivateMessagesCard, type PrivateInboxLoadState } from "@/utils/coachCommunicationCore";
 import { createCoachHomeTeamCards } from "@/utils/coachHomeTeamCards";
+import { resolveCoachResourcesAccess } from "@/utils/coachResourcesAccess";
 
 export default function CoachHomeScreen() {
   const { t } = useTranslation();
   const { activeMode, modeHydrated, setActiveMode } = useApp();
+  const { user } = useAuth();
   const [memberships, setMemberships] = useState<TeamMembership[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +141,12 @@ export default function CoachHomeScreen() {
     ...privateInbox,
     hasActiveTeam: teamCards.length > 0,
   });
+  const showCoachResources = resolveCoachResourcesAccess({
+    activeMode: modeHydrated ? activeMode : null,
+    authenticatedUserId: user?.uid,
+    loadState: loading ? "loading" : error ? "error" : "loaded",
+    memberships,
+  }) === "allowed";
 
   useEffect(() => {
     if (!__DEV__ || loading || activeMode !== "coach") return;
@@ -166,8 +176,7 @@ export default function CoachHomeScreen() {
 
       await switchActiveMode("parent");
       setActiveMode("parent");
-      router.dismissAll();
-      router.replace(targetRoute as never);
+      replaceAfterOptionalDismiss(targetRoute);
     } catch (nextError) {
       console.warn("[CoachHome] switch to parent error:", nextError);
       setError(t("coach.home.error"));
@@ -255,7 +264,7 @@ export default function CoachHomeScreen() {
               </View>
             </Card>
 
-            <Card style={styles.resourceCard}>
+            {showCoachResources ? <Card style={styles.resourceCard}>
               <View style={styles.resourceHeading}>
                 <Shield color={Colors.primary} size={24} />
                 <View style={styles.resourceCopy}>
@@ -271,7 +280,7 @@ export default function CoachHomeScreen() {
               >
                 <Text style={styles.primaryButtonText}>{t("coach.home.resources")}</Text>
               </TouchableOpacity>
-            </Card>
+            </Card> : null}
 
             {teamCards.map((teamCard) => (
               <Card key={teamCard.teamId} style={styles.cardGap}>

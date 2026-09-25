@@ -98,10 +98,15 @@ import { clearPersistedVoicePlaybackArtifacts } from "@/services/voicePlaybackCl
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
 import { FriendChatPhotoSaveError } from "@/utils/friendChatPhotoSaveCore";
 import {
+  FriendChatPhotoUploadDiagnosticError,
+  recordFriendChatPhotoUploadDiagnostic,
+} from "@/utils/friendChatPhotoUploadDiagnostic";
+import {
   createFriendChatDateSeparator,
   millisecondsUntilNextLocalDay,
   shouldShowFriendChatDateSeparator,
 } from "@/utils/friendChatDateSeparatorCore";
+import { executeFriendChatDeletion } from "@/utils/friendChatDeletionExecution";
 import {
   deletionOperationKey,
   reconcileFriendChatDeletionState,
@@ -559,6 +564,7 @@ export default function FriendConversationScreen() {
         setReplyDraft(null);
       }
     } catch (error) {
+      if (imageDraft) recordFriendChatPhotoUploadDiagnostic(error);
       setErrorKey(mediaErrorTranslationKey(error));
     } finally {
       uploadCancel.current = null;
@@ -681,25 +687,28 @@ export default function FriendConversationScreen() {
     if (viewerMessageId && messageIds.includes(viewerMessageId)) setViewerMessageId(null);
     setErrorKey(null);
     try {
-      await Promise.all(targetMessages.flatMap((message) => message.voiceMemo
-        ? [clearPersistedVoicePlaybackArtifacts({
-          kind: "persisted-message",
-          messageId: message.messageId,
-          messageKind: "friendChatMessage",
-          storagePath: message.voiceMemo.storagePath,
-        })]
-        : []));
-      if (mode === "forMe") {
-        await deleteFriendChatMessagesForMe(chatId, messageIds);
-      } else {
-        await Promise.all(messageIds.map((messageId) => deleteFriendChatMessageForEveryone(chatId, messageId)));
-      }
-      const imageMessageIds = targetMessages
-        .filter((message) => message.messageType === "image")
-        .map((message) => message.messageId);
-      if (imageMessageIds.length) await clearFriendChatImageCacheForMessages(imageMessageIds);
+      const result = await executeFriendChatDeletion({
+        deleteFromBackend: () => mode === "forMe"
+          ? deleteFriendChatMessagesForMe(chatId, messageIds)
+          : Promise.all(messageIds.map((messageId) => deleteFriendChatMessageForEveryone(chatId, messageId))),
+        cleanupLocalArtifacts: async () => {
+          await Promise.all(targetMessages.flatMap((message) => message.voiceMemo
+            ? [clearPersistedVoicePlaybackArtifacts({
+              kind: "persisted-message",
+              messageId: message.messageId,
+              messageKind: "friendChatMessage",
+              storagePath: message.voiceMemo.storagePath,
+            })]
+            : []));
+          const imageMessageIds = targetMessages
+            .filter((message) => message.messageType === "image")
+            .map((message) => message.messageId);
+          if (imageMessageIds.length) await clearFriendChatImageCacheForMessages(imageMessageIds);
+        },
+      });
       setDeleteSelectionVisible(false);
       clearSelection();
+      if (result.localCleanup === "failed") setErrorKey("chat.deleteLocalCleanupFailed");
     } catch (error) {
       targetMessages.forEach((message) => {
         const pending = pendingDeletionsRef.current.get(message.messageId);
@@ -1495,6 +1504,15 @@ function errorTranslationKey(error: ReturnType<typeof mapFriendChatError>) {
 }
 
 function mediaErrorTranslationKey(error: unknown) {
+  if (error instanceof FriendChatPhotoUploadDiagnosticError) {
+    if (error.stage === "finalization") return "chat.mediaFinalizationError";
+    if (["auth-missing", "auth-anonymous", "auth-refresh-failed", "auth-account-changed", "storage-unauthenticated"].includes(error.diagnosticCode)) {
+      return "chat.mediaUploadAuthenticationError";
+    }
+    if (error.diagnosticCode === "storage-unauthorized") return "chat.mediaUploadAuthorizationError";
+    if (error.diagnosticCode === "storage-canceled") return "chat.mediaUploadCanceled";
+    return "chat.mediaUploadError";
+  }
   const message = error instanceof Error ? error.message : typeof error === "object" && error && "code" in error ? String(error.code) : "";
   if (message.includes("image_feature_build_required")) return "chat.imageBuildRequired";
   if (message.includes("image_picker_in_progress")) return "chat.imagePickerInProgress";

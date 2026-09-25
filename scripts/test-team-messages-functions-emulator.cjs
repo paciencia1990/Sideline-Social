@@ -94,9 +94,14 @@ async function run() {
   assert.equal((await db.collection("teams").doc("team-empty").collection("announcements").get()).empty, true);
 
   const textAnnouncement = await coach.call("createTeamAnnouncement", {
-    teamId: "team-1", title: "Practice update", body: "Practice starts at six.", audience: "all", allowReplies: true,
+    teamId: "team-1", clientMessageId: "announcement_client_001", title: "Practice update", body: "Practice starts at six.", audience: "all", allowReplies: true,
   });
   assert.equal(textAnnouncement.status, "created");
+  const repeatedTextAnnouncement = await coach.call("createTeamAnnouncement", {
+    teamId: "team-1", clientMessageId: "announcement_client_001", title: "Practice update", body: "Practice starts at six.", audience: "all", allowReplies: true,
+  });
+  assert.equal(repeatedTextAnnouncement.status, "alreadyCreated");
+  assert.equal(repeatedTextAnnouncement.announcementId, textAnnouncement.announcementId);
   const textAnnouncementData = (await db.collection("teams").doc("team-1").collection("announcements").doc(textAnnouncement.announcementId).get()).data();
   assert.equal(textAnnouncementData.createdBy, coach.uid);
   assert.equal(textAnnouncementData.recipientCount, 5);
@@ -106,7 +111,7 @@ async function run() {
     "the stored audience snapshot exactly matches the preview and excludes the sender",
   );
   const staffAnnouncement = await coach.call("createTeamAnnouncement", {
-    teamId: "team-1", title: "Staff update", body: "Staff-only coordination.", audience: "staff", allowReplies: false,
+    teamId: "team-1", clientMessageId: "announcement_client_002", title: "Staff update", body: "Staff-only coordination.", audience: "staff", allowReplies: false,
   });
   const staffAnnouncementData = (await db.collection("teams").doc("team-1").collection("announcements")
     .doc(staffAnnouncement.announcementId).get()).data();
@@ -145,7 +150,13 @@ async function run() {
     announcementId: textAnnouncement.announcementId,
     body: "We will be there.",
     replyType: "team",
+    clientReplyId: "reply_client_001",
   });
+  const repeatedParentReply = await parent.call("createTeamAnnouncementReply", {
+    teamId: "team-1", announcementId: textAnnouncement.announcementId,
+    body: "We will be there.", replyType: "team", clientReplyId: "reply_client_001",
+  });
+  assert.equal(repeatedParentReply.reply.id, parentReply.reply.id, "repeated reply submission returns the canonical reply");
   await assert.rejects(() => otherParent.call("deleteTeamAnnouncementReply", {
     teamId: "team-1",
     announcementId: textAnnouncement.announcementId,
@@ -370,8 +381,13 @@ async function run() {
     voiceMemo: { ...voiceMemo, sizeBytes: 2 * 1024 * 1024 + 1 },
   }), hasCode("invalid-argument"));
   const announcementReservation = await coach.call("createTeamVoiceMemoUpload", {
-    teamId: "team-1", kind: "announcement", title: "Voice update", summary: "Practice starts at six.", audience: "all", allowReplies: true, voiceMemo,
+    teamId: "team-1", kind: "announcement", clientMessageId: "voice_announcement_client_001", title: "Voice update", summary: "Practice starts at six.", audience: "all", allowReplies: true, voiceMemo,
   });
+  const repeatedAnnouncementReservation = await coach.call("createTeamVoiceMemoUpload", {
+    teamId: "team-1", kind: "announcement", clientMessageId: "voice_announcement_client_001", title: "Voice update", summary: "Practice starts at six.", audience: "all", allowReplies: true, voiceMemo,
+  });
+  assert.equal(repeatedAnnouncementReservation.reservationId, announcementReservation.reservationId);
+  assert.equal(repeatedAnnouncementReservation.storagePath, announcementReservation.storagePath);
   assert.equal((await db.collection("teams").doc("team-1").collection("announcements").doc(announcementReservation.targetId).get()).exists, false, "reservation is not visible before finalize");
   await uploadBytes(ref(coach.storage, announcementReservation.storagePath), new Uint8Array(1024), { contentType: "audio/mp4" });
   assert.equal((await coach.call("finalizeTeamVoiceAnnouncement", { reservationId: announcementReservation.reservationId })).status, "sent");
@@ -436,6 +452,10 @@ async function run() {
   const privateReservation = await parent.call("createTeamVoiceMemoUpload", {
     teamId: "team-1", kind: "privateMessage", conversationId: first.conversationId, clientMessageId: "voice_client_001", caption: "Private voice reply", voiceMemo,
   });
+  const repeatedPrivateReservation = await parent.call("createTeamVoiceMemoUpload", {
+    teamId: "team-1", kind: "privateMessage", conversationId: first.conversationId, clientMessageId: "voice_client_001", caption: "Private voice reply", voiceMemo,
+  });
+  assert.equal(repeatedPrivateReservation.reservationId, privateReservation.reservationId);
   await uploadBytes(ref(parent.storage, privateReservation.storagePath), new Uint8Array(1024), { contentType: "audio/mp4" });
   assert.equal((await parent.call("finalizePrivateTeamVoiceMessage", { reservationId: privateReservation.reservationId })).status, "sent");
   assert.equal((await parent.call("finalizePrivateTeamVoiceMessage", { reservationId: privateReservation.reservationId })).status, "alreadyFinalized");

@@ -16,6 +16,15 @@ export type AccountProfileTimestamps<T> = {
   updatedAt: T;
 };
 
+export type FederatedAccountProfileInput = {
+  email: string | null;
+  firstName: string;
+  lastName: string;
+  phoneNumber: string | null;
+  preferredLanguage: "en" | "es";
+  userId: string;
+};
+
 export function normalizeAccountProfileInput(input: CanonicalAccountProfileInput) {
   const firstName = input.firstName.trim();
   const lastName = input.lastName.trim();
@@ -69,6 +78,46 @@ export function buildCanonicalAccountProfile<T>(
     communityGuidelinesAcceptedAt: timestamps.updatedAt,
     modeOnboardingCompleted: false,
   } as const;
+}
+
+export function buildFederatedAccountProfile<T>(
+  input: FederatedAccountProfileInput,
+  timestamps: AccountProfileTimestamps<T>,
+) {
+  const firstName = input.firstName.trim();
+  const lastName = input.lastName.trim();
+  const suggestedDisplayName = [firstName, lastName].filter(Boolean).join(" ");
+  return {
+    userId: input.userId,
+    firstName,
+    lastName,
+    displayName: suggestedDisplayName || null,
+    email: input.email?.trim() || null,
+    zipCode: "",
+    sports: [],
+    phoneNumber: input.phoneNumber,
+    createdAt: timestamps.createdAt,
+    updatedAt: timestamps.updatedAt,
+    tier: "member",
+    totalStars: 0,
+    sidelineStars: 0,
+    squadIds: [],
+    friendIds: [],
+    preferredLanguage: input.preferredLanguage,
+    profileVisibility: "squad_only",
+    accountOnboardingCompleted: false,
+    modeOnboardingCompleted: false,
+  } as const;
+}
+
+export async function initializeAccountProfileIfMissing<T>(input: {
+  createFields: () => T;
+  readExists: () => Promise<boolean>;
+  write: (fields: T) => void;
+}) {
+  if (await input.readExists()) return { created: false } as const;
+  input.write(input.createFields());
+  return { created: true } as const;
 }
 
 export function buildAccountCompletionFields<T>(

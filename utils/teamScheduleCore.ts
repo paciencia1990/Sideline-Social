@@ -36,6 +36,11 @@ export type ScheduleEventLike = {
   timezone: string;
 };
 
+export type ScheduleDisplayEventLike = ScheduleEventLike & {
+  status: TeamScheduleStatus;
+  source: "manual" | "csv" | "ics-file" | "ics-feed";
+};
+
 export type ScheduleDayGroup<T extends ScheduleEventLike> = {
   dateKey: string;
   events: T[];
@@ -164,6 +169,10 @@ export function splitScheduleEvents<T extends ScheduleEventLike>(events: T[], no
     .filter((event) => event.endAt.getTime() < now.getTime())
     .sort((first, second) => second.startAt.getTime() - first.startAt.getTime());
   return { upcoming, past };
+}
+
+export function scheduleEventsForDisplay<T extends ScheduleDisplayEventLike>(events: T[]) {
+  return events.filter((event) => event.status !== "cancelled" || event.source !== "ics-feed");
 }
 
 export function groupScheduleEvents<T extends ScheduleEventLike>(events: T[]): ScheduleMonthGroup<T>[] {

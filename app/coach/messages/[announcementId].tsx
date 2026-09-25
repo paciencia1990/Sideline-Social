@@ -31,6 +31,7 @@ import {
   isTeamActive,
 } from "@/services/teamService";
 import { submitModerationReport } from "@/services/moderationReportService";
+import { createClientMessageId } from "@/services/teamPrivateMessageService";
 
 type MessageActionTarget =
   | { kind: "announcement"; mine: boolean }
@@ -55,6 +56,7 @@ export default function AnnouncementThreadScreen() {
   const [actionTarget, setActionTarget] = useState<MessageActionTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
+  const replyClientIds = useRef(new Map<string, string>());
   const replyDeletionInFlight = useRef(false);
   const replyPageInFlight = useRef(false);
   const announcementDeletionInFlight = useRef(false);
@@ -148,7 +150,11 @@ export default function AnnouncementThreadScreen() {
       else setSending(true);
       setError(null);
       try {
-        const reply = await replyToAnnouncement(teamId, announcementId, body, "team");
+        const requestKey = quickReplyId ? `quick:${quickReplyId}` : "manual";
+        const clientReplyId = replyClientIds.current.get(requestKey) ?? createClientMessageId();
+        replyClientIds.current.set(requestKey, clientReplyId);
+        const reply = await replyToAnnouncement(teamId, announcementId, body, "team", clientReplyId);
+        replyClientIds.current.delete(requestKey);
         setReplies((current) => appendReply(current, reply));
         if (!quickReplyId) setReplyBody("");
       } catch (nextError) {
@@ -385,7 +391,7 @@ export default function AnnouncementThreadScreen() {
                 );
               })}
             </View>
-            <TextInput multiline onChangeText={setReplyBody} placeholder={t("coach.messages.replyPlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={replyBody} />
+            <TextInput multiline onChangeText={(value) => { replyClientIds.current.delete("manual"); setReplyBody(value); }} placeholder={t("coach.messages.replyPlaceholder")} placeholderTextColor={Colors.textPrimary} style={styles.input} value={replyBody} />
             <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: sending, disabled: sending || Boolean(sendingQuickReplyId) || !replyBody.trim() }} activeOpacity={0.86} disabled={sending || Boolean(sendingQuickReplyId) || !replyBody.trim()} onPress={() => void submitReply(replyBody)} style={[styles.primaryButton, (sending || Boolean(sendingQuickReplyId) || !replyBody.trim()) && styles.disabledButton]}>
               {sending ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.primaryButtonText}>{t("coach.messages.reply")}</Text>}
             </TouchableOpacity>

@@ -15,6 +15,7 @@ import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "@/config/firebase";
 import { TEAM_HISTORY_PAGE_SIZES } from "@/constants/teamHistoryPagination";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
+import { executeTeamLifecycleRequest } from "@/utils/teamLifecycleRequest";
 
 export type TeamRole = "parent" | "coach" | "assistantCoach" | "teamParent";
 export type TeamMemberStatus = "active" | "pending" | "inactive" | "removed";
@@ -29,6 +30,7 @@ export type TeamRoleKey = keyof TeamRoleFlags;
 export type AppMode = "parent" | "coach";
 
 export type TeamLookupOptions = {
+  requireComplete?: boolean;
   throwOnError?: boolean;
 };
 
@@ -174,7 +176,7 @@ export async function getCurrentUserTeamMemberships(options: TeamLookupOptions =
       .map((result) => result.value)
       .filter((membership): membership is TeamMembership => Boolean(membership));
     const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    if (options.throwOnError && memberships.length === 0 && failed) throw failed.reason;
+    if ((options.requireComplete || (options.throwOnError && memberships.length === 0)) && failed) throw failed.reason;
 
     return memberships;
   } catch (error) {
@@ -466,11 +468,21 @@ export async function setTeamArchived(teamId: string, archived: boolean) {
     { teamId: string; archived: boolean },
     { status: TeamStatus; inviteCode: string | null }
   >(functions, "setTeamArchived");
-  const response = await callable({ teamId: teamId.trim(), archived });
-  return {
-    status: readTeamStatus(response.data.status),
-    inviteCode: readNullableString(response.data.inviteCode),
-  };
+  const normalizedTeamId = teamId.trim();
+  return executeTeamLifecycleRequest({
+    desiredStatus: archived ? "archived" : "active",
+    request: async () => {
+      const response = await callable({ teamId: normalizedTeamId, archived });
+      return {
+        status: readTeamStatus(response.data.status),
+        inviteCode: readNullableString(response.data.inviteCode),
+      };
+    },
+    readPersistedState: async () => {
+      const persisted = await getTeamById(normalizedTeamId);
+      return persisted ? { status: persisted.status, inviteCode: persisted.inviteCode } : null;
+    },
+  });
 }
 
 export async function getTeamById(teamId: string): Promise<Team | null> {

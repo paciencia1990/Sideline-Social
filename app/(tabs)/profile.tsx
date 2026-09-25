@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { replaceAfterOptionalDismiss } from "@/components/NestedBackButton";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -124,8 +125,7 @@ export default function ProfileScreen() {
 
       await switchActiveMode("coach");
       setActiveMode("coach");
-      router.dismissAll();
-      router.replace(targetRoute as never);
+      replaceAfterOptionalDismiss(targetRoute);
     } catch (nextError) {
       console.warn("[Profile] switch to coach error:", nextError);
       setModeError(t("coach.home.error"));

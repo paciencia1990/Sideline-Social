@@ -158,7 +158,7 @@ service firebase.storage {
     }
 
     match /friendChatMedia/{conversationId}/{messageId}/{reservationId}/image.jpg {
-      allow create: if canCommunicate() &&
+      allow create: if resource == null && canCommunicate() &&
         friendReservation(reservationId).status == "pending" &&
         friendReservation(reservationId).kind == "image" &&
         friendReservation(reservationId).userId == request.auth.uid &&
@@ -176,7 +176,7 @@ service firebase.storage {
     }
 
     match /friendChatMedia/{conversationId}/{messageId}/{reservationId}/thumbnail.jpg {
-      allow create: if canCommunicate() &&
+      allow create: if resource == null && canCommunicate() &&
         friendReservation(reservationId).status == "pending" &&
         friendReservation(reservationId).kind == "image" &&
         friendReservation(reservationId).userId == request.auth.uid &&

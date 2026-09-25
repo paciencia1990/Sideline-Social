@@ -19,6 +19,7 @@ import { ref, uploadBytesResumable, type UploadTask } from "firebase/storage";
 import { auth, db, functions, storage } from "@/config/firebase";
 import { TEAM_HISTORY_PAGE_SIZES, type TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import { getPublicUserProfiles } from "@/services/publicProfileService";
+import { closeNativeUploadBlob, readNativeUploadBlob } from "@/utils/nativeUploadBlob";
 import { isCanonicalTeamVoiceStoragePath, normalizeVoiceMessageFields } from "@/utils/voiceMessageNormalizer";
 import { normalizeVoicePlaybackUrlResponse } from "@/utils/voicePlaybackCore";
 import type {
@@ -262,7 +263,7 @@ export async function reserveVoiceUpload(input: {
   audience?: "parents" | "staff" | "all";
   allowReplies?: boolean;
   conversationId?: string;
-  clientMessageId?: string;
+  clientMessageId: string;
   caption?: string;
 }) {
   requireUser();
@@ -279,15 +280,22 @@ export async function uploadReservedVoiceMemo(
   if (!draft.previewed) throw new Error("voice_preview_required");
   if (!/^(?:file|content|cache):/iu.test(draft.uri)) throw new Error("invalid_local_voice_uri");
   if (!isCanonicalTeamVoiceStoragePath(reservation.storagePath)) throw new Error("invalid_voice_storage_path");
-  const blob = await (await fetch(draft.uri)).blob();
-  if (blob.size < 1 || blob.size !== draft.sizeBytes) {
-    const closable = blob as unknown as { close?: () => void };
-    if (typeof closable.close === "function") closable.close();
-    throw new Error("voice_upload_size_mismatch");
-  }
-  const task = uploadBytesResumable(ref(storage, reservation.storagePath), blob, {
-    contentType: draft.mimeType,
+  const blob = await readNativeUploadBlob(draft.uri, draft.sizeBytes, {
+    canceledCode: "voice_upload_canceled",
+    invalidUriCode: "invalid_local_voice_uri",
+    localReadCode: "voice_local_read_failed",
+    localReadTimeoutCode: "voice_local_read_timeout",
+    sizeMismatchCode: "voice_upload_size_mismatch",
   });
+  let task: UploadTask;
+  try {
+    task = uploadBytesResumable(ref(storage, reservation.storagePath), blob, {
+      contentType: draft.mimeType,
+    });
+  } catch (error) {
+    closeNativeUploadBlob(blob);
+    throw error;
+  }
   const completion = new Promise<void>((resolve, reject) => {
     task.on("state_changed", (snapshot) => {
       onProgress?.(snapshot.totalBytes ? snapshot.bytesTransferred / snapshot.totalBytes : 0);
@@ -312,8 +320,7 @@ export async function uploadReservedVoiceMemo(
       resolve();
     });
   }).finally(() => {
-    const closable = blob as unknown as { close?: () => void };
-    if (typeof closable.close === "function") closable.close();
+    closeNativeUploadBlob(blob);
   });
   return { task, completion };
 }

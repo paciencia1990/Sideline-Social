@@ -89,12 +89,12 @@ export async function getTeamAnnouncementRecipientCounts(teamId: string) {
   };
 }
 
-export async function createTeamAnnouncement(teamId: string, input: AnnouncementInput) {
+export async function createTeamAnnouncement(teamId: string, input: AnnouncementInput, clientMessageId: string) {
   const callable = httpsCallable<
-    { teamId: string } & AnnouncementInput,
-    { announcementId: string; status: "created" }
+    { teamId: string; clientMessageId: string } & AnnouncementInput,
+    { announcementId: string; status: "created" | "alreadyCreated" }
   >(functions, "createTeamAnnouncement");
-  await callable({ teamId, ...input });
+  await callable({ teamId, clientMessageId, ...input });
 }
 
 export function listenToTeamAnnouncements(
@@ -330,14 +330,15 @@ export async function replyToAnnouncement(
   teamId: string,
   announcementId: string,
   body: string,
-  replyType: ReplyType = "team",
+  replyType: ReplyType,
+  clientReplyId: string,
 ) {
   requireUser();
   const submitReply = httpsCallable<
-    { teamId: string; announcementId: string; body: string; replyType: ReplyType },
+    { teamId: string; announcementId: string; body: string; replyType: ReplyType; clientReplyId: string },
     { reply: { id: string; userId: string; displayName: string; body: string; replyType: ReplyType; createdAtMillis: number } }
   >(functions, "createTeamAnnouncementReply");
-  const response = await submitReply({ teamId, announcementId, body: body.trim(), replyType });
+  const response = await submitReply({ teamId, announcementId, body: body.trim(), replyType, clientReplyId });
   return {
     ...response.data.reply,
     createdAt: new Date(response.data.reply.createdAtMillis),

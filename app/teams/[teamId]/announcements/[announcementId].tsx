@@ -31,6 +31,7 @@ import {
 import type { TeamHistoryCursor } from "@/constants/teamHistoryPagination";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import { submitModerationReport } from "@/services/moderationReportService";
+import { createClientMessageId } from "@/services/teamPrivateMessageService";
 
 type MessageActionTarget =
   | { contentId: string; kind: "announcement"; mine: false }
@@ -59,6 +60,7 @@ export default function ParentAnnouncementScreen() {
   const [actionTarget, setActionTarget] = useState<MessageActionTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
+  const replyClientIds = useRef(new Map<string, string>());
   const replyDeletionInFlight = useRef(false);
   const replyPageInFlight = useRef(false);
   const acknowledgedNotificationIds = useRef(new Set<string>());
@@ -202,7 +204,10 @@ export default function ParentAnnouncementScreen() {
     setSending(true);
     setError(null);
     try {
-      const reply = await replyToAnnouncement(teamId, announcementId, replyBody.trim(), "team");
+      const clientReplyId = replyClientIds.current.get("manual") ?? createClientMessageId();
+      replyClientIds.current.set("manual", clientReplyId);
+      const reply = await replyToAnnouncement(teamId, announcementId, replyBody.trim(), "team", clientReplyId);
+      replyClientIds.current.delete("manual");
       setReplies((current) => appendReply(current, reply));
       setReplyBody("");
     } catch (nextError) {
@@ -220,12 +225,17 @@ export default function ParentAnnouncementScreen() {
     setSendingQuickReplyId(quickReplyId);
     setError(null);
     try {
+      const requestKey = `quick:${quickReplyId}`;
+      const clientReplyId = replyClientIds.current.get(requestKey) ?? createClientMessageId();
+      replyClientIds.current.set(requestKey, clientReplyId);
       const reply = await replyToAnnouncement(
         teamId,
         announcementId,
         t(QUICK_REPLY_TRANSLATION_KEYS[quickReplyId]),
         "team",
+        clientReplyId,
       );
+      replyClientIds.current.delete(requestKey);
       setReplies((current) => appendReply(current, reply));
     } catch (nextError) {
       logOperationError("createQuickReply", nextError);
@@ -436,7 +446,7 @@ export default function ParentAnnouncementScreen() {
                   <TextInput
                     accessibilityLabel={t("myTeams.replyPlaceholder")}
                     multiline
-                    onChangeText={setReplyBody}
+                    onChangeText={(value) => { replyClientIds.current.delete("manual"); setReplyBody(value); }}
                     onContentSizeChange={updateComposerKeyboardOverlap}
                     onFocus={updateComposerKeyboardOverlap}
                     placeholder={t("myTeams.replyPlaceholder")}

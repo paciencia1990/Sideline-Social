@@ -21,9 +21,13 @@ const restrictedReservationId = "media_" + "4".repeat(64);
 const version2ReservationId = "media_" + "5".repeat(64);
 const unknownProfileReservationId = "media_" + "6".repeat(64);
 const oversizedV2ReservationId = "media_" + "7".repeat(64);
+const expiredImageReservationId = "media_" + "8".repeat(64);
+const finalizedImageReservationId = "media_" + "9".repeat(64);
 const version2MessageId = "message_" + "e".repeat(64);
 const unknownProfileMessageId = "message_" + "f".repeat(64);
 const oversizedV2MessageId = "message_" + "0".repeat(64);
+const expiredImageMessageId = "message_" + "1".repeat(64);
+const finalizedImageMessageId = "message_" + "2".repeat(64);
 
 function friendPath(targetMessageId, reservationId, fileName) {
   return `friendChatMedia/conversation-1/${targetMessageId}/${reservationId}/${fileName}`;
@@ -111,6 +115,29 @@ async function seed(testEnv) {
         userId: "active-a",
       });
     }
+    for (const [reservationId, targetId, status, expiresAt] of [
+      [expiredImageReservationId, expiredImageMessageId, "pending", Timestamp.fromMillis(Date.now() - 1000)],
+      [finalizedImageReservationId, finalizedImageMessageId, "finalized", Timestamp.fromMillis(Date.now() + 60_000)],
+    ]) {
+      await setDoc(doc(db, "friendChatUploadReservations", reservationId), {
+        conversationId: "conversation-1",
+        expiresAt,
+        fullPath: friendPath(targetId, reservationId, "image.jpg"),
+        image: {
+          main: { height: 900, mimeType: "image/jpeg", sizeBytes: imageBytes.byteLength, width: 1440 },
+          mediaProfileVersion: 2,
+          sourceMimeType: "image/jpeg",
+          sourceSizeBytes: imageBytes.byteLength,
+          thumbnail: { height: 300, mimeType: "image/jpeg", sizeBytes: thumbnailBytes.byteLength, width: 480 },
+        },
+        kind: "image",
+        reservationId,
+        status,
+        targetId,
+        thumbnailPath: friendPath(targetId, reservationId, "thumbnail.jpg"),
+        userId: "active-a",
+      });
+    }
   });
 }
 
@@ -135,11 +162,15 @@ async function run() {
     await assertSucceeds(activeStorage.ref(voicePath).put(voiceBytes, { contentType: "audio/mp4" }));
     await assertSucceeds(activeStorage.ref(imagePath).put(imageBytes, { contentType: "image/jpeg" }));
     await assertSucceeds(activeStorage.ref(thumbnailPath).put(thumbnailBytes, { contentType: "image/jpeg" }));
+    await assertFails(activeStorage.ref(imagePath).put(imageBytes, { contentType: "image/jpeg" }));
+    await assertFails(otherStorage.ref(friendPath(version2MessageId, version2ReservationId, "image.jpg")).put(imageBytes, { contentType: "image/jpeg" }));
     await assertSucceeds(activeStorage.ref(friendPath(version2MessageId, version2ReservationId, "image.jpg")).put(imageBytes, { contentType: "image/jpeg" }));
     await assertSucceeds(activeStorage.ref(friendPath(version2MessageId, version2ReservationId, "thumbnail.jpg")).put(thumbnailBytes, { contentType: "image/jpeg" }));
     await assertFails(activeStorage.ref(friendPath(version2MessageId, version2ReservationId, "image.jpg")).put(imageBytes, { contentType: "image/webp" }));
     await assertFails(activeStorage.ref(friendPath(unknownProfileMessageId, unknownProfileReservationId, "image.jpg")).put(imageBytes, { contentType: "image/jpeg" }));
     await assertFails(activeStorage.ref(friendPath(oversizedV2MessageId, oversizedV2ReservationId, "image.jpg")).put(oversizedV2ImageBytes, { contentType: "image/jpeg" }));
+    await assertFails(activeStorage.ref(friendPath(expiredImageMessageId, expiredImageReservationId, "image.jpg")).put(imageBytes, { contentType: "image/jpeg" }));
+    await assertFails(activeStorage.ref(friendPath(finalizedImageMessageId, finalizedImageReservationId, "image.jpg")).put(imageBytes, { contentType: "image/jpeg" }));
     await assertFails(activeStorage.ref(voicePath).getDownloadURL());
     await assertFails(activeStorage.ref(imagePath).getDownloadURL());
     await assertFails(otherStorage.ref(voicePath).put(voiceBytes, { contentType: "audio/mp4" }));

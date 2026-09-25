@@ -16,7 +16,10 @@ export function mapFriendChatError(error: unknown): FriendChatUiError {
   if (code.includes("resource-exhausted")) return "rateLimited";
   if (code.includes("failed-precondition") && message.includes("no longer friends")) return "friendshipEnded";
   if (code.includes("failed-precondition") && message.includes("invitation")) return "invited";
-  if (code.includes("not-found")) return "removed";
+  // A callable endpoint, reservation, or message can be missing even while the
+  // user is still a member. Only the screen's verified membership state should
+  // display the membership-ended banner; a generic 404 is not that evidence.
+  if (code.includes("not-found")) return "unknown";
   if (code.includes("failed-precondition") && message.includes("index")) return "missingIndex";
   if (code.includes("unavailable") || code.includes("deadline-exceeded") || code.includes("network")) return "network";
   return "unknown";

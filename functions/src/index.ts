@@ -104,11 +104,15 @@ import {
   readOptionalBoundedText,
   readRequiredIdentifier,
   resolveAnnouncementRecipientUserIds,
+  teamAnnouncementId,
+  teamAnnouncementReplyId,
   teamPrivateConversationId,
   teamPrivateMessageId,
+  teamVoiceReservationId,
   teamVoiceStoragePath,
   validateVoiceMemoMetadata,
 } from './teamVoiceMessagingCore';
+import { attemptAuxiliaryAfterCommit } from './teamMessagingReliabilityCore';
 import {
   assertValidCoordinates,
   canonicalVenueId,
@@ -2806,8 +2810,10 @@ export const sendPrivateTeamTextMessage = communicationTeamMessagingFunctions.ht
       text,
     });
     if (result.blocked) throw new Error('conversation_read_only');
-    if (result.created) await notifyPrivateTeamMessage(result.conversation, uid, result.messageId);
-    return { messageId: result.messageId, status: result.created ? 'sent' : 'alreadySent' };
+    const notification = result.created
+      ? await notifyPrivateTeamMessageAfterCommit(result.conversation, uid, result.messageId)
+      : 'notRequired';
+    return { messageId: result.messageId, notification, status: result.created ? 'sent' : 'alreadySent' };
   } catch (error) {
     throwTeamMessagingError(error);
   }
@@ -2820,10 +2826,13 @@ export const createTeamVoiceMemoUpload = communicationTeamMessagingFunctions.htt
     const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
     const kind = data?.kind;
     if (kind !== 'announcement' && kind !== 'privateMessage') throw new Error('invalid_voice_target');
+    const clientMessageId = readClientIdentifier(data?.clientMessageId ?? `legacy_${randomBytes(16).toString('hex')}`);
     const voiceMemo = validateVoiceMemoMetadata(data?.voiceMemo);
     const firestore = admin.firestore();
     await enforceTeamMessageRateLimit(firestore, uid, 'voiceUpload', 20);
-    const reservationRef = firestore.collection('teamVoiceUploadReservations').doc();
+    const reservationRef = firestore.collection('teamVoiceUploadReservations').doc(
+      teamVoiceReservationId(kind, teamId, uid, clientMessageId),
+    );
     const expiresAt = Timestamp.fromMillis(Date.now() + TEAM_VOICE_UPLOAD_TTL_MS);
     let targetId: string;
     let storagePath: string;
@@ -2848,7 +2857,7 @@ export const createTeamVoiceMemoUpload = communicationTeamMessagingFunctions.htt
         audience,
       );
       if (recipientUserIds.length === 0) throw new Error('empty_audience');
-      targetId = teamRef.collection('announcements').doc().id;
+      targetId = teamAnnouncementId(teamId, uid, clientMessageId);
       storagePath = teamVoiceStoragePath({ teamId, announcementId: targetId, reservationId: reservationRef.id });
       reservationData = {
         title,
@@ -2860,7 +2869,6 @@ export const createTeamVoiceMemoUpload = communicationTeamMessagingFunctions.htt
       };
     } else {
       const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
-      const clientMessageId = readClientIdentifier(data?.clientMessageId);
       const caption = readOptionalBoundedText(data?.caption, 500, 'invalid_caption');
       assertUserContentAllowed(caption);
       const conversation = await requireActivePrivateConversation(firestore, conversationId, uid);
@@ -2874,7 +2882,33 @@ export const createTeamVoiceMemoUpload = communicationTeamMessagingFunctions.htt
       });
       reservationData = { conversationId, clientMessageId, caption: caption ?? null };
     }
-    await reservationRef.create({
+    const clientRequestHash = createHash('sha256').update(JSON.stringify({
+      clientMessageId,
+      kind,
+      reservationData,
+      teamId,
+      targetId,
+      voiceMemo,
+    })).digest('hex');
+    const result = await firestore.runTransaction(async (transaction) => {
+      const existingSnapshot = await transaction.get(reservationRef);
+      const existing = existingSnapshot.data();
+      if (existingSnapshot.exists) {
+        if (
+          existing?.userId !== uid ||
+          existing.kind !== kind ||
+          existing.teamId !== teamId ||
+          existing.targetId !== targetId ||
+          existing.storagePath !== storagePath ||
+          existing.clientRequestHash !== clientRequestHash
+        ) throw new Error('invalid_client_message_id');
+        if (existing.status !== 'pending' && existing.status !== 'finalized') throw new Error('upload_expired');
+        if (existing.status === 'pending' && (timestampMillis(existing.expiresAt) ?? 0) <= Date.now()) {
+          throw new Error('upload_expired');
+        }
+        return { expiresAt: existing.expiresAt, status: existing.status as string };
+      }
+      transaction.create(reservationRef, {
       reservationId: reservationRef.id,
       kind,
       teamId,
@@ -2882,12 +2916,22 @@ export const createTeamVoiceMemoUpload = communicationTeamMessagingFunctions.htt
       targetId,
       storagePath,
       status: 'pending',
+      clientMessageId,
+      clientRequestHash,
       voiceMemo,
       ...reservationData,
       createdAt: FieldValue.serverTimestamp(),
       expiresAt,
+      });
+      return { expiresAt, status: 'pending' };
     });
-    return { reservationId: reservationRef.id, targetId, storagePath, expiresAtMillis: expiresAt.toMillis() };
+    return {
+      reservationId: reservationRef.id,
+      targetId,
+      storagePath,
+      expiresAtMillis: timestampMillis(result.expiresAt) ?? expiresAt.toMillis(),
+      status: result.status,
+    };
   } catch (error) {
     throwTeamMessagingError(error);
   }
@@ -2974,8 +3018,10 @@ export const finalizePrivateTeamVoiceMessage = communicationTeamMessagingFunctio
       voiceMemo,
     });
     if (result.blocked) throw new Error('conversation_read_only');
-    if (result.created) await notifyPrivateTeamMessage(result.conversation, uid, result.messageId);
-    return { messageId: result.messageId, status: result.created ? 'sent' : 'alreadyFinalized' };
+    const notification = result.created
+      ? await notifyPrivateTeamMessageAfterCommit(result.conversation, uid, result.messageId)
+      : 'notRequired';
+    return { messageId: result.messageId, notification, status: result.created ? 'sent' : 'alreadyFinalized' };
   } catch (error) {
     throwTeamMessagingError(error);
   }
@@ -3939,6 +3985,31 @@ async function notifyPrivateTeamMessage(
   });
 }
 
+async function notifyPrivateTeamMessageAfterCommit(
+  conversation: Record<string, unknown>,
+  senderUserId: string,
+  messageId: string,
+) {
+  return attemptAuxiliaryAfterCommit(
+    () => notifyPrivateTeamMessage(conversation, senderUserId, messageId),
+    (error) => {
+    functions.logger.error('private_team_notification_deferred', {
+      errorCode: safeTeamMessagingLogCode(error),
+      messageCommitted: true,
+    });
+    },
+  );
+}
+
+function safeTeamMessagingLogCode(error: unknown) {
+  const raw = error && typeof error === 'object' && 'code' in error
+    ? String(error.code)
+    : error instanceof Error
+      ? error.name
+      : 'unknown';
+  return /^[A-Za-z0-9_./-]{1,80}$/u.test(raw) ? raw : 'unknown';
+}
+
 async function enforceTeamMessageRateLimit(
   firestore: FirebaseFirestore.Firestore,
   userId: string,
@@ -4723,18 +4794,23 @@ export const createTeamAnnouncement = communicationTeamMessagingFunctions.https.
     const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
     const title = readBoundedText(data?.title, 1, 160, 'announcement_title_required');
     const body = readBoundedText(data?.body, 1, 2000, 'announcement_body_required');
+    const clientMessageId = readClientIdentifier(data?.clientMessageId ?? `legacy_${randomBytes(16).toString('hex')}`);
     const audience = readAnnouncementAudience(data?.audience);
     const allowReplies = data?.allowReplies !== false;
     assertUserContentAllowed(title, body);
     const firestore = admin.firestore();
     const teamRef = firestore.collection('teams').doc(teamId);
-    const announcementRef = teamRef.collection('announcements').doc();
+    const announcementRef = teamRef.collection('announcements').doc(teamAnnouncementId(teamId, uid, clientMessageId));
+    const clientRequestHash = createHash('sha256')
+      .update(JSON.stringify({ allowReplies, audience, body, clientMessageId, teamId, title }))
+      .digest('hex');
     await enforceTeamMessageRateLimit(firestore, uid, 'textAnnouncement', 20);
-    await firestore.runTransaction(async (transaction) => {
-      const [team, member, profile] = await transaction.getAll(
+    const status = await firestore.runTransaction(async (transaction) => {
+      const [team, member, profile, existingAnnouncement] = await transaction.getAll(
         teamRef,
         teamRef.collection('members').doc(uid),
         firestore.collection('users').doc(uid),
+        announcementRef,
       );
       if (!team.exists || !isTeamActive(team.data())) throw new Error('team_not_found');
       if (!member.exists || !canManageTeamAnnouncements(member.data())) throw new Error('not_authorized_coach');
@@ -4745,6 +4821,15 @@ export const createTeamAnnouncement = communicationTeamMessagingFunctions.https.
         audience,
       );
       if (recipientUserIds.length === 0) throw new Error('empty_audience');
+      if (existingAnnouncement.exists) {
+        const existing = existingAnnouncement.data();
+        if (
+          existing?.createdBy !== uid ||
+          existing.clientMessageId !== clientMessageId ||
+          existing.clientRequestHash !== clientRequestHash
+        ) throw new Error('invalid_client_message_id');
+        return 'alreadyCreated' as const;
+      }
       transaction.create(announcementRef, {
         title,
         body,
@@ -4753,18 +4838,21 @@ export const createTeamAnnouncement = communicationTeamMessagingFunctions.https.
         recipientCount: recipientUserIds.length,
         recipientUserIds,
         contentType: 'text',
+        clientMessageId,
+        clientRequestHash,
         voiceMemo: null,
         createdBy: uid,
         createdByName: resolveReplyAuthorName(profile.data(), member.data(), context.auth?.token?.name),
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       });
+      return 'created' as const;
     });
     const announcementSnapshot = await announcementRef.get();
     return {
       announcementId: announcementRef.id,
       recipientCount: Math.max(0, Number(announcementSnapshot.data()?.recipientCount ?? 0)),
-      status: 'created',
+      status,
     };
   } catch (error) {
     throwTeamMessagingError(error);
@@ -4777,6 +4865,7 @@ export const createTeamAnnouncementReply = communicationFunctions.https.onCall(a
 
   const teamId = readReplyPathId(data?.teamId, 'team');
   const announcementId = readReplyPathId(data?.announcementId, 'announcement');
+  const clientReplyId = readClientIdentifier(data?.clientReplyId ?? `legacy_${randomBytes(16).toString('hex')}`);
   const body = typeof data?.body === 'string' ? data.body.trim() : '';
   const replyType = data?.replyType === 'privateToCoach' ? 'privateToCoach' : 'team';
   if (!body || body.length > 2000) {
@@ -4789,15 +4878,22 @@ export const createTeamAnnouncementReply = communicationFunctions.https.onCall(a
   const memberRef = teamRef.collection('members').doc(uid);
   const announcementRef = teamRef.collection('announcements').doc(announcementId);
   const profileRef = firestore.collection('users').doc(uid);
-  const replyRef = announcementRef.collection('replies').doc();
+  const replyRef = announcementRef.collection('replies').doc(
+    teamAnnouncementReplyId(teamId, announcementId, uid, clientReplyId),
+  );
+  const clientRequestHash = createHash('sha256')
+    .update(JSON.stringify({ announcementId, body, clientReplyId, replyType, teamId }))
+    .digest('hex');
   let displayName = 'Sideline Social member';
+  let createdAtMillis = Date.now();
 
   await firestore.runTransaction(async (transaction) => {
-    const [teamSnapshot, memberSnapshot, announcementSnapshot, profileSnapshot] = await transaction.getAll(
+    const [teamSnapshot, memberSnapshot, announcementSnapshot, profileSnapshot, existingReplySnapshot] = await transaction.getAll(
       teamRef,
       memberRef,
       announcementRef,
       profileRef,
+      replyRef,
     );
     if (!teamSnapshot.exists || !isTeamActive(teamSnapshot.data())) {
       throw new functions.https.HttpsError('failed-precondition', 'This team is no longer active.', { reason: 'team-inactive' });
@@ -4820,6 +4916,18 @@ export const createTeamAnnouncementReply = communicationFunctions.https.onCall(a
       throw new functions.https.HttpsError('permission-denied', 'This reply type is unavailable.');
     }
 
+    if (existingReplySnapshot.exists) {
+      const existing = existingReplySnapshot.data();
+      if (
+        existing?.userId !== uid ||
+        existing.clientReplyId !== clientReplyId ||
+        existing.clientRequestHash !== clientRequestHash
+      ) throw new functions.https.HttpsError('already-exists', 'A different reply already uses this request identifier.');
+      displayName = resolveReplyAuthorName(existing, member, context.auth?.token?.name);
+      createdAtMillis = timestampMillis(existing?.createdAt) ?? createdAtMillis;
+      return;
+    }
+
     displayName = resolveReplyAuthorName(
       profileSnapshot.exists ? profileSnapshot.data() : undefined,
       member,
@@ -4829,6 +4937,8 @@ export const createTeamAnnouncementReply = communicationFunctions.https.onCall(a
       userId: uid,
       displayName,
       body,
+      clientReplyId,
+      clientRequestHash,
       replyType,
       createdAt: FieldValue.serverTimestamp(),
     });
@@ -4841,7 +4951,7 @@ export const createTeamAnnouncementReply = communicationFunctions.https.onCall(a
       displayName,
       body,
       replyType,
-      createdAtMillis: Date.now(),
+      createdAtMillis,
     },
   };
 });
@@ -5313,10 +5423,30 @@ export const setTeamArchived = communicationFunctions.https.onCall(async (data, 
     };
   });
 
-  const fanout = await reconcileTeamLifecycleIndexes(firestore, teamId, archived ? 'archive' : 'restore');
-  const conversations = archived
-    ? await markTeamPrivateConversationsReadOnly(firestore, teamId)
-    : { conversationsReadOnly: 0 };
+  let fanout: Awaited<ReturnType<typeof reconcileTeamLifecycleIndexes>>;
+  let conversations: Awaited<ReturnType<typeof reconcileTeamPrivateConversationLifecycle>>;
+  try {
+    fanout = await reconcileTeamLifecycleIndexes(firestore, teamId, archived ? 'archive' : 'restore');
+    conversations = await reconcileTeamPrivateConversationLifecycle(
+      firestore,
+      teamId,
+      archived ? 'archive' : 'restore',
+    );
+  } catch (error) {
+    const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : 'unknown';
+    functions.logger.error('team_lifecycle_reconciliation_incomplete', {
+      code,
+      targetStatus: lifecycle.status,
+    });
+    throw new functions.https.HttpsError(
+      'aborted',
+      'The team status changed, but related team state did not finish reconciling.',
+      {
+        reason: 'team_lifecycle_reconciliation_incomplete',
+        persistedStatus: lifecycle.status,
+      },
+    );
+  }
   functions.logger.info('team_lifecycle_reconciled', {
     teamId,
     requestedBy: uid,
@@ -5570,12 +5700,15 @@ function buildTeamLifecycleUserIndexUpdate(
   return Object.keys(update).length > 1 ? update : null;
 }
 
-async function markTeamPrivateConversationsReadOnly(
+async function reconcileTeamPrivateConversationLifecycle(
   firestore: FirebaseFirestore.Firestore,
   teamId: string,
+  mode: TeamLifecycleMode,
 ) {
   let lastDocument: FirebaseFirestore.QueryDocumentSnapshot | null = null;
   let conversationsReadOnly = 0;
+  let conversationsRestored = 0;
+  let conversationsSkipped = 0;
 
   for (;;) {
     let conversationsQuery = firestore.collection('teamPrivateConversations')
@@ -5589,12 +5722,38 @@ async function markTeamPrivateConversationsReadOnly(
     for (let index = 0; index < snapshot.docs.length; index += TEAM_ARCHIVE_FANOUT_BATCH_SIZE) {
       const batch = firestore.batch();
       let hasWrites = false;
-      snapshot.docs.slice(index, index + TEAM_ARCHIVE_FANOUT_BATCH_SIZE).forEach((document) => {
-        if (document.data().status === 'readOnly') return;
-        conversationsReadOnly += 1;
+      const documents = snapshot.docs.slice(index, index + TEAM_ARCHIVE_FANOUT_BATCH_SIZE);
+      const restoreEligibility = mode === 'restore'
+        ? await Promise.all(documents.map((document) =>
+          document.data().teamLifecycleArchived === true
+            ? canRestoreTeamPrivateConversation(firestore, teamId, document.data())
+            : Promise.resolve(false)))
+        : [];
+      documents.forEach((document, chunkIndex) => {
+        const conversation = document.data();
+        if (mode === 'archive') {
+          if (conversation.status === 'readOnly') return;
+          conversationsReadOnly += 1;
+          batch.update(document.ref, {
+            status: 'readOnly',
+            archivedAt: FieldValue.serverTimestamp(),
+            teamLifecycleArchived: true,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          hasWrites = true;
+          return;
+        }
+        if (conversation.teamLifecycleArchived !== true) return;
+        if (!restoreEligibility[chunkIndex]) {
+          conversationsSkipped += 1;
+          return;
+        }
+        conversationsRestored += 1;
         batch.update(document.ref, {
-          status: 'readOnly',
-          archivedAt: FieldValue.serverTimestamp(),
+          status: 'active',
+          archivedAt: FieldValue.delete(),
+          teamLifecycleArchived: FieldValue.delete(),
+          restoredAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         });
         hasWrites = true;
@@ -5606,7 +5765,36 @@ async function markTeamPrivateConversationsReadOnly(
     if (snapshot.size < TEAM_ARCHIVE_RECONCILE_PAGE_SIZE) break;
   }
 
-  return { conversationsReadOnly };
+  return { conversationsReadOnly, conversationsRestored, conversationsSkipped };
+}
+
+async function canRestoreTeamPrivateConversation(
+  firestore: FirebaseFirestore.Firestore,
+  teamId: string,
+  conversation: FirebaseFirestore.DocumentData,
+) {
+  const coachUserId = typeof conversation.coachUserId === 'string' ? conversation.coachUserId : '';
+  const parentUserId = typeof conversation.parentUserId === 'string' ? conversation.parentUserId : '';
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(coachUserId) || !/^[A-Za-z0-9_-]{1,128}$/u.test(parentUserId)) {
+    return false;
+  }
+  const teamRef = firestore.collection('teams').doc(teamId);
+  const [team, coach, parent, parentLink, blockedByCoach, blockedByParent] = await firestore.getAll(
+    teamRef,
+    teamRef.collection('members').doc(coachUserId),
+    teamRef.collection('members').doc(parentUserId),
+    firestore.collection('users').doc(parentUserId).collection('teamChildLinks').doc(teamId),
+    firestore.collection('userBlocks').doc(coachUserId).collection('blockedUsers').doc(parentUserId),
+    firestore.collection('userBlocks').doc(parentUserId).collection('blockedUsers').doc(coachUserId),
+  );
+  return team.exists && isTeamActive(team.data()) &&
+    coach.exists && canManageTeamAnnouncements(coach.data()) &&
+    parent.exists && isEligiblePrivateTeamParent(
+      parent.data(),
+      parentLink.data(),
+      blockedByCoach,
+      blockedByParent,
+    );
 }
 
 export const deleteChildProfile = functions.https.onCall(async (data, context) => {

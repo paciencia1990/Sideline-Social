@@ -41,6 +41,7 @@ import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
 import { clearPersistedVoicePlaybackArtifacts } from "@/services/voicePlaybackCleanupService";
 import { submitModerationReport } from "@/services/moderationReportService";
 import { findUnresolvedCoachPlaceholders } from "@/services/coachResourcesService";
+import { executeTeamMessageDeletion } from "@/utils/teamMessageDeletionExecution";
 import type { LocalVoiceMemoDraft, TeamPrivateConversation, TeamPrivateMessage } from "@/types/teamVoiceMessaging";
 
 export function PrivateTeamMessageThread({
@@ -267,12 +268,19 @@ export function PrivateTeamMessageThread({
       voicePhase = "finalizing";
       setSendPhase("finalizing");
       await finalizePrivateVoiceMessage(reservation.reservationId);
-      await deleteLocalVoiceMemo(voiceDraft.uri);
+      let localCleanupFailed = false;
+      try {
+        await deleteLocalVoiceMemo(voiceDraft.uri);
+      } catch {
+        localCleanupFailed = true;
+        console.warn("[PrivateTeamMessageThread] finalized voice local cleanup", "local_cleanup_failed");
+      }
       setCaption("");
       setVoiceDraft(null);
       setVoiceComposerKey((value) => value + 1);
       setMode("text");
       clientId.current = createClientMessageId();
+      if (localCleanupFailed) setError(t("voiceMemo.localCleanupWarning"));
     } catch (nextError) {
       console.warn("[PrivateTeamMessageThread] voice send", getErrorCode(nextError));
       setError(voicePhase === "uploading" ? t("voiceMemo.uploadError") : resolveSendError(nextError, t));
@@ -312,42 +320,48 @@ export function PrivateTeamMessageThread({
     deleteInFlight.current = true;
     setError(null);
     try {
-      if (message.voiceMemo) {
-        await clearPersistedVoicePlaybackArtifacts({
-          kind: "persisted-message",
-          messageId: message.id,
-          messageKind: "privateMessage",
-          storagePath: message.voiceMemo.storagePath,
-        });
-      }
-      await deletePrivateTeamMessage(conversationId, message.id);
+      const result = await executeTeamMessageDeletion({
+        deleteFromBackend: () => deletePrivateTeamMessage(conversationId, message.id),
+        cleanupLocalArtifacts: () => message.voiceMemo
+          ? clearPersistedVoicePlaybackArtifacts({
+            kind: "persisted-message",
+            messageId: message.id,
+            messageKind: "privateMessage",
+            storagePath: message.voiceMemo.storagePath,
+          })
+          : Promise.resolve(),
+      });
+      if (result.localCleanup === "failed") setError(t("teamMessages.deleteLocalCleanupFailed"));
     } catch {
       throw new Error("delete_failed");
     } finally {
       deleteInFlight.current = false;
     }
-  }, [conversationId]);
+  }, [conversationId, t]);
 
   const hideMessage = useCallback(async (message: TeamPrivateMessage) => {
     if (deleteInFlight.current || message.senderUserId === auth.currentUser?.uid) return;
     deleteInFlight.current = true;
     setError(null);
     try {
-      if (message.voiceMemo) {
-        await clearPersistedVoicePlaybackArtifacts({
-          kind: "persisted-message",
-          messageId: message.id,
-          messageKind: "privateMessage",
-          storagePath: message.voiceMemo.storagePath,
-        });
-      }
-      await hidePrivateTeamMessageForCurrentUser(conversationId, message.id);
+      const result = await executeTeamMessageDeletion({
+        deleteFromBackend: () => hidePrivateTeamMessageForCurrentUser(conversationId, message.id),
+        cleanupLocalArtifacts: () => message.voiceMemo
+          ? clearPersistedVoicePlaybackArtifacts({
+            kind: "persisted-message",
+            messageId: message.id,
+            messageKind: "privateMessage",
+            storagePath: message.voiceMemo.storagePath,
+          })
+          : Promise.resolve(),
+      });
+      if (result.localCleanup === "failed") setError(t("teamMessages.deleteLocalCleanupFailed"));
     } catch {
       throw new Error("hide_failed");
     } finally {
       deleteInFlight.current = false;
     }
-  }, [conversationId]);
+  }, [conversationId, t]);
 
   const selectedMine = actionMessage?.senderUserId === auth.currentUser?.uid;
   const selectedActions = useMemo<MessageModalAction[]>(() => {

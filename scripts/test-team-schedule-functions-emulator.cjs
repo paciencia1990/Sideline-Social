@@ -114,6 +114,10 @@ async function run() {
 
   const syntheticIcs = fs.readFileSync(path.join(process.cwd(), "scripts", "fixtures", "team-calendar-synthetic.ics"), "utf8");
   await assert.rejects(() => parent.call("previewTeamScheduleIcs", { teamId: "team-active", ics: syntheticIcs }), hasCode("permission-denied"));
+  await assert.rejects(() => removed.call("previewTeamScheduleIcs", { teamId: "team-active", ics: syntheticIcs }), hasCode("permission-denied"));
+  await assert.rejects(() => outsider.call("previewTeamScheduleIcs", { teamId: "team-active", ics: syntheticIcs }), hasCode("permission-denied"));
+  await assert.rejects(() => coach.call("previewTeamScheduleIcs", { teamId: "team-archived", ics: syntheticIcs }), hasCode("permission-denied"));
+  assert.equal((await staff.call("previewTeamScheduleIcs", { teamId: "team-active", ics: syntheticIcs })).events.length, 6, "active staff retains the existing import policy");
   const icsPreview = await coach.call("previewTeamScheduleIcs", { teamId: "team-active", ics: syntheticIcs });
   assert.equal(icsPreview.events.length, 6);
   const icsImport = await coach.call("importTeamScheduleIcs", { teamId: "team-active", previewId: icsPreview.previewId, selectedKeys: icsPreview.events.map((event) => event.key), notifyTeam: true });
@@ -145,6 +149,16 @@ async function run() {
   assert.equal(parentNotifications.size, 1);
   assert.equal(parentNotifications.docs[0].data().type, "teamScheduleEvent");
   assert.equal(parentNotifications.docs[0].data().activeMode, "parent");
+  assert.deepEqual(
+    await coach.call("saveTeamScheduleEvent", {
+      ...createPayload, event: practice({ title: "Synthetic notified event", date: "2027-06-01" }), notifyTeam: true,
+      clientOperationId: "notify-create-1",
+    }),
+    notificationCreate,
+    "the same notification-bearing request replays its stored event result",
+  );
+  const replayedParentNotifications = await db.collection("userNotifications").doc(parent.uid).collection("notifications").where("eventId", "==", notificationCreate.eventIds[0]).get();
+  assert.equal(replayedParentNotifications.size, 1, "a replay cannot create a duplicate schedule notification");
 
   assert.equal((await coach.call("deleteTeamScheduleEvent", { teamId: "team-active", eventId })).deleted, true);
   assert.equal((await db.collection("teams").doc("team-active").collection("events").doc(eventId).get()).exists, false);

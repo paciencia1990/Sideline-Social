@@ -139,8 +139,25 @@ async function run() {
   });
   assert.equal(messageReport.reported, true);
   assert.equal((await db.collection("chatModerationReports").doc(messageReport.reportId).get()).data().reason, "offensive");
-  assert.equal((await b.call("deleteFriendChatMessagesForMe", { conversationId: group.conversationId, messageIds: [groupMessage.messageId] })).hidden, 1);
+  assert.equal((await b.call("deleteFriendChatMessagesForMe", {
+    conversationId: group.conversationId,
+    messageIds: [groupMessage.messageId, reply.messageId],
+  })).hidden, 2, "one private batch can hide received and sent messages");
   assert.equal((await groupDoc.collection("userMessageStates").doc(b.uid).collection("messages").doc(groupMessage.messageId).get()).data().hiddenForMe, true);
+  assert.equal((await groupDoc.collection("userMessageStates").doc(b.uid).collection("messages").doc(reply.messageId).get()).data().hiddenForMe, true);
+  assert.equal((await groupDoc.collection("messages").doc(groupMessage.messageId).get()).data().status, "active", "delete for me leaves the sender's shared message intact");
+  assert.equal((await groupDoc.collection("messages").doc(reply.messageId).get()).data().status, "active", "delete for me leaves the recipient's copy of a sent message intact");
+  assert.equal((await groupDoc.collection("userMessageStates").doc(a.uid).collection("messages").doc(groupMessage.messageId).get()).exists, false, "private deletion creates no state for the other participant");
+  assert.equal((await b.call("deleteFriendChatMessagesForMe", {
+    conversationId: group.conversationId,
+    messageIds: [groupMessage.messageId, reply.messageId],
+  })).hidden, 2, "repeating a private deletion remains idempotent and creates no duplicate records");
+  await groupDoc.collection("members").doc(b.uid).update({ status: "removed" });
+  await assert.rejects(() => b.call("deleteFriendChatMessagesForMe", {
+    conversationId: group.conversationId,
+    messageIds: [groupMessage.messageId],
+  }), hasCode("permission-denied"), "removed members cannot hide more messages");
+  await groupDoc.collection("members").doc(b.uid).update({ status: "active" });
   await assert.rejects(() => outsider.call("deleteFriendChatMessagesForMe", { conversationId: group.conversationId, messageIds: [groupMessage.messageId] }), hasCode("permission-denied"));
   await a.call("pinFriendChatMessage", { conversationId: group.conversationId, messageId: groupMessage.messageId, duration: "7d" });
   await b.call("toggleFriendChatReaction", { conversationId: group.conversationId, messageId: groupMessage.messageId, emoji: "👍" });
@@ -296,6 +313,14 @@ async function run() {
   );
   const imageUrl = await b.call("getFriendChatMediaDownloadUrl", { messageId: imageFinalize.messageId, storagePath: imageReservation.thumbnailPath });
   assert.match(imageUrl.url, /127\.0\.0\.1:9199|localhost:9199/u);
+  assert.equal((await b.call("deleteFriendChatMessagesForMe", {
+    conversationId: group.conversationId,
+    messageIds: [imageFinalize.messageId],
+  })).hidden, 1, "a recipient can privately hide a photo");
+  assert.match((await a.call("getFriendChatMediaDownloadUrl", {
+    messageId: imageFinalize.messageId,
+    storagePath: imageReservation.thumbnailPath,
+  })).url, /127\.0\.0\.1:9199|localhost:9199/u, "the sender retains photo access after another participant hides it");
   await assert.rejects(() => outsider.call("getFriendChatMediaDownloadUrl", { messageId: imageFinalize.messageId, storagePath: imageReservation.thumbnailPath }), hasCode("permission-denied"));
   const imageReport = await b.call("reportFriendChatMessage", {
     conversationId: group.conversationId,
@@ -405,6 +430,14 @@ async function run() {
   assert.deepEqual((await groupDoc.collection("messages").doc(voiceFinalize.messageId).get()).data().reactionCounts, { "🙏": 1 });
   const voiceUrl = await a.call("getFriendChatMediaDownloadUrl", { messageId: voiceFinalize.messageId, storagePath: voiceReservation.storagePath });
   assert.match(voiceUrl.url, /127\.0\.0\.1:9199|localhost:9199/u);
+  assert.equal((await a.call("deleteFriendChatMessagesForMe", {
+    conversationId: group.conversationId,
+    messageIds: [voiceFinalize.messageId],
+  })).hidden, 1, "a recipient can privately hide a voice message");
+  assert.match((await b.call("getFriendChatMediaDownloadUrl", {
+    messageId: voiceFinalize.messageId,
+    storagePath: voiceReservation.storagePath,
+  })).url, /127\.0\.0\.1:9199|localhost:9199/u, "the sender retains voice access after another participant hides it");
   const voiceReport = await a.call("reportFriendChatMessage", {
     conversationId: group.conversationId,
     messageId: voiceFinalize.messageId,

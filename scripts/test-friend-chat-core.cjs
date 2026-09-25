@@ -136,7 +136,15 @@ assert.equal(errorCore.mapFriendChatError(chatError("functions/permission-denied
 assert.equal(errorCore.mapFriendChatError(chatError("functions/permission-denied", "Messaging is unavailable for this connection")), "blocked");
 assert.equal(errorCore.mapFriendChatError(chatError("functions/failed-precondition", "You are no longer friends")), "friendshipEnded");
 assert.equal(errorCore.mapFriendChatError(chatError("functions/failed-precondition", "Invitation required")), "invited");
-assert.equal(errorCore.mapFriendChatError(chatError("functions/not-found", "Conversation unavailable")), "removed");
+assert.equal(errorCore.mapFriendChatError(chatError("functions/not-found", "Conversation unavailable")), "unknown");
+for (const message of ["NOT FOUND", "Upload reservation not found", "Message not found", "Member not found"]) {
+  assert.equal(errorCore.mapFriendChatError(chatError("functions/not-found", message)), "unknown",
+    "a missing endpoint or resource must not imply confirmed membership removal");
+}
+assert.equal(errorCore.mapFriendChatError({ code: "functions/not-found" }), "unknown");
+assert.equal(errorCore.mapFriendChatError(chatError("storage/object-not-found", "Object missing")), "unknown");
+assert.equal(errorCore.mapFriendChatError(chatError("functions/permission-denied", "Active membership required")), "permission",
+  "do not weaken authorization errors to conceal a service failure");
 assert.equal(errorCore.mapFriendChatError(chatError("functions/failed-precondition", "The query requires an index")), "missingIndex");
 assert.equal(errorCore.mapFriendChatError(chatError("functions/resource-exhausted", "Please wait a moment")), "rateLimited");
 

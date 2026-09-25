@@ -307,6 +307,13 @@ const coachAnnouncementSource = fs.readFileSync(path.join(process.cwd(), "app", 
 const coachAnnouncementListSource = fs.readFileSync(path.join(process.cwd(), "app", "coach", "messages.tsx"), "utf8");
 const parentTeamServiceSource = fs.readFileSync(path.join(process.cwd(), "services", "parentTeamService.ts"), "utf8");
 const parentTeamsScreenSource = fs.readFileSync(path.join(process.cwd(), "app", "teams", "index.tsx"), "utf8");
+const parentTeamHubSource = fs.readFileSync(path.join(process.cwd(), "app", "teams", "[teamId]", "index.tsx"), "utf8");
+const inboxCore = loadTypeScript("utils/parentTeamInboxCore.ts");
+assert.match(parentTeamServiceSource, /loadParentPrivateInbox/);
+assert.match(parentTeamServiceSource, /privateInboxAvailable/);
+assert.match(parentTeamsScreenSource, /!overview\.privateInboxAvailable[\s\S]*teamMessages\.inboxUnavailableTitle[\s\S]*onPress=\{loadTeams\}/);
+assert.match(parentTeamHubSource, /!summary\.privateInboxAvailable[\s\S]*teamMessages\.inboxUnavailableTitle[\s\S]*onPress=\{loadTeam\}/);
+assert.doesNotMatch(parentTeamHubSource, /!summary\.privateInboxAvailable[\s\S]{0,400}teamMessages\.parentEmpty/);
 assert.equal(rosterServiceSource.includes("getPublicUserProfiles"), true);
 assert.equal(rosterServiceSource.includes("documentId()"), false);
 assert.equal(rosterServiceSource.includes("looksLikeEmailAddress"), true);
@@ -357,6 +364,7 @@ const emptyAccountParentTeamService = loadTypeScriptWithDependencies("services/p
     getParentTeams: async () => { membershipReads += 1; return []; },
   },
   "@/utils/friendPrivacy": {},
+  "@/utils/parentTeamInboxCore": inboxCore,
   "@/services/teamPrivateMessageService": {
     getTeamPrivateMessageInbox: async () => { inboxReads += 1; return []; },
   },
@@ -434,6 +442,19 @@ assert.equal(translations.includes("¿Eliminar anuncio?"), true);
 assert.equal(translations.includes("Este anuncio y sus respuestas se eliminarán permanentemente del equipo."), true);
 
 void (async () => {
+  assert.deepEqual(await inboxCore.loadSupplementaryTeamInbox(async () => [{ id: "conversation" }], true), {
+    available: true,
+    items: [{ id: "conversation" }],
+  });
+  assert.deepEqual(await inboxCore.loadSupplementaryTeamInbox(async () => { throw Object.assign(new Error("index unavailable"), { code: "functions/internal" }); }, true), {
+    available: false,
+    items: [],
+  });
+  await assert.rejects(
+    () => inboxCore.loadSupplementaryTeamInbox(async () => { throw Object.assign(new Error("denied"), { code: "functions/permission-denied" }); }, true),
+    /denied/,
+  );
+  await assert.rejects(() => inboxCore.loadSupplementaryTeamInbox(async () => [], false), /Sign in/);
   assert.deepEqual(await emptyAccountParentTeamService.getParentHomeTeamsSummary(), {
     rows: [],
     totalTeams: 0,
@@ -445,6 +466,7 @@ void (async () => {
     unreadCountKnown: true,
     latestTeam: null,
     latestAnnouncement: null,
+    privateInboxAvailable: true,
     privateUnreadCount: 0,
   });
   assert.equal(membershipReads, 2);

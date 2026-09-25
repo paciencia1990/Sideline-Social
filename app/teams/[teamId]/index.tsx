@@ -319,10 +319,19 @@ export default function ParentTeamHubScreen() {
                 <Text accessibilityRole="header" style={styles.sectionTitle}>{t("teamMessages.title")}</Text>
                 <Text style={styles.sectionSubtitle}>{t("teamMessages.parentSectionSubtitle")}</Text>
               </View>
-              {summary.privateUnreadCount > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{summary.privateUnreadCount}</Text></View> : null}
+              {summary.privateInboxAvailable && summary.privateUnreadCount > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{summary.privateUnreadCount}</Text></View> : null}
             </View>
 
-            {summary.privateConversations.length === 0 ? (
+            {!summary.privateInboxAvailable ? (
+              <Card style={[styles.stateCard, styles.errorCard]}>
+                <LockKeyhole color={Colors.secondary} size={28} />
+                <Text style={styles.stateTitle}>{t("teamMessages.inboxUnavailableTitle")}</Text>
+                <Text style={styles.cardText}>{t("teamMessages.inboxUnavailableBody")}</Text>
+                <TouchableOpacity accessibilityRole="button" onPress={loadTeam} style={styles.outlineButton}>
+                  <Text style={styles.outlineButtonText}>{t("teamMessages.retryInbox")}</Text>
+                </TouchableOpacity>
+              </Card>
+            ) : summary.privateConversations.length === 0 ? (
               <Card style={styles.stateCard}>
                 <LockKeyhole color={Colors.secondary} size={28} />
                 <Text style={styles.stateTitle}>{t("teamMessages.parentEmpty")}</Text>

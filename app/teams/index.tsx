@@ -172,6 +172,15 @@ export default function ParentTeamsScreen() {
             <Text style={styles.outlineButtonText}>{t("myTeams.joinAnotherTeam")}</Text>
           </TouchableOpacity>
         ) : null}
+        {!loading && !error && overview && !overview.privateInboxAvailable ? (
+          <Card style={[styles.stateCard, styles.errorCard]}>
+            <Text style={styles.stateTitle}>{t("teamMessages.inboxUnavailableTitle")}</Text>
+            <Text style={styles.cardText}>{t("teamMessages.inboxUnavailableBody")}</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={loadTeams} style={styles.outlineButton}>
+              <Text style={styles.outlineButtonText}>{t("teamMessages.retryInbox")}</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : null}
         {!error ? groups.map((group) => (
           <View key={group.key} style={styles.group}>
             <View style={styles.childHeader}>
@@ -355,7 +364,8 @@ function ParentTeamCard({ locale, summary }: { locale: string; summary: ParentTe
   const { t } = useTranslation();
   const latest = summary.latestAnnouncement;
   const details = [summary.team.sport, summary.team.season || summary.team.division || summary.team.ageRange].filter(Boolean).join(" · ");
-  const totalUnread = (summary.unreadCountKnown ? summary.unreadCount : 0) + summary.privateUnreadCount;
+  const totalUnread = (summary.unreadCountKnown ? summary.unreadCount : 0) +
+    (summary.privateInboxAvailable ? summary.privateUnreadCount : 0);
 
   return (
     <TouchableOpacity
@@ -390,7 +400,7 @@ function ParentTeamCard({ locale, summary }: { locale: string; summary: ParentTe
           <Text style={styles.metaLabel}>{t("myTeams.coach")}: {summary.coachName ?? t(summary.coachProfileState === "deleted" ? "common.formerMember" : "common.sidelineSocialMember")}</Text>
         </View>
         {!summary.unreadCountKnown ? <Text style={styles.privateUnread}>{t("myTeams.unreadUnknown")}</Text> : null}
-        {summary.privateUnreadCount > 0 ? <Text style={styles.privateUnread}>{t("teamMessages.unread", { count: summary.privateUnreadCount })} · {t("teamMessages.title")}</Text> : null}
+        {summary.privateInboxAvailable && summary.privateUnreadCount > 0 ? <Text style={styles.privateUnread}>{t("teamMessages.unread", { count: summary.privateUnreadCount })} · {t("teamMessages.title")}</Text> : null}
         {latest ? (
           <View style={[styles.preview, !latest.isRead && styles.previewUnread]}>
             {latest.isDeleted
