@@ -13,6 +13,7 @@ import {
   resolveAccountStandingData,
 } from "./permanentAuth";
 import { parseFriendChatMediaStoragePath } from "./friendChatCore";
+import { completedAppealableAction } from "./accountStandingAppeal";
 
 const safetyFunctions = permanentAccountFunctions(
   firebaseFunctions,
@@ -37,6 +38,45 @@ export const getMyAccountStanding = safetyFunctions.https.onCall(
   async (_data, context) => {
     const uid = requirePermanentUid(context);
     return readSafeStanding(uid);
+  },
+);
+
+export const acknowledgeMyModerationWarning = safetyFunctions.https.onCall(
+  async (data, context) => {
+    const uid = requirePermanentUid(context);
+    const warningId = typeof data?.warningId === "string"
+      ? data.warningId.trim()
+      : "";
+    if (!/^[A-Za-z0-9_-]{1,200}$/u.test(warningId)) {
+      throw new firebaseFunctions.https.HttpsError(
+        "invalid-argument",
+        "A valid warning reference is required.",
+        { reason: "invalid_warning_reference" },
+      );
+    }
+
+    const reference = admin.firestore().collection("moderationUserNotices").doc(uid);
+    let alreadyAcknowledged = false;
+    await admin.firestore().runTransaction(async (transaction) => {
+      const current = await transaction.get(reference);
+      if (!current.exists || current.data()?.warningId !== warningId) {
+        throw new firebaseFunctions.https.HttpsError(
+          "failed-precondition",
+          "This warning is no longer current. Refresh your account status.",
+          { reason: "warning_changed" },
+        );
+      }
+      if (current.data()?.acknowledgedAt) {
+        alreadyAcknowledged = true;
+        return;
+      }
+      transaction.update(reference, {
+        acknowledgedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+
+    return { acknowledged: true, alreadyAcknowledged };
   },
 );
 
@@ -138,10 +178,10 @@ export const submitMyModerationAppeal = safetyFunctions.https.onCall(
         );
       }
       const originalAction = await transaction.get(firestore.doc(originalActionPath));
-      if (!originalAction.exists || originalAction.data()?.outcome !== "completed") {
+      if (!originalAction.exists || !completedAppealableAction(originalAction.data())) {
         throw new firebaseFunctions.https.HttpsError(
           "failed-precondition",
-          "The completed enforcement is unavailable.",
+          "The completed appealable enforcement is unavailable.",
           { reason: "original_enforcement_unavailable" },
         );
       }
@@ -297,15 +337,25 @@ export const onAccountStandingChanged = firebaseFunctions
 
 async function readSafeStanding(uid: string) {
   const firestore = admin.firestore();
-  const [standing, canonical] = await Promise.all([
+  const [standing, canonical, notice] = await Promise.all([
     resolveAccountStanding(uid),
     firestore.collection("accountStanding").doc(uid).get(),
+    firestore.collection("moderationUserNotices").doc(uid).get(),
   ]);
   const data = canonical.data() ?? {};
   const appealCase = standing.effective === "active"
     ? null
     : await findAppealCase(uid);
   const appealState = readAppealState(appealCase?.data()?.appealState);
+  const actionReference = appealCase
+    ? actionReferenceForCase(data.actionReference, appealCase.id)
+    : null;
+  const originalAction = actionReference
+    ? await firestore.doc(actionReference).get()
+    : null;
+  const appealableActionConfirmed = Boolean(
+    originalAction?.exists && completedAppealableAction(originalAction.data()),
+  );
 
   return {
     status: standing.effective,
@@ -315,14 +365,30 @@ async function readSafeStanding(uid: string) {
       : new Date(standing.expiresAtMillis).toISOString(),
     publicReasonCode: readPublicReasonCode(data.reasonCode),
     revision: standing.revision,
+    warning: safePendingWarning(notice),
     appeal: {
       available: Boolean(
         appealCase &&
         appealState === "none" &&
+        appealableActionConfirmed &&
         ["actioned", "closed"].includes(String(appealCase.data()?.status)),
       ),
       status: appealState,
     },
+  };
+}
+
+function safePendingWarning(snapshot: FirebaseFirestore.DocumentSnapshot) {
+  if (!snapshot.exists || snapshot.data()?.acknowledgedAt) return null;
+  const warningId = typeof snapshot.data()?.warningId === "string"
+    ? snapshot.data()?.warningId
+    : "";
+  if (!/^[A-Za-z0-9_-]{1,200}$/u.test(warningId)) return null;
+  return {
+    pending: true as const,
+    id: warningId,
+    publicReasonCode: readPublicReasonCode(snapshot.data()?.reasonCode),
+    effectiveAt: isoTime(snapshot.data()?.effectiveAt ?? snapshot.data()?.createdAt),
   };
 }
 

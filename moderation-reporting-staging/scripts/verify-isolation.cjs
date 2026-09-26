@@ -13,13 +13,17 @@ const firebaseConfig = require(resolve(mobileRoot, "firebase.moderation-staging.
 const generatedManifest = require(resolve(root, "src", "generated", "source-manifest.json"));
 
 assert.equal(packageJson.main, "lib/src/index.js");
-assert.deepEqual(Object.keys(packageJson.dependencies).sort(), ["firebase-admin", "firebase-functions"]);
+assert.deepEqual(Object.keys(packageJson.dependencies).sort(), [
+  "@google-cloud/firestore",
+  "firebase-admin",
+  "firebase-functions",
+]);
 assert.equal(firebaseConfig.functions.length, 1);
 assert.equal(firebaseConfig.functions[0].source, "moderation-reporting-staging");
 assert.equal(firebaseConfig.functions[0].codebase, "moderation-reporting-staging");
 assert.match(firebaseConfig.functions[0].predeploy[0], /assert-staging-project/u);
 assert.match(firebaseConfig.functions[0].predeploy.join("\n"), /verify:security-exception/u);
-assert.equal(Object.keys(generatedManifest.sha256).length, 5);
+assert.equal(Object.keys(generatedManifest.sha256).length, 6);
 
 const guard = resolve(root, "scripts", "assert-staging-project.cjs");
 const guardEnvironment = {
@@ -57,6 +61,7 @@ try {
 
 assert.deepEqual(Object.keys(exportsFromMain), ["submitModerationReportV2"]);
 assert.deepEqual([...localLoaded].sort(), [
+  "src/generated/friendChatCore.js",
   "src/generated/moderationReports.js",
   "src/generated/moderationReportsCore.js",
   "src/generated/permanentAuth.js",

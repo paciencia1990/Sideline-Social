@@ -8,7 +8,11 @@ const codebaseRoot = resolve(__dirname, "..");
 const mobileRoot = resolve(codebaseRoot, "..");
 const broadSourceRoot = resolve(mobileRoot, "functions", "src");
 const generatedRoot = resolve(codebaseRoot, "src", "generated");
-const approvedCopies = ["teamMembershipCore.ts", "teamVoiceMessagingCore.ts"];
+const approvedCopies = [
+  "friendChatCore.ts",
+  "teamMembershipCore.ts",
+  "teamVoiceMessagingCore.ts",
+];
 
 function assertContained(child, parent, label) {
   const path = realpathSync(child);

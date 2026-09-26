@@ -481,9 +481,42 @@ async function run() {
 
   const activeStanding = await activeParent.call("getMyAccountStanding");
   assert.equal(activeStanding.status, "active");
+  assert.equal(activeStanding.warning, null);
   assert.equal((await messagingRestricted.call("getMyAccountStanding")).status, "messagingRestricted");
   assert.equal((await suspended.call("getMyAccountStanding")).status, "suspended");
   assert.equal((await banned.call("getMyAccountStanding")).status, "banned");
+
+  await adminDb.collection("moderationUserNotices").doc(activeParent.uid).set({
+    warningId: "warning_active_parent_001",
+    actionReference: "moderationCases/warning-case/actions/warning-action",
+    reasonCode: "harassment",
+    effectiveAt: admin.firestore.Timestamp.now(),
+    acknowledgedAt: null,
+  });
+  const warnedStanding = await activeParent.call("getMyAccountStanding");
+  assert.equal(warnedStanding.status, "active");
+  assert.equal(warnedStanding.warning.pending, true);
+  assert.equal(warnedStanding.warning.id, "warning_active_parent_001");
+  assert.equal(warnedStanding.warning.publicReasonCode, "harassment");
+  await rejectsCode(
+    blocked.call("acknowledgeMyModerationWarning", { warningId: "warning_active_parent_001" }),
+    "failed-precondition",
+    "a different account cannot acknowledge the warning",
+  );
+  assert.deepEqual(
+    await activeParent.call("acknowledgeMyModerationWarning", { warningId: "warning_active_parent_001" }),
+    { acknowledged: true, alreadyAcknowledged: false },
+  );
+  assert.deepEqual(
+    await activeParent.call("acknowledgeMyModerationWarning", { warningId: "warning_active_parent_001" }),
+    { acknowledged: true, alreadyAcknowledged: true },
+  );
+  assert.equal((await activeParent.call("getMyAccountStanding")).warning, null);
+  await rejectsCode(
+    getDoc(doc(activeParent.firestore, "moderationUserNotices", activeParent.uid)),
+    "permission-denied",
+    "warning records remain server-only even for the affected user",
+  );
 
   await rejectsCode(
     messagingRestricted.call("sendFriendRequest", { targetUserId: activeParent.uid }),
@@ -628,6 +661,9 @@ async function run() {
     actionReference: originalAppealAction.path,
     revision: 2,
   });
+  const appealableStanding = await messagingRestricted.call("getMyAccountStanding");
+  assert.equal(appealableStanding.appeal.available, true);
+  assert.equal(appealableStanding.appeal.status, "none");
   const explanation = "Please review this restriction because I believe relevant context was missed.";
   const appeal = await messagingRestricted.call("submitMyModerationAppeal", {
     explanation,
@@ -648,6 +684,84 @@ async function run() {
   ]);
   assert.equal(appealedCase.data()?.caseVersion, 1);
   assert.equal(appealAudits.size, 1, "appeal and immutable audit must commit exactly once");
+
+  for (const consequence of [
+    { client: suspended, type: "temporarySuspend", status: "suspended", revision: 4 },
+    { client: banned, type: "permanentBan", status: "banned", revision: 4 },
+  ]) {
+    const caseId = `appeal-${consequence.type}`;
+    const action = adminDb.collection("moderationCases").doc(caseId)
+      .collection("actions").doc(`original-${consequence.type}`);
+    await Promise.all([
+      adminDb.collection("moderationCases").doc(caseId).set({
+        caseId,
+        reportedUserId: consequence.client.uid,
+        status: "actioned",
+        caseVersion: 0,
+        appealState: "none",
+        updatedAt: admin.firestore.Timestamp.now(),
+      }),
+      action.set({
+        actionId: action.id,
+        type: consequence.type,
+        outcome: "completed",
+        createdAt: admin.firestore.Timestamp.now(),
+        completedAt: admin.firestore.Timestamp.now(),
+      }),
+    ]);
+    await setStanding(consequence.client, {
+      status: consequence.status,
+      expiresAt: consequence.type === "temporarySuspend"
+        ? admin.firestore.Timestamp.fromMillis(Date.now() + 3_600_000)
+        : null,
+      caseId,
+      actionReference: action.path,
+      revision: consequence.revision,
+    });
+    const safeStanding = await consequence.client.call("getMyAccountStanding");
+    assert.equal(safeStanding.appeal.available, true, `${consequence.type} is discoverably appealable`);
+    const result = await consequence.client.call("submitMyModerationAppeal", {
+      explanation: `Please review this ${consequence.type} because relevant context may have been missed.`,
+      revision: consequence.revision,
+    });
+    assert.equal(result.appealStatus, "submitted");
+    const persisted = await action.parent.parent.collection("appeals")
+      .doc(`mobile_${consequence.client.uid}_r${consequence.revision}`).get();
+    assert.equal(persisted.data()?.originalActionType, consequence.type);
+  }
+
+  const nonAppealableCase = adminDb.collection("moderationCases").doc("appeal-warning");
+  const warningAction = nonAppealableCase.collection("actions").doc("original-warning");
+  await Promise.all([
+    nonAppealableCase.set({
+      caseId: nonAppealableCase.id,
+      reportedUserId: blocked.uid,
+      status: "actioned",
+      caseVersion: 0,
+      appealState: "none",
+      updatedAt: admin.firestore.Timestamp.now(),
+    }),
+    warningAction.set({
+      actionId: warningAction.id,
+      type: "warnUser",
+      outcome: "completed",
+      createdAt: admin.firestore.Timestamp.now(),
+      completedAt: admin.firestore.Timestamp.now(),
+    }),
+  ]);
+  await setStanding(blocked, {
+    status: "active",
+    messagingRestricted: true,
+    caseId: nonAppealableCase.id,
+    actionReference: warningAction.path,
+    revision: 2,
+  });
+  assert.equal((await blocked.call("getMyAccountStanding")).appeal.available, false);
+  await rejectsCode(
+    blocked.call("submitMyModerationAppeal", { explanation, revision: 2 }),
+    "failed-precondition",
+    "a non-appealable action cannot create an appeal even when standing is restricted",
+  );
 
   await adminDb.collection("userBlocks").doc(activeParent.uid)
     .collection("blockedUsers").doc(blocked.uid).set({

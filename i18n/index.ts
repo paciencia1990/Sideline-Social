@@ -10,6 +10,13 @@ const resources = {
         name: 'Sideline Social',
       },
       accountStanding: {
+        warning: {
+          title: 'A moderation warning was issued',
+          body: 'Review this policy warning before continuing. Your current app access is unchanged.',
+          acknowledge: 'I understand and want to continue',
+          errorTitle: 'Warning could not be acknowledged',
+          errorBody: 'Your warning remains available. Check your connection and try again.',
+        },
         messagingRestricted: {
           title: 'Messaging is temporarily unavailable',
           body: 'You can continue viewing permitted team information and official announcements, but you cannot send messages or other social contact right now.',
@@ -2401,6 +2408,13 @@ const resources = {
         name: 'Sideline Social',
       },
       accountStanding: {
+        warning: {
+          title: 'Se emitió una advertencia de moderación',
+          body: 'Revisa esta advertencia de política antes de continuar. Tu acceso actual a la aplicación no cambia.',
+          acknowledge: 'Entiendo y quiero continuar',
+          errorTitle: 'No se pudo confirmar la advertencia',
+          errorBody: 'La advertencia sigue disponible. Revisa tu conexión e inténtalo de nuevo.',
+        },
         messagingRestricted: {
           title: 'Los mensajes no estÃ¡n disponibles temporalmente',
           body: 'Puedes seguir viendo la informaciÃ³n permitida del equipo y los anuncios oficiales, pero ahora no puedes enviar mensajes ni otro contacto social.',

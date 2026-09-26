@@ -20,8 +20,12 @@ import { PRIVACY_POLICY_URL, SUPPORT_EMAIL, SUPPORT_URL, TERMS_OF_USE_URL } from
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAccountStanding } from "@/context/AccountStandingContext";
 import { useAuth } from "@/context/AuthContext";
-import { submitAccountStandingAppeal } from "@/services/accountStandingService";
+import {
+  acknowledgeAccountStandingWarning,
+  submitAccountStandingAppeal,
+} from "@/services/accountStandingService";
 import { needsAppealEligibilityRefresh } from "@/context/accountStandingRefreshCore";
+import { accountStandingGate } from "@/context/accountStandingGate";
 
 export function AccountStandingBoundary({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -36,17 +40,20 @@ export function AccountStandingBoundary({ children }: { children: ReactNode }) {
     return <StandingNotice kind="refresh" />;
   }
 
-  const status = standingState.standing.status;
-  if (status === "suspended" || status === "banned") {
+  const gate = accountStandingGate(
+    standingState.standing,
+    standingState.acknowledgedRevision,
+  );
+  if (gate === "suspended" || gate === "banned") {
     if (pathname === "/settings/legal") return <LegalScreen />;
     if (pathname === "/settings/delete-account") return <DeleteAccountScreen />;
-    return <StandingNotice kind={status} />;
+    return <StandingNotice kind={gate} />;
   }
-  if (
-    status === "messagingRestricted" &&
-    standingState.acknowledgedRevision !== standingState.standing.revision
-  ) {
+  if (gate === "messagingRestricted") {
     return <StandingNotice kind="messagingRestricted" />;
+  }
+  if (gate === "warning") {
+    return <StandingNotice kind="warning" />;
   }
   return children;
 }
@@ -62,7 +69,7 @@ function CenteredLoading() {
 function StandingNotice({
   kind,
 }: {
-  kind: "refresh" | "messagingRestricted" | "suspended" | "banned";
+  kind: "refresh" | "warning" | "messagingRestricted" | "suspended" | "banned";
 }) {
   const { i18n, t } = useTranslation();
   const router = useRouter();
@@ -71,20 +78,27 @@ function StandingNotice({
   const standing = standingState.standing;
   const [explanation, setExplanation] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [acknowledgingWarning, setAcknowledgingWarning] = useState(false);
 
   const title = t(`accountStanding.${kind}.title`);
   const body = t(`accountStanding.${kind}.body`);
   const showRestrictionDetails = kind !== "refresh" && standing !== null;
-  const reason = showRestrictionDetails
-    ? t(`accountStanding.reasons.${standing.publicReasonCode}`, {
+  const displayedReasonCode = kind === "warning"
+    ? standing?.warning?.publicReasonCode
+    : standing?.publicReasonCode;
+  const reason = showRestrictionDetails && displayedReasonCode
+    ? t(`accountStanding.reasons.${displayedReasonCode}`, {
         defaultValue: t("accountStanding.reasons.communityGuidelines"),
       })
     : null;
-  const effective = showRestrictionDetails && standing.effectiveAt
+  const displayedEffectiveAt = kind === "warning"
+    ? standing?.warning?.effectiveAt
+    : standing?.effectiveAt;
+  const effective = showRestrictionDetails && displayedEffectiveAt
     ? new Intl.DateTimeFormat(i18n.resolvedLanguage, {
         dateStyle: "medium",
         timeStyle: "short",
-      }).format(new Date(standing.effectiveAt))
+      }).format(new Date(displayedEffectiveAt))
     : null;
   const expiration = showRestrictionDetails && standing.expiresAt
     ? new Intl.DateTimeFormat(i18n.resolvedLanguage, {
@@ -106,6 +120,23 @@ function StandingNotice({
       Alert.alert(t("accountStanding.appeal.errorTitle"), t("accountStanding.appeal.errorBody"));
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const acknowledgeWarning = async () => {
+    const warningId = standing?.warning?.id;
+    if (!warningId || acknowledgingWarning) return;
+    setAcknowledgingWarning(true);
+    try {
+      await acknowledgeAccountStandingWarning(warningId);
+      await standingState.refresh();
+    } catch {
+      Alert.alert(
+        t("accountStanding.warning.errorTitle"),
+        t("accountStanding.warning.errorBody"),
+      );
+    } finally {
+      setAcknowledgingWarning(false);
     }
   };
 
@@ -184,6 +215,15 @@ function StandingNotice({
         ) : null}
         {kind === "messagingRestricted" ? (
           <ActionButton label={t("accountStanding.continue")} onPress={standingState.acknowledge} />
+        ) : null}
+        {kind === "warning" ? (
+          <ActionButton
+            disabled={acknowledgingWarning}
+            label={acknowledgingWarning
+              ? t("common.loading")
+              : t("accountStanding.warning.acknowledge")}
+            onPress={() => void acknowledgeWarning()}
+          />
         ) : null}
         <ActionButton
           label={t("accountStanding.support")}

@@ -181,6 +181,7 @@ export {
   submitModerationReportV2,
 } from './moderationReports';
 export {
+  acknowledgeMyModerationWarning,
   getMyAccountStanding,
   onAccountStandingChanged,
   submitMyModerationAppeal,

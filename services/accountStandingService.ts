@@ -13,6 +13,10 @@ const submitAppeal = httpsCallable<
   { explanation: string; revision: number },
   { appealStatus: "submitted"; alreadySubmitted: boolean }
 >(functions, "submitMyModerationAppeal");
+const acknowledgeWarning = httpsCallable<
+  { warningId: string },
+  { acknowledged: true; alreadyAcknowledged: boolean }
+>(functions, "acknowledgeMyModerationWarning");
 
 let standingRequest: { uid: string; promise: Promise<AccountStanding> } | null = null;
 
@@ -38,6 +42,10 @@ export async function submitAccountStandingAppeal(
   revision: number,
 ) {
   return (await submitAppeal({ explanation, revision })).data;
+}
+
+export async function acknowledgeAccountStandingWarning(warningId: string) {
+  return (await acknowledgeWarning({ warningId })).data;
 }
 
 export function subscribeToMyAccountStanding(

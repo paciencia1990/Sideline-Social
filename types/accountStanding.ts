@@ -10,6 +10,12 @@ export type AccountStanding = {
   expiresAt: string | null;
   publicReasonCode: string;
   revision: number;
+  warning?: {
+    pending: true;
+    id: string;
+    publicReasonCode: string;
+    effectiveAt: string | null;
+  } | null;
   appeal: {
     available: boolean;
     status: "none" | "submitted" | "resolved";

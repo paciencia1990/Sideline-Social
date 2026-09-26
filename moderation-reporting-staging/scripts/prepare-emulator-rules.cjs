@@ -6,7 +6,7 @@ const { dirname, resolve, sep } = require("node:path");
 
 const EXPECTED_SHA256 = "08e41d2abf8756ece597bcdae2356b35830d672251712370f13bef5ccd8b259d";
 const codebaseRoot = resolve(__dirname, "..");
-const consoleRoot = resolve(codebaseRoot, "..", "..", "Sideline_Social_Safety_Console_Phase2");
+const consoleRoot = resolve(codebaseRoot, "..", "..", "safety-console");
 const canonicalRules = resolve(consoleRoot, "firebase", "staging-firestore.rules");
 const destination = resolve(codebaseRoot, "emulator", "staging-firestore.rules");
 

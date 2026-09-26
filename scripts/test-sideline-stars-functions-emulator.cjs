@@ -64,22 +64,24 @@ async function run() {
   assert.equal(firstSeasonRetry.alreadyCreated, true);
   assert.equal((await db.collection("squads").doc(squadId).collection("seasons").get()).size, 1);
   assert.equal(secondSeason.status, "active");
+  const fixtureStartDate = calendarDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000));
+  const fixtureEndDate = calendarDate(new Date(Date.now() + 83 * 24 * 60 * 60 * 1000));
   const fallFixture = (await createSeason({
     squadId: fallFixtureSquadId,
-    name: "Fall 2026",
-    startDate: "2026-09-12",
-    endDate: "2026-11-20",
+    name: "Future Fixture",
+    startDate: fixtureStartDate,
+    endDate: fixtureEndDate,
     timeZone: "America/New_York",
     idempotencyKey: "fall-2026-fixture-request",
   })).data;
   const fallDocument = (await db.collection("squads").doc(fallFixtureSquadId).collection("seasons").doc(fallFixture.seasonId).get()).data();
-  assert.equal(fallDocument.startDateKey, "2026-09-12");
-  assert.equal(fallDocument.endDateKey, "2026-11-20");
+  assert.equal(fallDocument.startDateKey, fixtureStartDate);
+  assert.equal(fallDocument.endDateKey, fixtureEndDate);
   assert.equal(fallDocument.timeZone, "America/New_York");
   assert.equal(typeof fallDocument.startAt.toDate, "function", "Firestore stores canonical Timestamp values");
   const fallResponse = (await httpsCallable(parentA.functions, "getSquadSeasons")({ squadId: fallFixtureSquadId })).data;
-  assert.equal(fallResponse.seasons[0].startDateKey, "2026-09-12");
-  assert.equal(fallResponse.seasons[0].endDateKey, "2026-11-20");
+  assert.equal(fallResponse.seasons[0].startDateKey, fixtureStartDate);
+  assert.equal(fallResponse.seasons[0].endDateKey, fixtureEndDate);
   assert.equal(typeof fallResponse.seasons[0].startAtMs, "number", "callables return method-free timestamps as milliseconds");
   await membership(fallFixtureSquadId, parentA.uid, "left", "away");
   await assert.rejects(
