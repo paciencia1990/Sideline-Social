@@ -122,7 +122,9 @@ assert.deepEqual(
 const ios = load("ios", { GOOGLE_SERVICES_JSON_ANDROID_STAGING: undefined });
 assert.equal(ios.ios.bundleIdentifier, "com.sidelinesocial.app");
 assert.equal(ios.ios.googleServicesFile, iosFile);
-assert.equal(ios.ios.config.googleMapsApiKey, "synthetic-ios-maps-key");
+assert.equal(ios.ios.config?.googleMapsApiKey, undefined);
+assert.equal(ios.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === "react-native-maps")[1].iosGoogleMapsApiKey, "synthetic-ios-maps-key");
+assert.equal(android.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === "react-native-maps")[1].androidGoogleMapsApiKey, "synthetic-android-maps-key");
 assert.equal(ios.extra.authProviders.googleWebClientId, stagingWebClientId, "iOS preserves its staging-project client pairing");
 assert.deepEqual(
   ios.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === "react-native-nitro-google-signin"),

@@ -107,6 +107,8 @@
     "test:coach-ai-eval": "node scripts/test-coach-ai-eval.cjs",
     "test:coach-ai-environment": "tsx scripts/test-coach-ai-environment.ts && node scripts/test-coach-ai-native-config.cjs && node scripts/test-coach-ai-compiled-environment.cjs",
     "test:staging-acceptance-config": "node scripts/test-staging-acceptance-config.cjs",
+    "test:ios-maps-prebuild": "node scripts/test-ios-maps-prebuild.cjs",
+    "test:eas-archive": "node scripts/test-eas-archive.cjs",
     "test:external-testing-config": "node scripts/test-external-testing-config.cjs",
     "test:firebase-emulator-policy": "tsx scripts/test-firebase-emulator-policy.ts",
     "test:coach-ai-preview-bundle": "npx.cmd eas-cli@latest env:exec preview scripts\\run-coach-ai-preview-bundle.cmd --non-interactive",

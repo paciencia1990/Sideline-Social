@@ -1,0 +1,51 @@
+# Node & Expo
+node_modules/
+npm-cache/
+.npm-cache/
+.npm-install-cache/
+.expo/
+.expo-shared/
+
+# IDE junk
+.idea/
+.vscode/
+*.iml
+
+# Logs & temp
+*.log
+*.tmp
+.env.local
+.env.*.local
+functions/.env.*
+functions/.secret.local
+
+# OS junk
+.DS_Store
+
+# Build outputs
+dist/
+build/
+
+# Codex temp files
+codex-write-test.tmp
+tree.txt
+functions/lib/
+
+/moderation-reporting-staging/.env.sideline-social-staging-2026
+# Firebase Android development and staging-flavor configs are injected from EAS file variables.
+android/app/src/debug/google-services.json
+GoogleService-Info.ios.plist
+android/app/src/staging/google-services.json
+android/app/src/production/google-services.json
+
+
+# EAS-only exclusions. EAS replaces ALL nested .gitignore rules with this file.
+# Retain every application source, asset, plugin and authoritative Android input.
+.git
+android/**/.gradle/
+android/**/.idea/
+android/**/.cxx/
+android/**/.cxx-staging-libs/
+android/**/local.properties
+*.hprof
+*.jsbundle

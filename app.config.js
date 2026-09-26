@@ -264,9 +264,6 @@ module.exports = ({ config }) => ({
     bundleIdentifier: IOS_BUNDLE_IDENTIFIER,
     usesAppleSignIn: true,
     icon: "./assets/images/icon-ios.png",
-    ...(IOS_MAPS_API_KEY
-      ? { config: { googleMapsApiKey: IOS_MAPS_API_KEY } }
-      : {}),
     ...(EFFECTIVE_IOS_GOOGLE_SERVICES_FILE
       ? { googleServicesFile: EFFECTIVE_IOS_GOOGLE_SERVICES_FILE }
       : {}),
@@ -330,6 +327,15 @@ module.exports = ({ config }) => ({
 
   plugins: [
     "./plugins/withAndroidBackupProtection",
+    // Maps 1.27 uses its own plugin and the react-native-maps/Google subspec.
+    // Keep Android's existing key selection and native project unchanged.
+    [
+      "react-native-maps",
+      {
+        iosGoogleMapsApiKey: IOS_MAPS_API_KEY,
+        androidGoogleMapsApiKey: ANDROID_MAPS_API_KEY,
+      },
+    ],
     "expo-router",
     "expo-apple-authentication",
     ...(GOOGLE_SIGN_IN_PLUGIN ? [GOOGLE_SIGN_IN_PLUGIN] : []),
