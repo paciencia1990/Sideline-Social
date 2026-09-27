@@ -79,7 +79,9 @@ assert.match(chatScreen, /options=\{FRIEND_CHAT_QUICK_REACTIONS\}/);
 assert.match(chatScreen, /onMore=\{\(\) => setReactionPickerVisible\(true\)\}/);
 assert.match(chatScreen, /categories=\{reactionCategories\}/);
 assert.doesNotMatch(chatScreen, /openMessageActionsFromTray/);
-assert.doesNotMatch(chatScreen, /Clipboard/);
+assert.match(chatScreen, /import \* as Clipboard from "expo-clipboard"/);
+assert.doesNotMatch(chatScreen, /Clipboard[\s\S]*from "react-native"/u);
+assert.doesNotMatch(chatScreen, /@react-native-clipboard\/clipboard/);
 
 assert.match(messageBubble, /<Pressable/);
 assert.match(messageBubble, /onLongPress=\{openReactionTray\}/);
@@ -101,8 +103,9 @@ assert.doesNotMatch(messageBubble, /numberOfLines=\{1\}[\s\S]*message\.text/u, "
 assert.doesNotMatch(chatScreen, /messageMenu:/);
 
 assert.match(chatScreen, /setFriendChatMessagesStarred\(chatId, selectedMessages\.map/);
-assert.match(chatScreen, /deleteFriendChatMessagesForMe\(chatId, otherMessages\.map/);
-assert.match(chatScreen, /removeOwnFriendChatMessage\(chatId, message\.messageId\)/);
+assert.match(chatScreen, /executeFriendChatDeletion\(\{/);
+assert.match(chatScreen, /deleteFromBackend:[\s\S]*deleteFriendChatMessagesForMe\(chatId, messageIds\)/u);
+assert.match(chatScreen, /Promise\.all\(messageIds\.map\(\(messageId\) => deleteFriendChatMessageForEveryone\(chatId, messageId\)\)\)/);
 assert.match(chatScreen, /forwardFriendChatMessages\([\s\S]*clientForwardId/u);
 assert.match(chatScreen, /pinFriendChatMessage\(chatId, message\.messageId, "7d"\)/);
 assert.match(chatScreen, /unpinFriendChatMessage\(chatId, message\.messageId\)/);
@@ -131,8 +134,9 @@ assert.match(overflowMenu, /action\.destructive/);
 assert.match(imageMessage, /onPress=\{handlePress\}/, "quick tapping an image opens the explicit photo actions menu");
 assert.match(imageMessage, /onLongPress=\{handleLongPress\}/, "long pressing an image still opens reactions and selection");
 assert.match(imageMessage, /chat\.viewPhoto/);
-assert.match(imageMessage, /chat\.forwardPhoto/);
-assert.match(imageMessage, /chat\.savePhoto/);
+assert.match(chatScreen, /const canForwardSelection =/);
+assert.match(chatScreen, /accessibilityLabel=\{t\("chat\.forward"\)\}/);
+assert.match(chatScreen, /chat\.savePhoto/);
 assert.match(voicePlayer, /onPress=\{toggle\}/, "voice playback keeps its existing quick-tap control");
 
 for (const expected of [
@@ -143,8 +147,10 @@ for (const expected of [
   "selectedMessages",
   "replyingTo",
   "forwardMessages",
-  "copyUnavailable",
-  "translateUnavailable",
+  "reply",
+  "copy",
+  "messageCopied",
+  "copyFailed",
   "starredMessages",
   "noStarredMessages",
 ]) {

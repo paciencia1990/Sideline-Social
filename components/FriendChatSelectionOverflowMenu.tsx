@@ -49,6 +49,7 @@ export function FriendChatSelectionOverflowMenu({ actions, anchor, dismissLabel,
         <View onLayout={(event) => setHeight(event.nativeEvent.layout.height)} style={[styles.menu, { left: position.left, top: position.top }]}>
           {actions.map((action) => (
             <TouchableOpacity
+              accessibilityLabel={action.label}
               accessibilityRole="button"
               accessibilityState={{ disabled: action.disabled }}
               disabled={action.disabled}

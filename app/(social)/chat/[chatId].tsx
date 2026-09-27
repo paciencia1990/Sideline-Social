@@ -21,6 +21,7 @@ import {
   type ViewToken,
 } from "react-native";
 import * as Haptics from "expo-haptics";
+import * as Clipboard from "expo-clipboard";
 import { ArrowLeft, Check, Forward, Image as ImageIcon, Mic, MoreHorizontal, Pin, Reply, Send, Star, StarOff, Trash2, X } from "lucide-react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -94,6 +95,7 @@ import {
 } from "@/services/friendChatImageService";
 import { saveFriendChatPhoto } from "@/services/friendChatPhotoSaveService";
 import { deleteLocalVoiceMemo } from "@/services/voiceMemoFileService";
+import { copySelectedFriendChatText, friendChatSingleMessageEligibility } from "@/utils/friendChatCopyCore";
 import { clearPersistedVoicePlaybackArtifacts } from "@/services/voicePlaybackCleanupService";
 import type { LocalVoiceMemoDraft } from "@/types/teamVoiceMessaging";
 import { FriendChatPhotoSaveError } from "@/utils/friendChatPhotoSaveCore";
@@ -637,10 +639,10 @@ export default function FriendConversationScreen() {
 
   const startReply = useCallback(() => {
     const message = selectedMessages[0];
-    if (!message || selectedMessages.length !== 1) return;
+    if (!friendChatSingleMessageEligibility(selectedMessageIds, selectedMessages, user?.uid, unavailableImageMessageIds).reply || !message) return;
     setReplyDraft(makeReplyDraft(message));
     clearSelection();
-  }, [clearSelection, makeReplyDraft, selectedMessages]);
+  }, [clearSelection, makeReplyDraft, selectedMessageIds, selectedMessages, unavailableImageMessageIds, user?.uid]);
 
   const toggleSelection = useCallback((message: FriendChatMessage) => {
     if (!isFriendChatMessageInteractive(message)) return;
@@ -869,30 +871,40 @@ export default function FriendConversationScreen() {
   }, [actionMessage, chatId, runDeleteMessages, selectedActive, selectedMine, t]);
 
   const selectedReaction = reactionMessage?.reactions.find((reaction) => reaction.reactedBySelf)?.emoji ?? null;
-  const reportAction = actionMessage && !selectedMine && selectedActive && chatId
+  const reportAction = actionMessage && chatId && friendChatSingleMessageEligibility(
+    [actionMessage.messageId], [actionMessage], user?.uid, unavailableImageMessageIds,
+  ).report
     ? { chatId, messageId: actionMessage.messageId, reportedUserId: actionMessage.senderUserId }
     : null;
   const selectedCount = selectedMessages.length;
   const allSelectedStarred = selectedMessages.length > 0 && selectedMessages.every((message) => message.starredBySelf);
-  const canReplyToSelection = selectedMessages.length === 1;
+  const singleMessageActions = friendChatSingleMessageEligibility(selectedMessageIds, selectedMessages, user?.uid, unavailableImageMessageIds);
+  const canReplyToSelection = singleMessageActions.reply;
   const canForwardSelection = selectedMessages.length > 0 && selectedMessages.every((message) =>
     isFriendChatMessageForwardable(message) && !unavailableImageMessageIds.includes(message.messageId));
-  const canPinSelection = Boolean(selectedMessages.length === 1 && access &&
+  const canPinSelection = Boolean(canReplyToSelection && access &&
     (access.conversation.conversationType === "direct" || access.member.role === "owner" || access.member.role === "admin"));
   const selectedPinned = selectedMessages.length === 1 && access?.conversation.pinnedMessage?.messageId === selectedMessages[0].messageId;
-  const selectedIncoming = selectedMessages.length === 1 && selectedMessages[0].senderUserId !== user?.uid;
-  const selectedGroupIncoming = selectedIncoming && access?.conversation.conversationType === "group";
-  const selectedText = selectedMessages.length === 1 && selectedMessages[0].messageType === "text";
+  const selectedIncoming = singleMessageActions.report;
+  const canCopySelection = singleMessageActions.copy;
+  const runCopyAction = useCallback(async () => {
+    if (!canCopySelection) return;
+    const result = await copySelectedFriendChatText(selectedMessageIds, selectedMessages, Clipboard.setStringAsync);
+    if (result === "copied") {
+      clearSelection();
+      Alert.alert(t("chat.messageCopied"));
+    } else if (result === "failed") {
+      Alert.alert(t("chat.copyFailed"));
+    }
+  }, [canCopySelection, clearSelection, selectedMessageIds, selectedMessages, t]);
   const overflowActions = useMemo<FriendChatOverflowAction[]>(() => {
     const actions: FriendChatOverflowAction[] = [];
-    if (selectedText) actions.push({ disabled: true, id: "copy", label: t("chat.copyUnavailable"), onPress: () => undefined });
+    if (canCopySelection) actions.push({ id: "copy", label: t("chat.copy"), onPress: () => { void runCopyAction(); } });
     if (canReplyToSelection) actions.push({ id: "reply", label: t("chat.reply"), onPress: startReply });
     if (canPinSelection) actions.push({ id: "pin", label: selectedPinned ? t("chat.unpinMessage") : t("chat.pinForSevenDays"), onPress: runPinAction });
-    if (selectedGroupIncoming) actions.push({ disabled: true, id: "reply-privately", label: t("chat.replyPrivatelyUnavailable"), onPress: () => undefined });
-    if (selectedText) actions.push({ disabled: true, id: "translate", label: t("chat.translateUnavailable"), onPress: () => undefined });
     if (selectedIncoming) actions.push({ id: "report", label: t("moderation.reportMessage"), onPress: () => { setActionMessage(selectedMessages[0]); clearSelection(); } });
     return actions;
-  }, [canPinSelection, canReplyToSelection, clearSelection, runPinAction, selectedGroupIncoming, selectedIncoming, selectedMessages, selectedPinned, selectedText, startReply, t]);
+  }, [canCopySelection, canPinSelection, canReplyToSelection, clearSelection, runCopyAction, runPinAction, selectedIncoming, selectedMessages, selectedPinned, startReply, t]);
   const reactionCategories = useMemo(() => [
     { key: "quick", label: t("chat.reactionCategories.quick"), options: FRIEND_CHAT_QUICK_REACTIONS },
     { key: "support", label: t("chat.reactionCategories.support"), options: FRIEND_CHAT_REACTIONS.slice(8, 14) },
