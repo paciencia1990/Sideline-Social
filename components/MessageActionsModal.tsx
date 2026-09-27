@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { X } from "lucide-react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
@@ -21,6 +24,7 @@ import {
   type ModerationReasonCode,
   type ModerationReportReceipt,
 } from "@/services/moderationReportService";
+import { useModerationReportReadiness } from "@/hooks/useModerationReportReadiness";
 
 export type MessageReportReason = ModerationReasonCode;
 
@@ -64,6 +68,8 @@ const REPORT_REASONS: readonly MessageReportReason[] = MODERATION_REASON_CODES;
 
 export function MessageActionsModal({ actions, onDismiss, reactions, report, visible }: Props) {
   const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
+  const reportReadiness = useModerationReportReadiness();
   const [phase, setPhase] = useState<"actions" | "confirmation" | "report">("actions");
   const [pendingAction, setPendingAction] = useState<MessageModalAction | null>(null);
   const [reason, setReason] = useState<MessageReportReason | null>(null);
@@ -135,7 +141,7 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
   };
 
   const submitReport = async () => {
-    if (!report || !reason || submitting) return;
+    if (!report || !reason || reportReadiness !== "ready" || submitting) return;
     const operationId = ++operationIdRef.current;
     setSubmitting(true);
     setError(null);
@@ -182,7 +188,15 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
           onPress={dismiss}
           style={styles.backdropDismiss}
         />
-        <View accessibilityViewIsModal style={styles.sheet}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={0}
+          style={styles.keyboardContainer}
+        >
+        <View
+          accessibilityViewIsModal
+          style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, Spacing.lg) }]}
+        >
           <View style={styles.header}>
             <Text accessibilityRole="header" style={styles.title}>{title}</Text>
             <TouchableOpacity
@@ -276,7 +290,14 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
           ) : null}
 
           {phase === "report" ? (
-            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              automaticallyAdjustKeyboardInsets
+              contentContainerStyle={[styles.content, styles.reportContent]}
+              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+              style={styles.reportScroll}
+            >
               <Text style={styles.prompt}>{t("moderation.reportQuestion")}</Text>
               <View accessibilityRole="radiogroup" style={styles.reasons}>
                 {REPORT_REASONS.map((option) => {
@@ -298,6 +319,11 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
                   );
                 })}
               </View>
+              {reason ? (
+                <Text accessibilityLiveRegion="polite" style={styles.selectedReason}>
+                  {t("moderation.selectedReason", { reason: t(`moderation.reasons.${reason}`) })}
+                </Text>
+              ) : null}
               <Text style={styles.fieldLabel}>{t("moderation.explanationLabel")}</Text>
               <TextInput
                 accessibilityLabel={t("moderation.explanationLabel")}
@@ -324,6 +350,22 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
                   />
                 </View>
               ) : null}
+              {reportReadiness === "checking" ? (
+                <View accessibilityLiveRegion="polite" style={styles.readinessRow}>
+                  <ActivityIndicator color={Colors.textHeading} size="small" />
+                  <Text style={styles.readinessText}>{t("moderation.appCheckChecking")}</Text>
+                </View>
+              ) : null}
+              {reportReadiness === "unavailable" ? (
+                <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+                  {t("moderation.appCheckUnavailable")}
+                </Text>
+              ) : null}
+              {reportReadiness === "signedOut" ? (
+                <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+                  {t("moderation.reportSignInRequired")}
+                </Text>
+              ) : null}
               <View style={styles.buttonRow}>
                 <TouchableOpacity
                   accessibilityRole="button"
@@ -334,10 +376,16 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
                 </TouchableOpacity>
                 <TouchableOpacity
                   accessibilityRole="button"
-                  accessibilityState={{ busy: submitting, disabled: !reason || submitting }}
-                  disabled={!reason || submitting}
+                  accessibilityState={{
+                    busy: submitting || reportReadiness === "checking",
+                    disabled: !reason || reportReadiness !== "ready" || submitting,
+                  }}
+                  disabled={!reason || reportReadiness !== "ready" || submitting}
                   onPress={() => { void submitReport(); }}
-                  style={[styles.primaryButton, (!reason || submitting) && styles.disabled]}
+                  style={[
+                    styles.primaryButton,
+                    (!reason || reportReadiness !== "ready" || submitting) && styles.disabled,
+                  ]}
                 >
                   {submitting
                     ? (
@@ -364,6 +412,7 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
             </TouchableOpacity>
           ) : null}
         </View>
+        </KeyboardAvoidingView>
       </View>
     </Modal>
   );
@@ -376,13 +425,13 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   backdropDismiss: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
+  keyboardContainer: { flex: 1, justifyContent: "flex-end" },
   sheet: {
     backgroundColor: Colors.surface,
     borderTopLeftRadius: Radius.card,
     borderTopRightRadius: Radius.card,
     gap: Spacing.md,
     maxHeight: "92%",
-    paddingBottom: Spacing.xl,
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
     ...Shadow.card,
@@ -391,6 +440,8 @@ const styles = StyleSheet.create({
   title: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodyBold, fontSize: 20 },
   close: { alignItems: "center", justifyContent: "center", minHeight: 44, minWidth: 44 },
   content: { gap: Spacing.md },
+  reportContent: { paddingBottom: Spacing.sm },
+  reportScroll: { flexShrink: 1 },
   action: {
     alignItems: "center",
     borderColor: Colors.secondary,
@@ -417,9 +468,21 @@ const styles = StyleSheet.create({
   reactionRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   reactionTitle: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, marginBottom: Spacing.sm },
   prompt: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 15, lineHeight: 22 },
-  reasons: { gap: Spacing.xs, maxHeight: 320 },
-  reason: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, minHeight: 48 },
-  reasonText: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodyRegular, fontSize: 15 },
+  reasons: { gap: Spacing.xs },
+  reason: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: Spacing.sm,
+    minHeight: 48,
+    paddingVertical: Spacing.xs,
+  },
+  reasonText: {
+    color: Colors.textHeading,
+    flex: 1,
+    fontFamily: Typography.bodyRegular,
+    fontSize: 15,
+    lineHeight: 22,
+  },
   radio: {
     alignItems: "center",
     borderColor: Colors.textPrimary,
@@ -427,10 +490,17 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     height: 20,
     justifyContent: "center",
+    marginTop: 1,
     width: 20,
   },
   radioSelected: { borderColor: Colors.primary },
   radioDot: { backgroundColor: Colors.primary, borderRadius: 5, height: 10, width: 10 },
+  selectedReason: {
+    color: Colors.textHeading,
+    fontFamily: Typography.bodySemiBold,
+    fontSize: 13,
+    lineHeight: 19,
+  },
   fieldLabel: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   explanationInput: {
     borderColor: Colors.secondary,
@@ -441,10 +511,18 @@ const styles = StyleSheet.create({
     minHeight: 96,
     padding: Spacing.sm,
   },
-  blockRow: { alignItems: "center", flexDirection: "row", gap: Spacing.md },
+  blockRow: { alignItems: "flex-start", flexDirection: "row", gap: Spacing.md },
   blockText: { flex: 1, gap: Spacing.xs },
   blockHint: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12, lineHeight: 17 },
-  buttonRow: { flexDirection: "row", gap: Spacing.sm },
+  readinessRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
+  readinessText: {
+    color: Colors.textPrimary,
+    flex: 1,
+    fontFamily: Typography.bodyRegular,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  buttonRow: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
   secondaryButton: {
     alignItems: "center",
     borderColor: Colors.primary,
@@ -453,6 +531,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     minHeight: 48,
+    minWidth: 132,
     paddingHorizontal: Spacing.sm,
   },
   secondaryButtonText: { color: Colors.primary, fontFamily: Typography.bodySemiBold, textAlign: "center" },
@@ -463,6 +542,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     minHeight: 48,
+    minWidth: 132,
     paddingHorizontal: Spacing.sm,
   },
   destructiveButton: { backgroundColor: Colors.primary },

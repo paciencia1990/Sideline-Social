@@ -14,8 +14,21 @@ assert.match(modal, /onPress=\{dismiss\}[\s\S]*styles\.backdropDismiss/);
 assert.match(modal, /accessibilityViewIsModal/);
 assert.match(modal, /accessibilityRole="radio"/);
 assert.match(modal, /setReason\(option\)/);
+assert.match(modal, /KeyboardAvoidingView/);
+assert.match(modal, /automaticallyAdjustKeyboardInsets/);
+assert.match(modal, /keyboardDismissMode=\{Platform\.OS === "ios" \? "interactive" : "on-drag"\}/);
+assert.match(modal, /style=\{styles\.reportScroll\}/);
+assert.match(modal, /contentContainerStyle=\{\[styles\.content, styles\.reportContent\]\}/);
+assert.match(modal, /showsVerticalScrollIndicator/);
+assert.match(modal, /selectedReason/);
+assert.match(modal, /useSafeAreaInsets/);
+assert.doesNotMatch(modal, /reasons:\s*\{[^}]*maxHeight/);
 assert.match(modal, /onPress=\{\(\) => \{ void submitReport\(\); \}\}/);
-assert.match(modal, /if \(!report \|\| !reason \|\| submitting\) return/);
+assert.match(modal, /if \(!report \|\| !reason \|\| reportReadiness !== "ready" \|\| submitting\) return/);
+assert.match(modal, /disabled=\{!reason \|\| reportReadiness !== "ready" \|\| submitting\}/);
+assert.match(modal, /moderation\.appCheckChecking/);
+assert.match(modal, /moderation\.appCheckUnavailable/);
+assert.match(modal, /moderation\.reportSignInRequired/);
 assert.match(modal, /setSubmitting\(true\)/);
 assert.match(modal, /setError\(report\.errorMessage\)/);
 assert.match(modal, /accessibilityLiveRegion="assertive"/);
@@ -68,6 +81,8 @@ for (const expected of [
   "reportQuestion: 'Why are you reporting this message?'",
   "submitReport: 'Submit Report'",
   "submitting: 'Submitting'",
+  "appCheckChecking: 'Preparing secure report submission…'",
+  "selectedReason: 'Selected reason: {{reason}}'",
   "privacy: 'Private or child information'",
   "harassment: 'Harassment or threats'",
   "offensive: 'Offensive content'",
@@ -79,9 +94,31 @@ for (const expected of [
   "reportMessage: 'Reportar mensaje'",
   "reportQuestion: '\\u00bfPor qu\\u00e9 reportas este mensaje?'",
   "submitReport: 'Enviar reporte'",
+  "appCheckChecking: 'Preparando el envío seguro del reporte…'",
+  "selectedReason: 'Motivo seleccionado: {{reason}}'",
   "child_safety: 'Seguridad infantil'",
 ]) {
   assert.equal(translations.includes(expected), true, `${expected} is localized`);
+}
+
+for (const reason of [
+  "harassment_bullying",
+  "hate_discrimination",
+  "threat_violence",
+  "sexual_content",
+  "child_safety",
+  "sexual_extortion",
+  "nonconsensual_intimate_image",
+  "doxxing_privacy",
+  "stalking",
+  "self_harm",
+  "spam_scam_impersonation",
+  "illegal_activity",
+  "offline_behavior",
+  "ai_unsafe_output",
+  "other",
+]) {
+  assert.ok((translations.match(new RegExp(`\\b${reason}:`, "g")) || []).length >= 2, `${reason} has English and Spanish labels`);
 }
 
 assert.equal(fs.existsSync(path.join(process.cwd(), "utils", "contentReporting.ts")), false);

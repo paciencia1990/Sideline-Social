@@ -327,6 +327,16 @@ module.exports = ({ config }) => ({
 
   plugins: [
     "./plugins/withAndroidBackupProtection",
+    "@react-native-firebase/app",
+    "@react-native-firebase/app-check",
+    [
+      "expo-build-properties",
+      {
+        ios: {
+          useFrameworks: "static",
+        },
+      },
+    ],
     // Maps 1.27 uses its own plugin and the react-native-maps/Google subspec.
     // Keep Android's existing key selection and native project unchanged.
     [

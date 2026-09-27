@@ -14,6 +14,7 @@ import { getStorage } from "firebase/storage";
 import { Platform } from "react-native";
 import { createAsyncStoragePersistence } from "@/utils/firebaseAuthPersistence";
 
+import { startFirebaseAppCheck } from "@/config/firebaseAppCheck";
 import { resolveFirebaseClientConfig } from "@/config/firebaseEnvironment";
 import {
   assertNoImplicitFirebaseEmulatorDefaults,
@@ -72,6 +73,7 @@ export const firebaseApp = getApps().length
   ? getApp()
   : initializeApp(firebaseConfig);
 export const app = firebaseApp;
+export const firebaseAppCheckReady = startFirebaseAppCheck(firebaseApp);
 
 const firebaseAuth = initializeReactNativeAuth(firebaseApp);
 const firebaseDb = getFirestore(firebaseApp);

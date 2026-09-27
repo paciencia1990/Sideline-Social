@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
@@ -9,6 +9,7 @@ import { PrimaryButton } from "@/components/PrimaryButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SettingsBackButton } from "@/components/SettingsBackButton";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useModerationReportReadiness } from "@/hooks/useModerationReportReadiness";
 import { blockFriendChatUser } from "@/services/chatService";
 import {
   listMyModerationReports,
@@ -20,6 +21,7 @@ import {
 
 export default function SafetyScreen() {
   const { t } = useTranslation();
+  const reportReadiness = useModerationReportReadiness();
   const params = useLocalSearchParams<{
     conversationId?: string | string[];
     reportedUserId?: string | string[];
@@ -34,6 +36,10 @@ export default function SafetyScreen() {
   const [reports, setReports] = useState<MyModerationReport[]>([]);
 
   const refreshReports = useCallback(async () => {
+    if (reportReadiness !== "ready") {
+      setLoadingReports(false);
+      return;
+    }
     setLoadingReports(true);
     try {
       setReports(await listMyModerationReports());
@@ -42,19 +48,19 @@ export default function SafetyScreen() {
     } finally {
       setLoadingReports(false);
     }
-  }, []);
+  }, [reportReadiness]);
 
   useEffect(() => {
     void refreshReports();
   }, [refreshReports]);
 
   const canSubmit = useMemo(() => {
-    if (!reason || submitting) return false;
+    if (!reason || reportReadiness !== "ready" || submitting) return false;
     return Boolean(reportedUserId) || explanation.trim().length >= 20;
-  }, [explanation, reason, reportedUserId, submitting]);
+  }, [explanation, reason, reportReadiness, reportedUserId, submitting]);
 
   const submit = useCallback(async () => {
-    if (!reason || !canSubmit) return;
+    if (!reason || reportReadiness !== "ready" || !canSubmit) return;
     setSubmitting(true);
     try {
       const receipt = await submitModerationReport({
@@ -88,7 +94,7 @@ export default function SafetyScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [blockRequested, canSubmit, conversationId, explanation, reason, refreshReports, reportedUserId, t]);
+  }, [blockRequested, canSubmit, conversationId, explanation, reason, refreshReports, reportReadiness, reportedUserId, t]);
 
   return (
     <ScreenWrapper>
@@ -149,6 +155,22 @@ export default function SafetyScreen() {
               />
             </View>
           ) : null}
+          {reportReadiness === "checking" ? (
+            <View accessibilityLiveRegion="polite" style={styles.readinessRow}>
+              <ActivityIndicator color={Colors.textHeading} size="small" />
+              <Text style={styles.body}>{t("moderation.appCheckChecking")}</Text>
+            </View>
+          ) : null}
+          {reportReadiness === "unavailable" ? (
+            <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+              {t("moderation.appCheckUnavailable")}
+            </Text>
+          ) : null}
+          {reportReadiness === "signedOut" ? (
+            <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+              {t("moderation.reportSignInRequired")}
+            </Text>
+          ) : null}
           <PrimaryButton
             disabled={!canSubmit}
             loading={submitting}
@@ -185,6 +207,7 @@ const styles = StyleSheet.create({
   body: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, lineHeight: 21 },
   card: { gap: Spacing.md },
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
+  error: { color: Colors.primary, fontFamily: Typography.bodySemiBold, lineHeight: 20 },
   grow: { flex: 1 },
   heading: { gap: Spacing.xs },
   hint: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12, lineHeight: 17 },
@@ -196,6 +219,7 @@ const styles = StyleSheet.create({
   reasonText: { color: Colors.textHeading, fontFamily: Typography.bodyMedium, fontSize: 13 },
   reasonTextSelected: { color: "#FFFFFF" },
   reasons: { gap: Spacing.xs },
+  readinessRow: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
   reportReceipt: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 14 },
   reportRow: { alignItems: "center", borderTopColor: Colors.secondary, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: "row", gap: Spacing.sm, paddingTop: Spacing.sm },
   sectionTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 18 },

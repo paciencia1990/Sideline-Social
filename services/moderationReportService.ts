@@ -1,7 +1,8 @@
 import * as Crypto from "expo-crypto";
 import { httpsCallable } from "firebase/functions";
 
-import { functions } from "@/config/firebase";
+import { requireFirebaseAppCheckReady } from "@/config/firebaseAppCheck";
+import { auth, functions } from "@/config/firebase";
 
 export const MODERATION_REASON_CODES = [
   "harassment_bullying",
@@ -60,6 +61,7 @@ export async function submitModerationReport(input: {
   reason: ModerationReasonCode;
   target: ModerationReportTarget;
 }) {
+  await requireModerationCallableReady();
   const callable = httpsCallable<
     {
       blockRequested: boolean;
@@ -80,11 +82,18 @@ export async function submitModerationReport(input: {
 }
 
 export async function listMyModerationReports() {
+  await requireModerationCallableReady();
   const callable = httpsCallable<Record<string, never>, { reports: MyModerationReport[] }>(
     functions,
     "listMyModerationReports",
   );
   return (await callable({})).data.reports;
+}
+
+export async function requireModerationCallableReady() {
+  await auth.authStateReady();
+  if (!auth.currentUser) throw new Error("auth/sign-in-required");
+  await requireFirebaseAppCheckReady();
 }
 
 export function createModerationClientRequestId() {
