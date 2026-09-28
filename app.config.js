@@ -327,7 +327,17 @@ module.exports = ({ config }) => ({
 
   plugins: [
     "./plugins/withAndroidBackupProtection",
-    "@react-native-firebase/app",
+    [
+      "@react-native-firebase/app",
+      {
+        ios: {
+          // Static frameworks are required by the current native dependency set.
+          // React Native Firebase must therefore resolve Firebase with CocoaPods;
+          // its Swift Package mode cannot be combined with static linkage.
+          disableSPM: true,
+        },
+      },
+    ],
     "@react-native-firebase/app-check",
     [
       "expo-build-properties",

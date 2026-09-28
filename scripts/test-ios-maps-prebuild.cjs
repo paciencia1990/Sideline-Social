@@ -35,6 +35,9 @@ function run(args, env) {
 function inspectGenerated() {
   const ios = path.join(app, "ios");
   const podfile = fs.readFileSync(path.join(ios, "Podfile"), "utf8");
+  assert.equal((podfile.match(/\$RNFirebaseDisableSPM = true/gu) || []).length, 1, "React Native Firebase CocoaPods mode is configured exactly once.");
+  assert(podfile.indexOf("$RNFirebaseDisableSPM = true") < podfile.indexOf("target 'SidelineSocial' do"), "The CocoaPods-mode flag precedes the iOS target.");
+  assert.match(podfile, /use_frameworks! :linkage => podfile_properties\['ios\.useFrameworks'\]\.to_sym/u, "Static-framework linkage remains generated from Expo build properties.");
   assert.doesNotMatch(podfile, /react-native-google-maps/u, "Obsolete podspec must never return.");
   assert.equal((podfile.match(/pod 'react-native-maps\/Google'/gu) || []).length, 1);
   assert(podfile.indexOf("pod 'react-native-maps/Google'") < podfile.indexOf("config = use_native_modules!"));
@@ -71,7 +74,7 @@ function inspectGenerated() {
   assert.match(podspec, /ss\.dependency 'GoogleMaps', '9\.4\.0'/u);
   assert.match(podspec, /ss\.dependency 'Google-Maps-iOS-Utils', '6\.1\.0'/u);
   assert.equal(fs.existsSync(path.join(root, "node_modules/react-native-maps/react-native-google-maps.podspec")), false);
-  return { deploymentTarget: target, mapsPod: "react-native-maps/Google", firebaseCopied: true, googleSignIn: true, appleSignIn: true };
+  return { deploymentTarget: target, mapsPod: "react-native-maps/Google", firebaseDependencyMode: "cocoapods", staticFrameworksPreserved: true, firebaseCopied: true, googleSignIn: true, appleSignIn: true };
 }
 
 try {

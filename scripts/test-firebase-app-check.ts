@@ -65,6 +65,7 @@ assert.ok(readinessPosition >= 0 && readinessPosition < callablePosition, "readi
 const appConfig = read("app.config.js");
 assert.match(appConfig, /"@react-native-firebase\/app"/);
 assert.match(appConfig, /"@react-native-firebase\/app-check"/);
+assert.match(appConfig, /"@react-native-firebase\/app"[\s\S]*ios:\s*\{[\s\S]*disableSPM:\s*true/);
 assert.match(appConfig, /"expo-build-properties"[\s\S]*useFrameworks:\s*"static"/);
 assert.doesNotMatch(appConfig, /APP_CHECK_DEBUG|appCheckDebug|debugToken/);
 
