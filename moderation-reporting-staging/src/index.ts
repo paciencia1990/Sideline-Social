@@ -1,10 +1,15 @@
 import { getApps, initializeApp } from "firebase-admin/app";
 
 const APPROVED_STAGING_PROJECT = "sideline-social-staging-2026";
-const actualProject = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+const configuredProject = process.env.MODERATION_EXPECTED_PROJECT_ID;
+const providerProject = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || undefined;
 const runningInEmulator = process.env.FUNCTIONS_EMULATOR === "true";
 
-if (!runningInEmulator && actualProject !== APPROVED_STAGING_PROJECT) {
+if (
+  !runningInEmulator &&
+  (configuredProject !== APPROVED_STAGING_PROJECT ||
+    (providerProject !== undefined && providerProject !== APPROVED_STAGING_PROJECT))
+) {
   throw new Error("The isolated moderation-reporting codebase is restricted to the approved staging project.");
 }
 

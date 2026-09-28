@@ -79,6 +79,34 @@ assert.equal(
 );
 assert.deepEqual(Object.keys(exportsFromMain.submitModerationReportV2.__endpoint.callableTrigger), []);
 
+const runtimeEntry = resolve(root, packageJson.main);
+function runtimeGuardStatus(overrides) {
+  return spawnSync(process.execPath, ["-e", `require(${JSON.stringify(runtimeEntry)})`], {
+    env: {
+      ...process.env,
+      FUNCTIONS_EMULATOR: "",
+      GCLOUD_PROJECT: "",
+      GOOGLE_CLOUD_PROJECT: "",
+      MODERATION_EXPECTED_PROJECT_ID: "",
+      ...overrides,
+    },
+    encoding: "utf8",
+  }).status;
+}
+assert.equal(runtimeGuardStatus({ MODERATION_EXPECTED_PROJECT_ID: "sideline-social-staging-2026" }), 0);
+assert.equal(runtimeGuardStatus({
+  MODERATION_EXPECTED_PROJECT_ID: "sideline-social-staging-2026",
+  GCLOUD_PROJECT: "sideline-social-staging-2026",
+}), 0);
+for (const rejectedEnvironment of [
+  {},
+  { MODERATION_EXPECTED_PROJECT_ID: "another-project" },
+  { MODERATION_EXPECTED_PROJECT_ID: "sideline-social-staging-2026", GCLOUD_PROJECT: "another-project" },
+  { MODERATION_EXPECTED_PROJECT_ID: "sideline-social-staging-2026", GOOGLE_CLOUD_PROJECT: "another-project" },
+]) {
+  assert.notEqual(runtimeGuardStatus(rejectedEnvironment), 0, "runtime project guard accepted an unsafe project configuration");
+}
+
 function javascriptFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = resolve(directory, entry.name);
