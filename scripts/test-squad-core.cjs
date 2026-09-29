@@ -35,6 +35,23 @@ assert.deepEqual(
   { squadIds: ["softball"], selectedSquadId: "softball" },
   "leaving the selected Squad must fall back safely",
 );
+assert.equal(core.normalizeVenueName("Dr. Phillips Little League"), "doctor phillips little league");
+assert.equal(core.normalizeVenueName("Dr Phillips LL"), "doctor phillips little league");
+assert.equal(core.isPubliclyDiscoverableSquad({ isActive: true }), true, "legacy active Squads remain public");
+for (const hidden of [
+  { isActive: false },
+  { isActive: true, status: "archived" },
+  { isActive: true, status: "deleted" },
+  { isActive: true, archivedAt: 1 },
+  { isActive: true, deletedAt: 1 },
+  { isActive: true, isDiscoverable: false },
+  { isActive: true, discoverable: false },
+  { isActive: true, inviteOnly: true },
+  { isActive: true, visibility: "private" },
+  { isActive: true, joinPolicy: "invite-only" },
+]) {
+  assert.equal(core.isPubliclyDiscoverableSquad(hidden), false, "explicitly unavailable Squads fail closed");
+}
 assert.deepEqual(core.resolveSelectionAfterLeave([], null, "missing"), { squadIds: [], selectedSquadId: null });
 assert.deepEqual(core.resolveSelectionAfterLeave(["baseball"], null, "missing"), { squadIds: ["baseball"], selectedSquadId: "baseball" });
 assert.deepEqual(

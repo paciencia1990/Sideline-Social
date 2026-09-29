@@ -26,6 +26,7 @@ import {
   searchVenueSquads,
   updateMemberLastActive,
 } from "@/services/squadService";
+import { classifySquadCallableError } from "@/utils/squadCallableError";
 import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 
 interface SquadContextType {
@@ -178,7 +179,9 @@ export function SquadProvider({ children }: { children: ReactNode }) {
       logContextDiagnostic("nearby-search", nextError);
       if (requestId === squadSearchRequestId.current) {
         setNearbySquads([]);
-        setError("nearby_load_failed");
+        setError(classifySquadCallableError(nextError) === "service-unavailable"
+          ? "squad_discovery_unavailable"
+          : "nearby_load_failed");
       }
       throw nextError;
     } finally {
@@ -197,7 +200,9 @@ export function SquadProvider({ children }: { children: ReactNode }) {
       logContextDiagnostic("venue-search", nextError);
       if (requestId === squadSearchRequestId.current) {
         setNearbySquads([]);
-        setError("nearby_load_failed");
+        setError(classifySquadCallableError(nextError) === "service-unavailable"
+          ? "squad_discovery_unavailable"
+          : "squad_search_failed");
       }
       throw nextError;
     } finally {

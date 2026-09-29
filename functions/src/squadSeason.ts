@@ -22,7 +22,7 @@ import {
   seasonRangesOverlap,
   type SquadSeasonStatus,
 } from './squadSeasonCore';
-import { getSportDisplayName, normalizeSportId } from './squadCore';
+import { getSportDisplayName, isActiveSquadRecord, normalizeSportId } from './squadCore';
 
 const functions = permanentAccountFunctions(firebaseFunctions);
 const regionalFunctions = functions.region('us-central1');
@@ -134,7 +134,7 @@ async function assertSquadAccess(input: {
   if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to access Squad seasons.');
   const firestore = admin.firestore();
   const squadSnapshot = await firestore.collection('squads').doc(input.squadId).get();
-  if (!squadSnapshot.exists || squadSnapshot.data()?.isActive === false) {
+  if (!squadSnapshot.exists || !isActiveSquadRecord(squadSnapshot.data() ?? {})) {
     throw new functions.https.HttpsError('not-found', 'This Squad is unavailable.');
   }
   const squad = squadSnapshot.data() as SquadData;
@@ -182,7 +182,7 @@ async function assertTransactionSeasonAdmin(input: {
 }) {
   const squadRef = input.firestore.collection('squads').doc(input.squadId);
   const squadSnapshot = await input.transaction.get(squadRef);
-  if (!squadSnapshot.exists || squadSnapshot.data()?.isActive === false) {
+  if (!squadSnapshot.exists || !isActiveSquadRecord(squadSnapshot.data() ?? {})) {
     throw new functions.https.HttpsError('not-found', 'This Squad is unavailable.');
   }
   const squad = squadSnapshot.data() as SquadData;
@@ -403,7 +403,7 @@ export async function synchronizeSquadSeasonStates(squadId: string, now = Timest
       transaction.get(squadRef),
       transaction.get(seasonsRef),
     ]);
-    if (!squadSnapshot.exists || squadSnapshot.data()?.isActive === false) return false;
+    if (!squadSnapshot.exists || !isActiveSquadRecord(squadSnapshot.data() ?? {})) return false;
     const currentSeasonId = typeof squadSnapshot.data()?.currentSeasonId === 'string'
       ? squadSnapshot.data()!.currentSeasonId
       : null;

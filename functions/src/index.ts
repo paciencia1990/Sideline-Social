@@ -118,6 +118,7 @@ import {
   canonicalVenueId,
   deterministicSquadId,
   getSportDisplayName,
+  isPubliclyDiscoverableSquad,
   normalizeSportId,
   normalizeVenueName,
   resolveJoinProjection,
@@ -1025,6 +1026,7 @@ export const findNearbyVenueSportSquads = functions.https.onCall(async (data, co
     .get()));
   const results = new Map<string, ReturnType<typeof nearbySquadProjection> & { distanceMiles: number }>();
   snapshots.forEach((snapshot) => snapshot.docs.forEach((squadSnapshot) => {
+    if (!isPubliclyDiscoverableSquad(squadSnapshot.data())) return;
     const projection = nearbySquadProjection(squadSnapshot);
     if (!projection.venueLocation) return;
     const distanceMiles = distanceBetween(
@@ -1045,13 +1047,30 @@ export const searchVenueSportSquads = functions.https.onCall(async (data, contex
   if (queryText.length < 2 || queryText.length > 80) {
     throw new functions.https.HttpsError('invalid-argument', 'Enter at least two characters of the venue name.');
   }
-  const snapshot = await admin.firestore().collection('squads')
-    .where('isActive', '==', true)
-    .where('normalizedVenueName', '>=', queryText)
-    .where('normalizedVenueName', '<=', `${queryText}\uf8ff`)
-    .limit(50)
-    .get();
-  return { squads: snapshot.docs.map(squadProjection) };
+  const firestore = admin.firestore();
+  const pageSize = 50;
+  const maxScannedPages = 3;
+  const matches: ReturnType<typeof squadProjection>[] = [];
+  let cursor: admin.firestore.QueryDocumentSnapshot | null = null;
+  for (let page = 0; page < maxScannedPages && matches.length < pageSize; page += 1) {
+    let query = firestore.collection('squads')
+      .where('isActive', '==', true)
+      .where('normalizedVenueName', '>=', queryText)
+      .where('normalizedVenueName', '<=', `${queryText}\uf8ff`)
+      .orderBy('normalizedVenueName', 'asc')
+      .orderBy(FieldPath.documentId(), 'asc')
+      .limit(pageSize);
+    if (cursor) query = query.startAfter(cursor);
+    const snapshot = await query.get();
+    snapshot.docs.forEach((squadSnapshot) => {
+      if (matches.length < pageSize && isPubliclyDiscoverableSquad(squadSnapshot.data())) {
+        matches.push(squadProjection(squadSnapshot));
+      }
+    });
+    if (snapshot.size < pageSize) break;
+    cursor = snapshot.docs[snapshot.docs.length - 1] ?? null;
+  }
+  return { squads: matches };
 });
 
 export const getVenueSportSquadDetail = functions.https.onCall(async (data, context) => {

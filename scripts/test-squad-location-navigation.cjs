@@ -24,13 +24,15 @@ assert.match(squad, /rememberSquadSystemReturn[\s\S]*Linking\.openSettings/);
 assert.match(squad, /permission\.status === "granted"[\s\S]*retrieveLocation/);
 assert.match(squad, /permission\.canAskAgain \? "denied" : "permanent"/);
 assert.match(squad, /retryLocation/);
-assert.match(squad, /searchByVenue/);
+assert.match(squad, /searchBySquadOrVenue/);
 assert.doesNotMatch(squad, /router\.(?:replace|push)\(["']\/\(tabs\)["']/, 'permission flow must never route to Home');
 
 assert.match(context, /squadSearchRequestId/);
 assert.match(context, /requestId === squadSearchRequestId\.current/);
 assert.match(context, /fetchNearbySquads[\s\S]*requestId === squadSearchRequestId\.current[\s\S]*setNearbySquads/);
 assert.match(context, /searchVenueSquads[\s\S]*requestId === squadSearchRequestId\.current[\s\S]*setNearbySquads/);
+assert.match(context, /squad_search_failed/);
+assert.match(context, /squad_discovery_unavailable/);
 
 assert.match(service, /LocationPermissionState = "undetermined" \| "granted" \| "denied" \| "error"/);
 assert.match(service, /permission-request[\s\S]*status: "error", canAskAgain: true/);
@@ -52,5 +54,7 @@ assert.match(resume, /FRIEND_CHAT_IMAGE_PICKER_RETURN_KEY/);
 
 assert.equal((translations.match(/retryLocation:/g) ?? []).length, 2, 'Retry Location needs English and Spanish text');
 assert.equal((translations.match(/locationDisclosure:/g) ?? []).length, 2, 'the existing foreground-location privacy disclosure remains localized');
+assert.equal((translations.match(/searchBySquadOrVenue:/g) ?? []).length, 2, 'Squad-name fallback needs English and Spanish text');
+assert.equal((translations.match(/discoveryServiceUnavailable:/g) ?? []).length, 2, 'missing-service feedback needs English and Spanish text');
 
 console.log('Squad permission return routing, retry states, stale-response protection, and foreground-only location tests passed.');

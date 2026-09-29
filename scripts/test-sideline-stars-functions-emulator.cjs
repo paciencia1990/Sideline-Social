@@ -27,10 +27,12 @@ async function run() {
   const squadId = "dr-phillips__baseball";
   const secondSquadId = "ymca__basketball";
   const fallFixtureSquadId = "fall-fixture__baseball";
+  const archivedSquadId = "archived-fixture__baseball";
   await Promise.all([
     db.collection("squads").doc(squadId).set({ venueName: "Dr. Phillips Little League", sportId: "baseball", sportDisplayName: "Baseball", isActive: true, createdBy: parentA.uid, currentSeasonId: null }),
     db.collection("squads").doc(secondSquadId).set({ venueName: "YMCA", sportId: "basketball", sportDisplayName: "Basketball", isActive: true, createdBy: parentA.uid, currentSeasonId: null }),
     db.collection("squads").doc(fallFixtureSquadId).set({ venueName: "Fixture Venue", sportId: "baseball", sportDisplayName: "Baseball", isActive: true, createdBy: parentA.uid, currentSeasonId: null }),
+    db.collection("squads").doc(archivedSquadId).set({ venueName: "Archived Fixture", sportId: "baseball", sportDisplayName: "Baseball", isActive: false, createdBy: parentA.uid, currentSeasonId: null }),
     db.collection("users").doc(parentA.uid).set({ displayName: "Joann Pollard", sidelineStars: 10 }),
     db.collection("users").doc(parentB.uid).set({ firstName: "Maria", lastName: "Garcia", email: "private@example.test", sidelineStars: 20 }),
     db.collection("users").doc(outsider.uid).set({ displayName: "Outside Person", sidelineStars: 999 }),
@@ -42,6 +44,7 @@ async function run() {
     membership(secondSquadId, parentA.uid, "active", "away"),
     membership(secondSquadId, parentB.uid, "active", "recent"),
     membership(fallFixtureSquadId, parentA.uid, "active", "away"),
+    membership(archivedSquadId, parentA.uid, "active", "away", "admin"),
   ]);
 
   const createSeason = httpsCallable(parentA.functions, "createSquadSeason");
@@ -64,6 +67,28 @@ async function run() {
   assert.equal(firstSeasonRetry.alreadyCreated, true);
   assert.equal((await db.collection("squads").doc(squadId).collection("seasons").get()).size, 1);
   assert.equal(secondSeason.status, "active");
+  await membership(secondSquadId, parentB.uid, "active", "recent", "admin");
+  const adminSeason = (await httpsCallable(parentB.functions, "createSquadSeason")({
+    squadId: secondSquadId,
+    name: "Authorized Admin Future Season",
+    startDate: calendarDate(new Date(Date.now() + 150 * 24 * 60 * 60 * 1000)),
+    endDate: calendarDate(new Date(Date.now() + 210 * 24 * 60 * 60 * 1000)),
+    timeZone: "America/New_York",
+    idempotencyKey: "authorized-admin-season-request-1",
+  })).data;
+  assert.equal(adminSeason.status, "upcoming", "an explicitly authorized active Squad Admin can create a season");
+  await assert.rejects(
+    () => createSeason({
+      squadId: archivedSquadId,
+      name: "Archived Squad Season",
+      startDate: today,
+      endDate,
+      timeZone: "America/New_York",
+      idempotencyKey: "archived-squad-season-request-1",
+    }),
+    (error) => String(error?.code).includes("not-found"),
+  );
+  await membership(archivedSquadId, parentA.uid, "left", "away", "member");
   const fixtureStartDate = calendarDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000));
   const fixtureEndDate = calendarDate(new Date(Date.now() + 83 * 24 * 60 * 60 * 1000));
   const fallFixture = (await createSeason({
@@ -361,9 +386,10 @@ async function run() {
   console.log("Sideline Stars Functions emulator integration tests passed.");
 }
 
-function membership(squadId, userId, membershipStatus, presenceStatus) {
+function membership(squadId, userId, membershipStatus, presenceStatus, squadRole) {
   return db.collection("squadMemberships").doc(`${squadId}__${userId}`).set({
     squadId, userId, membershipStatus, presenceStatus,
+    ...(squadRole ? { squadRole } : {}),
   });
 }
 

@@ -38,11 +38,20 @@ for (const sportId of ["baseball", "softball", "basketball", "soccer", "football
 assert.doesNotMatch(`${home}\n${games}`, /mySquadIds\s*\[\s*0\s*\]/, "active flows must not depend on array order");
 assert.match(squadScreen, /const askForLocation[\s\S]*Alert\.alert\([\s\S]*locationDisclosure[\s\S]*requestPermissionAndSearch/, "the explanation action must invoke the guarded permission request");
 assert.match(squadScreen, /const requestPermissionAndSearch[\s\S]*requestLocationPermission/, "the guarded action must own the system permission request");
-assert.match(squadScreen, /searchByVenue/, "manual venue search must remain available");
+assert.match(squadScreen, /searchBySquadOrVenue/, "manual search must support an exact Squad or venue name without location");
+assert.match(squadScreen, /squad_discovery_unavailable/, "a missing discovery service must not look like an empty result");
+assert.match(squadScreen, /noSearchResultsTitle/, "manual search has a distinct empty state");
+assert.match(service, /venueLocation: Coordinates \| null/, "a location-free search result must not fabricate zero coordinates");
 assert.doesNotMatch(squadScreen, /useEffect\([\s\S]{0,300}requestLocationPermission/, "permission must not be requested on mount");
 assert.doesNotMatch(`${service}\n${squadScreen}\n${home}`, /updateUserLocation/, "parent coordinates must not be persisted");
 assert.doesNotMatch(`${service}\n${squadScreen}`, /startLocationUpdatesAsync|watchPositionAsync|requestBackgroundPermissionsAsync|startGeofencingAsync/, "continuous/background tracking must not be introduced");
 assert.doesNotMatch(nearbyCallable, /joinVenueSportSquad|memberIds|userId|child|email/i, "nearby search must not join or expose private membership/profile data");
+assert.match(nearbyCallable, /isPubliclyDiscoverableSquad/, "nearby discovery excludes explicitly private or archived Squads");
+const searchCallable = functions.slice(functions.indexOf("export const searchVenueSportSquads"), functions.indexOf("export const getVenueSportSquadDetail"));
+assert.match(searchCallable, /orderBy\('normalizedVenueName', 'asc'\)/, "name search uses the normalized exact-name index order");
+assert.match(searchCallable, /orderBy\(FieldPath\.documentId\(\), 'asc'\)/, "name search has stable document pagination");
+assert.match(searchCallable, /maxScannedPages = 3/, "private results cannot make the first page look empty");
+assert.match(searchCallable, /isPubliclyDiscoverableSquad/, "name search excludes explicitly private or archived Squads");
 assert.match(detailService, /getVenueSportSquadDetail/, "Squad detail must use the field-limited callable");
 assert.doesNotMatch(detailService, /getDoc|publicUserProfiles|getPublicUserProfiles/, "Squad detail must not read raw Squad or profile documents");
 assert.equal(

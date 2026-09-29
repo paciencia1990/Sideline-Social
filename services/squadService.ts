@@ -34,7 +34,7 @@ export interface Squad {
   sportId: SquadSportId;
   sportDisplayName: string;
   venueSportKey: string | null;
-  venueLocation: Coordinates;
+  venueLocation: Coordinates | null;
   venueGeohash: string;
   memberIds: string[];
   memberCount: number;
@@ -168,13 +168,15 @@ function toMillis(value: FirestoreDate): number {
   return 0;
 }
 
-function readPoint(value: unknown): Coordinates {
+function readPoint(value: unknown): Coordinates | null {
   if (value instanceof GeoPoint) return { latitude: value.latitude, longitude: value.longitude };
   const data = value as { latitude?: number; longitude?: number; _latitude?: number; _longitude?: number } | null;
-  return {
-    latitude: data?.latitude ?? data?._latitude ?? 0,
-    longitude: data?.longitude ?? data?._longitude ?? 0,
-  };
+  const latitude = data?.latitude ?? data?._latitude;
+  const longitude = data?.longitude ?? data?._longitude;
+  return typeof latitude === "number" && Number.isFinite(latitude) &&
+    typeof longitude === "number" && Number.isFinite(longitude)
+    ? { latitude, longitude }
+    : null;
 }
 
 export function normalizeSquadDocument(id: string, data: DocumentData): Squad {

@@ -367,15 +367,15 @@ export default function SquadScreen() {
 
               <View style={styles.searchRow}>
                 <TextInput
-                  accessibilityLabel={t("squad.searchByVenue")}
+                  accessibilityLabel={t("squad.searchBySquadOrVenue")}
                   onChangeText={setVenueQuery}
                   onSubmitEditing={() => void handleVenueSearch()}
-                  placeholder={t("squad.searchByVenue")}
+                  placeholder={t("squad.searchBySquadOrVenue")}
                   returnKeyType="search"
                   style={styles.searchInput}
                   value={venueQuery}
                 />
-                <TouchableOpacity accessibilityLabel={t("squad.searchByVenue")} accessibilityRole="button" onPress={() => void handleVenueSearch()} style={styles.searchButton}>
+                <TouchableOpacity accessibilityLabel={t("squad.searchBySquadOrVenue")} accessibilityRole="button" onPress={() => void handleVenueSearch()} style={styles.searchButton}>
                   <Search color={Colors.surface} size={20} />
                 </TouchableOpacity>
               </View>
@@ -397,11 +397,11 @@ export default function SquadScreen() {
                 toolbarEnabled={false}
                 zoomEnabled={false}
               >
-                {nearbySquads.map((squad) => (
+                {nearbySquads.filter((squad) => squad.venueLocation !== null).map((squad) => (
                   <Marker
                     accessibilityLabel={`${squad.venueName}, ${squad.sportDisplayName}`}
                     anchor={{ x: 0.5, y: 1 }}
-                    coordinate={squad.venueLocation}
+                    coordinate={squad.venueLocation!}
                     key={squad.squadId}
                     onPress={() => handleMarkerPress(squad)}
                     tracksViewChanges={false}
@@ -423,13 +423,21 @@ export default function SquadScreen() {
               ) : null}
             </View>
 
-            {error ? <Text accessibilityLiveRegion="assertive" style={styles.errorText}>{t("squad.loadNearbyError")}</Text> : null}
+            {error ? (
+              <Text accessibilityLiveRegion="assertive" style={styles.errorText}>
+                {error === "squad_discovery_unavailable"
+                  ? t("squad.discoveryServiceUnavailable")
+                  : error === "squad_search_failed"
+                    ? t("squad.searchError")
+                    : t("squad.loadNearbyError")}
+              </Text>
+            ) : null}
           </>
         )}
         ListEmptyComponent={isBusy ? <ActivityIndicator color={Colors.primary} style={styles.loader} /> : (
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>{t("squad.noNearbyTitle")}</Text>
-            <Text style={styles.emptyBody}>{t("squad.noResultOptions")}</Text>
+            <Text style={styles.emptyTitle}>{t(searchMode === "venue" ? "squad.noSearchResultsTitle" : "squad.noNearbyTitle")}</Text>
+            <Text style={styles.emptyBody}>{t(searchMode === "venue" ? "squad.noSearchResultsBody" : "squad.noResultOptions")}</Text>
             <TouchableOpacity accessibilityRole="button" onPress={openCreate} style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>{t("squad.createThisSquad")}</Text>
             </TouchableOpacity>

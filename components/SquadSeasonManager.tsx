@@ -42,6 +42,7 @@ import {
   normalizeDateKey,
   type SeasonDateField,
 } from "@/utils/squadSeasonDate";
+import { classifySquadCallableError } from "@/utils/squadCallableError";
 
 const TIME_ZONES = [
   "America/New_York",
@@ -631,6 +632,10 @@ function formTitleKey(mode: FormMode | null) {
 }
 
 function seasonErrorMessage(error: unknown, t: (key: string) => string) {
+  const kind = classifySquadCallableError(error);
+  if (kind === "service-unavailable") return t("season.serviceUnavailable");
+  if (kind === "authentication-required") return t("season.signInRequired");
+  if (kind === "temporarily-unavailable") return t("season.confirmationUnavailable");
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
   const message = typeof error === "object" && error && "message" in error ? String(error.message).toLowerCase() : "";
   if (code.includes("already-exists") || message.includes("overlap")) return t("season.datesOverlap");

@@ -9,6 +9,8 @@ const service = fs.readFileSync(path.join(process.cwd(), "services", "leaderboar
 const boundary = fs.readFileSync(path.join(process.cwd(), "components", "ErrorBoundary.tsx"), "utf8");
 const config = fs.readFileSync(path.join(process.cwd(), "app.config.js"), "utf8");
 const pickerCapability = fs.readFileSync(path.join(process.cwd(), "services", "seasonDatePickerCapability.ts"), "utf8");
+const callableErrors = fs.readFileSync(path.join(process.cwd(), "utils", "squadCallableError.ts"), "utf8");
+const translations = fs.readFileSync(path.join(process.cwd(), "i18n", "index.ts"), "utf8");
 
 assert.doesNotMatch(manager, /from ["']@react-native-community\/datetimepicker["']/);
 assert.match(manager, /getSeasonDatePickerCapability/);
@@ -32,5 +34,8 @@ assert.match(service, /normalizeSquadSeason/);
 assert.match(boundary, /common\.genericError/);
 assert.doesNotMatch(boundary, /this\.state\.error\.message/, "raw exceptions are not shown to users");
 assert.match(config, /@react-native-community\/datetimepicker/);
+assert.match(manager, /classifySquadCallableError/);
+assert.match(callableErrors, /not-found[\s\S]*service-unavailable/, "a missing season callable receives a specific privacy-safe state");
+assert.equal((translations.match(/serviceUnavailable:/g) ?? []).length >= 2, true, "season service errors are localized");
 
 console.log("Squad season calendar controls, accessibility, safe-area, duplicate-submit, and scoped-error contracts passed.");

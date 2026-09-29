@@ -300,6 +300,19 @@ async function run() {
       "venueName",
     ].sort(),
   );
+  const exactName = await unrelated.call("searchVenueSportSquads", { queryText: "Dr. Phillips Little League" });
+  assert.deepEqual(exactName.squads.map((squad) => squad.squadId), ["dr-phillips-discovery"]);
+  const withoutLocation = await unrelated.call("searchVenueSportSquads", { queryText: "Location Free" });
+  assert.deepEqual(withoutLocation.squads.map((squad) => squad.squadId), ["location-free-discovery"]);
+  const privateSearch = await unrelated.call("searchVenueSportSquads", { queryText: "Hidden Private" });
+  assert.deepEqual(privateSearch.squads, [], "explicit private Squads never appear in public discovery");
+  assert.equal(nearby.squads.some((squad) => squad.squadId === "private-hidden-discovery"), false);
+  const pagedSearch = await unrelated.call("searchVenueSportSquads", { queryText: "Paged" });
+  assert.deepEqual(
+    pagedSearch.squads.map((squad) => squad.squadId),
+    ["paged-public-result"],
+    "filtered first pages must not hide a later eligible result",
+  );
 
   const soloTrivia = await unrelated.call("createGameLobby", {
     gameType: "triviaBlitz",
@@ -678,6 +691,65 @@ async function seedSocialFixtures({
     activeMemberCount: 1,
     createdBy: coach.uid,
     creatorId: coach.uid,
+    isActive: true,
+  });
+  batch.set(adminFirestore.collection("squads").doc("dr-phillips-discovery"), {
+    venueName: "Dr. Phillips Little League",
+    normalizedVenueName: "doctor phillips little league",
+    sportId: "baseball",
+    sportDisplayName: "Baseball",
+    venueLocation: new admin.firestore.GeoPoint(40.01, -74.01),
+    venueGeohash: "dr57s1fbgh",
+    memberCount: 1,
+    activeMemberCount: 1,
+    createdBy: coach.uid,
+    isActive: true,
+  });
+  batch.set(adminFirestore.collection("squads").doc("location-free-discovery"), {
+    venueName: "Location Free Field",
+    normalizedVenueName: "location free field",
+    sportId: "soccer",
+    sportDisplayName: "Soccer",
+    memberCount: 1,
+    activeMemberCount: 1,
+    createdBy: coach.uid,
+    isActive: true,
+  });
+  batch.set(adminFirestore.collection("squads").doc("private-hidden-discovery"), {
+    venueName: "Hidden Private Field",
+    normalizedVenueName: "hidden private field",
+    sportId: "baseball",
+    sportDisplayName: "Baseball",
+    venueLocation: new admin.firestore.GeoPoint(40.0, -74.0),
+    venueGeohash: "dr57s1fbgh",
+    memberCount: 1,
+    activeMemberCount: 1,
+    createdBy: coach.uid,
+    isActive: true,
+    visibility: "private",
+  });
+  for (let index = 0; index < 51; index += 1) {
+    const suffix = String(index).padStart(3, "0");
+    batch.set(adminFirestore.collection("squads").doc(`paged-private-${suffix}`), {
+      venueName: `Paged ${suffix}`,
+      normalizedVenueName: `paged ${suffix}`,
+      sportId: "baseball",
+      sportDisplayName: "Baseball",
+      memberCount: 1,
+      activeMemberCount: 1,
+      createdBy: coach.uid,
+      isActive: true,
+      inviteOnly: true,
+    });
+  }
+  batch.set(adminFirestore.collection("squads").doc("paged-public-result"), {
+    venueName: "Paged Z Public",
+    normalizedVenueName: "paged z public",
+    sportId: "baseball",
+    sportDisplayName: "Baseball",
+    memberCount: 1,
+    activeMemberCount: 1,
+    createdBy: coach.uid,
     isActive: true,
   });
   batch.set(

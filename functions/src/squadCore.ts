@@ -46,6 +46,45 @@ export function normalizeVenueName(value: string): string {
     .replace(/\s+/g, ' ');
 }
 
+type SquadAvailabilityRecord = {
+  isActive?: unknown;
+  status?: unknown;
+  archivedAt?: unknown;
+  deletedAt?: unknown;
+};
+
+type SquadDiscoverabilityRecord = SquadAvailabilityRecord & {
+  discoverable?: unknown;
+  isDiscoverable?: unknown;
+  inviteOnly?: unknown;
+  joinPolicy?: unknown;
+  privacy?: unknown;
+  visibility?: unknown;
+};
+
+export function isActiveSquadRecord(squad: SquadAvailabilityRecord): boolean {
+  const status = typeof squad.status === 'string' ? squad.status.trim().toLocaleLowerCase() : '';
+  return squad.isActive !== false &&
+    status !== 'archived' &&
+    status !== 'deleted' &&
+    squad.archivedAt == null &&
+    squad.deletedAt == null;
+}
+
+/**
+ * Legacy active Squads were created before visibility fields existed and are
+ * public by the established product policy. Any explicit private, invite-only,
+ * or non-discoverable value fails closed without changing those legacy records.
+ */
+export function isPubliclyDiscoverableSquad(squad: SquadDiscoverabilityRecord): boolean {
+  if (!isActiveSquadRecord(squad)) return false;
+  if (squad.discoverable === false || squad.isDiscoverable === false || squad.inviteOnly === true) return false;
+  const restrictedValues = new Set(['private', 'invite', 'invite-only', 'invite_only', 'code-only', 'code_only']);
+  return ![squad.visibility, squad.privacy, squad.joinPolicy].some((value) =>
+    typeof value === 'string' && restrictedValues.has(value.trim().toLocaleLowerCase()),
+  );
+}
+
 export function normalizeSportId(value: unknown): SquadSportId | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLocaleLowerCase().replace(/[_\s&]+/g, '');
