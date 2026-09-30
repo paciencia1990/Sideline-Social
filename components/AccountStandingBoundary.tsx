@@ -188,6 +188,7 @@ function StandingNotice({
             <Text accessibilityRole="header" style={styles.sectionTitle}>
               {t("accountStanding.appeal.title")}
             </Text>
+            <Text style={styles.body}>{t("accountStanding.appeal.timing")}</Text>
             <TextInput
               accessibilityLabel={t("accountStanding.appeal.inputLabel")}
               multiline

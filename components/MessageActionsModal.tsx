@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -77,8 +78,30 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
   const [blockRequested, setBlockRequested] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reportScrollRef = useRef<ScrollView>(null);
+  const explanationOffsetRef = useRef(0);
+  const explanationFocusedRef = useRef(false);
   const visibleRef = useRef(visible);
   const operationIdRef = useRef(0);
+
+  const scrollExplanationIntoView = () => {
+    requestAnimationFrame(() => {
+      reportScrollRef.current?.scrollTo({
+        animated: true,
+        y: Math.max(0, explanationOffsetRef.current - Spacing.sm),
+      });
+    });
+  };
+
+  useEffect(() => {
+    const eventName = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const subscription = Keyboard.addListener(eventName, () => {
+      if (visibleRef.current && phase === "report" && explanationFocusedRef.current) {
+        scrollExplanationIntoView();
+      }
+    });
+    return () => subscription.remove();
+  }, [phase]);
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -295,6 +318,7 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
               contentContainerStyle={[styles.content, styles.reportContent]}
               keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
               keyboardShouldPersistTaps="handled"
+              ref={reportScrollRef}
               showsVerticalScrollIndicator
               style={styles.reportScroll}
             >
@@ -329,8 +353,14 @@ export function MessageActionsModal({ actions, onDismiss, reactions, report, vis
                 accessibilityLabel={t("moderation.explanationLabel")}
                 maxLength={1500}
                 multiline
+                onBlur={() => { explanationFocusedRef.current = false; }}
                 onChangeText={setExplanation}
-                placeholder={t("moderation.explanationPlaceholder")}
+                onFocus={() => {
+                  explanationFocusedRef.current = true;
+                  scrollExplanationIntoView();
+                }}
+                onLayout={(event) => { explanationOffsetRef.current = event.nativeEvent.layout.y; }}
+                placeholder={t("moderation.explanationOptional")}
                 placeholderTextColor={Colors.textPrimary}
                 style={styles.explanationInput}
                 textAlignVertical="top"

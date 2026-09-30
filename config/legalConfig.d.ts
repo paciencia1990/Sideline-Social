@@ -1,4 +1,4 @@
-export const SUPPORT_EMAIL: "joann@joinsidelinesocial.com";
+export const SUPPORT_EMAIL: "info@joinsidelinesocial.com";
 
 export interface ProductionLegalConfigInput {
   privacyPolicyUrl: string | null | undefined;

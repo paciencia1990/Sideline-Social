@@ -54,6 +54,7 @@ const resources = {
         },
         appeal: {
           title: 'Submit an appeal',
+          timing: 'You may appeal while this restriction or suspension is active. If it ends before review is complete, your submitted appeal may still be reviewed and the record corrected. Concerns first raised after it ends can be sent to info@joinsidelinesocial.com. We aim to begin reviewing appeals within two business days.',
           inputLabel: 'Appeal explanation',
           placeholder: 'Briefly explain why you would like this decision reviewed.',
           submit: 'Submit appeal',
@@ -2465,6 +2466,7 @@ const resources = {
         },
         appeal: {
           title: 'Enviar una apelaciÃ³n',
+          timing: 'Puedes apelar mientras esta restricción o suspensión esté activa. Si termina antes de que finalice la revisión, tu apelación enviada aún puede revisarse y el registro puede corregirse. Las inquietudes planteadas por primera vez después de que termine pueden enviarse a info@joinsidelinesocial.com. Nuestro objetivo es comenzar a revisar las apelaciones dentro de dos días hábiles.',
           inputLabel: 'ExplicaciÃ³n de la apelaciÃ³n',
           placeholder: 'Explica brevemente por quÃ© deseas que se revise esta decisiÃ³n.',
           submit: 'Enviar apelaciÃ³n',

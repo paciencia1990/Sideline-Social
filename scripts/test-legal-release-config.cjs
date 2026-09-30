@@ -19,7 +19,7 @@ const validConfig = {
   supportEmail: SUPPORT_EMAIL,
 };
 
-assert.equal(SUPPORT_EMAIL, "joann@joinsidelinesocial.com");
+assert.equal(SUPPORT_EMAIL, "info@joinsidelinesocial.com");
 assert.deepEqual(validateProductionLegalConfig(validConfig), { errors: [], valid: true });
 assert.doesNotThrow(() => assertProductionLegalConfig(validConfig));
 assert.equal(

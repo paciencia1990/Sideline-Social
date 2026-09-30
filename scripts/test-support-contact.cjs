@@ -12,10 +12,16 @@ const legalScreen = read("app", "settings", "legal.tsx");
 const translations = read("i18n", "index.ts");
 
 assert.match(legalConfig, /normalizePublicHttpsUrl/);
-assert.match(legalValidation, /joann@joinsidelinesocial\.com/);
+assert.match(legalValidation, /info@joinsidelinesocial\.com/);
 assert.match(legalScreen, /`mailto:\$\{SUPPORT_EMAIL\}`/);
 assert.match(legalScreen, /accessibilityRole="link"/);
 assert.match(legalScreen, /Linking\.openURL\(url\)/);
+assert.match(translations, /You may appeal while this restriction or suspension is active\./);
+assert.match(translations, /submitted appeal may still be reviewed and the record corrected\./);
+assert.match(translations, /Concerns first raised after it ends can be sent to info@joinsidelinesocial\.com\./);
+assert.match(translations, /We aim to begin reviewing appeals within two business days\./);
+assert.match(translations, /Puedes apelar mientras esta restricci/);
+assert.match(translations, /info@joinsidelinesocial\.com/);
 assert.match(legalScreen, /openExternalLink\(SUPPORT_URL\)/);
 assert.match(legalScreen, /catch\s*\{[\s\S]*settings\.linkErrorTitle[\s\S]*settings\.linkErrorBody/);
 assert.match(legalScreen, /settings\.supportEmailAccessibility/);

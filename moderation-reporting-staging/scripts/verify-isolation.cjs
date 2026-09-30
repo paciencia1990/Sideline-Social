@@ -103,6 +103,7 @@ for (const rejectedEnvironment of [
   { MODERATION_EXPECTED_PROJECT_ID: "another-project" },
   { MODERATION_EXPECTED_PROJECT_ID: "sideline-social-staging-2026", GCLOUD_PROJECT: "another-project" },
   { MODERATION_EXPECTED_PROJECT_ID: "sideline-social-staging-2026", GOOGLE_CLOUD_PROJECT: "another-project" },
+  { MODERATION_EXPECTED_PROJECT_ID: "sideline-social-staging-2026", GCLOUD_PROJECT: "sideline-social-staging-2026", GOOGLE_CLOUD_PROJECT: "another-project" },
 ]) {
   assert.notEqual(runtimeGuardStatus(rejectedEnvironment), 0, "runtime project guard accepted an unsafe project configuration");
 }

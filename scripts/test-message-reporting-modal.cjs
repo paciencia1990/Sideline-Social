@@ -15,12 +15,18 @@ assert.match(modal, /accessibilityViewIsModal/);
 assert.match(modal, /accessibilityRole="radio"/);
 assert.match(modal, /setReason\(option\)/);
 assert.match(modal, /KeyboardAvoidingView/);
+assert.match(modal, /Keyboard\.addListener\(eventName/);
 assert.match(modal, /automaticallyAdjustKeyboardInsets/);
 assert.match(modal, /keyboardDismissMode=\{Platform\.OS === "ios" \? "interactive" : "on-drag"\}/);
 assert.match(modal, /style=\{styles\.reportScroll\}/);
 assert.match(modal, /contentContainerStyle=\{\[styles\.content, styles\.reportContent\]\}/);
 assert.match(modal, /showsVerticalScrollIndicator/);
 assert.match(modal, /selectedReason/);
+assert.match(modal, /ref=\{reportScrollRef\}/);
+assert.match(modal, /onFocus=\{\(\) => \{[\s\S]*scrollExplanationIntoView\(\)/);
+assert.match(modal, /keyboardDidShow/);
+assert.match(modal, /placeholder=\{t\("moderation\.explanationOptional"\)\}/);
+assert.doesNotMatch(modal, /moderation\.explanationPlaceholder/);
 assert.match(modal, /useSafeAreaInsets/);
 assert.doesNotMatch(modal, /reasons:\s*\{[^}]*maxHeight/);
 assert.match(modal, /onPress=\{\(\) => \{ void submitReport\(\); \}\}/);
@@ -83,6 +89,7 @@ for (const expected of [
   "submitting: 'Submitting'",
   "appCheckChecking: 'Preparing secure report submission…'",
   "selectedReason: 'Selected reason: {{reason}}'",
+  "explanationOptional: 'Add helpful context (optional)'",
   "privacy: 'Private or child information'",
   "harassment: 'Harassment or threats'",
   "offensive: 'Offensive content'",
@@ -96,6 +103,7 @@ for (const expected of [
   "submitReport: 'Enviar reporte'",
   "appCheckChecking: 'Preparando el envío seguro del reporte…'",
   "selectedReason: 'Motivo seleccionado: {{reason}}'",
+  "explanationOptional: 'Agrega contexto útil (opcional)'",
   "child_safety: 'Seguridad infantil'",
 ]) {
   assert.equal(translations.includes(expected), true, `${expected} is localized`);

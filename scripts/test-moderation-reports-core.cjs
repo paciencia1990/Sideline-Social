@@ -86,7 +86,16 @@ const enabledMobileReporting = {
   MODERATION_APP_CHECK_MODE: "monitor",
 };
 assert.equal(mobileModerationReportingEnabled(enabledMobileReporting), true);
-for (const key of Object.keys(enabledMobileReporting)) {
+assert.equal(mobileModerationReportingEnabled({
+  ...enabledMobileReporting,
+  GCLOUD_PROJECT: undefined,
+}), true, "The exact configured staging project remains authoritative when provider metadata is not caller-visible");
+assert.equal(mobileModerationReportingEnabled({
+  ...enabledMobileReporting,
+  GCLOUD_PROJECT: undefined,
+  GOOGLE_CLOUD_PROJECT: "sideline-social-staging-2026",
+}), true);
+for (const key of ["MODERATION_EXPECTED_PROJECT_ID", "MODERATION_SYSTEM_ENABLED", "MODERATION_REPORTING_V2_ENABLED", "MODERATION_APP_CHECK_MODE"]) {
   assert.equal(
     mobileModerationReportingEnabled({ ...enabledMobileReporting, [key]: undefined }),
     false,
@@ -96,6 +105,15 @@ for (const key of Object.keys(enabledMobileReporting)) {
 assert.equal(mobileModerationReportingEnabled({
   ...enabledMobileReporting,
   GCLOUD_PROJECT: "sideline-squad",
+}), false);
+assert.equal(mobileModerationReportingEnabled({
+  ...enabledMobileReporting,
+  GOOGLE_CLOUD_PROJECT: "sideline-squad",
+}), false, "Conflicting provider project attribution is rejected even when another provider variable matches");
+assert.equal(mobileModerationReportingEnabled({
+  ...enabledMobileReporting,
+  GCLOUD_PROJECT: undefined,
+  GOOGLE_CLOUD_PROJECT: "sideline-squad",
 }), false);
 assert.equal(coachAiModerationIngestionEnabled({
   ...enabledCoachAiIngestion,

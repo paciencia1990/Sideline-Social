@@ -1,4 +1,4 @@
-const SUPPORT_EMAIL = "joann@joinsidelinesocial.com";
+const SUPPORT_EMAIL = "info@joinsidelinesocial.com";
 
 const RESERVED_HOSTNAMES = new Set([
   "example.com",

@@ -139,8 +139,9 @@ export function mobileModerationReportingEnabled(
   environment: Record<string, string | undefined>,
 ) {
   const approvedStagingProject = "sideline-social-staging-2026";
-  const actualProject = environment.GCLOUD_PROJECT || environment.GOOGLE_CLOUD_PROJECT;
-  return actualProject === approvedStagingProject &&
+  const providerProjects = [environment.GCLOUD_PROJECT, environment.GOOGLE_CLOUD_PROJECT]
+    .filter((value): value is string => Boolean(value));
+  return providerProjects.every((value) => value === approvedStagingProject) &&
     environment.MODERATION_EXPECTED_PROJECT_ID === approvedStagingProject &&
     environment.MODERATION_SYSTEM_ENABLED === "true" &&
     environment.MODERATION_REPORTING_V2_ENABLED === "true" &&
