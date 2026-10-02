@@ -33,6 +33,7 @@
     "test:local-user-state": "node scripts/test-local-user-state.cjs",
     "test:auth-profile-ui": "node scripts/test-auth-profile-ui-core.cjs",
     "test:account-profile-recovery": "node scripts/test-account-profile-recovery.cjs && node scripts/test-firebase-auth-persistence.cjs",
+    "test:suspended-auth-session": "node scripts/test-suspended-auth-session-core.cjs",
     "test:emulator:account-profile-initialization": "firebase.cmd emulators:exec --project demo-account-profile-initialization --only firestore \"node scripts/test-account-profile-initialization-emulator.cjs\"",
     "test:post-sdk57-regressions": "node scripts/test-post-sdk57-regressions.cjs",
     "test:spot-difference-assets": "node scripts/test-spot-difference-webp-assets.cjs",

@@ -96,9 +96,12 @@ for (const invalid of [
 }
 
 const authSource = fs.readFileSync(path.join(root, "context", "AuthContext.tsx"), "utf8");
+const authSessionProfileSource = fs.readFileSync(path.join(root, "utils", "authSessionProfileCore.ts"), "utf8");
 const profileSource = fs.readFileSync(path.join(root, "services", "authProfileService.ts"), "utf8");
 assert.match(authSource, /createPasswordUserProfile\(credential\.user/u);
-assert.match(authSource, /return \{ exists: true, profile: undefined \}/u, "transient profile-read failures must not misclassify established accounts as new");
+assert.match(authSource, /loadAuthSessionProfile\(\{/u, "authenticated profile hydration must use the guarded loader");
+assert.match(authSessionProfileSource, /return \{ exists: true, profile: undefined, unavailable: true \}/u,
+  "transient profile-read failures must not misclassify established accounts as new");
 assert.match(authSource, /runExclusiveAuthOperation\(async \(operationId\)/u);
 assert.match(profileSource, /if \(!existing\.exists\(\)\)[\s\S]*buildCanonicalAccountProfile/u, "missing-profile recovery must create the complete canonical record");
 assert.match(profileSource, /buildAccountCompletionFields[\s\S]*\{ merge: true \}/u, "existing profiles must retain relationship and team fields");

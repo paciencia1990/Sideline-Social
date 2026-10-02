@@ -166,6 +166,7 @@ assert.match(accountProfileCore, /modeOnboardingCompleted: false/u);
 assert.equal(profileService.includes("photoURL"), false, "Provider photos must not be copied silently.");
 
 const auth = read("context", "AuthContext.tsx");
+const authSessionProfile = read("utils", "authSessionProfileCore.ts");
 assert.match(auth, /auth\/account-exists-with-different-credential/u);
 assert.match(auth, /rememberPendingProviderConflict/u);
 assert.match(auth, /linkWithCredential/u);
@@ -173,7 +174,9 @@ assert.match(auth, /canUnlinkSignInMethod/u);
 assert.match(auth, /auth\/cannot-unlink-last-provider/u);
 assert.match(auth, /assertRecentAuthentication/u);
 assert.match(auth, /ensureFederatedUserProfile/u);
-assert.match(auth, /return \{ exists: true, profile: undefined \}/u, "A transient profile read failure must not force an existing account into new-account onboarding.");
+assert.match(auth, /loadAuthSessionProfile/u, "Auth hydration must use the shared guarded profile loader.");
+assert.match(authSessionProfile, /return \{ exists: true, profile: undefined, unavailable: true \}/u,
+  "A transient profile read failure must not force an existing account into new-account onboarding.");
 assert.match(auth, /subscribeToAppleCredentialRevocation/u);
 assert.match(auth, /void signOut\(\)\.catch/u, "A revoked Apple credential must clear local authentication without deleting account data.");
 

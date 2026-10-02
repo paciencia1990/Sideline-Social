@@ -16,6 +16,8 @@ import {
 import { doc, getDoc, type DocumentData } from "firebase/firestore";
 
 import { auth, db } from "@/config/firebase";
+import { requireFirebaseAppCheckReady } from "@/config/firebaseAppCheck";
+import { fetchMyAccountStanding } from "@/services/accountStandingService";
 import { createPasswordUserProfile, ensureFederatedUserProfile } from "@/services/authProfileService";
 import {
   clearPendingProviderConflict,
@@ -38,6 +40,10 @@ import {
   type SignInMethod,
 } from "@/utils/federatedAuthCore";
 import { resolveFirebaseIdentityKind } from "@/utils/authIdentity";
+import {
+  initializeFederatedProfileForSession,
+  loadAuthSessionProfile,
+} from "@/utils/authSessionProfileCore";
 import { completeLocalSignOut } from "@/utils/localUserStateCore";
 import { readModeOnboardingState, type AppMode } from "@/utils/onboardingMode";
 import { resolveDisplayName } from "@/utils/profileName";
@@ -173,13 +179,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       void measureDevelopmentPerformance(
         "startup.auth-profile",
-        () => getDoc(doc(db, "users", nextUser.uid)),
+        () => loadAuthSessionProfile({
+          allowUnavailable: true,
+          classifyError: getErrorCode,
+          onUnavailable: (code) => console.warn("[Auth] profile hydration unavailable:", code),
+          read: async () => {
+            const profileDoc = await getDoc(doc(db, "users", nextUser.uid));
+            return { exists: profileDoc.exists(), profile: profileDoc.data() };
+          },
+        }),
       )
-        .then((profileDoc) => ({ exists: profileDoc.exists(), profile: profileDoc.data() }))
-        .catch((error: unknown) => {
-          console.warn("[Auth] profile hydration unavailable:", getErrorCode(error));
-          return { exists: true, profile: undefined };
-        })
         .then(({ exists, profile }) => {
           if (disposed || loadVersion !== profileLoadVersion.current || auth.currentUser?.uid !== nextUser.uid) return;
           setUser(mapUser(nextUser, exists, profile));
@@ -194,7 +203,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const refreshProfile = useCallback(async () => {
+  const hydrateAuthenticatedProfile = useCallback(async (allowUnavailable: boolean) => {
     const currentUser = auth.currentUser;
     if (!currentUser || resolveFirebaseIdentityKind(currentUser) !== "permanent") {
       setFirebaseUser(null);
@@ -205,14 +214,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const loadVersion = ++profileLoadVersion.current;
     setLoading(true);
     try {
-      const profileDoc = await getDoc(doc(db, "users", currentUser.uid));
+      const { exists, profile } = await loadAuthSessionProfile({
+        allowUnavailable,
+        classifyError: getErrorCode,
+        onUnavailable: (code) => console.warn("[Auth] profile hydration unavailable:", code),
+        read: async () => {
+          const profileDoc = await getDoc(doc(db, "users", currentUser.uid));
+          return { exists: profileDoc.exists(), profile: profileDoc.data() };
+        },
+      });
       if (loadVersion !== profileLoadVersion.current || auth.currentUser?.uid !== currentUser.uid) return;
       setFirebaseUser(currentUser);
-      setUser(mapUser(currentUser, profileDoc.exists(), profileDoc.data()));
+      setUser(mapUser(currentUser, exists, profile));
     } finally {
       if (loadVersion === profileLoadVersion.current && auth.currentUser?.uid === currentUser.uid) setLoading(false);
     }
   }, []);
+
+  const refreshProfile = useCallback(
+    async () => hydrateAuthenticatedProfile(false),
+    [hydrateAuthenticatedProfile],
+  );
 
   const runExclusiveAuthOperation = useCallback(async <T,>(operation: (operationId: number) => Promise<T>) => {
     if (authOperationInFlight.current) throw codedError("auth/operation-in-progress");
@@ -289,15 +311,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           clearPendingProviderConflict();
         }
 
-        await ensureFederatedUserProfile(credentialResult.user, providerResult);
-        await refreshProfile();
+        const { restrictedSession } = await initializeFederatedProfileForSession({
+          classifyError: getErrorCode,
+          initializeProfile: () => ensureFederatedUserProfile(credentialResult.user, providerResult),
+          readStanding: fetchMyAccountStanding,
+          requireSecurityReady: requireFirebaseAppCheckReady,
+        });
+        if (!authOperationGuard.current.isCurrent(operationId)) throw codedError("auth/stale-response");
+        await hydrateAuthenticatedProfile(restrictedSession);
       } catch (error) {
         if (auth.currentUser) await firebaseSignOut(auth).catch(() => undefined);
         setLoading(false);
         throw error;
       }
     });
-  }, [refreshProfile, runExclusiveAuthOperation]);
+  }, [hydrateAuthenticatedProfile, runExclusiveAuthOperation]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     await runExclusiveAuthOperation(async () => {
@@ -315,14 +343,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await linkWithCredential(credential.user, pending.credential);
           clearPendingProviderConflict();
         }
-        await refreshProfile();
+        await hydrateAuthenticatedProfile(true);
       } catch (error) {
         if (auth.currentUser) await firebaseSignOut(auth).catch(() => undefined);
         setLoading(false);
         throw error;
       }
     });
-  }, [refreshProfile, runExclusiveAuthOperation]);
+  }, [hydrateAuthenticatedProfile, runExclusiveAuthOperation]);
 
   const signUp = useCallback(async (email: string, password: string, profile: SignUpProfile = {}) => runExclusiveAuthOperation(async (operationId) => {
     if (!profile.policiesAccepted || !profile.adultEligibilityConfirmed) {
