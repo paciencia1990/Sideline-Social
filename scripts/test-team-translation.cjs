@@ -163,6 +163,8 @@ const find = (tree, predicate) => all(tree, predicate)[0];
       assert.equal(url, 'https://translation.googleapis.com/v3/projects/demo-sideline-translation/locations/global:translateText');
       assert.equal(options.method, 'POST'); assert.equal(options.redirect, 'error'); assert.ok(options.signal);
       assert.equal(options.headers.Authorization, 'Bearer synthetic-not-a-real-token');
+      assert.equal(options.headers['x-goog-user-project'], 'demo-sideline-translation', 'Provider quota/billing attribution uses the intended app project');
+      assert.deepEqual(Object.keys(options.headers).sort(), ['Authorization', 'Content-Type', 'x-goog-user-project']);
       const body = JSON.parse(options.body);
       assert.deepEqual(Object.keys(body).sort(), ['contents', 'mimeType', 'model', 'targetLanguageCode']);
       assert.deepEqual(body.contents, ['Bring water.']); assert.equal(body.mimeType, 'text/plain');

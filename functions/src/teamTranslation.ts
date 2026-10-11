@@ -77,7 +77,7 @@ export async function translateWithGoogle(texts: string[], targetLanguageCode: s
   const token = await credential.getAccessToken();
   const response = await fetch(`https://translation.googleapis.com/v3/projects/${projectId}/locations/global:translateText`, {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(12_000),
-    headers: { Authorization: `Bearer ${token.access_token}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${token.access_token}`, 'Content-Type': 'application/json', 'x-goog-user-project': projectId },
     body: JSON.stringify({ contents: texts, mimeType: 'text/plain', targetLanguageCode,
       model: `projects/${projectId}/locations/global/models/general/nmt` }),
   });
