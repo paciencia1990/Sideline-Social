@@ -1,0 +1,63 @@
+Game release verification — October 11, 2026
+
+The candidate containing the game-start navigation repair passed the following
+isolated multiplayer journeys. These validate code and backend behavior before
+creating the next Android/iOS artifacts; they do not replace installation checks.
+
+Fresh Firebase emulator verification
+- Bomb Defusal: three authenticated players, readiness gating, shared countdown,
+  rotating Defuser/Expert/Support roles, six correct commands, duplicate-answer
+  idempotency, defused result, fresh-session rematch and complete membership cleanup.
+- Trivia Blitz: three authenticated players, readiness gating, shared countdown,
+  ten questions, correct and incorrect answers, turn progression, scores, results,
+  fresh-session rematch and complete membership cleanup.
+- Spot the Differences: four authenticated players, readiness gating, shared
+  countdown, two teams, ten discoveries, duplicate-discovery idempotency, cross-team
+  privacy during gameplay, visible completed results, winning team, fresh-session
+  rematch and complete membership cleanup.
+- All participants used authenticated Firestore listeners and accepted the public
+  start-state schema. All received identical server timelines. The real countdown
+  ran without moving clocks or rewriting gameplay deadlines.
+- Play Again retained the room and its join code while creating a fresh round,
+  resetting readiness, and preserving finished-round records. Leaving removed
+  active membership; repeated departure was idempotent.
+
+Test configuration
+The test requires a demo project and explicit local Auth, Firestore and RTDB
+emulator hosts. It explicitly installs and verifies the existing repository Rules
+on the project-name RTDB instance used by demo Functions, because the CLI can
+preload only the default-rtdb instance. This prevents accidentally testing an
+unprotected secondary emulator instance. No live Rules or database record changed.
+The first test revision incorrectly expected privacy after completion; the final
+test checks denial during gameplay and the intended completed-result visibility.
+
+Client verification
+The actual installed Expo Router stack router and the real departure hook passed
+the parent-stack navigation regression for all three game destinations. The host
+preparation-response fallback, snapshot deduplication, immediate repeated taps,
+bounded error/manual retry, account-change/unmount isolation, and single self-only
+readiness control passed. Existing departure tests and Trivia callable contracts
+passed. Spot's 21 scene definitions and 42 paired WebP assets passed validation.
+The preceding repair's TypeScript, lint, synchronization, responsiveness, efficiency,
+active-session and localization results remain applicable; no app logic changed here.
+
+Read-only live reconciliation
+All 17 relevant game endpoints were ACTIVE. Sixteen callable bodies matched the
+tested source directly; the Bomb player-view callable differed by an equivalent
+helper extraction. Reachable helper comparison identified the older directory
+timestamp optimization in other source snapshots, with unchanged game contracts.
+The live gameSessions, gameSessionSecrets and gameSessionTeamState Rules matched
+the tested policies after formatting normalization. Other denied RTDB branches
+differed in representation; no broad Rules publication is required by this repair.
+All 19 monitored moderation-related descriptors and the preserved alert-secret
+binding remained unchanged. Moderation was kept live throughout.
+
+Conclusion and remaining verification
+No additional game-code defect was found in the completed checks. The candidate
+is ready for the next Android/iOS beta builds. The installed Android 32/iOS 20
+artifacts still lack the navigation/readiness repair. After delivering the new
+artifacts, perform one focused multiplayer device pass per game: start, a few
+interactions, Play Again, and Home/back departure. Native rendering, gestures,
+real network timing and the actual installed artifact cannot be fully confirmed
+by emulators or source tests. No Android/iOS build, store submission, backend
+deployment, live game action or moderation mutation occurred in this verification.
