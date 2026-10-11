@@ -246,7 +246,7 @@ for (const route of ["index", "squad", "games", "friends", "profile"]) {
 
 const lobbyBase = read("components", "LobbyBase.tsx");
 const safeAreaLayout = read("utils", "safeAreaLayout.ts");
-assert.match(lobbyBase, /useSafeAreaInsets\(\)/, "The shared lobby shell must use the device bottom inset.");
+assert.match(lobbyBase, /useParentScreenInsets\(\)/, "The shared lobby shell accounts for the menu owning the device bottom inset.");
 assert.match(lobbyBase, /getFixedFooterBottomPadding\(insets\.bottom\)/, "All game lobby actions must share the safe-area footer calculation.");
 assert.ok(lobbyBase.indexOf("<ScrollView") < lobbyBase.indexOf("styles.actionFooter"), "The scrolling player list must stop above the action footer.");
 assert.doesNotMatch(lobbyBase, /actionFooter:[\s\S]{0,240}position:\s*["']absolute/, "The lobby footer must remain in normal layout flow.");

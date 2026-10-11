@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useParentScreenInsets } from '@/context/ParentNavigationContext';
 import { Colors } from '@/constants/theme';
 import { flattenStyle } from '@/utils/flatten-style';
 
@@ -10,7 +10,7 @@ interface ScreenWrapperProps {
 }
 
 export function ScreenWrapper({ children, style }: ScreenWrapperProps) {
-  const insets = useSafeAreaInsets();
+  const insets = useParentScreenInsets();
 
   return (
     <View

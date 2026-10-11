@@ -100,7 +100,8 @@ for (const route of [
   assert.match(source, /content: \{ flex: 1/, `${route.join("/")} gives the thread a bounded flexible height`);
   assert.match(keyboardLayout, /behavior=\{Platform\.OS === "ios" \? "padding" : "height"\}/);
   assert.match(keyboardLayout, /keyboardVerticalOffset=\{Platform\.OS === "android" \? -insets\.bottom : 0\}/);
-  assert.match(source, /const insets = useSafeAreaInsets\(\)/, `${route.join("/")} derives its Android offset from the live bottom safe area`);
+  const insetHook = route[1] === "teams" ? "useParentScreenInsets" : "useSafeAreaInsets";
+  assert.match(source, new RegExp(`const insets = ${insetHook}\\(\\)`), `${route.join("/")} derives its Android offset from the bottom inset owned by the screen`);
   assert.match(keyboardLayout, /<PrivateTeamMessageThread/, `${route.join("/")} keeps its header and composer in one keyboard-resized column`);
 }
 

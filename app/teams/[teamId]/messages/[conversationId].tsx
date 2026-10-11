@@ -1,7 +1,7 @@
 import React from "react";
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useParentScreenInsets } from "@/context/ParentNavigationContext";
 import { ArrowLeft } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
@@ -11,7 +11,7 @@ import { Colors, Spacing, Typography } from "@/constants/theme";
 
 export default function ParentPrivateTeamMessageScreen() {
   const { t } = useTranslation();
-  const insets = useSafeAreaInsets();
+  const insets = useParentScreenInsets();
   const params = useLocalSearchParams<{ teamId?: string | string[]; conversationId?: string | string[]; messageId?: string | string[]; notificationId?: string | string[] }>();
   const teamId = normalize(params.teamId);
   const conversationId = normalize(params.conversationId);

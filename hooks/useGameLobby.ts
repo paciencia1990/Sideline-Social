@@ -297,6 +297,8 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
       state.sessionId !== sessionId ||
       suppressLobbyEventsRef.current ||
       departureCompletedRef.current ||
+      roomDeparture.hasPendingNavigation() ||
+      roomDeparture.hasDeparted() ||
       navigatedStartAttemptRef.current === state.startAttemptId
     ) return;
     navigatedStartAttemptRef.current = state.startAttemptId;
@@ -388,14 +390,16 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
 
   const toggleReady = useCallback(() => {
     setStartError(null);
-    if (startPending || lifecycleInFlightRef.current || departureCompletedRef.current || roomDeparture.departing) return;
+    if (startPending || lifecycleInFlightRef.current || departureCompletedRef.current || roomDeparture.departing
+      || roomDeparture.hasPendingNavigation() || roomDeparture.hasDeparted()) return;
     if (!isLocal && (!sessionId || !currentUserId)) return;
     void readyController.toggle();
-  }, [currentUserId, isLocal, readyController, roomDeparture.departing, sessionId, startPending]);
+  }, [currentUserId, isLocal, readyController, roomDeparture, sessionId, startPending]);
 
   const startGame = useCallback(() => {
     if (!players.isHost || startPending || startRequestRef.current || readyState.pending
-      || lifecycleInFlightRef.current || departureCompletedRef.current || roomDeparture.departing) return;
+      || lifecycleInFlightRef.current || departureCompletedRef.current || roomDeparture.departing
+      || roomDeparture.hasPendingNavigation() || roomDeparture.hasDeparted()) return;
     setStartError(null);
     if (isLocal) {
       setShowCountdown(true);
@@ -421,7 +425,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
         if (startRequestRef.current === request) startRequestRef.current = null;
       });
     startRequestRef.current = request;
-  }, [gameType, isLocal, openPreparedGame, players.isHost, readyState.pending, roomDeparture.departing, sessionId, startPending]);
+  }, [gameType, isLocal, openPreparedGame, players.isHost, readyState.pending, roomDeparture, sessionId, startPending]);
 
   const performLifecycleAction = useCallback(async (action: 'leaving' | 'closing') => {
     if (lifecycleInFlightRef.current) return;

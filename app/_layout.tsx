@@ -16,6 +16,7 @@ import { useFonts } from "expo-font";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AccountStandingBoundary } from "@/components/AccountStandingBoundary";
 import { NotificationCoordinator } from "@/components/NotificationCoordinator";
+import { ParentNavigationShell } from "@/components/ParentNavigationShell";
 import { AppProvider } from "@/context/AppContext";
 import { AccountStandingProvider } from "@/context/AccountStandingContext";
 import { AuthProvider } from "@/context/AuthContext";
@@ -81,6 +82,7 @@ export default function RootLayout() {
                   <SquadProvider>
                     <AppProvider>
                   <NotificationCoordinator />
+                  <ParentNavigationShell>
                   <Stack
                     screenOptions={{
                       headerShown: false,
@@ -109,6 +111,7 @@ export default function RootLayout() {
                     />
                     <Stack.Screen name="+not-found" />
                   </Stack>
+                  </ParentNavigationShell>
                   <StatusBar style="dark" />
                     </AppProvider>
                   </SquadProvider>

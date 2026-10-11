@@ -73,9 +73,9 @@ async function lobbyStartTest() {
   const timers=new Map();let timerId=0,listener,listenerError;
   const originalSet=global.setTimeout,originalClear=global.clearTimeout;
   global.setTimeout=(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;};global.clearTimeout=id=>timers.delete(id);
-  let user={uid:'host',displayName:'Host'},sessionId='session',request=deferred();
+  let user={uid:'host',displayName:'Host'},sessionId='session',request=deferred(),pendingExit=false,departed=false;
   const requests=[],navigations=[];
-  const room={departing:false,continueWithinRoom:fn=>fn({__gameRoomTransition:'synthetic'}),markDeparted(){},depart:async()=>true,hasPendingNavigation:()=>false};
+  const room={departing:false,continueWithinRoom:fn=>fn({__gameRoomTransition:'synthetic'}),markDeparted(){},depart:async()=>true,hasPendingNavigation:()=>pendingExit,hasDeparted:()=>departed};
   const ui=harness(React=>load('hooks/useGameLobby.ts',{
     react:React,'expo-router':{router:{replace:input=>navigations.push(input)},useLocalSearchParams:()=>({sessionId,lobbyId:'lobby'})},
     'firebase/firestore':{onSnapshot(){return ()=>{};},orderBy(){},query(){}},'firebase/database':{onValue(_r,cb){cb({val:()=>({hostUserId:'host',players:{host:{displayName:'Host',isReady:true},other:{displayName:'Other',isReady:true}}})});return ()=>{};},ref(){}},
@@ -96,6 +96,11 @@ async function lobbyStartTest() {
     listener(prepared);ui.render();assert.equal(navigations.length,1,'The corresponding snapshot cannot navigate twice');
     const timeout=[...timers.values()].find(x=>x.delay===startCore.GAME_START_HANDOFF_TIMEOUT_MS);assert.ok(timeout);
     timeout.fn();lobby=ui.render();assert.equal(lobby.startPending,false);assert.equal(lobby.startError,'start_failed');assert.equal(requests.length,1,'A stalled handoff offers an error without an automatic write retry');
+    request=deferred();lobby.startGame();await flush();pendingExit=true;request.resolve({...prepared,startAttemptId:'late-attempt'});await flush();
+    listener({...prepared,startAttemptId:'late-snapshot'});assert.equal(navigations.length,1,'An exit requested before a late response/snapshot takes priority over game-start navigation');
+    pendingExit=false;departed=true;listener({...prepared,startAttemptId:'after-leave'});assert.equal(navigations.length,1,'A completed departure fences snapshots before unmount');
+    lobby=ui.render();const count=requests.length;lobby.startGame();await flush();assert.equal(requests.length,count,'A completed leave cannot submit another start');
+    departed=false;listenerError(Error('unavailable'));lobby=ui.render();
     request=deferred();lobby.startGame();await flush();request.resolve(prepared);await flush();assert.equal(navigations.length,2,'Manual retry may resume the same authoritative attempt');
     lobby=ui.render();listenerError(Error('unavailable'));lobby=ui.render();assert.equal(lobby.startPending,false);assert.equal(lobby.startError,'start_failed');
     request=deferred();lobby.startGame();await flush();user={uid:'different'};ui.render();request.resolve(prepared);await flush();assert.equal(navigations.length,2,'An old account response cannot navigate the new account');
@@ -107,7 +112,7 @@ async function lobbyStartTest() {
 function readinessTest() {
   let toggles=0;
   const ui=harness(React=>load('components/LobbyBase.tsx',{
-    react:React,'react-native':native,'react-native-safe-area-context':{useSafeAreaInsets:()=>({top:0,bottom:0})},'react-i18next':{useTranslation:()=>({t})},'@/constants/theme':theme,
+    react:React,'react-native':native,'@/context/ParentNavigationContext':{useParentScreenInsets:()=>({top:0,bottom:0})},'react-i18next':{useTranslation:()=>({t})},'@/constants/theme':theme,
     '@/utils/safeAreaLayout':{getFixedFooterBottomPadding:()=>0},'@/utils/gameJoinCode':{spokenGameJoinCode:x=>x},'@/utils/gameInteraction':interaction,
   }).default);
   const self={id:'self',name:'Me',ready:false},other={id:'other',name:'Other',ready:true};

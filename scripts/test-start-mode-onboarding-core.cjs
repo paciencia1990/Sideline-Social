@@ -108,8 +108,18 @@ assert.ok(rules.includes("allow update: if false;"), "Mobile clients must not gr
 assert.ok(teamService.includes('functions, "setTeamStaffRole"'), "Staff role changes must use the protected callable.");
 
 const translations = read("i18n", "index.ts");
+const translationAst = ts.createSourceFile("i18n/index.ts", translations, ts.ScriptTarget.Latest, true);
+const startModeBlocks = [];
+function findStartMode(node) {
+  if (ts.isPropertyAssignment(node) && node.name.getText(translationAst) === "startMode" && ts.isObjectLiteralExpression(node.initializer)) {
+    startModeBlocks.push(node.initializer.getText(translationAst));
+  }
+  ts.forEachChild(node, findStartMode);
+}
+findStartMode(translationAst);
+assert.equal(startModeBlocks.length, 2, "Start-mode translations exist in both languages.");
 for (const key of ["eyebrow", "parentTitle", "parentBody", "coachTitle", "coachBody", "switchNote", "coachWelcome", "coachWelcomeBody", "saveError"]) {
-  assert.equal(count(translations, new RegExp(`\\b${key}:`, "g")), 2, `${key} needs English and Spanish copy.`);
+  for (const block of startModeBlocks) assert.equal(count(block, new RegExp(`\\b${key}:`, "g")), 1, `${key} needs English and Spanish start-mode copy.`);
 }
 assert.match(translations, /continue:\s*'Continue'/, "English start-mode Continue copy must resolve.");
 assert.match(translations, /continue:\s*'Continuar'/, "Spanish start-mode Continue copy must resolve.");

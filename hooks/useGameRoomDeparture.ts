@@ -124,6 +124,7 @@ export function useGameRoomDeparture({
     () => controllerRef.current?.getState().hasPendingNavigation ?? false,
     [],
   );
+  const hasDeparted = useCallback(() => controllerRef.current?.hasDeparted() ?? false, []);
 
   usePreventRemove(enabled && !(controllerRef.current?.hasDeparted() ?? false), ({ data }) => {
     void controllerRef.current
@@ -144,6 +145,7 @@ export function useGameRoomDeparture({
     departureError: departureState.error,
     getDepartureError,
     hasPendingNavigation,
+    hasDeparted,
     retryDeparture,
     continueWithinRoom,
     markDeparted,
@@ -155,6 +157,7 @@ export function useGameRoomDeparture({
     departureState.error,
     getDepartureError,
     hasPendingNavigation,
+    hasDeparted,
     markDeparted,
     retryDeparture,
   ]);

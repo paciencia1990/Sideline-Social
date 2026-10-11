@@ -1,6 +1,6 @@
 import React from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useParentScreenInsets } from "@/context/ParentNavigationContext";
 import { useTranslation } from "react-i18next";
 
 import { Colors, Typography } from "@/constants/theme";
@@ -79,7 +79,7 @@ export default function LobbyBase({
   startError = null,
 }: LobbyBaseProps) {
   const { t } = useTranslation();
-  const insets = useSafeAreaInsets();
+  const insets = useParentScreenInsets();
   const readyCount = players.list.filter((player) => player.ready).length;
   const totalPlayers = players.list.length;
   const canStart = totalPlayers >= minPlayers && readyCount === totalPlayers;

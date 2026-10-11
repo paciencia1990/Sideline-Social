@@ -1,11 +1,10 @@
 import React, { useMemo } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { Redirect, Tabs } from "expo-router";
-import { Gamepad2, Heart, Home, MapPin, User } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { TabIcon } from "@/components/TabIcon";
+import { ParentTabsBar } from "@/components/ParentNavigationBar";
 import { CHOOSE_START_MODE_ROUTE, COACH_MODE_ROUTE, COMPLETE_ACCOUNT_ROUTE, SIGN_IN_ROUTE } from "@/constants/routes";
 import { Colors, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
@@ -54,6 +53,7 @@ export default function TabLayout() {
   return (
     <Tabs
       safeAreaInsets={{ bottom: 0 }}
+      tabBar={props => <ParentTabsBar {...props} />}
       screenOptions={{
         headerShown: false,
         tabBarHideOnKeyboard: true,
@@ -63,11 +63,11 @@ export default function TabLayout() {
         tabBarLabelStyle: styles.tabLabel,
       }}
     >
-      <Tabs.Screen name="index" options={{ title: t("tabs.home"), tabBarIcon: ({ focused }) => <TabIcon Icon={Home} focused={focused} /> }} />
-      <Tabs.Screen name="squad" options={{ title: t("tabs.squad"), tabBarIcon: ({ focused }) => <TabIcon Icon={MapPin} focused={focused} /> }} />
-      <Tabs.Screen name="games" options={{ title: t("tabs.games"), tabBarIcon: ({ focused }) => <TabIcon Icon={Gamepad2} focused={focused} isCenter /> }} />
-      <Tabs.Screen name="friends" options={{ title: t("tabs.friends"), tabBarIcon: ({ focused }) => <TabIcon Icon={Heart} focused={focused} /> }} />
-      <Tabs.Screen name="profile" options={{ title: t("tabs.profile"), tabBarIcon: ({ focused }) => <TabIcon Icon={User} focused={focused} /> }} />
+      <Tabs.Screen name="index" options={{ title: t("tabs.home") }} />
+      <Tabs.Screen name="squad" options={{ title: t("tabs.squad") }} />
+      <Tabs.Screen name="games" options={{ title: t("tabs.games") }} />
+      <Tabs.Screen name="friends" options={{ title: t("tabs.friends") }} />
+      <Tabs.Screen name="profile" options={{ title: t("tabs.profile") }} />
     </Tabs>
   );
 }

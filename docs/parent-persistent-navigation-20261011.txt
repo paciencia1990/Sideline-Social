@@ -1,0 +1,36 @@
+Parent Mode persistent navigation — 2026-10-11
+
+The existing Home, Squad, Games, Friends and Profile menu now also appears on
+Leaderboard, friend Chat (including conversations and related pages), Team
+pages and their schedules/events/messages, Squad detail, all three game lobby
+directories, and all three waiting rooms.
+
+The main Tabs navigator and detail routes use the same menu component, icons,
+localized labels, selected state and accessible touch targets. The footer owns
+the bottom safe area and occupies normal layout space. Screen content, lobby
+actions and chat composers are above it. Typing hides the menu; closing the
+keyboard restores it. Full-screen modal components retain actual device insets.
+
+Coach Mode, authentication, onboarding, restricted standing and gameplay retain
+their existing layouts. The shell remains inside AccountStandingBoundary.
+
+Detail-menu navigation uses Expo Router dismissTo, reusing an existing Tabs
+route or replacing a directly opened detail route. Waiting-room exits pass
+through the existing usePreventRemove guard and canonical leaveGameLobby
+operation. Concurrent exits share cleanup; only the latest destination resumes.
+Cleanup failure retains the room and its existing localized Retry controls.
+The menu does not submit a second leave operation. Same-room game-start and
+Play Again transitions retain their existing one-time navigation tokens.
+Pending or completed departure also fences late game-start responses/snapshots
+and further Start/Ready writes, so a delayed round cannot override a menu exit.
+
+Validation: TypeScript, targeted ESLint, parent-navigation integration checks,
+game-start handoff, lobby departure, game responsiveness, chat/private-message
+keyboard layouts, auth/onboarding, Coach/Chat/Squad back-navigation and SDK 57
+safe-area regressions. The onboarding test now scopes translation keys to each
+startMode object rather than counting unrelated modules' saveError keys.
+
+No dependency or native configuration change. No cloud write or native build.
+This client change requires the next Android and iOS beta builds. Verify native
+safe areas/rotation, chat typing, tab selection/back, and a two-device waiting
+lobby exit (including offline failure/Retry) on those candidate builds.
