@@ -4,7 +4,9 @@ const { initializeApp } = require("firebase/app");
 const { connectAuthEmulator, createUserWithEmailAndPassword, getAuth } = require("firebase/auth");
 const { connectFunctionsEmulator, getFunctions, httpsCallable } = require("firebase/functions");
 
-const projectId = process.env.GCLOUD_PROJECT || "sideline-notifications-functions-test";
+const projectId = process.env.GCLOUD_PROJECT;
+assert.ok(projectId?.startsWith("demo-") && process.env.FIRESTORE_EMULATOR_HOST && process.env.FIREBASE_AUTH_EMULATOR_HOST,
+  "Notification checks require isolated demo Auth and Firestore emulators");
 if (!admin.apps.length) admin.initializeApp({ projectId });
 const db = admin.firestore();
 

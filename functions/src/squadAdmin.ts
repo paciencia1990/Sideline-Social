@@ -1,3 +1,4 @@
+import { readSquadSports, squadSportsRevision } from './squadSportsCore';
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import * as firebaseFunctions from 'firebase-functions';
@@ -28,7 +29,7 @@ const communicationFunctions = permanentAccountFunctions(
   firebaseFunctions,
   "communication",
 );
-const MAX_ACTIVE_MEMBERS = 250;
+const PROFILE_LOOKUP_BATCH_SIZE = 250;
 // Each invitation may also update one notification in the same atomic batch.
 // Keeping this at 200 stays safely below Firestore's 500-write batch limit.
 const INVITATION_EXPIRY_BATCH_SIZE = 200;
@@ -185,10 +186,12 @@ function assertActiveAdmin(
 
 async function loadPublicMemberProfiles(userIds: string[]) {
   const db = firestore();
-  const ids = Array.from(new Set(userIds)).slice(0, MAX_ACTIVE_MEMBERS);
-  const publicSnapshots = ids.length
-    ? await db.getAll(...ids.map((userId) => db.collection('publicUserProfiles').doc(userId)))
-    : [];
+  const ids = Array.from(new Set(userIds));
+  const publicSnapshots: FirebaseFirestore.DocumentSnapshot[] = [];
+  for (let index = 0; index < ids.length; index += PROFILE_LOOKUP_BATCH_SIZE) {
+    publicSnapshots.push(...await db.getAll(...ids.slice(index, index + PROFILE_LOOKUP_BATCH_SIZE)
+      .map((userId) => db.collection('publicUserProfiles').doc(userId))));
+  }
   const resolved = new Map(ids.map((userId) => [userId, {
     userId,
     displayName: null as string | null,
@@ -204,7 +207,11 @@ async function loadPublicMemberProfiles(userIds: string[]) {
     else missingIds.push(snapshot.id);
   });
   if (missingIds.length) {
-    const privateSnapshots = await db.getAll(...missingIds.map((userId) => db.collection('users').doc(userId)));
+    const privateSnapshots: FirebaseFirestore.DocumentSnapshot[] = [];
+    for (let index = 0; index < missingIds.length; index += PROFILE_LOOKUP_BATCH_SIZE) {
+      privateSnapshots.push(...await db.getAll(...missingIds.slice(index, index + PROFILE_LOOKUP_BATCH_SIZE)
+        .map((userId) => db.collection('users').doc(userId))));
+    }
     const authFallbackIds: string[] = [];
     privateSnapshots.forEach((snapshot) => {
       const profile = resolveCanonicalPublicProfile(snapshot.id, snapshot.data() as Record<string, unknown> | undefined);
@@ -383,6 +390,8 @@ export const getSquadAdministration = functions.https.onCall(async (data, contex
   return {
     squadId,
     squadLabel: squadLabel(state.squad),
+    sportIds: readSquadSports(state.squad),
+    sportsRevision: squadSportsRevision(state.squad),
     callerIsAdmin,
     activeAdminCount: currentAdminIds.length,
     isOrphaned: currentAdminIds.length === 0,

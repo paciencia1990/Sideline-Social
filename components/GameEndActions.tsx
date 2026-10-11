@@ -1,42 +1,53 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 
 type GameEndActionsProps = {
   onPlayAgain: () => void | Promise<void>;
-  lobbyRoute: string;
-  lobbyParams?: Record<string, string>;
-  onBackToLobby?: () => void;
+  onBackToLobbies: () => void | Promise<void>;
+  onExitToGames: () => void | Promise<void>;
+  onExitToHome: () => void | Promise<void>;
+  departing?: boolean;
+  departureFailed?: boolean;
+  onRetryDeparture?: () => void;
 };
 
-export function GameEndActions({ lobbyParams, lobbyRoute, onBackToLobby, onPlayAgain }: GameEndActionsProps) {
+export function GameEndActions({
+  departing = false,
+  departureFailed = false,
+  onBackToLobbies,
+  onExitToGames,
+  onExitToHome,
+  onPlayAgain,
+  onRetryDeparture,
+}: GameEndActionsProps) {
   const { t } = useTranslation();
-  const handleBackToLobby = () => {
-    if (onBackToLobby) {
-      onBackToLobby();
-      return;
-    }
-    router.replace(lobbyParams
-      ? { pathname: lobbyRoute as never, params: lobbyParams }
-      : lobbyRoute as never);
-  };
 
   return (
     <View style={styles.actions}>
-      <Pressable style={styles.primaryButton} onPress={() => void onPlayAgain()}>
+      <Pressable disabled={departing} style={styles.primaryButton} onPress={() => void onPlayAgain()}>
         <Text style={styles.primaryText}>{t("game.playAgain")}</Text>
       </Pressable>
-      <Pressable style={styles.secondaryButton} onPress={handleBackToLobby}>
-        <Text style={styles.secondaryText}>{t("game.backToLobby")}</Text>
+      <Pressable disabled={departing} style={styles.secondaryButton} onPress={() => void onBackToLobbies()}>
+        <Text style={styles.secondaryText}>{departing ? t("game.leavingRoom") : t("game.backToLobbies")}</Text>
       </Pressable>
+      {departureFailed ? (
+        <View accessibilityLiveRegion="polite" style={styles.errorPanel}>
+          <Text style={styles.errorText}>{t("game.departureFailedBody")}</Text>
+          {onRetryDeparture ? (
+            <Pressable accessibilityRole="button" onPress={onRetryDeparture}>
+              <Text style={styles.retryText}>{t("common.retry")}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
       <View style={styles.navRow}>
-        <Pressable style={styles.navButton} onPress={() => router.replace("/(tabs)/games" as never)}>
+        <Pressable disabled={departing} style={styles.navButton} onPress={() => void onExitToGames()}>
           <Text style={styles.navText}>{t("game.games")}</Text>
         </Pressable>
-        <Pressable style={styles.navButton} onPress={() => router.replace("/(tabs)" as never)}>
+        <Pressable disabled={departing} style={styles.navButton} onPress={() => void onExitToHome()}>
           <Text style={styles.navText}>{t("game.home")}</Text>
         </Pressable>
       </View>
@@ -95,5 +106,19 @@ const styles = StyleSheet.create({
     color: Colors.textHeading,
     fontFamily: Typography.bodySemiBold,
     fontSize: 14,
+  },
+  errorPanel: {
+    alignItems: "center",
+    gap: Spacing.xs,
+  },
+  errorText: {
+    color: "#B42318",
+    fontFamily: Typography.bodyRegular,
+    textAlign: "center",
+  },
+  retryText: {
+    color: Colors.primary,
+    fontFamily: Typography.bodyBold,
+    textDecorationLine: "underline",
   },
 });

@@ -1,5 +1,16 @@
 # Sideline Social privacy-policy fact sheet
 
+## Pending candidate: optional Team/Coach translation (October 10, 2026)
+
+This section describes local code awaiting provider configuration and release; it is not a claim that the delivered beta already translates messages.
+
+- A parent chooses a language and explicitly requests translation of an authorized received Team announcement or private Coach message. Google Cloud Translation receives written text only, using the standard NMT model and its global endpoint. There is no background translation, audio transcription, or Coach AI entitlement requirement.
+- The callable loads message text from Firestore and checks standing, team membership/audience, private conversation identity, user-hidden messages, deletion and moderation visibility before and after translation. It does not accept arbitrary text or send UIDs, team IDs, children’s profiles, account profiles or conversation IDs to Google. Names or other personal information written inside the message can still reach Google. URLs, email addresses and six-character team invite codes are preserved locally and omitted from provider text spans.
+- The original is preserved. Translations are returned to the requesting client and are not added to message history or a persistent translation database. A bounded in-memory server cache may reuse results for five minutes; process memory is not durable storage. Client results are cleared on message change, account change or component departure.
+- The selected language is stored in local AsyncStorage under the user’s UID. Existing account deletion clears local storage. Server-only rolling usage counters contain current month aggregate characters and each account’s current day characters/minute request count. The account counter is nested under the user and is removed by existing recursive account deletion. Counters contain no message text, translation text, language, message ID or conversation ID.
+- Google’s current data-usage statement says submitted text is used to provide translation, briefly held in memory, and not used to train its models: https://docs.cloud.google.com/translate/data-usage . Confirm the applicable Google Cloud agreement and international-processing disclosures before enabling the feature. The global endpoint does not enforce a specific processing region.
+- Update the public privacy policy and store disclosures before enabling this release. Evaluate messages/communications as optional collection for app functionality and the applicable service-provider sharing exception against actual contracts; do not automatically declare every processor transfer as sharing. Include Google Translate attribution, app-description/help references, and access to Google’s translation disclaimer: https://docs.cloud.google.com/translate/attribution .
+
 Status: **verified engineering facts plus conspicuous decision placeholders. This is not legal prose and is not the final Privacy Policy.** A single unified policy can cover iOS and Android, with a short Platform-Specific Information section for notification delivery, Firebase files and Android development-build differences.
 
 ## Policy identity

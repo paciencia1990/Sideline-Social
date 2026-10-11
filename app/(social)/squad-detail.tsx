@@ -23,6 +23,7 @@ import { OutlineButton } from '@/components/OutlineButton';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Card } from '@/components/Card';
 import { SquadIdentity } from '@/components/SquadIdentity';
+import { VenueLightningCard } from '@/components/VenueLightningCard';
 import { SquadSeasonManager } from '@/components/SquadSeasonManager';
 import {
   SquadAdministrationCard,
@@ -36,14 +37,15 @@ import {
   getSquadStatus,
   type SquadAdministration,
   type SquadDetail,
+  type SquadSportsUpdate,
 } from '@/services/squadService';
-import { getSquadSportOption, getSquadSportTranslationKey } from '@/constants/sports';
+import { getSquadSportOption, getSquadSportTranslationKey, readSquadSportIds } from '@/constants/sports';
 
 export default function SquadDetailScreen() {
   const { t } = useTranslation();
   const { squadId } = useLocalSearchParams<{ squadId: string }>();
   const { user } = useAuth();
-  const { joinSquad, leaveSquad, mySquadIds } = useSquad();
+  const { joinSquad, leaveSquad, mySquadIds, reloadMemberships } = useSquad();
 
   const [squadDetail, setSquadDetail] = useState<SquadDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -62,7 +64,12 @@ export default function SquadDetailScreen() {
   const isMember =
     mySquadIds.includes(squadId ?? '') &&
     squadDetail?.viewerIsMember === true;
-  const emoji = getSquadSportOption(squadDetail?.sportId).emoji;
+  const sports = readSquadSportIds(squadDetail?.sportIds, squadDetail?.sportId);
+  const emoji = sports.length > 1 ? "🏅" : getSquadSportOption(squadDetail?.sportId).emoji;
+  const handleSportsSaved = useCallback((result: SquadSportsUpdate) => {
+    setSquadDetail((current) => current?.squadId === result.squadId ? { ...current, sportIds: result.sportIds, sportId: result.sportId, sportDisplayName: result.sportDisplayName, sport: result.sportDisplayName } : current);
+    void reloadMemberships();
+  }, [reloadMemberships]);
 
   const loadSquadDetail = useCallback(async () => {
     if (!squadId) {
@@ -239,7 +246,7 @@ export default function SquadDetailScreen() {
       : status === 'starting_soon'
         ? Colors.accentGold
         : Colors.secondary;
-  const sportName = t(getSquadSportTranslationKey(squadDetail.sportId));
+  const sportName = sports.map((id) => t(getSquadSportTranslationKey(id))).join(" · ");
   const squadAccessibilityName = [squadDetail.venueName, sportName].filter(Boolean).join(' ');
 
   return (
@@ -253,6 +260,8 @@ export default function SquadDetailScreen() {
 
       <ScrollView
         ref={scrollRef}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         contentContainerStyle={styles.scroll}
         onMomentumScrollEnd={focusAdministrationHeading}
         onScroll={handleScroll}
@@ -266,6 +275,7 @@ export default function SquadDetailScreen() {
           <SquadIdentity
             venueName={squadDetail.venueName}
             sportId={squadDetail.sportId}
+            sportIds={squadDetail.sportIds}
             sportDisplayName={squadDetail.sportDisplayName}
             style={styles.heroIdentity}
           />
@@ -274,6 +284,8 @@ export default function SquadDetailScreen() {
             <Text style={styles.statusText}>{statusLabel}</Text>
           </View>
         </View>
+
+        <VenueLightningCard squadId={squadDetail.squadId} venueId={squadDetail.venueId} />
 
         {administration?.callerIsAdmin === true ? (
           <Card style={styles.manageSquadCard}>
@@ -306,8 +318,8 @@ export default function SquadDetailScreen() {
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statItem}>
-            <Text style={styles.statValue}>{sportName}</Text>
-            <Text style={styles.statLabel}>{t('squad.sport')}</Text>
+            <Text style={styles.statValue}>{sports.length > 1 ? sports.length : sportName}</Text>
+            <Text style={styles.statLabel}>{t(sports.length > 1 ? 'squadSports.sports' : 'squad.sport')}</Text>
           </View>
         </View>
 
@@ -347,6 +359,7 @@ export default function SquadDetailScreen() {
             <SquadAdministrationCard
               ref={administrationCardRef}
               onStateChange={setAdministration}
+              onSportsSaved={handleSportsSaved}
               selectionRequestKey={adminSelectionRequestKey}
               squadId={squadDetail.squadId}
             />

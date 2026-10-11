@@ -1208,7 +1208,16 @@ export const getBombDefusalPlayerView = functions.https.onCall(async (data, cont
     admin.database().ref(`/gameSessionSecrets/${sessionId}`).once('value'),
   ]);
   if (!sessionSnapshot.exists()) throw safeError('not-found', 'game_not_found');
-  const session = readRecord(sessionSnapshot.val());
+  return buildBombPlayerView(sessionId, uid, locale, readRecord(sessionSnapshot.val()), readRecord(secretSnapshot.val()));
+});
+
+function buildBombPlayerView(
+  sessionId: string,
+  uid: string,
+  locale: ReturnType<typeof normalizeBombLocale>,
+  session: Record<string, unknown>,
+  secret: Record<string, unknown>,
+) {
   const players = readRecord(session.players);
   const gameState = readRecord(session.gameState);
   if (session.gameType !== 'bomb_defusal' || !players[uid]) {
@@ -1235,7 +1244,6 @@ export const getBombDefusalPlayerView = functions.https.onCall(async (data, cont
     ? Number(gameState.currentCommandIndex)
     : -1;
   const assignment = readBombRoleAssignment(gameState.roleAssignment);
-  const secret = readRecord(secretSnapshot.val());
   const commands = Array.isArray(secret.bombSteps) ? secret.bombSteps : [];
   const command = commandIndex >= 0 && commandIndex < commands.length
     ? commands[commandIndex]
@@ -1278,7 +1286,7 @@ export const getBombDefusalPlayerView = functions.https.onCall(async (data, cont
     endsAtMs: readPositiveNumber(session.endsAt) ?? 0,
     serverNowMs: Date.now(),
   };
-});
+}
 
 async function expireBombDefusalRoundIfNeeded(sessionId: string) {
   const reference = admin.database().ref(`/gameSessions/${sessionId}`);
@@ -1328,6 +1336,8 @@ async function expireBombDefusalRoundIfNeeded(sessionId: string) {
 export const submitBombDefusalStep = functions.https.onCall(async (data, context) => {
   const uid = requireUid(context);
   const sessionId = readSessionId(data?.sessionId);
+  const includePlayerView = data?.includePlayerView === true;
+  const locale = normalizeBombLocale(data?.locale);
   const commandId = typeof data?.commandId === 'string' ? data.commandId.trim() : '';
   const submissionId =
     typeof data?.submissionId === 'string' ? data.submissionId.trim() : '';
@@ -1378,7 +1388,9 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
     commandId,
     actionHash,
   );
-  if (existingResult) return existingResult;
+  if (existingResult) return includePlayerView
+    ? { ...existingResult, playerView: buildBombPlayerView(sessionId, uid, locale, readRecord(initialSession), secret) }
+    : existingResult;
 
   let resultPayload: {
     correct: boolean;
@@ -1513,7 +1525,11 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
   if (completedPayload.outcome !== 'playing') {
     await markGameJoinCodeEndedFromServer('bombDefusal', sessionId);
   }
-  return completedPayload;
+  // Build only the authenticated caller's role-filtered view from the committed
+  // transaction snapshot. The shared database record contains no private view.
+  return includePlayerView
+    ? { ...completedPayload, playerView: buildBombPlayerView(sessionId, uid, locale, readRecord(transactionResult.snapshot.val()), secret) }
+    : completedPayload;
 });
 
 type StoredLobbyMembership = {

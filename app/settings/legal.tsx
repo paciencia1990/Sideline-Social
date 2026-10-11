@@ -5,6 +5,8 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SettingsBackButton } from "@/components/SettingsBackButton";
 import { PRIVACY_POLICY_URL, SUPPORT_EMAIL, SUPPORT_URL, TERMS_OF_USE_URL } from "@/config/legal";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { GOOGLE_TRANSLATION_PRODUCT_URL } from '@/utils/teamTranslation';
+import { openTranslationInformation } from '@/services/teamTranslationService';
 
 export default function LegalScreen() {
   const { t } = useTranslation();
@@ -26,6 +28,16 @@ export default function LegalScreen() {
         <LegalSection title={t("settings.privacyTitle")} body={t("settings.privacyBody")} onOpen={privacyPolicyUrl ? () => void openExternalLink(privacyPolicyUrl) : undefined} linkLabel={t("settings.openFullPolicy")} />
         <LegalSection title={t("settings.termsTitle")} body={t("settings.termsBody")} onOpen={termsOfUseUrl ? () => void openExternalLink(termsOfUseUrl) : undefined} linkLabel={t("settings.openTerms")} />
         <LegalSection title={t("settings.communityTitle")} body={t("settings.communityBody")} />
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>{t('messageTranslation.helpTitle')}</Text>
+          <Text style={styles.body}>{t('messageTranslation.help')}</Text>
+          <TouchableOpacity accessibilityRole="link" onPress={() => void openExternalLink(GOOGLE_TRANSLATION_PRODUCT_URL)} style={styles.linkButton}>
+            <Text style={styles.linkText}>{t('messageTranslation.productLink')}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity accessibilityRole="link" onPress={() => { void openTranslationInformation().catch(() => Alert.alert(t('settings.linkErrorTitle'), t('settings.linkErrorBody'))); }} style={styles.linkButton}>
+            <Text style={styles.linkText}>{t('messageTranslation.info')}</Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t("settings.supportTitle")}</Text>
           <Text style={styles.body}>{t("settings.supportBody")}</Text>

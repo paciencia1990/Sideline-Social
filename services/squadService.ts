@@ -9,10 +9,12 @@ import {
   type DocumentData,
 } from "firebase/firestore";
 
-import { db, functions } from "@/config/firebase";
+import { auth, db, firebaseAppCheckReady, functions } from "@/config/firebase";
 import {
   getSquadSportOption,
+  isSquadSportId,
   normalizeSquadSportId,
+  readSquadSportIds,
   type SquadSportId,
 } from "@/constants/sports";
 
@@ -32,6 +34,7 @@ export interface Squad {
   venueName: string;
   normalizedVenueName: string;
   sportId: SquadSportId;
+  sportIds?: SquadSportId[];
   sportDisplayName: string;
   venueSportKey: string | null;
   venueLocation: Coordinates | null;
@@ -56,13 +59,14 @@ export interface Squad {
 export interface CreateSquadInput {
   venueId?: string;
   venueName: string;
-  sportId: SquadSportId;
+  sportIds: SquadSportId[];
   venueLocation: Coordinates;
 }
 
 export interface FindOrCreateSquadResult {
   squadId: string;
   status: "existing" | "created";
+  sportIds: SquadSportId[];
 }
 
 export interface AppConfig {
@@ -123,6 +127,8 @@ export type SquadAdministration = {
   squadId: string;
   squadLabel: string;
   callerIsAdmin: boolean;
+  sportIds?: SquadSportId[];
+  sportsRevision?: number;
   activeAdminCount: number;
   isOrphaned: boolean;
   admins: SquadAdminMember[];
@@ -190,6 +196,7 @@ export function normalizeSquadDocument(id: string, data: DocumentData): Squad {
     venueName,
     normalizedVenueName: readString(data.normalizedVenueName),
     sportId,
+    sportIds: readSquadSportIds(data.sportIds, sportId),
     sportDisplayName: readString(data.sportDisplayName) || sportOption.englishName,
     venueSportKey: readString(data.venueSportKey) || null,
     venueLocation: readPoint(data.venueLocation),
@@ -341,15 +348,15 @@ export async function searchVenueSquads(queryText: string): Promise<Squad[]> {
 
 export async function findOrCreateSquad(input: CreateSquadInput): Promise<FindOrCreateSquadResult> {
   const callable = httpsCallable<
-    { venueId?: string; venueName: string; latitude: number; longitude: number; sportId: SquadSportId },
+    { venueId?: string; venueName: string; latitude: number; longitude: number; sportIds: SquadSportId[] },
     FindOrCreateSquadResult
   >(functions, "findOrCreateVenueSportSquad");
   const response = await callable({
-    venueId: input.venueId,
+    ...(input.venueId ? { venueId: input.venueId } : {}),
     venueName: input.venueName.trim(),
     latitude: input.venueLocation.latitude,
     longitude: input.venueLocation.longitude,
-    sportId: input.sportId,
+    sportIds: input.sportIds,
   });
   return response.data;
 }
@@ -365,6 +372,24 @@ export async function joinSquad(squadId: string): Promise<{ selectedSquadId: str
 export async function leaveSquad(squadId: string): Promise<{ selectedSquadId: string | null }> {
   const callable = httpsCallable<{ squadId: string }, { selectedSquadId: string | null }>(functions, "leaveVenueSportSquad");
   return (await callable({ squadId })).data;
+}
+
+export type SquadSportsUpdate = { squadId: string; sportIds: SquadSportId[]; sportId: SquadSportId; sportDisplayName: string; sportsRevision: number };
+
+export async function updateSquadSports(squadId: string, sportIds: SquadSportId[], expectedRevision: number): Promise<SquadSportsUpdate> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Sign-in required');
+  await firebaseAppCheckReady;
+  if (auth.currentUser?.uid !== uid) throw new Error('Account changed');
+  const callable = httpsCallable<{ squadId: string; sportIds: SquadSportId[]; expectedRevision: number }, SquadSportsUpdate>(functions, 'updateSquadSports', { timeout: 25_000 });
+  const response = (await callable({ squadId, sportIds, expectedRevision })).data;
+  const requestedSports = readSquadSportIds(sportIds, sportIds[0]);
+  if (auth.currentUser?.uid !== uid || response.squadId !== squadId || !Array.isArray(response.sportIds)
+    || !response.sportIds.length || !response.sportIds.every(isSquadSportId)
+    || response.sportIds.join('|') !== requestedSports.join('|') || !response.sportIds.includes(response.sportId)
+    || typeof response.sportDisplayName !== 'string' || !Number.isSafeInteger(response.sportsRevision)
+    || response.sportsRevision < expectedRevision || response.sportsRevision > expectedRevision + 1) throw new Error('Unconfirmed sports update');
+  return response;
 }
 
 export async function getSquadAdministration(squadId: string): Promise<SquadAdministration> {

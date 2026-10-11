@@ -173,7 +173,7 @@ assert.match(screen, /session\?\.currentQuestion/);
 assert.match(screen, /createTriviaQuestionKey\(session\?\.questionIndex \?\? -1, currentQuestion\.id\)/);
 assert.match(screen, /lastResult\?\.questionKey === currentQuestionKey/);
 assert.match(screen, /currentResult\?\.correctAnswerIndex \?\? -1/);
-assert.match(screen, /disabled=\{busy \|\| answerLocked\}/);
+assert.match(screen, /disabled=\{busy \|\| answerPendingKey === currentQuestionKey \|\| answerLocked\}/);
 assert.match(screen, /if \(hasAlreadyAnswered\)/);
 assert.match(screen, /claimTriviaAnswerSubmission\(questionKey, answerSubmissionKeyRef\.current\)/);
 assert.match(screen, /answerSubmissionKeyRef\.current = claim\.submissionKey/);
@@ -182,7 +182,7 @@ assert.match(screen, /session\?\.currentSelection\?\.answerIndex \?\?[\s\S]*opti
 assert.equal((screen.match(/submitTriviaAnswer\(\{/g) ?? []).length, 1);
 assert.match(screen, /submissionId = createTriviaSessionId\(\)/);
 assert.match(screen, /resolveClientGameAuthority\(\{/);
-assert.match(screen, /readTimestampMillis\(session\.questionEndsAt\)/);
+assert.match(screen, /readTimestampMillis\(session\?\.questionEndsAt\)/);
 assert.doesNotMatch(screen, /selectedQuestions|selectionRevealed|currentQuestion\.answer/);
 assert.match(screen, /pointerEvents="none"/);
 assert.match(screen, /accessibilityElementsHidden/);
@@ -197,7 +197,8 @@ assert.match(styles, /answerText:[\s\S]*flex: 1[\s\S]*flexShrink: 1/);
 assert.match(styles, /feedbackIconSlot:[\s\S]*flexShrink: 0[\s\S]*minHeight: 24[\s\S]*width: 24/);
 assert.doesNotMatch(screen, /numberOfLines=|adjustsFontSizeToFit=/);
 assert.match(screen, /const QUESTION_SECONDS = 15/);
-assert.match(screen, /currentResult\s*\?\s*1400/);
+assert.match(screen, /getTriviaAdvanceDelay\(/);
+assert.match(screen, /revealTimingRef\.current/);
 
 assert.equal(playRoute.trim(), legacyRoute.trim(), "Host and joining routes must use the same screen.");
 assert.match(playRoute, /TriviaBlitzScreen/);

@@ -1,0 +1,45 @@
+Optional Team and Coach translation — local candidate, October 10, 2026
+
+Parents can request free translation of received Team announcement titles/bodies and private Coach text messages or written voice captions. No audio, image, attachment or transcription is sent. Team replies and friend chat are outside this first release. There are 70 searchable language choices; supported device locales set a default, and parents can remember another language per account/device. Unsupported device languages require a manual choice.
+
+Originals are preserved. Each request requires the language/Google-processing confirmation. Automatic output appears beneath the original with the unmodified official Google Translate attribution badge. Help links include Google Cloud Translation and the provider’s full attribution/disclaimer page, opened in the app browser sheet. Important details should be confirmed with the coach.
+
+Messages show only a compact Translate button until the parent requests a translation. This single button opens the same language picker before and after translating. The picker’s final provider-request confirmation says Translate with Google. Hide translation removes the entire result panel, including its heading, translated text, badge, accuracy notice and information link; the original and compact Translate button remain.
+
+Provider and access controls
+- New us-central1 callable: translateTeamMessage. It accepts only canonical message identifiers, a catalog language and consentVersion=1; it rejects raw client text and extra fields.
+- Permanent Firebase authentication and App Check are required. The server checks current standing and authorized active parent membership/audience. Private messages additionally require explicit conversation participation, the designated parent and coach identities, a matching team, and no user-hidden record. Deleted/moderated content is denied. Recheck all access and canonical text after provider work or cache use.
+- Uses Google Cloud Translation v3, global endpoint, standard general/nmt model, MIME text/plain, server runtime OAuth credentials. No client API key, new native SDK, downloaded model or browser translation of private text.
+- Protect the team’s current invite code, digit-containing valid six-character invite codes, full HTTP(S) URLs and email addresses. Preserve whitespace around these literals; omit them from the Google request. Ordinary uppercase words remain translatable. Other personal information written in the message can still be submitted.
+- The server reuses at most 100 results in process memory for up to five minutes of cache eligibility; expired entries are pruned on provider completion and instances can end at any time. No persistent translation cache, message rewrite or translation history is created. Client state is cleared on source/account change or screen departure.
+
+Cost controls
+- TEAM_TRANSLATION_ENABLED must be exactly true. Otherwise the endpoint is unavailable without a provider call. Default is disabled until delivery readiness is reviewed.
+- TEAM_TRANSLATION_MONTHLY_CHAR_LIMIT defaults to 500000 and may be lowered. Values above 500000 or invalid values fail closed. The monthly cap counts this callable’s reserved provider source characters in UTC calendar months.
+- Per account: 20000 characters/day and 10 uncached translation reservations/minute. In-process identical concurrent requests share provider work; existing authorized cache results do not consume new source-character quota.
+- Firestore transactions reserve characters before calling Google. Failed/timed-out provider requests retain their reservation because billing outcome can be uncertain. There are no automatic provider write retries. Manual retry may reserve characters again.
+- Counters: teamTranslationUsage/current (aggregate current month); users/{uid}/translationUsage/current (rolling account day/minute). No message text, translation, message identifier, conversation identifier or language is recorded in these counters. Existing Rules deny client reads/writes without a Rules change. Recursive user deletion removes the account counter.
+- A cap on source characters is not a total cloud spending cap. Functions/Firestore costs are separate. Google’s monthly credit can be consumed by other Translation usage in the project; do not promise that the first 500000 characters are necessarily free on this account. Read-only billing/usage checks and budget alerts accompany rollout; alerts alone do not enforce a cap.
+
+Delivery sequence — no operations performed by this document
+1. Bind the reviewed combined source to the intended release branch; preserve all pending child/auth/lobby/game/weather changes. Do not build from the stale primary workspace or reapply older isolated copies.
+2. Inspect existing project billing, translation.googleapis.com enablement, runtime identity and permissions read-only. Review any required API enablement and narrowly scoped runtime permission (cloudtranslate.generalModels.predict) before applying them. Do not grant broad Editor/Owner, distribute a service-account key or alter moderation IAM.
+3. Review/update the public privacy policy and store declarations against the real Google Cloud agreement and processing path. Text may contain personal details supplied by message authors. Global processing has no regional restriction. Google’s current statement says translation text is used for providing the service and is not used to train its translation models. Review optional collection for functionality and any applicable service-provider sharing exception; do not auto-certify form answers.
+4. Deploy only the new translateTeamMessage callable with its reviewed identity/configuration and source. Include the already pending deleteChildProfile and submitBombDefusalStep targets in the combined release review. Do not redeploy all Functions. Verify App Check, identity and protected limits before enabling this new callable.
+5. Build one Android beta candidate and one iOS TestFlight candidate through the protected workflow with fresh version-counter/source checks. No native dependency changed. This feature can share the planned builds with the other pending repairs.
+6. Verify on one authorized synthetic received announcement and one private coach message: language/consent, actual provider result with preserved codes/link, duplicate taps, offline/error handling, account switch, and iOS/Android keyboard/browser-sheet return. Keep paid-provider acceptance narrowly scoped; do not copy genuine child-sensitive material into fixtures.
+7. Keep moderation live throughout. No suspension, restriction, new report, moderation alert, appeal, dark recovery or repeat moderation acceptance cycle is needed. Disable only TEAM_TRANSLATION_ENABLED if this feature fails.
+
+Suggested store-description addition, for reviewed release only:
+Translate received Team announcements and private Coach messages into your chosen language, powered by Google Translate (https://cloud.google.com/translate). Translations are automatic; confirm important details with your coach.
+
+Suggested public privacy addition, for reviewed publication only:
+Message translation is optional. When you request it, we send the written message text to Google Cloud Translation to return a translation in your chosen language. This text can include personal information written by the sender. We keep the original message and do not send audio recordings, account profiles or children’s profiles to the translation service. The service processes text globally. We do not add translations to message history. We keep rolling usage counters to control cost and abuse, and save your chosen language on your device for your account.
+
+Primary provider references
+https://docs.cloud.google.com/translate/docs/advanced/translating-text-v3
+https://docs.cloud.google.com/translate/docs/languages
+https://docs.cloud.google.com/translate/data-usage
+https://docs.cloud.google.com/translate/attribution
+https://cloud.google.com/products/translate/pricing
+https://support.google.com/googleplay/android-developer/answer/10787469

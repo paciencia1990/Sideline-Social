@@ -334,6 +334,8 @@ export async function submitBombDefusalStep(input: {
   commandId: string;
   action: Record<string, string | number>;
   submissionId: string;
+  includePlayerView?: boolean;
+  locale?: 'en' | 'es';
 }) {
   const callable = httpsCallable<
     typeof input,
@@ -343,6 +345,7 @@ export async function submitBombDefusalStep(input: {
       nextCommandIndex: number;
       strikeCount: number;
       outcome: 'playing' | 'defused' | 'exploded';
+      playerView?: BombDefusalPlayerView;
     }
   >(functions, 'submitBombDefusalStep');
   return (await callable(input)).data;

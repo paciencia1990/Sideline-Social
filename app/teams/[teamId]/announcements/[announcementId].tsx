@@ -5,6 +5,9 @@ import { ArrowLeft, MessageCircle, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { AnnouncementBody } from "@/components/AnnouncementBody";
+import { MessageTranslation } from "@/components/MessageTranslation";
+import { announcementTranslationText } from "@/utils/teamTranslation";
 import { MessageActionsModal, type MessageModalAction, type MessageReportReason } from "@/components/MessageActionsModal";
 import { MessageKeyboardAwareScrollView } from "@/components/MessageKeyboardAwareScrollView";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
@@ -350,7 +353,10 @@ export default function ParentAnnouncementScreen() {
                   </TouchableOpacity>
                 ) : null}
               </View>
-              {!announcement.isDeleted ? <Text style={styles.announcementBody}>{announcement.body}</Text> : null}
+              {!announcement.isDeleted ? <AnnouncementBody body={announcement.body} style={styles.announcementBody} /> : null}
+              {!announcement.isDeleted && !announcement.isModerated && announcement.createdBy !== auth.currentUser?.uid ? (
+                <MessageTranslation source={{ kind: 'announcement', teamId, messageId: announcement.id }} sourceText={announcementTranslationText(announcement.title, announcement.body)} />
+              ) : null}
               {!announcement.isDeleted && announcement.contentType === "voice" && announcement.voiceMemo ? (
                 <VoiceMemoPlayer
                   durationMilliseconds={announcement.voiceMemo.durationMilliseconds}

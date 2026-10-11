@@ -18,6 +18,8 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withTiming,
+  withDelay,
+  withSequence,
   type SharedValue,
 } from "react-native-reanimated";
 import { useTranslation } from "react-i18next";
@@ -31,6 +33,7 @@ import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { useFirebaseServerClock } from "@/hooks/useFirebaseServerClock";
+import { useGameRoomDeparture } from "@/hooks/useGameRoomDeparture";
 import {
   createGameRewardSession,
   finalizeGameReward,
@@ -66,6 +69,7 @@ type SpotFeedback =
   | { kind: "missed" }
   | { kind: "alreadyFound" }
   | { kind: "actionFailed" }
+  | { kind: "checking" }
   | { kind: "found"; number: number }
   | { kind: "foundByName"; name: string };
 
@@ -107,7 +111,7 @@ type ZoomControls = {
 const ROUND_SECONDS = 90;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
-const PAN_MIN_DISTANCE = 8;
+const PAN_MIN_DISTANCE = 10;
 const ZOOM_EPSILON = 0.01;
 const RESET_THRESHOLD = 1.02;
 const FOUND_MARKER_RADIUS_SCALE = 0.4;
@@ -122,6 +126,7 @@ export default function SpotDifferenceScreen() {
   const params = useLocalSearchParams<{ sessionId?: string | string[]; lobbyId?: string | string[] }>();
   const requestedSessionId = normalizeRouteParam(params.sessionId);
   const lobbyId = normalizeRouteParam(params.lobbyId);
+  const roomDeparture = useGameRoomDeparture({ enabled: Boolean(lobbyId), lobbyId });
   const [usedSceneIds, setUsedSceneIds] = useState<string[]>([]);
   const [currentScene, setCurrentScene] = useState<SpotDifferenceScene | null>(() => selectNextScene([]));
   const [foundIds, setFoundIds] = useState<string[]>([]);
@@ -139,6 +144,9 @@ export default function SpotDifferenceScreen() {
   const [spotResult, setSpotResult] = useState<SpotRoundResultState | null>(null);
   const finalizedRewardKeyRef = useRef("");
   const submittingDifferenceIdsRef = useRef(new Set<string>());
+  const latestTapSequenceRef = useRef(0);
+  const roundScopeRef = useRef("");
+  roundScopeRef.current = `${requestedSessionId}:${currentScene?.id ?? ""}:${roundInstance}`;
   const latestDiscoveryRef = useRef("");
   const rematchInFlightRef = useRef(false);
   const [sceneLayouts, setSceneLayouts] = useState<SceneLayouts>({
@@ -155,6 +163,8 @@ export default function SpotDifferenceScreen() {
         return t("spot.alreadyFound");
       case "actionFailed":
         return t("spot.actionFailed");
+      case "checking":
+        return t("spot.checking");
       case "found":
         return t("spot.foundNumber", { number: feedback.number });
       case "foundByName":
@@ -300,7 +310,7 @@ export default function SpotDifferenceScreen() {
     if (rewardSessionId && (isComplete || secondsLeft <= 0 || spotResult)) void awardCurrentResult();
   }, [awardCurrentResult, isComplete, rewardSessionId, secondsLeft, spotResult]);
 
-  const openLobbyDirectory = useCallback(() => {
+  const navigateToLobbyDirectory = useCallback(() => {
     if (selectedSquadId) {
       router.replace({
         pathname: "/(games)/lobbies",
@@ -311,28 +321,50 @@ export default function SpotDifferenceScreen() {
     router.replace("/(tabs)/games" as never);
   }, [selectedSquadId]);
 
+  const openLobbyDirectory = useCallback(() => {
+    void roomDeparture.departAndNavigate(navigateToLobbyDirectory);
+  }, [navigateToLobbyDirectory, roomDeparture]);
+
+  const exitToGames = useCallback(() => {
+    void roomDeparture.departAndNavigate(() => router.replace("/(tabs)/games" as never));
+  }, [roomDeparture]);
+
+  const exitToHome = useCallback(() => {
+    void roomDeparture.departAndNavigate(() => router.replace("/(tabs)" as never));
+  }, [roomDeparture]);
+
+  const returnToCurrentLobby = useCallback(() => {
+    roomDeparture.continueWithinRoom((retainedParams) => router.replace({
+      pathname: "/(games)/spot-the-difference/Lobby",
+      params: { ...retainedParams, lobbyId, sessionId: requestedSessionId },
+    } as never));
+  }, [lobbyId, requestedSessionId, roomDeparture]);
+
   const handlePlayAgain = useCallback(async () => {
     if (requestedSessionId) {
-      if (!lobbyId || hostUserId !== user?.uid || rematchInFlightRef.current) {
-        openLobbyDirectory();
+      if (!lobbyId || rematchInFlightRef.current) {
+        return;
+      }
+      if (hostUserId !== user?.uid) {
+        returnToCurrentLobby();
         return;
       }
       rematchInFlightRef.current = true;
       try {
         const rematch = await startGameLobbyRematch({ lobbyId });
-        router.replace({
+        roomDeparture.continueWithinRoom((retainedParams) => router.replace({
           pathname: "/(games)/spot-the-difference/Lobby",
-          params: { lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
-        } as never);
+          params: { ...retainedParams, lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
+        } as never));
       } catch {
-        openLobbyDirectory();
+        returnToCurrentLobby();
       } finally {
         rematchInFlightRef.current = false;
       }
       return;
     }
     resetGame();
-  }, [hostUserId, lobbyId, openLobbyDirectory, requestedSessionId, resetGame, user?.uid]);
+  }, [hostUserId, lobbyId, requestedSessionId, resetGame, returnToCurrentLobby, roomDeparture, user?.uid]);
 
   const handleSceneLayout = useCallback((side: ImageSide, size: SceneSize) => {
     setSceneLayouts((current) => {
@@ -371,29 +403,34 @@ export default function SpotDifferenceScreen() {
     }
 
     if (requestedSessionId) {
-      const submissionKey = `${tap.x.toFixed(4)}:${tap.y.toFixed(4)}`;
+      const requestScope = roundScopeRef.current;
+      const candidate = findDifferenceAtPoint(currentScene.differences, tap);
+      const submissionKey = `${requestScope}:${candidate?.id ?? `${tap.x.toFixed(4)}:${tap.y.toFixed(4)}`}`;
       if (submittingDifferenceIdsRef.current.has(submissionKey)) return;
       submittingDifferenceIdsRef.current.add(submissionKey);
+      const tapSequence = ++latestTapSequenceRef.current;
+      setFeedback({ kind: "checking" });
       void recordSpotDifferenceFound({
         sessionId: requestedSessionId,
         x: tap.x,
         y: tap.y,
       }).then((result) => {
+        if (roundScopeRef.current !== requestScope) return;
         if (result.alreadyFound) {
-          setFeedback({ kind: "alreadyFound" });
+          if (latestTapSequenceRef.current === tapSequence) setFeedback({ kind: "alreadyFound" });
           return;
         }
         if (!result.found || !result.differenceId) {
-          setFeedback({ kind: "missed" });
+          if (latestTapSequenceRef.current === tapSequence) setFeedback({ kind: "missed" });
           return;
         }
         const differenceNumber = currentScene.differences.findIndex((difference) => difference.id === result.differenceId) + 1;
         setFoundIds((current) => current.includes(result.differenceId!) ? current : [...current, result.differenceId!]);
-        setFeedback(result.foundByName
+        if (latestTapSequenceRef.current === tapSequence) setFeedback(result.foundByName
           ? { kind: "foundByName", name: result.foundByName }
           : { kind: "found", number: Math.max(differenceNumber, 1) });
       }).catch(() => {
-        setFeedback({ kind: "actionFailed" });
+        if (roundScopeRef.current === requestScope && latestTapSequenceRef.current === tapSequence) setFeedback({ kind: "actionFailed" });
       }).finally(() => {
         submittingDifferenceIdsRef.current.delete(submissionKey);
       });
@@ -422,7 +459,7 @@ export default function SpotDifferenceScreen() {
         <View style={styles.emptyState}>
           <Text style={styles.resultTitle}>{t("spot.unavailableTitle")}</Text>
           <Text style={styles.resultText}>{t("spot.unavailableBody")}</Text>
-          <PrimaryButton title={t("game.games")} onPress={() => router.replace("/(tabs)/games")} />
+          <PrimaryButton title={t("game.games")} onPress={exitToGames} />
         </View>
       </ScreenWrapper>
     );
@@ -579,7 +616,15 @@ export default function SpotDifferenceScreen() {
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/spot-the-difference/Lobby" />
+            <GameEndActions
+              departing={roomDeparture.departing}
+              departureFailed={Boolean(roomDeparture.departureError)}
+              onBackToLobbies={openLobbyDirectory}
+              onExitToGames={exitToGames}
+              onExitToHome={exitToHome}
+              onPlayAgain={handlePlayAgain}
+              onRetryDeparture={roomDeparture.retryDeparture}
+            />
           </View>
         ) : isComplete ? (
           <View style={styles.resultPanel}>
@@ -592,7 +637,15 @@ export default function SpotDifferenceScreen() {
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/spot-the-difference/Lobby" />
+            <GameEndActions
+              departing={roomDeparture.departing}
+              departureFailed={Boolean(roomDeparture.departureError)}
+              onBackToLobbies={openLobbyDirectory}
+              onExitToGames={exitToGames}
+              onExitToHome={exitToHome}
+              onPlayAgain={handlePlayAgain}
+              onRetryDeparture={roomDeparture.retryDeparture}
+            />
           </View>
         ) : secondsLeft <= 0 ? (
           <View style={styles.resultPanel}>
@@ -605,7 +658,15 @@ export default function SpotDifferenceScreen() {
               onRetry={() => rewardSessionId ? void awardCurrentResult() : setRewardSetupAttempt((value) => value + 1)}
               result={rewardResult}
             />
-            <GameEndActions onPlayAgain={handlePlayAgain} lobbyRoute="/(games)/spot-the-difference/Lobby" />
+            <GameEndActions
+              departing={roomDeparture.departing}
+              departureFailed={Boolean(roomDeparture.departureError)}
+              onBackToLobbies={openLobbyDirectory}
+              onExitToGames={exitToGames}
+              onExitToHome={exitToHome}
+              onPlayAgain={handlePlayAgain}
+              onRetryDeparture={roomDeparture.retryDeparture}
+            />
           </View>
         ) : null}
         </ScrollView>
@@ -801,6 +862,13 @@ function SceneCard({
   const panWasActive = useSharedValue(false);
   const pinchIsActive = useSharedValue(false);
   const tapBlockedByMultitouch = useSharedValue(false);
+  const tapX = useSharedValue(0);
+  const tapY = useSharedValue(0);
+  const tapOpacity = useSharedValue(0);
+  const tapFeedbackStyle = useAnimatedStyle(() => ({
+    opacity: tapOpacity.value,
+    transform: [{ translateX: tapX.value - 14 }, { translateY: tapY.value - 14 }],
+  }));
   const composedGesture = useMemo(() => {
     const settleTransform = () => {
       "worklet";
@@ -939,13 +1007,16 @@ function SceneCard({
       });
     const singleTap = Gesture.Tap()
       .maxDistance(PAN_MIN_DISTANCE)
-      .maxDuration(300)
+      .maxDuration(350)
       .simultaneousWithExternalGesture(scrollGesture)
       .onTouchesDown((event) => {
         tapBlockedByMultitouch.value = event.allTouches.length > 1;
       })
       .onEnd((event, success) => {
         if (!success || roundEnded.value || tapBlockedByMultitouch.value) return;
+        tapX.value = event.x;
+        tapY.value = event.y;
+        tapOpacity.value = withSequence(withTiming(1, { duration: 0 }), withDelay(220, withTiming(0, { duration: 100 })));
         runOnJS(onTap)(
           variant,
           { x: event.x, y: event.y },
@@ -975,6 +1046,9 @@ function SceneCard({
     scrollGesture,
     setZoomedFromGesture,
     tapBlockedByMultitouch,
+    tapX,
+    tapY,
+    tapOpacity,
     translateX,
     translateY,
     variant,
@@ -1012,6 +1086,7 @@ function SceneCard({
       <GestureDetector gesture={composedGesture}>
         <Animated.View collapsable={false} style={styles.gestureLayer}>
           {viewport}
+          <Animated.View accessible={false} pointerEvents="none" style={[styles.tapFeedback, tapFeedbackStyle]} />
         </Animated.View>
       </GestureDetector>
     </View>
@@ -1245,6 +1320,17 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
     borderWidth: 2,
     position: "absolute",
+  },
+  tapFeedback: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: Colors.textHeading,
+    backgroundColor: `${Colors.surface}60`,
   },
   devPanel: {
     backgroundColor: Colors.surface,

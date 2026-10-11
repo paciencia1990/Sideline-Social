@@ -1,0 +1,70 @@
+Venue lightning shortcut — first release
+
+The app owner maintains constants/venueLightning.ts as a reviewed registry.
+This first release includes only the owner-provided Earth Networks page labeled
+Dr Phillips Park, bound to existing venue_1l4q16f. The venue identifier was read
+from staging on 2026-10-10 without changing a record. The provider label must
+remain visible; this URL is not a universal Little League or sports alert feed.
+
+Authorized configuration process
+1. The owner or delegated staff obtains the facility's public weather page.
+2. Confirm the provider's displayed facility and coverage with the venue operator.
+3. Bind the approved source to the exact venue identifiers. Do not match by sport,
+   free-text names, the user's current GPS position, or a selected unrelated Squad.
+4. Set environment to indoor, outdoor, or both. Indoor/disabled entries do not
+   display the shortcut. Both supports facilities that also host outdoor activity.
+5. Add an HTTPS source to the registry through the reviewed app release process.
+   Other providers are supported as approved public HTTPS links. Do not let an
+   ordinary member supply an arbitrary weather URL to this card.
+6. For legacy noncanonical Squads, add only independently verified squadIds.
+   Duplicate matching entries or conflicting identifiers fail closed.
+
+This is owner-controlled release configuration, not an in-app staff editor.
+No new cloud configuration document, callable, index, Rules, or role is required.
+Adding another registry entry needs a client update. A remotely editable staff
+registry can be designed separately if many facilities need frequent changes.
+
+Placement
+- Squad details: the verified venue card is below the Squad identity.
+- Parent and Coach team pages: their own team.squadId supplies the venue binding.
+  The card identifies it as the Squad venue and warns that away venues may differ.
+- A team without a linked approved Squad does not inherit the currently selected
+  Squad's weather. Users can open that venue's Squad page directly.
+- Event records currently have free-text venue/address, without a verified venue
+  identifier. No weather source is inferred for an away event from those fields.
+
+Weather Delay messages
+- The Communications template offers an unchecked venue-confirmation checkbox
+  only when the selected team's own Squad resolves to an approved outdoor source.
+  The coach confirms the activity is at that named venue before including a link.
+- The optional suffix shows the facility name, full public HTTPS URL, and venue
+  safety instructions. Share and the announcement composer receive the same text.
+  The coach's existing message and next-update time remain editable and unchanged.
+- Venue confirmation is saved separately for each team draft while the screen is
+  open. New team drafts do not inherit another team's confirmation or weather URL.
+  Unchecking removes the generated suffix, without deleting manually edited text.
+- Parent and Coach announcement details make only exact approved weather URLs
+  tappable through the existing provider browser. Other URLs remain ordinary text.
+  Deleted/removed announcements keep their existing visibility checks.
+- The link is optional for rain-only delays, indoor activities and away venues.
+  No message is sent automatically, and provider status never resumes play.
+
+Provider boundary
+The app opens the original HTTPS page using the already-installed
+expo-web-browser package. Android uses a browser tab in the app's task; iOS uses
+the system browser sheet. Closing/back returns to the originating app screen.
+No GPS, account ID, credentials, token, child details, or event data is appended.
+The provider receives an ordinary page visit and controls its page/cookies/status.
+There is no polling, scraping, local countdown, mirrored safe/unsafe badge, or
+automatic Sideline Social lightning push notification.
+Browser launch failures have a localized manual Retry. A provider page load or
+connection failure is not detected by openBrowserAsync: the card explains how to
+handle it and never treats it as all clear. The venue's safety plan governs play.
+
+Delivery
+Include this UI in the same upcoming Android and iOS candidates as the pending
+repairs. No native dependency or cloud deployment is added by this feature.
+Keep live moderation unchanged. Existing repair-specific server delivery remains
+scoped to deleteChildProfile and submitBombDefusalStep.
+Check on both real platforms: correct venue label/link, opening and closing/back,
+offline/provider unavailable behavior, readable larger text and screen readers.

@@ -2,20 +2,21 @@ import React from "react";
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import { useTranslation } from "react-i18next";
 
-import { getSquadSportTranslationKey, type SquadSportId } from "@/constants/sports";
+import { getSquadSportTranslationKey, readSquadSportIds, type SquadSportId } from "@/constants/sports";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 
 type SquadIdentityProps = {
   venueName: string;
   sportId: SquadSportId;
+  sportIds?: SquadSportId[];
   sportDisplayName: string;
   compact?: boolean;
   style?: StyleProp<ViewStyle>;
 };
 
-export function SquadIdentity({ venueName, sportId, sportDisplayName, compact, style }: SquadIdentityProps) {
+export function SquadIdentity({ venueName, sportId, sportIds, sportDisplayName, compact, style }: SquadIdentityProps) {
   const { t } = useTranslation();
-  const sportName = t(getSquadSportTranslationKey(sportId), { defaultValue: sportDisplayName });
+  const sportName = readSquadSportIds(sportIds, sportId).map((id) => t(getSquadSportTranslationKey(id), { defaultValue: id === sportId ? sportDisplayName : id })).join(" · ");
 
   return (
     <View

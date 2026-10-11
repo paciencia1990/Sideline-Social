@@ -3,7 +3,7 @@ import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "rea
 import { useTranslation } from "react-i18next";
 
 import { SquadIdentity } from "@/components/SquadIdentity";
-import { getSquadSportOption } from "@/constants/sports";
+import { getSquadSportOption, getSquadSportTranslationKey, readSquadSportIds } from "@/constants/sports";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import { type Squad, type SquadStatus, getSquadStatus } from "@/services/squadService";
 
@@ -24,6 +24,8 @@ interface SquadCardProps {
 
 export function SquadCard({ squad, isMember, isHighlighted, onJoin, onPress, joining }: SquadCardProps) {
   const { t } = useTranslation();
+  const sports = readSquadSportIds(squad.sportIds, squad.sportId);
+  const sportNames = sports.map((id) => t(getSquadSportTranslationKey(id))).join(" · ");
   const status = getSquadStatus(squad);
   const statusColor = STATUS_COLORS[status];
   const distance = squad.distanceMiles !== undefined
@@ -38,17 +40,18 @@ export function SquadCard({ squad, isMember, isHighlighted, onJoin, onPress, joi
   return (
     <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={[styles.card, isHighlighted && styles.highlighted]}>
       <View
-        accessibilityLabel={`${squad.sportDisplayName}. ${t("squad.sport")}.`}
+        accessibilityLabel={`${sportNames}.`}
         accessibilityRole="image"
         style={styles.emojiWrap}
       >
-        <Text style={styles.emoji}>{getSquadSportOption(squad.sportId).emoji}</Text>
+        <Text style={styles.emoji}>{sports.length > 1 ? "🏅" : getSquadSportOption(squad.sportId).emoji}</Text>
       </View>
       <View style={styles.info}>
         <SquadIdentity
           compact
           venueName={squad.venueName}
           sportId={squad.sportId}
+          sportIds={squad.sportIds}
           sportDisplayName={squad.sportDisplayName}
         />
         {distance ? <Text style={styles.meta}>{distance}</Text> : null}

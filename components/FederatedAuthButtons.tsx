@@ -1,4 +1,4 @@
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -81,7 +81,10 @@ function ProviderIconButton({
       accessibilityRole="button"
       accessibilityState={{ busy: loading, disabled }}
       disabled={disabled}
-      onPress={onPress}
+      onPress={() => {
+        Keyboard.dismiss();
+        onPress();
+      }}
       style={({ pressed }) => [
         styles.providerButton,
         pressed && !disabled && styles.providerButtonPressed,

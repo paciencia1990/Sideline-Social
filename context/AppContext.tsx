@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import i18n from "@/i18n";
 import { useAuth } from "@/context/AuthContext";
 import { resolveInitialMode, type AppMode } from "@/utils/onboardingMode";
@@ -38,11 +38,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const [activeMode, setActiveModeState] = useState<AppMode>("parent");
   const [hydratedUserId, setHydratedUserId] = useState<string | null>();
+  const explicitModeChoice = useRef<{ userId: string; mode: AppMode } | null>(null);
   const userId = user?.uid ?? null;
   const modeHydrated = !authLoading && hydratedUserId === userId;
 
   useEffect(() => {
     if (authLoading) return;
+    if (explicitModeChoice.current?.userId !== userId) explicitModeChoice.current = null;
 
     let isMounted = true;
 
@@ -59,7 +61,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const storedMode = await AsyncStorage.getItem(MODE_STORAGE_KEY).catch(() => null);
         if (!isMounted) return;
 
-        const nextMode = resolveInitialMode(user, storedMode);
+        // A current session's navigation choice survives an unavailable or stale
+        // server preference. This does not change team or account authorization.
+        const nextMode = explicitModeChoice.current?.userId === userId
+          ? explicitModeChoice.current.mode : resolveInitialMode(user, storedMode);
         setActiveModeState(nextMode);
         await AsyncStorage.setItem(MODE_STORAGE_KEY, nextMode).catch(() => undefined);
         if (isMounted) setHydratedUserId(userId);
@@ -93,9 +98,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setActiveMode = useCallback((nextMode: AppMode) => {
+    if (userId) explicitModeChoice.current = { userId, mode: nextMode };
     setActiveModeState(nextMode);
     AsyncStorage.setItem(MODE_STORAGE_KEY, nextMode).catch(() => undefined);
-  }, []);
+  }, [userId]);
 
   const value = useMemo<AppContextType>(() => ({
     language,

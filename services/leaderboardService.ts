@@ -1,7 +1,7 @@
 import { httpsCallable } from "firebase/functions";
 
 import { functions } from "@/config/firebase";
-import type { SquadSportId } from "@/constants/sports";
+import { readSquadSportIds, type SquadSportId } from "@/constants/sports";
 import type { LeaderboardTierKey } from "@/constants/sidelineStars";
 import {
   DEFAULT_SQUAD_TIME_ZONE,
@@ -28,6 +28,7 @@ export type SquadLeaderboardResult = {
     squadId: string;
     venueName: string;
     sportId: SquadSportId;
+    sportIds?: SquadSportId[];
     sportDisplayName: string;
   };
   season: SquadSeasonSummary | null;
@@ -131,6 +132,7 @@ function normalizeLeaderboardResult(value: unknown, squadId: string): SquadLeade
       squadId: readString(rawSquad.squadId) ?? squadId,
       venueName: readString(rawSquad.venueName) ?? "Sports Venue",
       sportId: (readString(rawSquad.sportId) ?? "other") as SquadSportId,
+      sportIds: readSquadSportIds(rawSquad.sportIds, rawSquad.sportId ?? rawSquad.sportDisplayName),
       sportDisplayName: readString(rawSquad.sportDisplayName) ?? "Sports",
     },
     season: raw.season == null ? null : normalizeSquadSeason(raw.season, { squadId }),

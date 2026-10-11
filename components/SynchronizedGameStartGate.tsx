@@ -8,13 +8,14 @@ import CountdownOverlay from "@/components/CountdownOverlay";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 import { useSquad } from "@/context/SquadContext";
 import { useFirebaseServerClock } from "@/hooks/useFirebaseServerClock";
+import { useGameRoomDeparture } from "@/hooks/useGameRoomDeparture";
 import {
   acknowledgeSynchronizedGameStart,
   preloadSynchronizedGameRound,
   prepareSynchronizedGameStart,
   subscribeToSynchronizedGameStart,
 } from "@/services/gameStartSynchronizationService";
-import { leaveGameLobby, type GameJoinCodeType } from "@/services/gameJoinCodeService";
+import { type GameJoinCodeType } from "@/services/gameJoinCodeService";
 import {
   deriveGameStartVisiblePhase,
   serverAdjustedNow,
@@ -125,6 +126,11 @@ export default function SynchronizedGameStartGate({
     [serverNowMs, state],
   );
   const waitingCount = state ? Math.max(0, state.participantCount - state.acknowledgedCount) : 0;
+  const activeLobbyId = state?.lobbyId || routeLobbyId;
+  const roomDeparture = useGameRoomDeparture({
+    enabled: Boolean(activeLobbyId) && !(phase === "active" && loaded),
+    lobbyId: activeLobbyId,
+  });
 
   const handleRetry = useCallback(async () => {
     if (!sessionId || retrying) return;
@@ -156,14 +162,14 @@ export default function SynchronizedGameStartGate({
   }, [gameType, retrying, sessionId, state]);
 
   const handleLeave = useCallback(async () => {
-    const lobbyId = state?.lobbyId || routeLobbyId;
-    if (lobbyId) await leaveGameLobby({ lobbyId }).catch(() => undefined);
-    if (selectedSquadId) {
-      router.replace({ pathname: "/(games)/lobbies", params: { gameType, squadId: selectedSquadId } } as never);
-    } else {
-      router.replace("/(tabs)/games");
-    }
-  }, [gameType, routeLobbyId, selectedSquadId, state?.lobbyId]);
+    await roomDeparture.departAndNavigate(() => {
+      if (selectedSquadId) {
+        router.replace({ pathname: "/(games)/lobbies", params: { gameType, squadId: selectedSquadId } } as never);
+      } else {
+        router.replace("/(tabs)/games");
+      }
+    });
+  }, [gameType, roomDeparture, selectedSquadId]);
 
   if (isLocal) return <>{children}</>;
   if (phase === "active" && loaded) return <>{children}</>;
@@ -200,8 +206,13 @@ export default function SynchronizedGameStartGate({
             {retrying ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.primaryText}>{t("common.retry")}</Text>}
           </Pressable>
           <Pressable accessibilityRole="button" onPress={() => void handleLeave()} style={styles.secondaryButton}>
-            <Text style={styles.secondaryText}>{t("games.joinCode.leaveLobby")}</Text>
+            <Text style={styles.secondaryText}>{roomDeparture.departing ? t("game.leavingRoom") : t("games.joinCode.leaveLobby")}</Text>
           </Pressable>
+          {roomDeparture.departureError ? (
+            <Pressable accessibilityRole="button" onPress={roomDeparture.retryDeparture}>
+              <Text accessibilityLiveRegion="polite" style={styles.errorText}>{t("game.departureFailedBody")} {t("common.retry")}</Text>
+            </Pressable>
+          ) : null}
         </View>
       )}
     </View>
@@ -233,6 +244,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 24,
     marginTop: Spacing.sm,
+    textAlign: "center",
+  },
+  errorText: {
+    color: "#B42318",
+    fontFamily: Typography.bodySemiBold,
     textAlign: "center",
   },
   actions: {

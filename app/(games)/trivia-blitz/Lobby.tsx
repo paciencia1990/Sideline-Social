@@ -24,20 +24,23 @@ export default function TriviaBlitzLobby() {
     lifecycleAction,
     lifecycleError,
     toggleReady,
+    readyPending,
+    readyError,
     startGame,
     startPending,
     showCountdown,
     setShowCountdown,
+    continueWithinRoom,
   } =
     useGameLobby("trivia-blitz");
 
   const handleComplete = useCallback(() => {
     setShowCountdown(false);
-    router.replace({
+    continueWithinRoom((retainedParams) => router.replace({
       pathname: "/games/trivia-blitz/play",
-      params: sessionId ? { sessionId, ...(lobbyId ? { lobbyId } : {}) } : { local: "1" },
-    } as never);
-  }, [lobbyId, sessionId, setShowCountdown]);
+      params: sessionId ? { ...retainedParams, sessionId, ...(lobbyId ? { lobbyId } : {}) } : { ...retainedParams, local: "1" },
+    } as never));
+  }, [continueWithinRoom, lobbyId, sessionId, setShowCountdown]);
 
   return (
     <View style={styles.container}>
@@ -55,6 +58,8 @@ export default function TriviaBlitzLobby() {
         lifecycleAction={lifecycleAction}
         lifecycleError={lifecycleError}
         onReadyToggle={toggleReady}
+        readyPending={readyPending}
+        readyError={readyError}
         onStart={startGame}
         startPending={startPending}
       />

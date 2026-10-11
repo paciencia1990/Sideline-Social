@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -11,13 +11,15 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { Check, X } from "lucide-react-native";
+import { X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useAuth } from "@/context/AuthContext";
+import { SquadSportPicker } from "@/components/SquadSportPicker";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { useSquad } from "@/context/SquadContext";
-import { SQUAD_SPORTS, getSquadSportTranslationKey, type SquadSportId } from "@/constants/sports";
+import { type SquadSportId } from "@/constants/sports";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 
 interface CreateSquadSheetProps {
@@ -31,74 +33,70 @@ export function CreateSquadSheet({ isOpen, onClose, userCoords, onSquadCreated }
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const { createSquad, joinSquad } = useSquad();
-  const [sportId, setSportId] = useState<SquadSportId | null>(null);
+  const { user } = useAuth();
+  const [sportIds, setSportIds] = useState<SquadSportId[]>([]);
+  const pending = useRef(false);
+  const request = useRef(0);
+  const currentIdentity = useRef(user?.uid);
+  currentIdentity.current = user?.uid;
   const [venueName, setVenueName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!isOpen) {
-      setError("");
-      setLoading(false);
-    }
-  }, [isOpen]);
+    request.current += 1;
+    pending.current = false;
+    setError('');
+    setLoading(false);
+    return () => { request.current += 1; };
+  }, [isOpen, user?.uid]);
 
-  const finishJoin = async (squadId: string) => {
+  const isCurrent = (id: number) => request.current === id && currentIdentity.current === user?.uid && isOpen;
+  const finishJoin = async (squadId: string, id: number) => {
+    if (!isCurrent(id)) return;
+    pending.current = true;
     setLoading(true);
-    setError("");
+    setError('');
     try {
       await joinSquad(squadId);
-      setVenueName("");
-      setSportId(null);
+      if (!isCurrent(id)) return;
+      setVenueName('');
+      setSportIds([]);
       onClose();
       onSquadCreated(squadId);
     } catch (nextError) {
-      logCreateDiagnostic("join", nextError);
-      setError(t("squad.errorJoining"));
+      if (isCurrent(id)) { logCreateDiagnostic('join', nextError); setError(t('squad.errorJoining')); }
     } finally {
-      setLoading(false);
+      if (isCurrent(id)) { pending.current = false; setLoading(false); }
     }
   };
 
   const handleCreate = async () => {
-    setError("");
-    if (!userCoords) {
-      setError(t("squad.locationRequired"));
-      return;
-    }
-    if (!venueName.trim()) {
-      setError(t("squad.invalidVenue"));
-      return;
-    }
-    if (!sportId) {
-      setError(t("squad.sportRequired"));
-      return;
-    }
-
+    if (pending.current || !isOpen || !user?.uid) return;
+    setError('');
+    if (!userCoords) { setError(t('squad.locationRequired')); return; }
+    if (!venueName.trim()) { setError(t('squad.invalidVenue')); return; }
+    if (!sportIds.length) { setError(t('squadSports.required')); return; }
+    pending.current = true;
+    const id = ++request.current;
     setLoading(true);
     try {
-      const result = await createSquad({
-        venueName: venueName.trim(),
-        sportId,
-        venueLocation: userCoords,
-      });
-      if (result.status === "existing") {
+      const result = await createSquad({ venueName: venueName.trim(), sportIds, venueLocation: userCoords });
+      if (!isCurrent(id)) return;
+      if (result.status === 'existing') {
+        pending.current = false;
         setLoading(false);
-        const sportName = t(getSquadSportTranslationKey(sportId));
-        Alert.alert(
-          t("squad.alreadyExists"),
-          `${venueName.trim()}\n${sportName}`,
-          [
-            { text: t("common.cancel"), style: "cancel" },
-            { text: t("squad.joinThisSquad"), onPress: () => void finishJoin(result.squadId) },
-          ],
-        );
-        return;
-      }
-      await finishJoin(result.squadId);
+        Alert.alert(t('squad.alreadyExists'), t('squadSports.existingBody'), [
+          { text: t('common.cancel'), style: 'cancel' },
+          { text: t('squad.joinThisSquad'), onPress: () => { if (!pending.current && isCurrent(id)) void finishJoin(result.squadId, id); } },
+        ]);
+      } else await finishJoin(result.squadId, id);
     } catch (nextError) {
-      logCreateDiagnostic("find-or-create", nextError);
-      setError(t("squad.errorCreating"));
+      if (!isCurrent(id)) return;
+      logCreateDiagnostic('find-or-create', nextError);
+      const details = nextError && typeof nextError === 'object' && 'details' in nextError ? nextError.details as { reason?: string } : null;
+      setError(t(details?.reason === 'duplicate-candidates' ? 'squadSports.duplicates' : 'squad.errorCreating'));
+      pending.current = false;
       setLoading(false);
     }
   };
@@ -127,39 +125,23 @@ export function CreateSquadSheet({ isOpen, onClose, userCoords, onSquadCreated }
             <TextInput
               accessibilityLabel={t("squad.venue")}
               autoCorrect={false}
+              editable={!loading}
               onChangeText={setVenueName}
               placeholder={t("squad.venuePlaceholder")}
               style={styles.input}
               value={venueName}
             />
 
-            <Text style={styles.label}>{t("squad.selectSport")}</Text>
-            <View accessibilityRole="radiogroup" style={styles.sportGrid}>
-              {SQUAD_SPORTS.map((sport) => {
-                const selected = sportId === sport.id;
-                return (
-                  <TouchableOpacity
-                    accessibilityRole="radio"
-                    accessibilityState={{ checked: selected }}
-                    activeOpacity={0.8}
-                    key={sport.id}
-                    onPress={() => setSportId(sport.id)}
-                    style={[styles.sportOption, selected && styles.sportSelected]}
-                  >
-                    <Text style={styles.sportEmoji}>{sport.emoji}</Text>
-                    <Text style={styles.sportText}>{t(getSquadSportTranslationKey(sport.id))}</Text>
-                    {selected ? <Check color={Colors.accentGreen} size={16} /> : null}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            <Text style={styles.label}>{t('squadSports.select')}</Text>
+            <Text style={styles.locationNote}>{t('squadSports.help')}</Text>
+            <SquadSportPicker disabled={loading} selected={sportIds} onChange={setSportIds} />
 
             <Text accessibilityLiveRegion="polite" style={styles.locationNote}>
               {userCoords ? t("squad.venueUsesLocation") : t("squad.locationRequired")}
             </Text>
             {error ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
             <PrimaryButton
-              disabled={!userCoords || !venueName.trim() || !sportId}
+              disabled={loading || !userCoords || !venueName.trim() || !sportIds.length}
               loading={loading}
               onPress={() => void handleCreate()}
               title={t("squad.createThisSquad")}
@@ -186,11 +168,6 @@ const styles = StyleSheet.create({
   form: { gap: Spacing.sm, paddingBottom: Spacing.lg },
   label: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold, fontSize: 13, marginTop: Spacing.xs },
   input: { backgroundColor: Colors.background, borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, color: Colors.textPrimary, fontFamily: Typography.bodyRegular, minHeight: 48, paddingHorizontal: Spacing.md },
-  sportGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
-  sportOption: { alignItems: "center", borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.xs, minHeight: 46, paddingHorizontal: Spacing.sm, width: "48%" },
-  sportSelected: { backgroundColor: Colors.background, borderColor: Colors.accentGreen },
-  sportEmoji: { fontSize: 17 },
-  sportText: { color: Colors.textHeading, flex: 1, flexShrink: 1, fontFamily: Typography.bodyMedium, fontSize: 12 },
   locationNote: { color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 12, lineHeight: 18 },
   error: { color: Colors.primary, fontFamily: Typography.bodyRegular, textAlign: "center" },
 });

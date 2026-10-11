@@ -1,0 +1,50 @@
+Squad admin member search — pending beta release
+
+Squads already support multiple active administrators. An existing active
+administrator invites another active member, and the recipient must accept
+before gaining administrator access. The last-admin safeguards remain in place.
+
+Manage Squad > Choose a New Squad Admin now provides name search. It filters
+the authorized eligible member list immediately, ignoring capitalization and
+common accents and matching multiple name words in any order. Search does not
+query private contact information, child profiles, or account identifiers.
+
+The screen renders 20 matching members at a time, with Show more and Clear
+search actions, a result count, and distinct no-match/no-eligible-member messages.
+Typing performs no network request or write. Existing admins, the current user,
+and members with pending invitations remain excluded by server eligibility.
+Successful invitation refresh keeps the search and removes that target from
+the eligible list. Duplicate confirmation taps share one pending action.
+
+The server previously resolved names for only the first 250 members. The existing
+getSquadAdministration response now resolves all authorized names in bounded
+250-profile batches, preserving its existing minimal public-name projection
+and Authentication fallback. No new search endpoint, index, privilege, or role
+assignment mechanism is introduced. Ordinary members still receive no eligible
+member list, and outsiders are denied.
+
+English and Spanish copy, checkbox-independent text search, accessible result
+counts, keyboard-friendly taps, and account/screen departure guards are included.
+Old-account lookup results and stale confirmation callbacks cannot operate in
+the new account context.
+
+Validation passed
+- Actual component behavior with 360 members: filtering, accents/case, multiple
+  words, 20-row rendering, Show more, Clear, no matches, confirmed invitation,
+  duplicate confirmations, refresh, ordinary-member visibility and late replies.
+- Isolated demo Auth/Firestore: 360 members, two admins, names beyond the former
+  cutoff, public and legacy-profile batches, minimal projection and authorization.
+- Related Squad admin/UI/manage and multi-sport regressions, client/Functions
+  TypeScript, focused lint, English/Spanish copy and whitespace/privacy checks.
+
+Delivery
+Include this in the existing combined Android/iOS candidate. Update the existing
+getSquadAdministration callable before compatible client delivery; it is already
+an affected target in the multi-sport release. No additional build beyond the
+planned combined beta builds is required. No native dependency was added.
+
+Remaining device checks on the future candidate: search with the keyboard open,
+tap the intended member, verify the invitation/acceptance flow and search reset
+when changing Squads or accounts. Reuse the completed local/backend results.
+No live admin invitation, role change, cloud write, build, deployment, commit,
+push, store publication, or moderation change occurred during implementation.

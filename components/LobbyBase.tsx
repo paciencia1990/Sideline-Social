@@ -8,6 +8,7 @@ import type { GameCodeState } from "@/hooks/useGameLobby";
 import type { GameJoinCodeFailureReason } from "@/services/gameJoinCodeService";
 import { getFixedFooterBottomPadding } from "@/utils/safeAreaLayout";
 import { spokenGameJoinCode } from "@/utils/gameJoinCode";
+import { GAME_BUTTON_HIT_SLOP } from "@/utils/gameInteraction";
 
 type LobbyPlayer = {
   id: string;
@@ -49,6 +50,8 @@ type LobbyBaseProps = {
   lifecycleAction: "leaving" | "closing" | null;
   lifecycleError: GameJoinCodeFailureReason | null;
   onReadyToggle: () => void;
+  readyPending?: boolean;
+  readyError?: GameJoinCodeFailureReason | null;
   onStart: () => void;
   startPending?: boolean;
   startError?: GameJoinCodeFailureReason | null;
@@ -69,6 +72,8 @@ export default function LobbyBase({
   lifecycleAction,
   lifecycleError,
   onReadyToggle,
+  readyPending = false,
+  readyError = null,
   onStart,
   startPending = false,
   startError = null,
@@ -261,31 +266,39 @@ export default function LobbyBase({
             ) : null}
           </View>
         ) : null}
+        {readyError ? <Text accessibilityLiveRegion="polite" style={styles.lifecycleErrorText}>{t("games.joinCode.readyUpdateFailed")}</Text> : null}
         <View style={styles.actions}>
           <Pressable
             accessibilityRole="button"
-            disabled={lifecycleAction !== null || startPending}
-            style={[
+            accessibilityState={{ busy: readyPending, disabled: readyPending || lifecycleAction !== null || startPending }}
+            disabled={readyPending || lifecycleAction !== null || startPending}
+            hitSlop={GAME_BUTTON_HIT_SLOP}
+            unstable_pressDelay={0}
+            style={({ pressed }) => [
               styles.button,
               players.self.ready ? styles.secondaryButton : styles.primaryButton,
+              pressed && { opacity: 0.8 },
             ]}
             onPress={onReadyToggle}
           >
+            {readyPending ? <ActivityIndicator color={players.self.ready ? Colors.textHeading : Colors.surface} size="small" /> : null}
             <Text
               style={[
                 styles.buttonText,
                 players.self.ready ? styles.secondaryButtonText : styles.primaryButtonText,
               ]}
             >
-              {players.self.ready ? t("games.joinCode.unready") : t("games.joinCode.ready")}
+              {readyPending ? t("games.joinCode.updatingReady") : players.self.ready ? t("games.joinCode.unready") : t("games.joinCode.ready")}
             </Text>
           </Pressable>
 
           {players.isHost && (
             <Pressable
-              accessibilityState={{ busy: startPending, disabled: !canStart || startPending }}
+              accessibilityState={{ busy: startPending, disabled: !canStart || startPending || readyPending }}
               accessibilityRole="button"
-              disabled={!canStart || startPending || lifecycleAction !== null}
+              disabled={!canStart || startPending || readyPending || lifecycleAction !== null}
+              hitSlop={GAME_BUTTON_HIT_SLOP}
+              unstable_pressDelay={0}
               style={[styles.button, styles.primaryButton, (!canStart || startPending) && styles.disabledButton]}
               onPress={onStart}
             >

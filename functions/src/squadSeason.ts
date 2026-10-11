@@ -1,3 +1,4 @@
+import { readSquadSports } from './squadSportsCore';
 import { createHash } from 'node:crypto';
 
 import * as admin from 'firebase-admin';
@@ -809,6 +810,7 @@ export const getSquadLeaderboard = regionalFunctions.https.onCall(async (data, c
         ? squad.venueName.trim()
         : typeof squad.name === 'string' && squad.name.trim() ? squad.name.trim() : 'Sports Venue',
       sportId,
+      sportIds: readSquadSports(squad),
       sportDisplayName: typeof squad.sportDisplayName === 'string' && squad.sportDisplayName.trim()
         ? squad.sportDisplayName.trim()
         : getSportDisplayName(sportId),

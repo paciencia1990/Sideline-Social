@@ -13,6 +13,7 @@ import { Archive, CalendarDays, ChevronRight, MoreVertical, RotateCcw } from "lu
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { VenueLightningCard } from "@/components/VenueLightningCard";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { auth } from "@/config/firebase";
@@ -406,6 +407,8 @@ export default function CoachTeamScreen() {
                 </View>
               ) : <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>}
             </Card>
+
+            <VenueLightningCard context="team" squadId={selectedTeam.squadId} />
 
             <TouchableOpacity
               accessibilityLabel={t("schedule.teamSchedule", { teamName: selectedTeam.name })}

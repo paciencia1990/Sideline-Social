@@ -8,6 +8,7 @@ import { Card } from "@/components/Card";
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { WeatherDelayLightningOption } from "@/components/WeatherDelayLightningOption";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -19,6 +20,8 @@ import {
 } from "@/services/coachResourcesService";
 import { getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive, type TeamMembership } from "@/services/teamService";
 import { resolveCoachCommunicationTeamDraft } from "@/utils/coachCommunicationDraftCore";
+import { resolveVenueLightningSource } from "@/utils/venueLightning";
+import { composeWeatherDelayMessage } from "@/utils/weatherDelayLightning";
 
 export default function CoachCommunicationTemplateScreen() {
   const { i18n, t } = useTranslation();
@@ -33,7 +36,8 @@ export default function CoachCommunicationTemplateScreen() {
     () => template ? personalizeCoachTemplate(template, locale, { coachName: user?.displayName ?? undefined }) : "",
     [locale, template, user?.displayName],
   );
-  const [message, setMessage] = useState(initialMessage);
+  const [draftMessage, setDraftMessage] = useState(initialMessage);
+  const [confirmedLightningTeams, setConfirmedLightningTeams] = useState<Record<string, boolean>>({});
   const [validation, setValidation] = useState<string | null>(null);
   const activeDraftKey = useRef("");
   const currentMessage = useRef(initialMessage);
@@ -54,6 +58,15 @@ export default function CoachCommunicationTemplateScreen() {
   }, []);
 
   const selectedMembership = memberships.find((entry) => entry.teamId === selectedTeamId) ?? null;
+  const lightningSource = resolveVenueLightningSource({ squadId: selectedMembership?.team?.squadId });
+  const message = composeWeatherDelayMessage({
+    templateId,
+    binding: { squadId: selectedMembership?.team?.squadId },
+    confirmedVenue: confirmedLightningTeams[selectedTeamId] === true,
+    message: draftMessage,
+    linkLabel: t("venueLightning.messageLink", { venue: lightningSource?.venueName ?? "" }),
+    safetyNote: t("venueLightning.messageSafety"),
+  });
 
   const selectTeam = useCallback((entry: TeamMembership, availableMemberships = memberships) => {
     if (!template || !entry.team || !availableMemberships.some((membership) => membership.teamId === entry.teamId)) return;
@@ -74,13 +87,13 @@ export default function CoachCommunicationTemplateScreen() {
     draftsByTeam.current = resolution.drafts;
     currentMessage.current = resolution.message;
     setSelectedTeamId(entry.teamId);
-    setMessage(resolution.message);
+    setDraftMessage(resolution.message);
     setValidation(null);
   }, [locale, memberships, template, user?.displayName]);
 
   const unresolved = useMemo(() => findUnresolvedCoachPlaceholders(message), [message]);
   const validate = useCallback(() => {
-    if (!message.trim()) {
+    if (!draftMessage.trim()) {
       setValidation(t("coach.resources.messageRequired"));
       return false;
     }
@@ -90,7 +103,7 @@ export default function CoachCommunicationTemplateScreen() {
     }
     setValidation(null);
     return true;
-  }, [message, t, unresolved]);
+  }, [draftMessage, t, unresolved]);
 
   const shareMessage = useCallback(async () => {
     if (!validate()) return;
@@ -104,6 +117,10 @@ export default function CoachCommunicationTemplateScreen() {
 
   const sendToComposer = useCallback(() => {
     if (!validate()) return;
+    if (message.length > 2000) {
+      setValidation(t("venueLightning.messageTooLong", { count: 2000 }));
+      return;
+    }
     if (!selectedMembership?.team) {
       setValidation(t("coach.resources.selectTeamRequired"));
       return;
@@ -156,13 +173,24 @@ export default function CoachCommunicationTemplateScreen() {
             onChangeText={(value) => {
               currentMessage.current = value;
               draftsByTeam.current.set(activeDraftKey.current, value);
-              setMessage(value);
+              setDraftMessage(value);
               setValidation(null);
             }}
             style={styles.editor}
             textAlignVertical="top"
-            value={message}
+            value={draftMessage}
           />
+          {templateId === "weather-delay" ? (
+            <WeatherDelayLightningOption
+              checked={confirmedLightningTeams[selectedTeamId] === true}
+              onChange={(checked) => {
+                if (!selectedTeamId) return;
+                setConfirmedLightningTeams((previous) => ({ ...previous, [selectedTeamId]: checked }));
+                setValidation(null);
+              }}
+              squadId={selectedMembership?.team?.squadId}
+            />
+          ) : null}
           {unresolved.length > 0 ? (
             <View accessibilityLiveRegion="polite" style={styles.unresolvedBox}>
               <Text style={styles.unresolvedTitle}>{t("coach.resources.unresolvedTitle")}</Text>

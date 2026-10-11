@@ -76,6 +76,9 @@ export async function updateChildProfile(childId: string, displayName: string): 
 export async function deleteChildProfile(childId: string): Promise<boolean> {
   const callable = httpsCallable<{ childId: string }, { deleted: boolean }>(functions, "deleteChildProfile");
   const response = await callable({ childId });
+  if (response.data?.deleted !== true) {
+    throw new Error("Child profile deletion was not confirmed.");
+  }
   return response.data.deleted;
 }
 

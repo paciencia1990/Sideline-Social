@@ -5,6 +5,7 @@ import { MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { AnnouncementBody } from "@/components/AnnouncementBody";
 import { MessageActionsModal, type MessageModalAction, type MessageReportReason } from "@/components/MessageActionsModal";
 import { MessageKeyboardAwareScrollView } from "@/components/MessageKeyboardAwareScrollView";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
@@ -305,7 +306,7 @@ export default function AnnouncementThreadScreen() {
             </View>
             {announcement.isDeleted
               ? <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>{t("teamMessages.messageDeleted")}</Text>
-              : <Text style={styles.cardText}>{announcement.body}</Text>}
+              : <AnnouncementBody body={announcement.body} style={styles.cardText} />}
             {!announcement.isDeleted && announcement.contentType === "voice" && announcement.voiceMemo ? (
               <VoiceMemoPlayer
                 durationMilliseconds={announcement.voiceMemo.durationMilliseconds}

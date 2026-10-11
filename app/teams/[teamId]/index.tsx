@@ -5,6 +5,7 @@ import { ArrowLeft, CalendarDays, ChevronRight, LockKeyhole, Mail, MoreVertical 
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { VenueLightningCard } from "@/components/VenueLightningCard";
 import { ChildProfilePicker } from "@/components/ChildProfilePicker";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -278,6 +279,8 @@ export default function ParentTeamHubScreen() {
                 <Text style={styles.outlineButtonText}>{t("myTeams.manageChildren")}</Text>
               </TouchableOpacity> : null}
             </Card>
+
+            <VenueLightningCard context="team" squadId={summary.team.squadId} />
 
             <TouchableOpacity
               accessibilityLabel={t("schedule.teamSchedule", { teamName: summary.team.name })}

@@ -144,6 +144,7 @@ function LeaderboardScreen() {
             <SquadIdentity
               venueName={identity.venueName}
               sportId={identity.sportId}
+              sportIds={identity.sportIds}
               sportDisplayName={identity.sportDisplayName}
             />
           </View>

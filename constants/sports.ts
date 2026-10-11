@@ -83,3 +83,9 @@ export function getSquadSportOption(value: unknown): SquadSportOption {
 export function getSquadSportTranslationKey(value: unknown): string {
   return `sports.labels.${normalizeSquadSportId(value)}`;
 }
+
+// Read older single-sport records without changing their identity or membership.
+export function readSquadSportIds(value: unknown, legacySport: unknown): SquadSportId[] {
+  const selected = new Set(Array.isArray(value) ? value.filter(isSquadSportId) : []);
+  return selected.size ? SQUAD_SPORT_IDS.filter((id) => selected.has(id)) : [normalizeSquadSportId(legacySport)];
+}

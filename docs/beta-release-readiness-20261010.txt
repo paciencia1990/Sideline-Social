@@ -1,0 +1,111 @@
+Combined Android and iOS beta source — October 10, 2026
+
+Use the release/external-testing-20260919 branch of
+paciencia1990/Sideline-Social. This is the combined candidate; do not reapply
+older isolated child, lobby, gameplay, or weather copies on top of it.
+
+Included client changes
+1. Lobby departure: Play Again retains the room; Home, Games, lobby-list,
+   Exit and platform back wait for authoritative cleanup. Retry keeps the
+   intended destination, and repeated exits share one leave request.
+2. Child profiles: Edit/Save/Cancel, stable child identity/team selections,
+   serialized operations, and removal only after confirmed server deletion.
+3. iOS Google sign-in: explicit interactive chooser from the Google button;
+   keyboard dismissal. Android fallbacks and Apple authorization remain intact.
+4. Ready and game touch feedback: immediate pending indicators, duplicate-tap
+   guards, shorter confirmed Trivia feedback, optional caller-only Bomb next
+   view, and Spot tap feedback with stale-round protection.
+5. Verified venue weather: owner-supplied Dr Phillips Park page from the exact
+   approved venue and its linked team pages; no universal weather inference.
+6. Weather Delay: optional venue confirmation includes the named weather link
+   in Share/composer drafts; approved announcement links open with Retry.
+7. Parent message translation: compact Translate button, language choice,
+   explicit Google processing confirmation, original retained, Hide translation,
+   official attribution, safe private authorization and enforced cost limits.
+8. Coach Mode recovery: visible Parent Mode escape and Retry, bounded strict
+   current-team loading, independent archive failures and session-scoped mode.
+9. Multi-sport Squads: creation checkboxes, all-sports venue labels and active
+   manager editing, preserving Squad identity, membership, Teams and scores.
+10. Admin member search: public-name filtering, 20-row results, Show more/Clear,
+    preserved invitation/acceptance process and complete names beyond 250 members.
+
+Notifications
+The existing source already contains the two dismissal callables. The retained
+October 7 read-only assessment found them absent from staging, explaining why
+opened alerts return after restart and Clear all fails. The local HTTP emulator
+now verifies acknowledgement persistence, recipient ownership, idempotency and
+405-item Clear all pagination. Include those two existing callables in the
+backend delivery; a new client-only change cannot repair missing endpoints.
+Do not add notification cleanup or deletion schedules to this repair.
+
+Exact supporting backend scope: sideline-social-staging-2026, us-central1
+Review current target identity/configuration immediately before delivery.
+Deploy or update only the following affected existing callables:
+  acknowledgeNotificationOpened
+  clearUserNotifications
+  deleteChildProfile
+  submitBombDefusalStep
+  findOrCreateVenueSportSquad
+  findNearbyVenueSportSquads
+  searchVenueSportSquads
+  getVenueSportSquadDetail
+  getSquadAdministration
+  getSquadLeaderboard
+Add these new App Check-protected callables:
+  updateSquadSports
+  translateTeamMessage
+
+Admin member search shares the getSquadAdministration update already required
+for multi-sport Squads. Existing single-sport callers remain compatible. The
+new sports-array creation request rejects an old backend rather than silently
+dropping extra selections. Do not merge existing duplicate Squads.
+
+Translation activation is a separate delivery requirement
+The client and server source are included and validated locally. Google Cloud
+API enablement, billing, runtime permissions, provider agreement, public privacy
+wording and store disclosures still need the reviewed readiness described in
+docs/team-message-translation-config.txt. TEAM_TRANSLATION_ENABLED defaults off.
+Keep it off until those checks and scoped provider acceptance are complete.
+The hard cap is 500000 reserved source characters/month for this callable; this
+is not a promise of free billing or a total Functions/Firestore spending cap.
+
+Build preparation
+- Use the external-testing profile with the existing protected staging Firebase
+  and Maps inputs. Do not use a raw EAS command without those protected inputs.
+- Bind a fresh reviewed commit and complete file manifest. Previous six-file
+  build seals and preflight runners do not authorize or describe this candidate.
+- Read current remote version counters and confirm platform identifiers before
+  any future build; do not assume that the next counters are still 32 and 20.
+- Android identity: com.sidelinesquad.app. iOS: com.sidelinesocial.app.
+- Preserve Play Integrity and App Attest/DeviceCheck release providers.
+- No dependency, native plugin, native project or lockfile change was added.
+  The existing Android/iOS configuration and EAS packaging inputs remain valid.
+- All implementation changes can share one next Android beta build and one
+  next iOS TestFlight build. No EAS build or store delivery was started by this
+  source review and GitHub push task.
+
+Validation
+Client and Functions TypeScript, changed-file ESLint, feature behavior and
+integration regressions, notification HTTP emulators, external-testing native
+Firebase/OAuth/Maps configuration, Android/CNG iOS parity, App Check fail-closed
+contracts, legal build gates, packaging, credential scan and whitespace passed.
+ESLint retains three existing native-provider require-import warnings, no errors.
+Completed unchanged emulator results for Bomb, translation, lobby backend,
+multi-sport and the 360-member admin list are reused; no broad moderation cycle
+is needed. Results and the post-commit source binding are retained privately.
+
+Before beta delivery and acceptance
+Deliver the scoped backend changes and complete translation-specific readiness
+before claiming every feature works live. After future builds are installed,
+perform one focused device pass for navigation/back/swipe, child persistence,
+Google/Apple sign-in, fast Ready/gameplay taps, weather/browser return, translation
+consent/provider/keyboard, Coach offline escape and Squad sports/admin search.
+Use benign approved fixtures; reuse local results rather than repeating broad
+suites. The installed Android 31 and iOS 19 clients lack these pending changes.
+
+Moderation
+Keep the existing live moderation configuration and accepted source intact.
+No activation, dark recovery, new moderation case/consequence/appeal, broad
+Function deployment, IAM/Rules/index/secret change, production rollout, or extra
+build is part of this source review. Revisit only a concrete regression if one
+is actually found during the focused future device pass.

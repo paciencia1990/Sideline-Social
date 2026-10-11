@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Colors, Typography } from '@/constants/theme';
 import { Squad } from '@/services/squadService';
-import { getSquadSportOption } from '@/constants/sports';
+import { getSquadSportOption, readSquadSportIds } from '@/constants/sports';
 
 interface SquadMarkerProps {
   squad: Squad;
@@ -10,7 +10,7 @@ interface SquadMarkerProps {
 }
 
 export function SquadMarker({ squad, isSelected }: SquadMarkerProps) {
-  const emoji = getSquadSportOption(squad.sportId).emoji;
+  const emoji = readSquadSportIds(squad.sportIds, squad.sportId).length > 1 ? "🏅" : getSquadSportOption(squad.sportId).emoji;
 
   return (
     <View

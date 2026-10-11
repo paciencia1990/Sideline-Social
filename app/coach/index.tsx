@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { Archive, CalendarDays, ChevronDown, ChevronUp, MessageCircle, MessagesSquare, RotateCcw, Shield, Users, type LucideIcon } from "lucide-react-native";
@@ -28,15 +28,20 @@ import { getTeamPrivateMessageInboxPage } from "@/services/teamPrivateMessageSer
 import { shouldShowPrivateMessagesCard, type PrivateInboxLoadState } from "@/utils/coachCommunicationCore";
 import { createCoachHomeTeamCards } from "@/utils/coachHomeTeamCards";
 import { resolveCoachResourcesAccess } from "@/utils/coachResourcesAccess";
+import { loadCoachHomeData } from "@/utils/coachHomeRecovery";
 
 export default function CoachHomeScreen() {
   const { t } = useTranslation();
   const { activeMode, modeHydrated, setActiveMode } = useApp();
   const { user } = useAuth();
+  const currentUserId = useRef(user?.uid);
+  currentUserId.current = user?.uid;
   const [memberships, setMemberships] = useState<TeamMembership[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isSwitchingMode, setIsSwitchingMode] = useState(false);
+  const isSwitchingMode = useRef(false);
+  const loadVersion = useRef(0);
+  const [archiveCountUnavailable, setArchiveCountUnavailable] = useState(false);
   const [restoringTeamId, setRestoringTeamId] = useState<string | null>(null);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
@@ -53,28 +58,37 @@ export default function CoachHomeScreen() {
   }>({ conversationCount: 0, loadState: "loading", unreadCount: 0 });
 
   const loadTeams = useCallback(async () => {
+    const version = ++loadVersion.current;
+    const requestUserId = user?.uid;
+    const isCurrentLoad = () => version === loadVersion.current && requestUserId === currentUserId.current;
     setLoading(true);
+    setMemberships([]);
     setError(null);
     setLifecycleError(null);
     try {
-      const [nextMemberships, nextArchivedCount] = await Promise.all([
-        getCurrentUserTeamMemberships(),
-        getArchivedCoachTeamCount(),
-      ]);
-      setMemberships(nextMemberships);
-      setArchivedCount(nextArchivedCount);
+      const next = await loadCoachHomeData({
+        memberships: () => getCurrentUserTeamMemberships({ throwOnError: true, requireComplete: true }),
+        archivedCount: getArchivedCoachTeamCount,
+      });
+      if (!isCurrentLoad()) return;
+      setMemberships(next.memberships);
+      setArchivedCount(next.archivedCount);
+      setArchiveCountUnavailable(next.archiveCountUnavailable);
     } catch (nextError) {
-      console.warn("[CoachHome] load error:", nextError);
+      if (!isCurrentLoad()) return;
+      console.warn("[CoachHome] load unavailable:", getErrorCode(nextError));
       setError(t("coach.home.error"));
       setMemberships([]);
     } finally {
-      setLoading(false);
+      if (isCurrentLoad()) setLoading(false);
     }
-  }, [t]);
+  }, [t, user?.uid]);
 
   useFocusEffect(
     useCallback(() => {
+      isSwitchingMode.current = false;
       void loadTeams();
+      return () => { loadVersion.current += 1; };
     }, [loadTeams]),
   );
 
@@ -114,21 +128,22 @@ export default function CoachHomeScreen() {
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      setPrivateInbox((current) => ({ ...current, loadState: "loading" }));
+      const requestUserId = user?.uid;
+      setPrivateInbox({ conversationCount: 0, loadState: "loading", unreadCount: 0 });
       void getTeamPrivateMessageInboxPage("coach", undefined, null, 50).then((page) => {
-        if (!active) return;
+        if (!active || requestUserId !== currentUserId.current) return;
         setPrivateInbox({
           conversationCount: page.conversations.length,
           loadState: "loaded",
           unreadCount: page.conversations.reduce((total, conversation) => total + conversation.unreadCount, 0),
         });
       }).catch((nextError) => {
-        if (!active) return;
+        if (!active || requestUserId !== currentUserId.current) return;
         console.info("[CoachHome] private inbox unavailable", { code: getErrorCode(nextError) });
         setPrivateInbox({ conversationCount: 0, loadState: "error", unreadCount: 0 });
       });
       return () => { active = false; };
-    }, []),
+    }, [user?.uid]),
   );
   const parentTeams = memberships.filter((membership) =>
     hasTeamRole(membership, "parent") && isTeamActive(membership.team),
@@ -160,10 +175,14 @@ export default function CoachHomeScreen() {
   }, [activeMode, coachTeams.length, hasTeams, loading]);
 
   const switchToParent = useCallback(async () => {
+    if (isSwitchingMode.current) return;
+    isSwitchingMode.current = true;
+    loadVersion.current += 1;
     const targetRoute = PARENT_PROFILE_ROUTE;
-    setIsSwitchingMode(true);
-    setError(null);
-
+    setActiveMode("parent");
+    replaceAfterOptionalDismiss(targetRoute);
+    // Mode is a navigation preference. Unavailable persistence must not strand
+    // the user; server-owned standing and team permissions still govern access.
     try {
       if (__DEV__) {
         console.log("[ModeSwitch:toParent]", {
@@ -175,15 +194,10 @@ export default function CoachHomeScreen() {
       }
 
       await switchActiveMode("parent");
-      setActiveMode("parent");
-      replaceAfterOptionalDismiss(targetRoute);
     } catch (nextError) {
-      console.warn("[CoachHome] switch to parent error:", nextError);
-      setError(t("coach.home.error"));
-    } finally {
-      setIsSwitchingMode(false);
+      console.warn("[CoachHome] mode preference unavailable:", getErrorCode(nextError));
     }
-  }, [activeMode, setActiveMode, t]);
+  }, [activeMode, setActiveMode]);
 
   const restoreTeam = useCallback(async (membership: TeamMembership) => {
     if (!membership.team || restoringTeamId) return;
@@ -245,25 +259,41 @@ export default function CoachHomeScreen() {
           </Card>
         ) : null}
 
-        {!loading && error ? <StateCard title={t("coach.home.errorTitle")} body={error} /> : null}
+        {!loading && error ? (
+          <Card style={styles.centerCard}>
+            <Text accessibilityLiveRegion="polite" style={styles.cardTitle}>{t("coach.home.errorTitle")}</Text>
+            <Text style={styles.cardText}>{error}</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={() => { void loadTeams(); }} style={styles.primaryButton}>
+              <Text style={styles.primaryButtonText}>{t("common.retry")}</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : null}
+
+        <Card style={styles.modeCard}>
+          <Text style={styles.cardTitle}>{loading || error ? t("mode.coach") : hasTeams ? t("mode.viewingCoach") : t("startMode.coachWelcome")}</Text>
+          <Text style={styles.cardText}>{loading || error ? t("coach.home.recoveryHelp") : hasTeams ? t("coach.home.modeHelp") : t("startMode.coachWelcomeBody")}</Text>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity
+              activeOpacity={0.86}
+              accessibilityRole="button"
+              onPress={switchToParent}
+              style={styles.outlineButton}
+            >
+              <Text style={styles.outlineButtonText}>{t("mode.switchToParent")}</Text>
+            </TouchableOpacity>
+          </View>
+        </Card>
 
         {!loading && !error ? (
           <>
-            <Card style={styles.modeCard}>
-              <Text style={styles.cardTitle}>{hasTeams ? t("mode.viewingCoach") : t("startMode.coachWelcome")}</Text>
-              <Text style={styles.cardText}>{hasTeams ? t("coach.home.modeHelp") : t("startMode.coachWelcomeBody")}</Text>
-              <View style={styles.buttonRow}>
-                <TouchableOpacity
-                  activeOpacity={0.86}
-                  disabled={isSwitchingMode}
-                  onPress={switchToParent}
-                  style={[styles.outlineButton, isSwitchingMode && styles.disabledButton]}
-                >
-                  <Text style={styles.outlineButtonText}>{t("mode.switchToParent")}</Text>
+            {archiveCountUnavailable ? (
+              <Card style={styles.centerCard}>
+                <Text accessibilityLiveRegion="polite" style={styles.cardText}>{t("coach.home.archiveUnavailable")}</Text>
+                <TouchableOpacity accessibilityRole="button" onPress={() => { void loadTeams(); }} style={styles.outlineButton}>
+                  <Text style={styles.outlineButtonText}>{t("common.retry")}</Text>
                 </TouchableOpacity>
-              </View>
-            </Card>
-
+              </Card>
+            ) : null}
             {showCoachResources ? <Card style={styles.resourceCard}>
               <View style={styles.resourceHeading}>
                 <Shield color={Colors.primary} size={24} />
@@ -412,15 +442,6 @@ function QuickAction({ Icon, badge, label, onPress }: { Icon: LucideIcon; badge?
   );
 }
 
-function StateCard({ body, title }: { body: string; title: string }) {
-  return (
-    <Card style={styles.centerCard}>
-      <Text style={styles.cardTitle}>{title}</Text>
-      <Text style={styles.cardText}>{body}</Text>
-    </Card>
-  );
-}
-
 const styles = StyleSheet.create({
   centerScreen: { alignItems: "center", flex: 1, justifyContent: "center" },
   content: { gap: Spacing.md, padding: Spacing.lg, paddingBottom: Spacing.xxl },
@@ -468,5 +489,6 @@ const styles = StyleSheet.create({
 });
 
 function getErrorCode(error: unknown) {
-  return typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+  return /^(?:(?:firestore|functions)\/)?(?:aborted|already-exists|cancelled|deadline-exceeded|failed-precondition|internal|invalid-argument|not-found|permission-denied|resource-exhausted|unauthenticated|unavailable|unknown)$/.test(code) ? code : "unknown";
 }

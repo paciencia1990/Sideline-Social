@@ -18,6 +18,7 @@ import { MessageActionsModal, type MessageModalAction, type MessageReportReason 
 import { VoiceMemoComposer } from "@/components/VoiceMemoComposer";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { Card } from "@/components/Card";
+import { MessageTranslation } from "@/components/MessageTranslation";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { auth } from "@/config/firebase";
 import {
@@ -477,6 +478,9 @@ export function PrivateTeamMessageThread({
                   ? <VoiceMemoUnavailable />
                   : <Text style={styles.messageText}>{message.text}</Text>}
                 {!message.isDeleted && message.caption ? <Text style={styles.caption}>{message.caption}</Text> : null}
+                {role === 'parent' && !mine && !message.isDeleted && !message.isModerated && message.senderRole === 'coach' ? (
+                  <MessageTranslation source={{ kind: 'privateMessage', conversationId, messageId: message.id }} sourceText={(message.contentType === 'voice' ? message.caption : message.text) ?? ''} />
+                ) : null}
               </View>
             );
           })}

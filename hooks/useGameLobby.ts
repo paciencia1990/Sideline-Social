@@ -7,10 +7,11 @@ import { useTranslation } from 'react-i18next';
 import { rtdb } from '@/config/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { useSquad } from '@/context/SquadContext';
+import { useGameRoomDeparture } from '@/hooks/useGameRoomDeparture';
+import type { RetainedGameRoomNavigationParams } from '@/utils/gameRoomDeparture';
 import {
   closeGameLobby,
   getGameJoinCodeForSession,
-  leaveGameLobby,
   readGameJoinCodeFailureReason,
   setRealtimeGamePlayerReady,
   type GameJoinCodeFailureReason,
@@ -22,6 +23,7 @@ import {
 } from '@/services/gameStartSynchronizationService';
 import { togglePlayerReady } from '@/src/game/triviaBlitz/gameState';
 import { getTriviaParentSessionRef, getTriviaPlayersRef } from '@/src/game/triviaBlitz/firebaseUtils';
+import { createReadyToggleController, type ReadyToggleState } from '@/utils/gameInteraction';
 
 type LobbyGameId = 'bomb-defusal' | 'trivia-blitz' | 'spot-the-difference';
 
@@ -60,11 +62,14 @@ type GameLobbyState = {
   lifecycleAction: 'leaving' | 'closing' | null;
   lifecycleError: GameJoinCodeFailureReason | null;
   toggleReady: () => void;
+  readyPending: boolean;
+  readyError: GameJoinCodeFailureReason | null;
   startGame: () => void;
   startPending: boolean;
   startError: GameJoinCodeFailureReason | null;
   showCountdown: boolean;
   setShowCountdown: (value: boolean) => void;
+  continueWithinRoom: (navigate: (params: RetainedGameRoomNavigationParams) => void) => void;
 };
 
 type RealtimeLobbyRecord = {
@@ -113,6 +118,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const [showCountdown, setShowCountdown] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [startError, setStartError] = useState<GameJoinCodeFailureReason | null>(null);
+  const [readyState, setReadyState] = useState<ReadyToggleState<GameJoinCodeFailureReason>>({ ready: false, pending: false, error: null });
   const [lifecycleAction, setLifecycleAction] = useState<'leaving' | 'closing' | null>(null);
   const [lifecycleError, setLifecycleError] = useState<GameJoinCodeFailureReason | null>(null);
   const [setupAttempt, setSetupAttempt] = useState(0);
@@ -126,6 +132,11 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const lastLifecycleActionRef = useRef<'leaving' | 'closing'>('leaving');
   const lifecycleInFlightRef = useRef(false);
   const navigatedStartAttemptRef = useRef('');
+  const roomDeparture = useGameRoomDeparture({
+    enabled: !isLocal && Boolean(lobbyId),
+    lobbyId,
+    presentFailureAlert: false,
+  });
 
   const clearLocalLobbyState = useCallback(() => {
     setSessionId('');
@@ -152,9 +163,10 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     remoteClosureHandledRef.current = true;
     departureCompletedRef.current = true;
     suppressLobbyEventsRef.current = true;
+    roomDeparture.markDeparted();
     clearLocalLobbyState();
     openLobbyDirectory('lobbyClosed');
-  }, [clearLocalLobbyState, openLobbyDirectory]);
+  }, [clearLocalLobbyState, openLobbyDirectory, roomDeparture]);
 
   useEffect(() => {
     if (suppressLobbyEventsRef.current || departureCompletedRef.current) return;
@@ -281,21 +293,22 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
         navigatedStartAttemptRef.current = state.startAttemptId;
         setStartError(null);
         setStartPending(true);
-        router.replace({
+        roomDeparture.continueWithinRoom((retainedParams) => router.replace({
           pathname: playPathForGame(gameId),
           params: {
+            ...retainedParams,
             sessionId,
             startAttemptId: state.startAttemptId,
             ...(lobbyId ? { lobbyId } : {}),
           },
-        } as never);
+        } as never));
       },
       (error) => {
         setStartPending(false);
         setStartError(readGameStartFailureReason(error));
       },
     );
-  }, [gameId, gameType, isLocal, lobbyId, sessionId]);
+  }, [gameId, gameType, isLocal, lobbyId, roomDeparture, sessionId]);
 
   const activePlayerList = isLocal ? localPlayers : playerList;
   const effectiveUserId = currentUserId || 'local-player';
@@ -307,12 +320,34 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     }
   ), [activePlayerList, currentUserName, effectiveUserId]);
 
+  const readyController = useMemo(() => createReadyToggleController({
+    writeReady: async (ready: boolean) => {
+      if (isLocal) {
+        setLocalPlayers((current) => current.map((player) => player.id === effectiveUserId ? { ...player, ready } : player));
+      } else if (gameType === 'triviaBlitz') {
+        await togglePlayerReady(sessionId, currentUserId, ready);
+      } else {
+        await setRealtimeGamePlayerReady({ sessionId, ready });
+      }
+    },
+    onChange: setReadyState,
+    classifyError: readGameJoinCodeFailureReason,
+  }), [currentUserId, effectiveUserId, gameType, isLocal, sessionId]);
+
+  useEffect(() => {
+    setReadyState(readyController.getState());
+    return () => readyController.dispose();
+  }, [readyController]);
+  useEffect(() => { readyController.updateConfirmed(self.ready); }, [readyController, self.ready]);
+
+  const visibleSelf = useMemo(() => ({ ...self, ready: readyState.ready }), [readyState.ready, self]);
+  const visiblePlayers = useMemo(() => activePlayerList.map((player) => player.id === effectiveUserId ? visibleSelf : player), [activePlayerList, effectiveUserId, visibleSelf]);
   const players = useMemo<LobbyPlayers>(() => ({
     joinCode,
-    list: activePlayerList,
-    self,
+    list: visiblePlayers,
+    self: visibleSelf,
     isHost: isLocal || hostUserId === effectiveUserId,
-  }), [activePlayerList, effectiveUserId, hostUserId, isLocal, joinCode, self]);
+  }), [effectiveUserId, hostUserId, isLocal, joinCode, visiblePlayers, visibleSelf]);
 
   const retryCode = useCallback(() => {
     setCodeState('loading');
@@ -322,22 +357,13 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
 
   const toggleReady = useCallback(() => {
     setStartError(null);
-    if (isLocal) {
-      setLocalPlayers((current) => current.map((player) => (
-        player.id === effectiveUserId ? { ...player, ready: !player.ready } : player
-      )));
-      return;
-    }
-    if (!sessionId || !currentUserId) return;
-    if (gameType === 'triviaBlitz') {
-      void togglePlayerReady(sessionId, currentUserId, !self.ready);
-      return;
-    }
-    void setRealtimeGamePlayerReady({ sessionId, ready: !self.ready });
-  }, [currentUserId, effectiveUserId, gameType, isLocal, self.ready, sessionId]);
+    if (startPending || lifecycleInFlightRef.current || departureCompletedRef.current || roomDeparture.departing) return;
+    if (!isLocal && (!sessionId || !currentUserId)) return;
+    void readyController.toggle();
+  }, [currentUserId, isLocal, readyController, roomDeparture.departing, sessionId, startPending]);
 
   const startGame = useCallback(() => {
-    if (!players.isHost || startPending) return;
+    if (!players.isHost || startPending || readyState.pending) return;
     setStartError(null);
     if (isLocal) {
       setShowCountdown(true);
@@ -350,7 +376,7 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
         setStartPending(false);
         setStartError(readGameStartFailureReason(error));
       });
-  }, [gameType, isLocal, players.isHost, sessionId, startPending]);
+  }, [gameType, isLocal, players.isHost, readyState.pending, sessionId, startPending]);
 
   const performLifecycleAction = useCallback(async (action: 'leaving' | 'closing') => {
     if (lifecycleInFlightRef.current) return;
@@ -366,8 +392,17 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     setLifecycleError(null);
     try {
       if (!isLocal) {
-        if (action === 'closing') await closeGameLobby({ lobbyId });
-        else await leaveGameLobby({ lobbyId });
+        if (action === 'closing') {
+          await closeGameLobby({ lobbyId });
+          roomDeparture.markDeparted();
+        } else {
+          const departed = await roomDeparture.depart();
+          if (!departed) {
+            suppressLobbyEventsRef.current = false;
+            setLifecycleError(roomDeparture.getDepartureError() ?? 'network_unavailable');
+            return;
+          }
+        }
       }
       departureCompletedRef.current = true;
       clearLocalLobbyState();
@@ -379,13 +414,20 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
       lifecycleInFlightRef.current = false;
       setLifecycleAction(null);
     }
-  }, [clearLocalLobbyState, isLocal, lobbyId, openLobbyDirectory]);
+  }, [clearLocalLobbyState, isLocal, lobbyId, openLobbyDirectory, roomDeparture]);
 
   const leaveGame = useCallback(() => performLifecycleAction('leaving'), [performLifecycleAction]);
   const closeLobby = useCallback(() => performLifecycleAction('closing'), [performLifecycleAction]);
   const retryLifecycleAction = useCallback(() => {
+    if (roomDeparture.hasPendingNavigation()) {
+      roomDeparture.retryDeparture();
+      return;
+    }
     void performLifecycleAction(lastLifecycleActionRef.current);
-  }, [performLifecycleAction]);
+  }, [performLifecycleAction, roomDeparture]);
+
+  const visibleLifecycleAction = lifecycleAction ?? (roomDeparture.departing ? 'leaving' : null);
+  const visibleLifecycleError = lifecycleError ?? roomDeparture.departureError;
 
   return {
     sessionId,
@@ -399,14 +441,17 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     leaveGame,
     closeLobby,
     retryLifecycleAction,
-    lifecycleAction,
-    lifecycleError,
+    lifecycleAction: visibleLifecycleAction,
+    lifecycleError: visibleLifecycleError,
     toggleReady,
+    readyPending: readyState.pending,
+    readyError: readyState.error,
     startGame,
     startPending,
     startError,
     showCountdown,
     setShowCountdown,
+    continueWithinRoom: roomDeparture.continueWithinRoom,
   };
 }
 

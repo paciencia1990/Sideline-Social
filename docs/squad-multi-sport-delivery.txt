@@ -1,0 +1,80 @@
+Multi-sport venue Squads — pending beta release
+
+Behavior
+- A new public venue Squad accepts one or more of the existing 15 sports.
+- Finding a matching public venue reuses its existing Squad ID, regardless of
+  the requested sports. It never changes the existing sports on behalf of the
+  person searching. The person can choose to join the existing Squad.
+- Active Squad administrators can add or remove sports from Manage Squad.
+  At least one sport is required. Coaches and ordinary members do not acquire
+  Squad administrator authority merely by having a team role.
+- Each venue card displays its sports together. Multi-sport communities use
+  the general medal indicator; single-sport Squads retain their existing emoji.
+- Editing sports preserves the Squad ID, venue, membership, active selection,
+  linked Teams, seasons, and scores. Teams keep their individual sport.
+- English and Spanish copy, checkbox accessibility, visible save failures,
+  retained drafts, conflict reload, and duplicate-submit guards are included.
+
+Existing data
+- Legacy records without sportIds are read as their single existing sport.
+- A single legacy public Squad can be reused without rewriting the record;
+  a manager's first edit introduces the sports array and revision.
+- Multiple public Squads matching the same venue require a separately reviewed
+  consolidation. This release does not merge, relabel, archive, or delete them.
+- Venue matching retains the existing normalized-name and nearby-coordinate
+  rules. Different spellings or locations can still require manual review;
+  the implementation does not assert universal geographic deduplication.
+- Concurrent creation for the same verified venue uses a server-only directory
+  and Firestore transaction. Private, archived, and deleted communities are not
+  exposed or adopted by the public creation flow.
+
+Scoped backend delivery, before compatible clients
+Update only these affected existing callables and add the manager callable:
+  findOrCreateVenueSportSquad
+  findNearbyVenueSportSquads
+  searchVenueSportSquads
+  getVenueSportSquadDetail
+  getSquadAdministration
+  getSquadLeaderboard
+  updateSquadSports (new, us-central1, App Check enforced)
+
+The existing creator callable name and single sportId input remain accepted for
+installed clients. A new client sends sportIds without a single-sport fallback,
+so an old backend rejects it instead of silently creating an incomplete Squad.
+Older clients display the retained primary sport. They reuse the same community
+and cannot overwrite its list through creation. Existing squads retain their
+historical venueSportKey; it is no longer used to choose a separate sport Squad.
+
+The new manager endpoint checks permanent authentication, account standing,
+App Check, active Squad manager membership, supported sports, and a matching
+server revision. A stale edit cannot overwrite a newer edit. Direct client
+writes to Squads and the private venueSquadDirectory remain denied under the
+existing Rules. No Rules, indexes, secrets, roles, or moderation changes were
+made for this local implementation.
+
+Client delivery
+Include this shared client change in the existing combined Android/iOS beta
+candidate. No native dependency was added. The installed Android 31 and iOS 19
+builds do not contain this feature. Fresh build numbers must be read before
+building. No build, source publication, deployment, commit, or push has been
+performed by this implementation task.
+
+Focused verification
+Passed: actual picker/editor/creation behavior; legacy normalization and
+transport; repeated taps; failed/conflicting saves with retained selections;
+stale account and unmounted replies; isolated demo Firestore concurrent
+creation, manager authorization, App Check/authentication denial, legacy
+adoption, ambiguity/private handling, revision conflicts, unchanged members,
+Teams and scores, and existing Rules denial of direct writes. Client and
+Functions TypeScript, targeted ESLint, related Squad/season/venue regressions,
+localization, credential/private-path scan and diff whitespace were checked.
+
+Remaining on-device acceptance on the future compatible client
+Create or reuse an approved disposable venue with two sports; as its manager,
+add and remove one sport, reopen the app and confirm labels remain correct.
+Confirm an ordinary member cannot edit. Check scrolling, keyboard and checkbox
+accessibility on Android/iOS. Existing separate Squads must not be combined as
+part of that acceptance. Reuse the completed local/backend test results.
+
+Moderation remains live; this change needs no moderation activation, recovery,
+new moderation consequence, or repeated moderation acceptance journey.

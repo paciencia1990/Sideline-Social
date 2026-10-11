@@ -20,6 +20,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { useFirebaseServerClock } from "@/hooks/useFirebaseServerClock";
+import { useGameRoomDeparture } from "@/hooks/useGameRoomDeparture";
 import { Colors, Spacing, Typography } from "@/constants/theme";
 import {
   advanceTriviaGameSession,
@@ -50,6 +51,7 @@ import {
   type TriviaAnswerAccessibilityLabels,
 } from "./answerFeedback";
 import type { ScoreResult, TriviaPlayer, TriviaSession } from "./types";
+import { createReadyToggleController, GAME_BUTTON_HIT_SLOP, getTriviaAdvanceDelay, type ReadyToggleState } from "@/utils/gameInteraction";
 
 const QUESTION_SECONDS = 15;
 const TRIVIA_MIN_PLAYERS = 2;
@@ -95,6 +97,7 @@ export default function TriviaBlitzScreen() {
     [params.code, params.joinCode, params.sessionId],
   );
   const lobbyId = normalizeParam(params.lobbyId);
+  const roomDeparture = useGameRoomDeparture({ enabled: Boolean(lobbyId), lobbyId });
   const [sessionId, setSessionId] = useState(requestedSessionId);
   const [playerId, setPlayerId] = useState("");
   const [session, setSession] = useState<TriviaSession | null>(null);
@@ -103,6 +106,9 @@ export default function TriviaBlitzScreen() {
   const [lastResult, setLastResult] = useState<QuestionScoreResult | null>(null);
   const [optimisticSelection, setOptimisticSelection] = useState<OptimisticTriviaSelection | null>(null);
   const [busy, setBusy] = useState(false);
+  const [answerPendingKey, setAnswerPendingKey] = useState<string | null>(null);
+  const [screenReaderEnabled, setScreenReaderEnabled] = useState(false);
+  const [readyState, setReadyState] = useState<ReadyToggleState<TriviaErrorKey>>({ ready: false, pending: false, error: null });
   const [settingUp, setSettingUp] = useState(false);
   const [setupError, setSetupError] = useState<TriviaErrorKey | null>(null);
   const [setupAttempt, setSetupAttempt] = useState(0);
@@ -110,13 +116,15 @@ export default function TriviaBlitzScreen() {
   const [rewardLoading, setRewardLoading] = useState(false);
   const [rewardError, setRewardError] = useState<string | null>(null);
   const setupInFlightRef = useRef(false);
-  const advanceInFlightRef = useRef(false);
+  const advanceInFlightRef = useRef<string | null>(null);
   const advancedQuestionRef = useRef<string | null>(null);
   const announcedFeedbackRef = useRef<string | null>(null);
   const rewardRequestKeyRef = useRef("");
   const lifecycleEndedRef = useRef("");
   const rematchInFlightRef = useRef(false);
   const answerSubmissionKeyRef = useRef("");
+  const currentQuestionScopeRef = useRef("");
+  const revealTimingRef = useRef<{ questionKey: string; atMs: number } | null>(null);
   const fallbackPlayerName = t("games.playerFallback");
 
   const resolvedPlayerName = useMemo(
@@ -203,6 +211,16 @@ export default function TriviaBlitzScreen() {
     () => players.find((player) => player.id === playerId) ?? null,
     [playerId, players],
   );
+  const readyController = useMemo(() => createReadyToggleController({
+    writeReady: (ready: boolean) => togglePlayerReady(sessionId, playerId, ready),
+    onChange: setReadyState,
+    classifyError: getTriviaErrorTranslationKey,
+  }), [playerId, sessionId]);
+  useEffect(() => {
+    setReadyState(readyController.getState());
+    return () => readyController.dispose();
+  }, [readyController]);
+  useEffect(() => { readyController.updateConfirmed(self?.ready ?? false); }, [readyController, self?.ready]);
   const activePlayer = useMemo(
     () => players.find((player) => player.playerIndex === session?.turnIndex) ?? null,
     [players, session?.turnIndex],
@@ -211,6 +229,8 @@ export default function TriviaBlitzScreen() {
   const currentQuestionKey = currentQuestion
     ? createTriviaQuestionKey(session?.questionIndex ?? -1, currentQuestion.id)
     : "";
+  currentQuestionScopeRef.current = `${sessionId}:${currentQuestionKey}`;
+  const questionEndsAtMs = readTimestampMillis(session?.questionEndsAt);
   const synchronizedResult =
     session?.answerResult &&
     session.answerResult.questionIndex === session.questionIndex
@@ -240,11 +260,23 @@ export default function TriviaBlitzScreen() {
     : "";
 
   useEffect(() => {
-    answerSubmissionKeyRef.current = "";
-    setOptimisticSelection(null);
+    if (revealTimingRef.current?.questionKey !== currentQuestionKey) revealTimingRef.current = null;
+    setOptimisticSelection((current) => current?.questionKey === currentQuestionKey ? current : null);
+    setAnswerPendingKey((current) => current === currentQuestionKey ? current : null);
   }, [currentQuestionKey]);
+
+  useEffect(() => {
+    let active = true;
+    void AccessibilityInfo.isScreenReaderEnabled().then((enabled) => {
+      if (active) setScreenReaderEnabled(enabled);
+    }).catch(() => undefined);
+    const subscription = AccessibilityInfo.addEventListener("screenReaderChanged", setScreenReaderEnabled);
+    return () => { active = false; subscription.remove(); };
+  }, []);
   const selectionBelongsToSelf = Boolean(
-    self && session?.currentSelection?.playerId === self.id,
+    self && (session?.currentSelection
+      ? session.currentSelection.playerId === self.id
+      : optimisticSelection?.questionKey === currentQuestionKey),
   );
   const selectedAnswerWasCorrect = Boolean(answerResultKnown && currentResult?.correct);
   const answerAccessibilityLabels = useMemo<TriviaAnswerAccessibilityLabels>(
@@ -323,16 +355,15 @@ export default function TriviaBlitzScreen() {
       return;
     }
 
-    const questionEndsAtMs = readTimestampMillis(session.questionEndsAt);
     setSecondsRemaining(
       questionEndsAtMs
         ? Math.max(Math.ceil((questionEndsAtMs - (Date.now() + offsetMs)) / 1000), 0)
         : QUESTION_SECONDS,
     );
-    setLastResult(null);
+    setLastResult((current) => current?.questionKey === currentQuestionKey ? current : null);
     advancedQuestionRef.current = null;
     announcedFeedbackRef.current = null;
-  }, [offsetMs, session?.questionEndsAt, session?.questionIndex, session?.status]);
+  }, [currentQuestionKey, offsetMs, questionEndsAtMs, session?.status]);
 
   useEffect(() => {
     if (session?.status !== "playing") {
@@ -340,7 +371,6 @@ export default function TriviaBlitzScreen() {
     }
 
     const updateRemainingTime = () => {
-      const questionEndsAtMs = readTimestampMillis(session.questionEndsAt);
       setSecondsRemaining(
         questionEndsAtMs
           ? Math.max(Math.ceil((questionEndsAtMs - (Date.now() + offsetMs)) / 1000), 0)
@@ -353,7 +383,7 @@ export default function TriviaBlitzScreen() {
     }, 250);
 
     return () => clearInterval(timer);
-  }, [offsetMs, session?.questionEndsAt, session?.status]);
+  }, [offsetMs, questionEndsAtMs, session?.status]);
 
   useEffect(() => {
     if (
@@ -380,27 +410,36 @@ export default function TriviaBlitzScreen() {
     }
 
     const questionAdvanceKey = `${sessionId}:${session.questionIndex}`;
-    const questionEndsAtMs = readTimestampMillis(session.questionEndsAt);
-    const delayMs = currentResult
-      ? 1400
-      : Math.max((questionEndsAtMs || (Date.now() + offsetMs)) - (Date.now() + offsetMs) + 100, 0);
+    const nowMs = Date.now() + offsetMs;
+    if (currentResult && revealTimingRef.current?.questionKey !== currentQuestionKey) {
+      // Anchor once when confirmed feedback becomes visible. A second snapshot
+      // must not restart the pause, and network delay must not erase feedback.
+      revealTimingRef.current = { questionKey: currentQuestionKey, atMs: nowMs };
+    }
+    const delayMs = getTriviaAdvanceDelay({
+      nowMs,
+      questionEndsAtMs: questionEndsAtMs ?? nowMs,
+      revealedAtMs: currentResult ? revealTimingRef.current!.atMs : null,
+      screenReaderEnabled,
+    });
     const timer = setTimeout(() => {
       if (
-        advanceInFlightRef.current ||
+        advanceInFlightRef.current === questionAdvanceKey ||
         advancedQuestionRef.current === questionAdvanceKey
       ) {
         return;
       }
 
-      advanceInFlightRef.current = true;
+      advanceInFlightRef.current = questionAdvanceKey;
       void advanceTriviaGameSession({
         sessionId,
         questionIndex: session.questionIndex,
       })
         .then(() => {
-          advancedQuestionRef.current = questionAdvanceKey;
+          if (currentQuestionScopeRef.current === `${sessionId}:${currentQuestionKey}`) advancedQuestionRef.current = questionAdvanceKey;
         })
         .catch((error) => {
+          if (currentQuestionScopeRef.current !== `${sessionId}:${currentQuestionKey}`) return;
           logTriviaFirebaseError("advanceQuestion", {}, error);
           Alert.alert(
             t("games.triviaBlitz.title"),
@@ -408,7 +447,7 @@ export default function TriviaBlitzScreen() {
           );
         })
         .finally(() => {
-          advanceInFlightRef.current = false;
+          if (advanceInFlightRef.current === questionAdvanceKey) advanceInFlightRef.current = null;
         });
     }, delayMs);
 
@@ -418,7 +457,8 @@ export default function TriviaBlitzScreen() {
     currentResult,
     isHost,
     offsetMs,
-    session?.questionEndsAt,
+    questionEndsAtMs,
+    screenReaderEnabled,
     session?.questionIndex,
     session?.status,
     sessionId,
@@ -449,15 +489,15 @@ export default function TriviaBlitzScreen() {
   }, [t]);
 
   const handleToggleReady = useCallback(() => {
-    if (!sessionId || !self) {
+    if (!sessionId || !self || busy) {
       return;
     }
 
-    runAction(() => togglePlayerReady(sessionId, self.id, !self.ready));
-  }, [runAction, self, sessionId]);
+    void readyController.toggle();
+  }, [busy, readyController, self, sessionId]);
 
   const handleStart = useCallback(() => {
-    if (!sessionId) {
+    if (!sessionId || readyState.pending) {
       return;
     }
 
@@ -470,7 +510,7 @@ export default function TriviaBlitzScreen() {
     }
 
     runAction(() => startGameSession(sessionId));
-  }, [canStartGame, runAction, sessionId, t]);
+  }, [canStartGame, readyState.pending, runAction, sessionId, t]);
 
   const handleSelectAnswer = useCallback(
     (answerIndex: number) => {
@@ -509,12 +549,13 @@ export default function TriviaBlitzScreen() {
 
       const questionIndex = session.questionIndex;
       const questionKey = currentQuestionKey;
+      const requestScope = `${sessionId}:${questionKey}`;
       const claim = claimTriviaAnswerSubmission(questionKey, answerSubmissionKeyRef.current);
       if (!claim.accepted) return;
       const submissionId = createTriviaSessionId();
       answerSubmissionKeyRef.current = claim.submissionKey;
       setOptimisticSelection({ answerIndex, questionKey });
-      setBusy(true);
+      setAnswerPendingKey(questionKey);
       void submitTriviaAnswer({
           sessionId,
           questionIndex,
@@ -522,9 +563,10 @@ export default function TriviaBlitzScreen() {
           submissionId,
         })
         .then((result) => {
-        setLastResult({ ...result, questionKey });
+          if (currentQuestionScopeRef.current === requestScope) setLastResult({ ...result, questionKey });
         })
         .catch((error) => {
+          if (currentQuestionScopeRef.current !== requestScope) return;
           if (answerSubmissionKeyRef.current === questionKey) {
             answerSubmissionKeyRef.current = "";
             setOptimisticSelection(null);
@@ -534,7 +576,7 @@ export default function TriviaBlitzScreen() {
             t(getTriviaErrorTranslationKey(error)),
           );
         })
-        .finally(() => setBusy(false));
+        .finally(() => setAnswerPendingKey((current) => current === questionKey ? null : current));
     },
     [
       currentQuestion,
@@ -549,7 +591,7 @@ export default function TriviaBlitzScreen() {
       t,
     ],
   );
-  const openLobbyDirectory = useCallback(() => {
+  const navigateToLobbyDirectory = useCallback(() => {
     if (selectedSquadId) {
       router.replace({
         pathname: "/(games)/lobbies",
@@ -560,28 +602,50 @@ export default function TriviaBlitzScreen() {
     router.replace("/(tabs)/games" as never);
   }, [selectedSquadId]);
 
+  const openLobbyDirectory = useCallback(() => {
+    void roomDeparture.departAndNavigate(navigateToLobbyDirectory);
+  }, [navigateToLobbyDirectory, roomDeparture]);
+
+  const exitToGames = useCallback(() => {
+    void roomDeparture.departAndNavigate(() => router.replace("/(tabs)/games" as never));
+  }, [roomDeparture]);
+
+  const exitToHome = useCallback(() => {
+    void roomDeparture.departAndNavigate(() => router.replace("/(tabs)" as never));
+  }, [roomDeparture]);
+
+  const returnToCurrentLobby = useCallback(() => {
+    roomDeparture.continueWithinRoom((retainedParams) => router.replace({
+      pathname: "/(games)/trivia-blitz/Lobby",
+      params: { ...retainedParams, lobbyId, sessionId: requestedSessionId },
+    } as never));
+  }, [lobbyId, requestedSessionId, roomDeparture]);
+
   const handleReset = useCallback(async () => {
     if (requestedSessionId) {
-      if (!lobbyId || !gameAuthority.isHost || rematchInFlightRef.current) {
-        openLobbyDirectory();
+      if (!lobbyId || rematchInFlightRef.current) {
+        return;
+      }
+      if (!gameAuthority.isHost) {
+        returnToCurrentLobby();
         return;
       }
       rematchInFlightRef.current = true;
       try {
         const rematch = await startGameLobbyRematch({ lobbyId });
-        router.replace({
+        roomDeparture.continueWithinRoom((retainedParams) => router.replace({
           pathname: "/(games)/trivia-blitz/Lobby",
-          params: { lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
-        } as never);
+          params: { ...retainedParams, lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
+        } as never));
       } catch {
-        openLobbyDirectory();
+        returnToCurrentLobby();
       } finally {
         rematchInFlightRef.current = false;
       }
       return;
     }
     router.replace("/(tabs)/games" as never);
-  }, [gameAuthority.isHost, lobbyId, openLobbyDirectory, requestedSessionId]);
+  }, [gameAuthority.isHost, lobbyId, requestedSessionId, returnToCurrentLobby, roomDeparture]);
 
   const handleEnd = useCallback(() => {
     if (!sessionId) {
@@ -639,10 +703,10 @@ export default function TriviaBlitzScreen() {
               <Pressable style={styles.primaryButton} onPress={handleRetrySetup} disabled={busy || settingUp}>
                 <Text style={styles.primaryButtonText}>{t("trivia.tryAgain")}</Text>
               </Pressable>
-              <Pressable style={styles.secondaryButton} onPress={() => router.replace("/(tabs)/games" as never)}>
+              <Pressable style={styles.secondaryButton} onPress={exitToGames}>
                 <Text style={styles.secondaryButtonText}>{t("trivia.backToGames")}</Text>
               </Pressable>
-              <Pressable style={styles.secondaryButton} onPress={() => router.replace("/(tabs)" as never)}>
+              <Pressable style={styles.secondaryButton} onPress={exitToHome}>
                 <Text style={styles.secondaryButtonText}>{t("trivia.home")}</Text>
               </Pressable>
             </View>
@@ -675,16 +739,26 @@ export default function TriviaBlitzScreen() {
                 {t("trivia.minimumPlayers", { count: TRIVIA_MIN_PLAYERS })}
               </Text>
             ) : null}
+            {readyState.error ? <Text accessibilityLiveRegion="polite" style={styles.metaText}>{t("games.joinCode.readyUpdateFailed")}</Text> : null}
             <View style={styles.actionsRow}>
-              <Pressable style={styles.secondaryButton} onPress={handleToggleReady} disabled={busy || !self}>
+              <Pressable
+                style={({ pressed }) => [styles.secondaryButton, pressed && { opacity: 0.8 }]}
+                onPress={handleToggleReady}
+                disabled={busy || readyState.pending || !self}
+                hitSlop={GAME_BUTTON_HIT_SLOP}
+                unstable_pressDelay={0}
+                accessibilityRole="button"
+                accessibilityState={{ busy: readyState.pending, disabled: busy || readyState.pending || !self }}
+              >
+                {readyState.pending ? <ActivityIndicator color={Colors.textHeading} size="small" /> : null}
                 <Text style={styles.secondaryButtonText}>
-                  {self?.ready
+                  {readyState.pending ? t("games.joinCode.updatingReady") : readyState.ready
                     ? t("games.joinCode.unready")
                     : t("games.joinCode.ready")}
                 </Text>
               </Pressable>
               {isHost ? (
-                <Pressable style={[styles.primaryButton, !canStartGame && styles.disabledButton]} onPress={handleStart} disabled={busy || !canStartGame}>
+                <Pressable style={[styles.primaryButton, !canStartGame && styles.disabledButton]} onPress={handleStart} disabled={busy || readyState.pending || !canStartGame}>
                   <Text style={styles.primaryButtonText}>
                     {t("games.joinCode.startGame")}
                   </Text>
@@ -723,7 +797,7 @@ export default function TriviaBlitzScreen() {
             </Text>
             <Text style={styles.question}>{currentQuestionText}</Text>
             {currentAnswerOptions.map((option, index) => {
-              const selected = session.currentSelection?.answerIndex === index;
+              const selected = selectedAnswerIndex === index;
               const visualState = resolveTriviaAnswerVisualState({
                 answerIndex: index,
                 selectedAnswerIndex,
@@ -743,7 +817,8 @@ export default function TriviaBlitzScreen() {
                 <Pressable
                   android_ripple={{ color: `${Colors.accentGreen}30` }}
                   key={`${currentQuestionKey}:${index}`}
-                  hitSlop={2}
+                  hitSlop={GAME_BUTTON_HIT_SLOP}
+                  unstable_pressDelay={0}
                   style={({ pressed }) => [
                     styles.answerButton,
                     pressed && !answerLocked && styles.answerPressed,
@@ -751,7 +826,7 @@ export default function TriviaBlitzScreen() {
                     usesCorrectStyle && styles.correctAnswer,
                   ]}
                   onPress={() => handleSelectAnswer(index)}
-                  disabled={busy || answerLocked}
+                  disabled={busy || answerPendingKey === currentQuestionKey || answerLocked}
                   accessibilityRole="button"
                   accessibilityLabel={getTriviaAnswerAccessibilityLabel(
                     option,
@@ -760,7 +835,8 @@ export default function TriviaBlitzScreen() {
                     selectionBelongsToSelf,
                   )}
                   accessibilityState={{
-                    disabled: busy || answerLocked,
+                    busy: selected && answerPendingKey === currentQuestionKey,
+                    disabled: busy || answerPendingKey === currentQuestionKey || answerLocked,
                     selected,
                   }}
                 >
@@ -820,7 +896,15 @@ export default function TriviaBlitzScreen() {
               onRetry={() => void awardTriviaResult()}
               result={rewardResult}
             />
-            <GameEndActions onBackToLobby={openLobbyDirectory} onPlayAgain={handleReset} lobbyRoute="/(games)/trivia-blitz/Lobby" />
+            <GameEndActions
+              departing={roomDeparture.departing}
+              departureFailed={Boolean(roomDeparture.departureError)}
+              onBackToLobbies={openLobbyDirectory}
+              onExitToGames={exitToGames}
+              onExitToHome={exitToHome}
+              onPlayAgain={handleReset}
+              onRetryDeparture={roomDeparture.retryDeparture}
+            />
           </View>
         ) : null}
       </ScrollView>

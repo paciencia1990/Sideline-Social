@@ -1,11 +1,14 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { AccessibilityInfo, ActivityIndicator, Alert, AppState, findNodeHandle, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { AccessibilityInfo, ActivityIndicator, Alert, AppState, findNodeHandle, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { ShieldCheck, UserPlus } from "lucide-react-native";
 import { useFocusEffect } from "expo-router";
 import { useTranslation } from "react-i18next";
 
+import { SquadSportsEditor } from "@/components/SquadSportsEditor";
 import { Card } from "@/components/Card";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useAuth } from "@/context/AuthContext";
+import { searchEligibleSquadMembers, SQUAD_ADMIN_MEMBER_PAGE_SIZE } from "@/utils/squadAdminMemberSearch";
 import {
   cancelSquadAdminInvitation,
   getSquadAdministration,
@@ -15,10 +18,12 @@ import {
   requestSquadAdminAccess,
   respondToSquadAdminInvitation,
   type SquadAdministration,
+  type SquadSportsUpdate,
   type SquadAdminMember,
 } from "@/services/squadService";
 
 type Props = {
+  onSportsSaved?: (result: SquadSportsUpdate) => void;
   onStateChange?: (state: SquadAdministration | null) => void;
   selectionRequestKey?: number;
   squadId: string;
@@ -29,17 +34,39 @@ export type SquadAdministrationCardHandle = {
 };
 
 export const SquadAdministrationCard = forwardRef<SquadAdministrationCardHandle, Props>(function SquadAdministrationCard(
-  { onStateChange, selectionRequestKey = 0, squadId },
+  { onStateChange, onSportsSaved, selectionRequestKey = 0, squadId },
   ref,
 ) {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const identity = `${user?.uid ?? ""}:${squadId}`;
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
   const headingRef = useRef<React.ElementRef<typeof Text>>(null);
   const loadRequestRef = useRef(0);
+  const actionRequestRef = useRef(0);
+  const actionPendingRef = useRef(false);
   const [state, setState] = useState<SquadAdministration | null>(null);
+  const [loadedIdentity, setLoadedIdentity] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showEligibleMembers, setShowEligibleMembers] = useState(false);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [memberLimit, setMemberLimit] = useState(SQUAD_ADMIN_MEMBER_PAGE_SIZE);
+
+  useEffect(() => {
+    actionRequestRef.current += 1;
+    actionPendingRef.current = false;
+    setBusyAction(null);
+    setMemberSearch("");
+    setMemberLimit(SQUAD_ADMIN_MEMBER_PAGE_SIZE);
+    setShowEligibleMembers(false);
+    return () => { actionRequestRef.current += 1; };
+  }, [identity]);
+
+  const matchingMembers = useMemo(() => searchEligibleSquadMembers(state?.eligibleMembers ?? [], memberSearch), [state?.eligibleMembers, memberSearch]);
+  const visibleMembers = matchingMembers.slice(0, memberLimit);
 
   const load = useCallback(async () => {
     const requestId = loadRequestRef.current + 1;
@@ -49,17 +76,18 @@ export const SquadAdministrationCard = forwardRef<SquadAdministrationCardHandle,
     onStateChange?.(null);
     try {
       const next = await getSquadAdministration(squadId);
-      if (requestId !== loadRequestRef.current) return;
+      if (requestId !== loadRequestRef.current || identityRef.current !== identity) return;
       setState(next);
+      setLoadedIdentity(identity);
       onStateChange?.(next);
     } catch (nextError) {
-      if (requestId !== loadRequestRef.current) return;
+      if (requestId !== loadRequestRef.current || identityRef.current !== identity) return;
       onStateChange?.(null);
       setError(adminErrorMessage(nextError, t));
     } finally {
-      if (requestId === loadRequestRef.current) setLoading(false);
+      if (requestId === loadRequestRef.current && identityRef.current === identity) setLoading(false);
     }
-  }, [onStateChange, squadId, t]);
+  }, [identity, onStateChange, squadId, t]);
 
   const focusHeading = useCallback(() => {
     const node = findNodeHandle(headingRef.current);
@@ -70,6 +98,7 @@ export const SquadAdministrationCard = forwardRef<SquadAdministrationCardHandle,
 
   useFocusEffect(useCallback(() => {
     void load();
+    return () => { loadRequestRef.current += 1; };
   }, [load]));
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
@@ -86,24 +115,31 @@ export const SquadAdministrationCard = forwardRef<SquadAdministrationCardHandle,
   ), [state?.members, t]);
 
   const run = useCallback(async (actionId: string, action: () => Promise<unknown>, successKey?: string) => {
-    if (busyAction) return;
+    if (actionPendingRef.current || identityRef.current !== identity || loadedIdentity !== identity) return;
+    actionPendingRef.current = true;
+    const requestId = ++actionRequestRef.current;
     setBusyAction(actionId);
     setError(null);
     try {
       await action();
+      if (requestId !== actionRequestRef.current || identityRef.current !== identity) return;
       if (successKey) Alert.alert("", t(successKey));
       await load();
     } catch (nextError) {
+      if (requestId !== actionRequestRef.current || identityRef.current !== identity) return;
       setError(adminErrorMessage(nextError, t));
     } finally {
-      setBusyAction(null);
+      if (requestId === actionRequestRef.current && identityRef.current === identity) {
+        actionPendingRef.current = false;
+        setBusyAction(null);
+      }
     }
-  }, [busyAction, load, t]);
+  }, [identity, loadedIdentity, load, t]);
 
-  if (loading && !state) {
+  if (loading && (!state || loadedIdentity !== identity)) {
     return <ActivityIndicator accessibilityLabel={t("squadAdmin.loading")} color={Colors.primary} />;
   }
-  if (!state) {
+  if (!state || loadedIdentity !== identity) {
     return error ? <Text accessibilityLiveRegion="polite" style={styles.error}>{error}</Text> : null;
   }
 
@@ -197,6 +233,22 @@ export const SquadAdministrationCard = forwardRef<SquadAdministrationCardHandle,
 
       {state.callerIsAdmin ? (
         <>
+          {Array.isArray(state.sportIds) && Number.isSafeInteger(state.sportsRevision) ? (
+            <SquadSportsEditor
+              key={squadId}
+              squadId={squadId}
+              sportIds={state.sportIds}
+              sportsRevision={state.sportsRevision!}
+              disabled={loading || Boolean(busyAction)}
+              onReload={() => void load()}
+              onSaved={(result) => {
+                loadRequestRef.current += 1;
+                setLoading(false);
+                setState((current) => current && current.squadId === result.squadId && (current.sportsRevision ?? 0) <= result.sportsRevision ? { ...current, sportIds: result.sportIds, sportsRevision: result.sportsRevision } : current);
+                onSportsSaved?.(result);
+              }}
+            />
+          ) : <Text style={styles.body}>{t("squadSports.unavailable")}</Text>}
           {state.pendingInvitations.length ? (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>{t("squadAdmin.pendingInvitations")}</Text>
@@ -229,21 +281,43 @@ export const SquadAdministrationCard = forwardRef<SquadAdministrationCardHandle,
               accessibilityRole="button"
               accessibilityState={{ expanded: showEligibleMembers }}
               activeOpacity={0.84}
-              onPress={() => setShowEligibleMembers((value) => !value)}
+              onPress={() => {
+                setShowEligibleMembers((value) => !value);
+                setMemberSearch("");
+                setMemberLimit(SQUAD_ADMIN_MEMBER_PAGE_SIZE);
+              }}
               style={styles.selectorButton}
             >
               <UserPlus color={Colors.primary} size={18} />
               <Text style={styles.selectorText}>{t("squadAdmin.chooseNewAdmin")}</Text>
             </TouchableOpacity>
             {showEligibleMembers ? (
-              <View accessibilityLiveRegion="polite" style={styles.memberList}>
+              <View style={styles.memberList}>
                 <Text style={styles.sectionTitle}>{t("squadAdmin.members")}</Text>
-                {state.eligibleMembers.length ? state.eligibleMembers.map((member) => {
+                <Text style={styles.body}>{t("squadAdmin.memberSearchHelp")}</Text>
+                <View style={styles.searchRow}>
+                  <TextInput
+                    accessibilityLabel={t("squadAdmin.memberSearchLabel")}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!loading}
+                    maxLength={100}
+                    onChangeText={(value) => { setMemberSearch(value); setMemberLimit(SQUAD_ADMIN_MEMBER_PAGE_SIZE); }}
+                    onSubmitEditing={() => Keyboard.dismiss()}
+                    placeholder={t("squadAdmin.memberSearchPlaceholder")}
+                    returnKeyType="search"
+                    style={styles.searchInput}
+                    value={memberSearch}
+                  />
+                  {memberSearch ? <TextAction disabled={loading} label={t("squadAdmin.clearMemberSearch")} onPress={() => { setMemberSearch(""); setMemberLimit(SQUAD_ADMIN_MEMBER_PAGE_SIZE); }} /> : null}
+                </View>
+                <Text accessibilityLiveRegion="polite" style={styles.body}>{t("squadAdmin.memberSearchCount", { shown: visibleMembers.length, total: matchingMembers.length })}</Text>
+                {visibleMembers.length ? visibleMembers.map((member) => {
                   const name = memberName(member, t);
                   return (
                     <MemberRow key={member.userId} name={name}>
                       <TextAction
-                        disabled={Boolean(busyAction)}
+                        disabled={loading || Boolean(busyAction)}
                         label={t("squadAdmin.inviteAsAdmin")}
                         onPress={() => confirmAction(
                           t("squadAdmin.inviteConfirmTitle"),
@@ -255,7 +329,10 @@ export const SquadAdministrationCard = forwardRef<SquadAdministrationCardHandle,
                       />
                     </MemberRow>
                   );
-                }) : <Text style={styles.body}>{t("squadAdmin.noEligibleMembers")}</Text>}
+                }) : <Text accessibilityLiveRegion="polite" style={styles.body}>{t(state.eligibleMembers.length ? "squadAdmin.noMatchingMembers" : "squadAdmin.noEligibleMembers")}</Text>}
+                {visibleMembers.length < matchingMembers.length ? (
+                  <TextAction disabled={loading} label={t("squadAdmin.showMoreMembers")} onPress={() => setMemberLimit((value) => value + SQUAD_ADMIN_MEMBER_PAGE_SIZE)} />
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -396,6 +473,8 @@ const styles = StyleSheet.create({
   secondaryButtonText: { color: Colors.primary, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 14, textAlign: "center" },
   disabled: { opacity: 0.55 },
   memberList: { gap: Spacing.sm },
+  searchRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
+  searchInput: { flex: 1, minWidth: 120, minHeight: 48, paddingHorizontal: Spacing.sm, borderWidth: 1, borderColor: Colors.secondary, borderRadius: Radius.button, color: Colors.textPrimary, fontFamily: Typography.bodyRegular, fontSize: 14, backgroundColor: Colors.background },
   memberRow: { alignItems: "center", borderTopColor: `${Colors.secondary}66`, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm, minHeight: 48, paddingTop: Spacing.sm },
   memberCopy: { flex: 1, minWidth: 140 },
   memberName: { color: Colors.textHeading, flexShrink: 1, fontFamily: Typography.bodySemiBold, fontSize: 14 },

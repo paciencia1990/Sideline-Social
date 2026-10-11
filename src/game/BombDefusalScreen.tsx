@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  Keyboard,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,6 +22,8 @@ import { GameRewardSummary } from "@/components/GameRewardSummary";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
+import { useGameRoomDeparture } from "@/hooks/useGameRoomDeparture";
+import { bombViewMatchesPublicState, GAME_BUTTON_HIT_SLOP } from "@/utils/gameInteraction";
 import { buildBombChoiceDescription } from "@/src/game/bombDefusalChoiceText";
 import {
   createGameJoinIdempotencyKey,
@@ -63,6 +66,7 @@ export default function BombDefusalScreen() {
   const [deadlineLocalMs, setDeadlineLocalMs] = useState(0);
   const [actionSubmitting, setActionSubmitting] = useState(false);
   const [actionError, setActionError] = useState<GameJoinCodeFailureReason | null>(null);
+  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [rewardSessionId, setRewardSessionId] = useState("");
   const [rewardSetupAttempt, setRewardSetupAttempt] = useState(0);
   const [rewardResult, setRewardResult] = useState<GameRewardResult | null>(null);
@@ -74,7 +78,23 @@ export default function BombDefusalScreen() {
   const finalizedRewardKeyRef = useRef("");
   const rematchInFlightRef = useRef(false);
   const submissionIdsRef = useRef(new Map<string, string>());
+  const actionInFlightRef = useRef(false);
+  const actionRequestRef = useRef(0);
+  const roundStartRef = useRef<number | null>(null);
+  const publicViewRefreshPendingRef = useRef(false);
+  const playerViewRef = useRef<BombDefusalPlayerView | null>(null);
   const locale = i18n.resolvedLanguage?.toLowerCase().startsWith("es") ? "es" : "en";
+  const roomDeparture = useGameRoomDeparture({ enabled: Boolean(lobbyId), lobbyId });
+
+  const applyPlayerView = useCallback((nextView: BombDefusalPlayerView) => {
+    playerViewRef.current = nextView;
+    setPlayerView(nextView);
+    setViewError(null);
+    setSessionOutcome(nextView.outcome === "playing" ? null : nextView.outcome);
+    const localDeadline = Date.now() + Math.max(0, nextView.endsAtMs - nextView.serverNowMs);
+    setDeadlineLocalMs(localDeadline);
+    setTimeLeft(Math.max(0, Math.ceil((localDeadline - Date.now()) / 1000)));
+  }, []);
 
   const refreshPlayerView = useCallback(async (showLoading = false) => {
     if (!sessionId) {
@@ -86,25 +106,26 @@ export default function BombDefusalScreen() {
     try {
       const nextView = await getBombDefusalPlayerView({ locale, sessionId });
       if (requestSequence !== requestSequenceRef.current) return;
-      setPlayerView(nextView);
-      setViewError(null);
-      setSessionOutcome(nextView.outcome === "playing" ? null : nextView.outcome);
-      const localDeadline = Date.now() + Math.max(0, nextView.endsAtMs - nextView.serverNowMs);
-      setDeadlineLocalMs(localDeadline);
-      setTimeLeft(Math.max(0, Math.ceil((localDeadline - Date.now()) / 1000)));
+      applyPlayerView(nextView);
     } catch (error) {
       if (requestSequence !== requestSequenceRef.current) return;
       setViewError(readGameJoinCodeFailureReason(error));
     } finally {
       if (requestSequence === requestSequenceRef.current) setViewLoading(false);
     }
-  }, [locale, sessionId]);
+  }, [applyPlayerView, locale, sessionId]);
 
   useEffect(() => {
     requestSequenceRef.current += 1;
     publicSignatureRef.current = "";
     timeoutRefreshRef.current = "";
     submissionIdsRef.current.clear();
+    actionRequestRef.current += 1;
+    actionInFlightRef.current = false;
+    roundStartRef.current = null;
+    setActionSubmitting(false);
+    setSelectedOptionId(null);
+    playerViewRef.current = null;
     setPlayerView(null);
     setSessionOutcome(null);
     setViewError(null);
@@ -121,6 +142,15 @@ export default function BombDefusalScreen() {
         return;
       }
       setHostUserId(session.hostUserId);
+      const roundStart = typeof session.gameplayStartsAt === "number" ? session.gameplayStartsAt : null;
+      const changedRound = roundStartRef.current !== null && roundStart !== roundStartRef.current;
+      roundStartRef.current = roundStart;
+      if (actionInFlightRef.current && (changedRound || (session.status !== "active" && session.status !== "completed"))) {
+        actionRequestRef.current += 1;
+        actionInFlightRef.current = false;
+        setActionSubmitting(false);
+        setSelectedOptionId(null);
+      }
       const publicOutcome = readBombOutcome(session.gameState.outcome);
       if (session.status === "canceled" || session.status === "expired") {
         setSessionOutcome("abandoned");
@@ -132,10 +162,14 @@ export default function BombDefusalScreen() {
         String(session.gameState.currentCommandId ?? ""),
         String(session.gameState.roleRevision ?? ""),
         publicOutcome ?? "playing",
-        String(session.updatedAt ?? ""),
+        String(session.gameState.strikeCount ?? ""),
+        String((session.gameState.lastResult as { resolvedAt?: number } | null)?.resolvedAt ?? ""),
+        String(session.endsAt ?? ""),
       ].join(":");
       if (signature === publicSignatureRef.current) return;
       publicSignatureRef.current = signature;
+      if (bombViewMatchesPublicState(playerViewRef.current, session)) return;
+      if (actionInFlightRef.current) { publicViewRefreshPendingRef.current = true; return; }
       void refreshPlayerView(false);
     });
   }, [refreshPlayerView, sessionId]);
@@ -210,31 +244,55 @@ export default function BombDefusalScreen() {
   }, [awardCurrentResult, outcome, rewardSessionId]);
 
   const submitAction = useCallback(async (action: Record<string, string | number>) => {
-    if (!playerView || playerView.role !== "defuser" || outcome !== "playing" || actionSubmitting) return;
+    if (!playerView || playerView.role !== "defuser" || outcome !== "playing" || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    const requestId = ++actionRequestRef.current;
+    publicViewRefreshPendingRef.current = false;
     const submissionKey = `${playerView.commandId}:${JSON.stringify(action)}`;
     const submissionId = submissionIdsRef.current.get(submissionKey) ?? createGameJoinIdempotencyKey();
     submissionIdsRef.current.set(submissionKey, submissionId);
     setActionSubmitting(true);
+    setSelectedOptionId(typeof action.optionId === "string" ? action.optionId : null);
     setActionError(null);
     try {
-      await submitBombDefusalStep({
+      const result = await submitBombDefusalStep({
         sessionId,
         commandId: playerView.commandId,
         action,
         submissionId,
+        includePlayerView: true,
+        locale,
       });
+      if (actionRequestRef.current !== requestId) return;
       submissionIdsRef.current.delete(submissionKey);
-      await refreshPlayerView(false);
+      if (result.playerView?.sessionId === sessionId) {
+        requestSequenceRef.current += 1;
+        applyPlayerView(result.playerView);
+        setViewLoading(false);
+      } else {
+        // Compatibility with an existing server while the scoped update rolls out.
+        await refreshPlayerView(false);
+      }
+      publicViewRefreshPendingRef.current = false;
     } catch (error) {
+      if (actionRequestRef.current !== requestId) return;
       const reason = readGameJoinCodeFailureReason(error);
       setActionError(reason);
-      if (reason === "bomb_command_stale") void refreshPlayerView(false);
+      if (reason === "bomb_command_stale") publicViewRefreshPendingRef.current = true;
     } finally {
-      setActionSubmitting(false);
+      if (actionRequestRef.current === requestId) {
+        actionInFlightRef.current = false;
+        setActionSubmitting(false);
+        setSelectedOptionId(null);
+        if (publicViewRefreshPendingRef.current) {
+          publicViewRefreshPendingRef.current = false;
+          void refreshPlayerView(false);
+        }
+      }
     }
-  }, [actionSubmitting, outcome, playerView, refreshPlayerView, sessionId]);
+  }, [applyPlayerView, locale, outcome, playerView, refreshPlayerView, sessionId]);
 
-  const openLobbyDirectory = useCallback(() => {
+  const navigateToLobbyDirectory = useCallback(() => {
     if (selectedSquadId) {
       router.replace({
         pathname: "/(games)/lobbies",
@@ -245,24 +303,46 @@ export default function BombDefusalScreen() {
     router.replace("/(tabs)/games" as never);
   }, [selectedSquadId]);
 
+  const openLobbyDirectory = useCallback(() => {
+    void roomDeparture.departAndNavigate(navigateToLobbyDirectory);
+  }, [navigateToLobbyDirectory, roomDeparture]);
+
+  const exitToGames = useCallback(() => {
+    void roomDeparture.departAndNavigate(() => router.replace("/(tabs)/games" as never));
+  }, [roomDeparture]);
+
+  const exitToHome = useCallback(() => {
+    void roomDeparture.departAndNavigate(() => router.replace("/(tabs)" as never));
+  }, [roomDeparture]);
+
+  const returnToCurrentLobby = useCallback(() => {
+    roomDeparture.continueWithinRoom((retainedParams) => router.replace({
+      pathname: "/(games)/bomb-defusal/Lobby",
+      params: { ...retainedParams, lobbyId, sessionId },
+    } as never));
+  }, [lobbyId, roomDeparture, sessionId]);
+
   const handlePlayAgain = useCallback(async () => {
-    if (!sessionId || !lobbyId || hostUserId !== user?.uid || rematchInFlightRef.current) {
-      openLobbyDirectory();
+    if (!sessionId || !lobbyId || rematchInFlightRef.current) {
+      return;
+    }
+    if (hostUserId !== user?.uid) {
+      returnToCurrentLobby();
       return;
     }
     rematchInFlightRef.current = true;
     try {
       const rematch = await startGameLobbyRematch({ lobbyId });
-      router.replace({
+      roomDeparture.continueWithinRoom((retainedParams) => router.replace({
         pathname: "/(games)/bomb-defusal/Lobby",
-        params: { lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
-      } as never);
+        params: { ...retainedParams, lobbyId: rematch.lobbyId, sessionId: rematch.sessionId },
+      } as never));
     } catch {
-      openLobbyDirectory();
+      returnToCurrentLobby();
     } finally {
       rematchInFlightRef.current = false;
     }
-  }, [hostUserId, lobbyId, openLobbyDirectory, sessionId, user?.uid]);
+  }, [hostUserId, lobbyId, returnToCurrentLobby, roomDeparture, sessionId, user?.uid]);
 
   const feedback = useMemo(() => {
     if (actionError === "bomb_not_defuser") return t("bomb.feedback.notDefuser");
@@ -348,14 +428,15 @@ export default function BombDefusalScreen() {
 
         {outcome === "playing" && playerView ? (
           <>
-            {actionError || playerView.lastResult ? (
-              <Text accessibilityLiveRegion="polite" style={styles.feedback}>{feedback}</Text>
+            {actionSubmitting || actionError || playerView.lastResult ? (
+              <Text accessibilityLiveRegion="polite" style={styles.feedback}>{actionSubmitting ? t("bomb.feedback.checking") : feedback}</Text>
             ) : null}
             {playerView.role === "expert" ? (
               <ExpertInstruction playerView={playerView} />
             ) : (
               <BombControls
                 actionSubmitting={actionSubmitting}
+                selectedOptionId={selectedOptionId}
                 interactive={playerView.role === "defuser"}
                 key={playerView.publicCommand.commandId}
                 onSubmit={submitAction}
@@ -368,7 +449,10 @@ export default function BombDefusalScreen() {
             correctCommandCount={playerView?.correctCommandCount ?? 0}
             hostCanRematch={hostUserId === user?.uid}
             onBack={openLobbyDirectory}
+            onExitToGames={exitToGames}
+            onExitToHome={exitToHome}
             onPlayAgain={handlePlayAgain}
+            roomDeparture={roomDeparture}
             onRetryReward={() => rewardSessionId
               ? void awardCurrentResult()
               : setRewardSetupAttempt((value) => value + 1)}
@@ -432,11 +516,13 @@ function ExpertInstruction({ playerView }: { playerView: BombDefusalPlayerView }
 
 function BombControls({
   actionSubmitting,
+  selectedOptionId,
   interactive,
   onSubmit,
   publicCommand,
 }: {
   actionSubmitting: boolean;
+  selectedOptionId: string | null;
   interactive: boolean;
   onSubmit: (action: Record<string, string | number>) => void | Promise<void>;
   publicCommand: BombPublicCommand;
@@ -466,6 +552,7 @@ function BombControls({
         {publicCommand.options.map((option) => (
           <OptionControl
             disabled={actionSubmitting || !interactive}
+            selected={selectedOptionId === option.id}
             interactive={interactive}
             key={option.id}
             label={buildBombChoiceDescription({
@@ -485,12 +572,14 @@ function BombControls({
 
 function OptionControl({
   disabled,
+  selected,
   interactive,
   label,
   number,
   onPress,
 }: {
   disabled: boolean;
+  selected: boolean;
   interactive: boolean;
   label: string;
   number: number;
@@ -513,10 +602,12 @@ function OptionControl({
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
-      accessibilityState={{ disabled }}
+      accessibilityState={{ disabled, selected, busy: selected && disabled }}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.optionControl, pressed && styles.optionPressed, disabled && styles.disabledButton]}
+      hitSlop={GAME_BUTTON_HIT_SLOP}
+      unstable_pressDelay={0}
+      style={({ pressed }) => [styles.optionControl, (pressed || selected) && styles.optionPressed, disabled && !selected && styles.disabledButton]}
     >
       {content}
     </Pressable>
@@ -546,6 +637,7 @@ function TextEntryControl({
   const submit = () => {
     if (!interactive || actionSubmitting || submitInFlightRef.current || !normalizedValue) return;
     submitInFlightRef.current = true;
+    Keyboard.dismiss();
     void Promise.resolve(onSubmit({ value: normalizedValue })).finally(() => {
       submitInFlightRef.current = false;
     });
@@ -578,6 +670,8 @@ function TextEntryControl({
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ disabled: actionSubmitting || !normalizedValue }}
+            hitSlop={GAME_BUTTON_HIT_SLOP}
+            unstable_pressDelay={0}
             disabled={actionSubmitting || !normalizedValue}
             onPress={submit}
             style={({ pressed }) => [
@@ -598,23 +692,29 @@ function BombResult({
   correctCommandCount,
   hostCanRematch,
   onBack,
+  onExitToGames,
+  onExitToHome,
   onPlayAgain,
   onRetryReward,
   outcome,
   rewardError,
   rewardLoading,
   rewardResult,
+  roomDeparture,
   solution,
 }: {
   correctCommandCount: number;
   hostCanRematch: boolean;
   onBack: () => void;
+  onExitToGames: () => void;
+  onExitToHome: () => void;
   onPlayAgain: () => void | Promise<void>;
   onRetryReward: () => void;
   outcome: BombOutcome;
   rewardError: string | null;
   rewardLoading: boolean;
   rewardResult: GameRewardResult | null;
+  roomDeparture: ReturnType<typeof useGameRoomDeparture>;
   solution: BombSolution | null;
 }) {
   const { t } = useTranslation();
@@ -644,9 +744,13 @@ function BombResult({
         />
       ) : null}
       <GameEndActions
-        onBackToLobby={onBack}
+        departing={roomDeparture.departing}
+        departureFailed={Boolean(roomDeparture.departureError)}
+        onBackToLobbies={onBack}
+        onExitToGames={onExitToGames}
+        onExitToHome={onExitToHome}
         onPlayAgain={onPlayAgain}
-        lobbyRoute="/(games)/bomb-defusal/Lobby"
+        onRetryDeparture={roomDeparture.retryDeparture}
       />
       {!hostCanRematch ? <Text style={styles.rematchHint}>{t("bomb.results.hostStartsRematch")}</Text> : null}
     </View>
@@ -675,7 +779,7 @@ function BombUnavailable({
           </Pressable>
         ) : null}
         <Pressable accessibilityRole="button" onPress={onBack} style={styles.secondaryButton}>
-          <Text style={styles.secondaryButtonText}>{t("game.backToLobby")}</Text>
+          <Text style={styles.secondaryButtonText}>{t("game.backToLobbies")}</Text>
         </Pressable>
       </View>
     </SafeAreaView>

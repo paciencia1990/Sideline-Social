@@ -641,6 +641,7 @@ function YourSquadCard({
       <SquadIdentity
         venueName={currentSquad.venueName}
         sportId={currentSquad.sportId}
+        sportIds={currentSquad.sportIds}
         sportDisplayName={currentSquad.sportDisplayName}
       />
       <Text style={styles.cardText}>{t("home.squadMemberCount", { count: currentSquad.memberCount })}</Text>

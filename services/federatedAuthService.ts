@@ -103,13 +103,22 @@ async function requestGoogleCredential(): Promise<FederatedCredentialResult> {
       googleConfiguredFor = googleConfigurationKey;
     }
 
-    await google.GoogleOneTapSignIn.checkPlayServices();
-    let response = await google.GoogleOneTapSignIn.signIn();
-    if (google.isNoSavedCredentialFoundResponse(response)) {
-      response = await google.GoogleOneTapSignIn.createAccount();
-    }
-    if (google.isNoSavedCredentialFoundResponse(response)) {
+    // On iOS signIn() only restores a previous session. A user pressing the
+    // Google button must enter the interactive flow, including reauthentication.
+    let response;
+    if (Platform.OS === "ios") {
       response = await google.GoogleOneTapSignIn.presentExplicitSignIn();
+    } else if (Platform.OS === "android") {
+      await google.GoogleOneTapSignIn.checkPlayServices();
+      response = await google.GoogleOneTapSignIn.signIn();
+      if (google.isNoSavedCredentialFoundResponse(response)) {
+        response = await google.GoogleOneTapSignIn.createAccount();
+      }
+      if (google.isNoSavedCredentialFoundResponse(response)) {
+        response = await google.GoogleOneTapSignIn.presentExplicitSignIn();
+      }
+    } else {
+      throw new ProviderFlowError("unsupported_platform", "Google authentication requires a native app.");
     }
     if (google.isCancelledResponse(response)) {
       throw new ProviderFlowError("cancelled", "Google authentication was cancelled.");

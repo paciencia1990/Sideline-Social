@@ -115,15 +115,11 @@ import {
 import { attemptAuxiliaryAfterCommit } from './teamMessagingReliabilityCore';
 import {
   assertValidCoordinates,
-  canonicalVenueId,
-  deterministicSquadId,
   getSportDisplayName,
   isPubliclyDiscoverableSquad,
   normalizeSportId,
   normalizeVenueName,
   resolveJoinProjection,
-  validateVenueId,
-  venueSportKeyFor,
   type SquadSportId,
 } from './squadCore';
 import {
@@ -140,6 +136,9 @@ import {
 import { readSeasonEligibleSquadIds } from './squadSeason';
 import { finalizeSpotDifferenceRoundForRewards } from './gameJoinCodes';
 import { BOMB_COMMAND_COUNT, BOMB_ROLE_SCHEMA_VERSION } from './bombDefusalCore';
+import { readSquadSports } from './squadSportsCore';
+export { findOrCreateVenueSportSquad, updateSquadSports } from './venueSquad';
+export { translateTeamMessage } from './teamTranslation';
 
 const functions = permanentAccountFunctions(firebaseFunctions);
 const communicationFunctions = permanentAccountFunctions(
@@ -425,20 +424,6 @@ function readCallableCoordinates(data: unknown) {
   return { latitude, longitude };
 }
 
-function readCallableVenueName(value: unknown) {
-  const venueName = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
-  if (venueName.length < 2 || venueName.length > 120) {
-    throw new functions.https.HttpsError('invalid-argument', 'A valid venue name is required.');
-  }
-  return venueName;
-}
-
-function readCallableSportId(value: unknown): SquadSportId {
-  const sportId = normalizeSportId(value);
-  if (!sportId) throw new functions.https.HttpsError('invalid-argument', 'A supported sport is required.');
-  return sportId;
-}
-
 function readCallableSquadId(value: unknown) {
   const squadId = typeof value === 'string' ? value.trim() : '';
   if (!/^[A-Za-z0-9_-]{1,360}$/.test(squadId)) {
@@ -631,6 +616,7 @@ function squadProjection(snapshot: admin.firestore.DocumentSnapshot) {
     squadId: snapshot.id,
     venueName,
     sportId,
+    sportIds: readSquadSports(squad),
     sportDisplayName: typeof squad.sportDisplayName === 'string' && squad.sportDisplayName.trim()
       ? squad.sportDisplayName.trim()
       : getSportDisplayName(sportId),
@@ -727,155 +713,6 @@ async function readSquadMemberPreviews(
       : [];
   }).slice(0, 8);
 }
-
-async function findLegacyVenueSportCandidate(input: {
-  firestore: admin.firestore.Firestore;
-  latitude: number;
-  longitude: number;
-  normalizedVenueName: string;
-  sportId: SquadSportId;
-}) {
-  const bounds = geohashQueryBounds([input.latitude, input.longitude], 250);
-  const snapshots = await Promise.all(bounds.map(([lower, upper]) => input.firestore
-    .collection('squads')
-    .where('venueGeohash', '>=', lower)
-    .where('venueGeohash', '<=', upper)
-    .where('isActive', '==', true)
-    .limit(50)
-    .get()));
-  const candidates = new Map<string, admin.firestore.QueryDocumentSnapshot>();
-  snapshots.forEach((snapshot) => snapshot.docs.forEach((candidate) => {
-    const squad = candidate.data() as SquadDocument;
-    const point = squad.venueLocation;
-    if (!(point instanceof GeoPoint)) return;
-    const venueName = typeof squad.venueName === 'string' ? squad.venueName : squad.name;
-    if (typeof venueName !== 'string' || normalizeVenueName(venueName) !== input.normalizedVenueName) return;
-    if (legacySportIdForSquad(squad) !== input.sportId) return;
-    const miles = distanceBetween(
-      [input.latitude, input.longitude],
-      [point.latitude, point.longitude],
-    ) * 0.621371;
-    if (miles <= 0.15) candidates.set(candidate.id, candidate);
-  }));
-  if (candidates.size > 1) {
-    throw new functions.https.HttpsError(
-      'failed-precondition',
-      'Multiple legacy Squads may match this venue and sport. Review them before creating another.',
-      { reason: 'duplicate-candidates' },
-    );
-  }
-  return Array.from(candidates.values())[0] ?? null;
-}
-
-// A venue-and-sport key is the canonical Squad identity. The deterministic
-// document ID makes concurrent creation of the same combination race-safe.
-export const findOrCreateVenueSportSquad = communicationFunctions.https.onCall(async (data, context) => {
-  const uid = context.auth?.uid;
-  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to create a Squad.');
-  const venueName = readCallableVenueName(data?.venueName);
-  const { latitude, longitude } = readCallableCoordinates(data);
-  const sportId = readCallableSportId(data?.sportId);
-  const normalizedVenueName = normalizeVenueName(venueName);
-  const suppliedVenueId = data?.venueId == null ? null : validateVenueId(data.venueId);
-  if (data?.venueId != null && !suppliedVenueId) {
-    throw new functions.https.HttpsError('invalid-argument', 'The venue reference is invalid.');
-  }
-  const firestore = admin.firestore();
-  if (suppliedVenueId) {
-    const venueDocuments = await firestore.collection('squads').where('venueId', '==', suppliedVenueId).limit(20).get();
-    const verified = venueDocuments.docs.some((document) => {
-      const existingSquad = document.data() as SquadDocument;
-      const point = existingSquad.venueLocation;
-      const existingVenueName = existingSquad.venueName ?? existingSquad.name;
-      return existingSquad.isActive !== false
-        && point instanceof GeoPoint
-        && typeof existingVenueName === 'string'
-        && normalizeVenueName(existingVenueName) === normalizedVenueName
-        && distanceBetween([latitude, longitude], [point.latitude, point.longitude]) * 0.621371 <= 0.15;
-    });
-    if (!verified) {
-      throw new functions.https.HttpsError('invalid-argument', 'The venue reference could not be verified.');
-    }
-  }
-  const venueId = suppliedVenueId ?? canonicalVenueId(venueName, latitude, longitude);
-  const venueSportKey = venueSportKeyFor(venueId, sportId);
-  const canonicalSquadId = deterministicSquadId(venueSportKey);
-
-  const indexedExisting = await firestore.collection('squads')
-    .where('venueSportKey', '==', venueSportKey)
-    .where('isActive', '==', true)
-    .limit(2)
-    .get();
-  if (indexedExisting.size > 1) {
-    throw new functions.https.HttpsError('failed-precondition', 'Duplicate Squad records require review.', { reason: 'duplicate-candidates' });
-  }
-  let existing = indexedExisting.docs[0] ?? null;
-  if (!existing) {
-    const canonicalSnapshot = await firestore.collection('squads').doc(canonicalSquadId).get();
-    if (canonicalSnapshot.exists && canonicalSnapshot.data()?.isActive !== false) {
-      existing = canonicalSnapshot as admin.firestore.QueryDocumentSnapshot;
-    }
-  }
-  if (!existing) {
-    existing = await findLegacyVenueSportCandidate({
-      firestore, latitude, longitude, normalizedVenueName, sportId,
-    });
-  }
-
-  if (existing) {
-    const existingData = existing.data() as SquadDocument;
-    const existingVenueName = typeof existingData.venueName === 'string' && existingData.venueName.trim()
-      ? existingData.venueName.trim()
-      : typeof existingData.name === 'string' && existingData.name.trim()
-        ? existingData.name.trim()
-        : venueName;
-    await existing.ref.set({
-      squadId: existing.id,
-      venueId,
-      venueName: existingVenueName,
-      normalizedVenueName: normalizeVenueName(existingVenueName),
-      sportId,
-      sportDisplayName: getSportDisplayName(sportId),
-      venueSportKey,
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-    return { squadId: existing.id, status: 'existing' as const };
-  }
-
-  const squadRef = firestore.collection('squads').doc(canonicalSquadId);
-  const status = await firestore.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(squadRef);
-    if (snapshot.exists && snapshot.data()?.isActive !== false) return 'existing' as const;
-    const timestamp = FieldValue.serverTimestamp();
-    transaction.set(squadRef, {
-      squadId: canonicalSquadId,
-      name: venueName,
-      venueId,
-      venueName,
-      normalizedVenueName,
-      sportId,
-      sport: getSportDisplayName(sportId),
-      sportDisplayName: getSportDisplayName(sportId),
-      venueSportKey,
-      venueLocation: new GeoPoint(latitude, longitude),
-      venueGeohash: geohashForLocation([latitude, longitude]),
-      memberIds: [],
-      memberCount: 0,
-      activeMemberCount: 0,
-      createdBy: uid,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      isActive: true,
-      seasonId: null,
-      currentSeasonId: null,
-      timeZone: null,
-      sponsorId: null,
-      lastActivityAt: null,
-    });
-    return 'created' as const;
-  });
-  return { squadId: canonicalSquadId, status };
-});
 
 export const joinVenueSportSquad = communicationFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;

@@ -60,6 +60,7 @@ export function SquadSelector({ hideTrigger = false, onOpenChange, open: control
             compact
             venueName={currentSquad.venueName}
             sportId={currentSquad.sportId}
+            sportIds={currentSquad.sportIds}
             sportDisplayName={currentSquad.sportDisplayName}
           />
         </View>
@@ -94,6 +95,7 @@ export function SquadSelector({ hideTrigger = false, onOpenChange, open: control
                     style={styles.optionCopy}
                     venueName={squad.venueName}
                     sportId={squad.sportId}
+                    sportIds={squad.sportIds}
                     sportDisplayName={squad.sportDisplayName}
                   />
                   {selected ? <Check color={Colors.accentGreen} size={21} /> : null}

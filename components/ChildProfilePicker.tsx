@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { Check, Plus, Trash2 } from "lucide-react-native";
+import { Check, Pencil, Plus, Trash2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -8,6 +8,7 @@ import {
   createChildProfile,
   deleteChildProfile,
   getCurrentUserChildren,
+  updateChildProfile,
   type ParentChildProfile,
 } from "@/services/childService";
 
@@ -26,7 +27,12 @@ export function ChildProfilePicker({
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [savingId, setSavingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const mutationInFlight = useRef(false);
+  const busy = creating || deletingId !== null || savingId !== null;
 
   const loadChildren = useCallback(async () => {
     setLoading(true);
@@ -48,6 +54,7 @@ export function ChildProfilePicker({
   }, [loadChildren]);
 
   const toggleChild = useCallback((childId: string) => {
+    if (mutationInFlight.current) return;
     onChange(
       selectedIds.includes(childId)
         ? selectedIds.filter((selectedId) => selectedId !== childId)
@@ -56,7 +63,8 @@ export function ChildProfilePicker({
   }, [onChange, selectedIds]);
 
   const addChild = useCallback(async () => {
-    if (!draftName.trim()) return;
+    if (mutationInFlight.current || editingId !== null || !draftName.trim()) return;
+    mutationInFlight.current = true;
     setCreating(true);
     setError(null);
     try {
@@ -71,11 +79,52 @@ export function ChildProfilePicker({
       console.warn("[ChildProfiles] create error:", getErrorCode(nextError));
       setError(t("myTeams.childCreateError"));
     } finally {
+      mutationInFlight.current = false;
       setCreating(false);
     }
-  }, [children, draftName, onChange, onProfilesChange, selectedIds, t]);
+  }, [children, draftName, editingId, onChange, onProfilesChange, selectedIds, t]);
+
+  const editChild = useCallback((child: ParentChildProfile) => {
+    if (mutationInFlight.current) return;
+    setEditingId(child.id);
+    setEditingName(child.displayName);
+    setError(null);
+  }, []);
+
+  const saveEdit = useCallback(async () => {
+    const name = editingName.trim();
+    if (mutationInFlight.current || !editingId || !name || name.length > 80) return;
+    mutationInFlight.current = true;
+    setSavingId(editingId);
+    setError(null);
+    try {
+      await updateChildProfile(editingId, name);
+      const nextChildren = children
+        .map((child) => child.id === editingId ? { ...child, displayName: name } : child)
+        .sort((first, second) => first.displayName.localeCompare(second.displayName));
+      setChildren(nextChildren);
+      onProfilesChange?.(nextChildren);
+      // Renaming preserves the existing child ID and all team selections.
+      setEditingId(null);
+      setEditingName("");
+    } catch (nextError) {
+      console.warn("[ChildProfiles] update error:", getErrorCode(nextError));
+      setError(t("myTeams.childRenameError"));
+    } finally {
+      mutationInFlight.current = false;
+      setSavingId(null);
+    }
+  }, [children, editingId, editingName, onProfilesChange, t]);
+
+  const cancelEdit = useCallback(() => {
+    if (mutationInFlight.current) return;
+    setEditingId(null);
+    setEditingName("");
+    setError(null);
+  }, []);
 
   const confirmDelete = useCallback((child: ParentChildProfile) => {
+    if (mutationInFlight.current) return;
     Alert.alert(
       t("myTeams.deleteChildTitle"),
       t("myTeams.deleteChildBody", { name: child.displayName }),
@@ -85,6 +134,8 @@ export function ChildProfilePicker({
           text: t("myTeams.deleteChild"),
           style: "destructive",
           onPress: () => {
+            if (mutationInFlight.current) return;
+            mutationInFlight.current = true;
             setDeletingId(child.id);
             setError(null);
             deleteChildProfile(child.id)
@@ -101,7 +152,10 @@ export function ChildProfilePicker({
                   ? t("myTeams.childDeleteLinkedError")
                   : t("myTeams.childDeleteError"));
               })
-              .finally(() => setDeletingId(null));
+              .finally(() => {
+                mutationInFlight.current = false;
+                setDeletingId(null);
+              });
           },
         },
       ],
@@ -128,30 +182,75 @@ export function ChildProfilePicker({
       {!loading ? children.map((child) => {
         const selected = selectedIds.includes(child.id);
         return (
-          <View key={child.id} style={[styles.childRow, selected && styles.childRowSelected]}>
-            <TouchableOpacity
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: selected }}
-              activeOpacity={0.84}
-              onPress={() => toggleChild(child.id)}
-              style={styles.childSelectArea}
-            >
-              <View style={[styles.checkbox, selected && styles.checkboxSelected]}>
-                {selected ? <Check color={Colors.surface} size={15} /> : null}
+          <View key={child.id} style={styles.childSection}>
+            <View style={[styles.childRow, selected && styles.childRowSelected]}>
+              <TouchableOpacity
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: selected, disabled: busy }}
+                activeOpacity={0.84}
+                disabled={busy}
+                onPress={() => toggleChild(child.id)}
+                style={styles.childSelectArea}
+              >
+                <View style={[styles.checkbox, selected && styles.checkboxSelected]}>
+                  {selected ? <Check color={Colors.surface} size={15} /> : null}
+                </View>
+                <Text style={styles.childName}>{child.displayName}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                accessibilityLabel={t("myTeams.editChildNamed", { name: child.displayName })}
+                accessibilityRole="button"
+                disabled={busy || editingId !== null}
+                onPress={() => editChild(child)}
+                style={styles.actionButton}
+              >
+                <Pencil color={Colors.primary} size={18} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                accessibilityLabel={t("myTeams.deleteChildNamed", { name: child.displayName })}
+                accessibilityRole="button"
+                disabled={busy || editingId !== null}
+                onPress={() => confirmDelete(child)}
+                style={styles.actionButton}
+              >
+                {deletingId === child.id
+                  ? <ActivityIndicator color={Colors.primary} size="small" />
+                  : <Trash2 color={Colors.primary} size={18} />}
+              </TouchableOpacity>
+            </View>
+            {editingId === child.id ? (
+              <View style={styles.editSection}>
+                <Text style={styles.addTitle}>{t("myTeams.editChild")}</Text>
+                <TextInput
+                  accessibilityLabel={t("myTeams.childNamePlaceholder")}
+                  autoCapitalize="words"
+                  autoFocus
+                  editable={!busy}
+                  maxLength={80}
+                  onChangeText={setEditingName}
+                  onSubmitEditing={() => void saveEdit()}
+                  returnKeyType="done"
+                  selectTextOnFocus
+                  style={styles.input}
+                  value={editingName}
+                />
+                <View style={styles.editActions}>
+                  <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={cancelEdit} style={styles.cancelButton}>
+                    <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    disabled={busy || !editingName.trim()}
+                    onPress={() => void saveEdit()}
+                    style={[styles.addButton, (busy || !editingName.trim()) && styles.disabled]}
+                  >
+                    {savingId === child.id
+                      ? <ActivityIndicator color={Colors.surface} />
+                      : <Text style={styles.addButtonText}>{t("myTeams.saveChild")}</Text>}
+                  </TouchableOpacity>
+                </View>
               </View>
-              <Text style={styles.childName}>{child.displayName}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              accessibilityLabel={t("myTeams.deleteChild")}
-              accessibilityRole="button"
-              disabled={deletingId === child.id}
-              onPress={() => confirmDelete(child)}
-              style={styles.deleteButton}
-            >
-              {deletingId === child.id
-                ? <ActivityIndicator color={Colors.primary} size="small" />
-                : <Trash2 color={Colors.primary} size={18} />}
-            </TouchableOpacity>
+            ) : null}
           </View>
         );
       }) : null}
@@ -160,6 +259,7 @@ export function ChildProfilePicker({
         <Text style={styles.addTitle}>{t("myTeams.addChildProfile")}</Text>
         <TextInput
           autoCapitalize="words"
+          editable={!busy && editingId === null}
           maxLength={80}
           onChangeText={setDraftName}
           placeholder={t("myTeams.childNamePlaceholder")}
@@ -169,9 +269,9 @@ export function ChildProfilePicker({
         />
         <TouchableOpacity
           accessibilityRole="button"
-          disabled={creating || !draftName.trim()}
+          disabled={busy || editingId !== null || !draftName.trim()}
           onPress={addChild}
-          style={[styles.addButton, (creating || !draftName.trim()) && styles.disabled]}
+          style={[styles.addButton, (busy || editingId !== null || !draftName.trim()) && styles.disabled]}
         >
           {creating
             ? <ActivityIndicator color={Colors.surface} />
@@ -182,7 +282,7 @@ export function ChildProfilePicker({
       {selectedIds.length > 0 ? (
         <Text style={styles.selectedText}>{t("myTeams.childrenSelected", { count: selectedIds.length })}</Text>
       ) : null}
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      {error ? <Text accessibilityLiveRegion="polite" style={styles.errorText}>{error}</Text> : null}
     </View>
   );
 }
@@ -201,7 +301,12 @@ const styles = StyleSheet.create({
   childRow: { alignItems: "center", borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, flexDirection: "row", gap: Spacing.sm, minHeight: 46, paddingHorizontal: Spacing.sm },
   childRowSelected: { backgroundColor: Colors.background, borderColor: Colors.primary },
   childSelectArea: { alignItems: "center", flex: 1, flexDirection: "row", gap: Spacing.sm, minHeight: 44 },
-  deleteButton: { alignItems: "center", height: 40, justifyContent: "center", width: 40 },
+  actionButton: { alignItems: "center", height: 44, justifyContent: "center", width: 44 },
+  childSection: { gap: Spacing.sm },
+  editSection: { gap: Spacing.sm, paddingHorizontal: Spacing.sm, paddingBottom: Spacing.sm },
+  editActions: { flexDirection: "row", gap: Spacing.sm, justifyContent: "flex-end" },
+  cancelButton: { alignItems: "center", borderColor: Colors.secondary, borderRadius: Radius.button, borderWidth: 1, justifyContent: "center", minHeight: 44, paddingHorizontal: Spacing.md },
+  cancelButtonText: { color: Colors.textHeading, fontFamily: Typography.bodySemiBold },
   checkbox: { alignItems: "center", borderColor: Colors.primary, borderRadius: 5, borderWidth: 1, height: 22, justifyContent: "center", width: 22 },
   checkboxSelected: { backgroundColor: Colors.primary },
   childName: { color: Colors.textHeading, flex: 1, fontFamily: Typography.bodySemiBold, fontSize: 14 },

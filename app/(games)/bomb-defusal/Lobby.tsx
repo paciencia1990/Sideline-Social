@@ -24,21 +24,24 @@ export default function BombDefusalLobby() {
     lifecycleAction,
     lifecycleError,
     toggleReady,
+    readyPending,
+    readyError,
     startGame,
     startPending,
     startError,
     showCountdown,
     setShowCountdown,
+    continueWithinRoom,
   } =
     useGameLobby("bomb-defusal");
 
   const handleComplete = useCallback(() => {
     setShowCountdown(false);
-    router.replace({
+    continueWithinRoom((retainedParams) => router.replace({
       pathname: "/games/bomb-defusal/play",
-      params: sessionId ? { sessionId, ...(lobbyId ? { lobbyId } : {}) } : { local: "1" },
-    } as never);
-  }, [lobbyId, sessionId, setShowCountdown]);
+      params: sessionId ? { ...retainedParams, sessionId, ...(lobbyId ? { lobbyId } : {}) } : { ...retainedParams, local: "1" },
+    } as never));
+  }, [continueWithinRoom, lobbyId, sessionId, setShowCountdown]);
 
   return (
     <View style={styles.container}>
@@ -56,6 +59,8 @@ export default function BombDefusalLobby() {
         lifecycleAction={lifecycleAction}
         lifecycleError={lifecycleError}
         onReadyToggle={toggleReady}
+        readyPending={readyPending}
+        readyError={readyError}
         onStart={startGame}
         startPending={startPending}
         startError={startError}

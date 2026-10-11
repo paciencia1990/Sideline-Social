@@ -1,3 +1,4 @@
+import { readSquadSportIds, getSquadSportTranslationKey } from "@/constants/sports";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -399,7 +400,7 @@ export default function SquadScreen() {
               >
                 {nearbySquads.filter((squad) => squad.venueLocation !== null).map((squad) => (
                   <Marker
-                    accessibilityLabel={`${squad.venueName}, ${squad.sportDisplayName}`}
+                    accessibilityLabel={`${squad.venueName}, ${readSquadSportIds(squad.sportIds, squad.sportId).map((id) => t(getSquadSportTranslationKey(id))).join(", ")}`}
                     anchor={{ x: 0.5, y: 1 }}
                     coordinate={squad.venueLocation!}
                     key={squad.squadId}

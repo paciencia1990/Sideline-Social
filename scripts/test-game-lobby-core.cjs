@@ -158,6 +158,7 @@ function run() {
   const games = source('app/(tabs)/games.tsx');
   const directoryScreen = source('app/(games)/lobbies.tsx');
   const lobbyHook = source('hooks/useGameLobby.ts');
+  const departureHook = source('hooks/useGameRoomDeparture.ts');
   const lobbyBase = source('components/LobbyBase.tsx');
   const lobbyRoutes = [
     source('app/(games)/bomb-defusal/Lobby.tsx'),
@@ -186,7 +187,10 @@ function run() {
   assert.doesNotMatch(directoryScreen, /Platform\.(OS|select)[\s\S]{0,120}(eligib|canCreate|Start Lobby)/, 'Android and iOS share one eligibility path');
   assert.match(games, /resolveAndJoinGameByCode\(joinCode\)/, 'manual codes retain a secondary entry path');
   assert.doesNotMatch(lobbyHook, /createGameLobby|createGameJoinCode/, 'mounting a lobby never creates one');
-  assert.match(lobbyHook, /await leaveGameLobby\(\{ lobbyId \}\)/, 'navigation waits for server-authoritative leave');
+  assert.match(lobbyHook, /await roomDeparture\.depart\(\)/, 'lobby navigation waits for shared server-authoritative departure');
+  assert.match(departureHook, /await leaveGameLobby\(\{ lobbyId \}\)/, 'the shared departure path invokes the canonical leave operation');
+  assert.match(departureHook, /usePreventRemove/, 'platform back and navigation exits use the supported removal guard');
+  assert.doesNotMatch(departureHook, /navigation\.addListener\(["']beforeRemove/, 'the departure hook does not install a raw beforeRemove blocker');
   assert.match(lobbyHook, /await closeGameLobby\(\{ lobbyId \}\)/, 'host closure waits for the backend');
   assert.match(lobbyHook, /if \(!isLocal && !lobbyId\)[\s\S]*setLifecycleError\('game_not_found'\)/, 'a missing canonical lobby ID keeps the user on-screen for retry');
   assert.match(lobbyHook, /suppressLobbyEventsRef/, 'stale listeners cannot resurrect a deliberately departed lobby');
