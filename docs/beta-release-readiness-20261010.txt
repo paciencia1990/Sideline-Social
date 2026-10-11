@@ -63,17 +63,17 @@ Included client changes
     synthetic before/after operation comparison. Device timing awaits delivery.
 
 Notifications
-The existing source already contains the two dismissal callables. The retained
-October 7 read-only assessment found them absent from staging, explaining why
-opened alerts return after restart and Clear all fails. The local HTTP emulator
-now verifies acknowledgement persistence, recipient ownership, idempotency and
-405-item Clear all pagination. Include those two existing callables in the
-backend delivery; a new client-only change cannot repair missing endpoints.
-Do not add notification cleanup or deletion schedules to this repair.
+Fresh October 10 reconciliation found both notification dismissal callables
+already deployed. Their deployed handlers match the reviewed source; they were
+preserved without redeployment. This supersedes the earlier missing-endpoint
+assessment. Local HTTP emulator results cover acknowledgement persistence,
+recipient ownership, idempotency and 405-item Clear all pagination. No notification
+cleanup or deletion schedule was added. Device persistence still needs the
+focused check after delivery; endpoint presence alone is not device acceptance.
 
 Exact supporting backend scope: sideline-social-staging-2026, us-central1
-Review current target identity/configuration immediately before delivery.
-Deploy or update only the following affected existing callables:
+All 14 reviewed targets are now ACTIVE. Twelve were created or updated; the two
+already delivered notification targets were verified and preserved:
   acknowledgeNotificationOpened
   clearUserNotifications
   deleteChildProfile
@@ -86,7 +86,6 @@ Deploy or update only the following affected existing callables:
   getVenueSportSquadDetail
   getSquadAdministration
   getSquadLeaderboard
-Add these new App Check-protected callables:
   updateSquadSports
   translateTeamMessage
 
@@ -95,14 +94,18 @@ for multi-sport Squads. Existing single-sport callers remain compatible. The
 new sports-array creation request rejects an old backend rather than silently
 dropping extra selections. Do not merge existing duplicate Squads.
 
-Translation activation is a separate delivery requirement
-The client and server source are included and validated locally. Google Cloud
-API enablement, billing, runtime permissions, provider agreement, public privacy
-wording and store disclosures still need the reviewed readiness described in
-docs/team-message-translation-config.txt. TEAM_TRANSLATION_ENABLED defaults off.
-Keep it off until those checks and scoped provider acceptance are complete.
-The hard cap is 500000 reserved source characters/month for this callable; this
-is not a promise of free billing or a total Functions/Firestore spending cap.
+Translation backend delivery
+Google Cloud Translation is enabled with a dedicated six-permission runtime
+role, existing project billing, a Translation-only $10 monthly monitoring budget
+and 50/80/100 percent alerts. The repaired provider transport attributes quota
+to the intended project. One successful real Google request translated two
+synthetic messages and preserved their Team code and link. No private message
+content was used. The public privacy notice is published, Apple message data is
+correctly disclosed as linked to identity, and Google Data safety already covers
+optional message collection for app functionality. See the delivery receipt in
+docs/backend-translation-delivery-20261010.txt and the configuration document.
+The hard cap remains 500000 reserved source characters/month for this callable;
+this is not a promise of free billing or a total Functions/Firestore spending cap.
 
 Build preparation
 - Use the external-testing profile with the existing protected staging Firebase
@@ -130,8 +133,8 @@ multi-sport and the 360-member admin list are reused; no broad moderation cycle
 is needed. Results and the post-commit source binding are retained privately.
 
 Before beta delivery and acceptance
-Deliver the scoped backend changes and complete translation-specific readiness
-before claiming every feature works live. After future builds are installed,
+The supporting backend is delivered; compatible clients and native acceptance
+remain pending. After future builds are installed,
 perform one focused device pass for navigation/back/swipe, child persistence,
 Google/Apple sign-in, fast Ready/gameplay taps, weather/browser return, translation
 consent/provider/keyboard, Coach offline escape and Squad sports/admin search.
@@ -140,7 +143,8 @@ suites. The installed Android 31 and iOS 19 clients lack these pending changes.
 
 Moderation
 Keep the existing live moderation configuration and accepted source intact.
-No activation, dark recovery, new moderation case/consequence/appeal, broad
-Function deployment, IAM/Rules/index/secret change, production rollout, or extra
-build is part of this source review. Revisit only a concrete regression if one
-is actually found during the focused future device pass.
+No moderation activation, dark recovery, new moderation case/consequence/appeal,
+broad Function deployment, moderation IAM/Rules/index/secret change or native
+build occurred during the scoped backend delivery. Moderation descriptors and
+the alert secret binding were checked independently. Revisit only a concrete
+regression if one is actually found during the focused future device pass.

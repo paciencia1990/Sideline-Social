@@ -1,0 +1,77 @@
+Scoped beta backend and Google Translation delivery — October 10, 2026
+
+Project: sideline-social-staging-2026, us-central1
+Moderation stayed live. No moderation Function, source, gate, identity, trigger,
+secret, case, report, alert, consequence or appeal was changed by this delivery.
+No Android/iOS build or store delivery was started.
+
+Backend scope
+- Verified and preserved the already deployed acknowledgeNotificationOpened and
+  clearUserNotifications handlers; their deployed implementation matches the
+  reviewed source. The earlier absent-endpoint assessment is superseded.
+- Created deleteChildProfile, getSquadLeaderboard, updateSquadSports and
+  translateTeamMessage.
+- Updated only submitBombDefusalStep, listGameLobbies, startGameLobbyRematch,
+  findOrCreateVenueSportSquad, findNearbyVenueSportSquads, searchVenueSportSquads,
+  getVenueSportSquadDetail and getSquadAdministration.
+- Existing source updates preserved each target's runtime configuration and
+  invocation policy. New callables use the normal public HTTPS callable
+  transport with permanent-account authorization and App Check in the source.
+  HTTP invoker permission does not grant message or child-profile access.
+
+Translation
+- Enabled the translate.googleapis.com service under existing project billing.
+  Its v3 transport endpoint is translation.googleapis.com.
+- Created a dedicated translation runtime and exact custom role containing:
+  cloudtranslate.generalModels.predict, datastore.databases.get,
+  datastore.entities.get, datastore.entities.create, datastore.entities.update,
+  serviceusage.services.use. No broad Editor/Owner, impersonation grant or
+  service-account key was added to this runtime.
+- Deployed the provider repair from 60235b2d9557500d88e63b8918c420f62f7496ae:
+  x-goog-user-project explicitly attributes the request to the staging project.
+  All 206 deployed archive files were independently compared with the review.
+- Translation is enabled with 500000 reserved source characters per UTC month,
+  20000 characters per account/day and 10 uncached reservations/account/minute.
+  Identical authorized requests share bounded in-memory cache/provider work.
+- A Translation-only $10 monthly budget monitors spend before credits and sends
+  50/80/100 percent alerts to existing billing IAM recipients. This is an alert,
+  not a total cloud spending cap; Functions/Firestore costs are separate.
+- Google successfully translated two synthetic messages into Spanish in one
+  request containing 65 source characters. Protected Team codes and the fixture
+  link were preserved. No private user messages were submitted. This check used
+  existing operator OAuth; runtime identity/permissions were checked separately.
+
+Privacy publication
+- Public policy: https://www.joinsidelinesocial.com/privacy
+  Added optional Team/Coach written-message translation, explicit Google
+  processing consent, global processing, personal details inside message text,
+  temporary result caching, local preferences, counters and deletion behavior.
+- Published only the reviewed website artifact to its existing Netlify site.
+  No production-branch push/merge, second publication path or moderation Hosting
+  update occurred. Website source: 4059301d116d7ae8a6437f5dc588e4f099c3effa.
+- Apple App Privacy: Emails or Text Messages are linked to identity, used for
+  App Functionality and not tracking. The corrected disclosure is published.
+- Google Data safety already records optional message collection for App
+  Functionality and safety. The Google Cloud service-provider processing path
+  does not require adding a new data type or changing the existing sharing answer.
+  No unrelated Google declaration or store release was submitted.
+
+Delivery remains necessary for the client interface
+Android 31 and iOS 19 lack the pending translation UI and other combined client
+repairs. Use the existing combined release branch for the next protected beta
+builds when separately requested. Do not repeat backend delivery or moderation
+acceptance merely because new clients are built.
+
+After compatible delivery, perform one focused Android/iOS pass for an authorized
+received Team announcement and private Coach message: consent/language selection,
+provider response, code/link preservation, duplicate taps, offline/error behavior,
+Hide translation, account switch and keyboard/browser return. Native authenticated
+App Check-protected positive acceptance is pending; operator provider success is
+not a claim that the current installed clients translate messages.
+
+If translation fails, disable only TEAM_TRANSLATION_ENABLED on its callable,
+preserving its user-managed character cap and runtime identity. Send only the
+user-managed translation variables in the configuration payload; do not resend
+the reserved FIREBASE_CONFIG, GCLOUD_PROJECT or EVENTARC_CLOUD_EVENT_SOURCE
+values returned by older descriptors. Firebase documents automatic population
+of runtime project configuration. Never disable moderation or weaken App Check.

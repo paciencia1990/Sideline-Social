@@ -1,4 +1,16 @@
-Optional Team and Coach translation — local candidate, October 10, 2026
+Optional Team and Coach translation — backend delivered, October 10, 2026
+
+Google Cloud setup and scoped backend delivery are complete; translation is
+enabled on staging with the reviewed limits. The provider quota
+project is explicitly set with x-goog-user-project. Translation uses a dedicated
+runtime identity with only prediction, canonical Firestore reads, transactional
+counter writes and service usage permissions. The public privacy notice is live;
+Apple message data is disclosed as linked to identity and Google Data safety's
+existing optional functionality disclosure covers this path. Translation-only
+budget alerts are configured at $10/month, 50/80/100 percent, before credits.
+No Android/iOS build was started. Native authenticated/App Check acceptance must
+follow the next compatible client delivery. Existing Android 31 and iOS 19 do
+not contain the translation interface. See backend-translation-delivery-20261010.txt.
 
 Parents can request free translation of received Team announcement titles/bodies and private Coach text messages or written voice captions. No audio, image, attachment or transcription is sent. Team replies and friend chat are outside this first release. There are 70 searchable language choices; supported device locales set a default, and parents can remember another language per account/device. Unsupported device languages require a manual choice.
 
@@ -23,7 +35,7 @@ Cost controls
 
 Delivery sequence — no operations performed by this document
 1. Bind the reviewed combined source to the intended release branch; preserve all pending child/auth/lobby/game/weather changes. Do not build from the stale primary workspace or reapply older isolated copies.
-2. Inspect existing project billing, translation.googleapis.com enablement, runtime identity and permissions read-only. Review any required API enablement and narrowly scoped runtime permission (cloudtranslate.generalModels.predict) before applying them. Do not grant broad Editor/Owner, distribute a service-account key or alter moderation IAM.
+2. Inspect existing project billing, translate.googleapis.com enablement, runtime identity and permissions read-only. The v3 endpoint is translation.googleapis.com; the Service Usage API name is translate.googleapis.com. Preserve the dedicated narrow runtime role, with no Editor/Owner, service-account key or moderation IAM change.
 3. Review/update the public privacy policy and store declarations against the real Google Cloud agreement and processing path. Text may contain personal details supplied by message authors. Global processing has no regional restriction. Google’s current statement says translation text is used for providing the service and is not used to train its translation models. Review optional collection for functionality and any applicable service-provider sharing exception; do not auto-certify form answers.
 4. Deploy only the new translateTeamMessage callable with its reviewed identity/configuration and source. Include the already pending deleteChildProfile and submitBombDefusalStep targets in the combined release review. Do not redeploy all Functions. Verify App Check, identity and protected limits before enabling this new callable.
 5. Build one Android beta candidate and one iOS TestFlight candidate through the protected workflow with fresh version-counter/source checks. No native dependency changed. This feature can share the planned builds with the other pending repairs.
