@@ -131,7 +131,7 @@ assert.doesNotMatch(
 );
 assert.match(
   gameLobby,
-  /setRealtimeGamePlayerReady\(\{ sessionId, ready: !self\.ready \}\)/,
+  /writeReady:[\s\S]*setRealtimeGamePlayerReady\(\{ sessionId, ready \}\)/,
   "Bomb Defusal and Spot the Difference ready state must cross the callable boundary.",
 );
 assert.match(

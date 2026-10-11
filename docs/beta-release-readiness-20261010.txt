@@ -36,6 +36,24 @@ Included client changes
     Account changes discard old responses; active membership and message visibility
     checks remain in force. See docs/app-efficiency-changes-20261010.txt.
 
+12. Shared game-start preparation: readiness-count updates retain preparation for
+    the current attempt; Retry is coalesced, superseded attempts cannot acknowledge
+    or release gameplay, and the countdown ticker stops in gameplay/background.
+13. Lobby/Bomb efficiency: account/Squad/filter-scoped refreshes coalesce, only
+    visible foreground directories poll, room cards survive routine refresh, and
+    Bomb reads coalesce with command/role/locale/account invalidation. Private
+    Expert instructions remain caller-only and stale views are hidden.
+14. Lobby backend: unchanged observations preserve stored timestamps; real room
+    changes and expired entries reconcile, concurrent newer revisions survive.
+    Rematch eligibility checks run in four bounded parallel workers while keeping
+    current standing/membership, join order, capacity and host/rollback checks.
+15. Teams/private-message efficiency: active Teams render independently of past
+    counts; overlapping Team refreshes share a read; independent summary reads
+    start together; unchanged hidden-message queries remain attached, with content
+    withheld until every visibility chunk is ready. Read acknowledgements coalesce
+    while the thread is visible. Public-profile reads share only in-flight work.
+    See docs/game-and-team-efficiency-20261010.txt for validation and profiling.
+
 Notifications
 The existing source already contains the two dismissal callables. The retained
 October 7 read-only assessment found them absent from staging, explaining why
@@ -52,6 +70,8 @@ Deploy or update only the following affected existing callables:
   clearUserNotifications
   deleteChildProfile
   submitBombDefusalStep
+  listGameLobbies
+  startGameLobbyRematch
   findOrCreateVenueSportSquad
   findNearbyVenueSportSquads
   searchVenueSportSquads

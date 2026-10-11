@@ -1,6 +1,7 @@
 import { collection, doc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 
+import { measureDevelopmentPerformance } from '@/utils/performanceDiagnostics';
 import { db, functions } from '@/config/firebase';
 import { normalizeGameLobbyDirectoryResult } from '@/utils/gameLobbyDirectoryState';
 
@@ -173,7 +174,7 @@ export async function closeGameLobby(input: { lobbyId: string }) {
 
 export async function startGameLobbyRematch(input: { lobbyId: string }) {
   const callable = httpsCallable<typeof input, CreateGameLobbyResult>(functions, 'startGameLobbyRematch');
-  return (await callable(input)).data;
+  return measureDevelopmentPerformance('games.rematch', async () => (await callable(input)).data);
 }
 
 export async function createGameJoinCode(input: {
@@ -326,7 +327,7 @@ export type BombDefusalPlayerView = {
 
 export async function getBombDefusalPlayerView(input: { sessionId: string; locale: 'en' | 'es' }) {
   const callable = httpsCallable<typeof input, BombDefusalPlayerView>(functions, 'getBombDefusalPlayerView');
-  return (await callable(input)).data;
+  return measureDevelopmentPerformance('bomb.private-view', async () => (await callable(input)).data);
 }
 
 export async function submitBombDefusalStep(input: {

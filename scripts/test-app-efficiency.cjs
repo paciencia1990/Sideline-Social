@@ -265,7 +265,9 @@ async function lobbyScopeTests() {
   let input={enabled:true,squadId:'first'}, task=deferred();
   const ui=harness(React=>{
     const api=load('hooks/useSquadGameLobbies.ts',{
-      react:React,'react-native':{AppState:{currentState:'active',addEventListener:()=>({remove(){}})}},
+      react:React,'@/context/AuthContext':{useAuth:()=>({user:{uid:'viewer'}})},
+      '@/hooks/useCoalescedRefresh':load('hooks/useCoalescedRefresh.ts',{react:React,'@/utils/coalescedRefresh':refreshCore}),
+      '@/hooks/useFocusedGameRefresh':load('hooks/useFocusedGameRefresh.ts',{react:React,'react-native':{AppState:{currentState:'active',addEventListener:()=>({remove(){}})}},'expo-router':{useFocusEffect:cb=>React.useEffect(cb,[cb])}}),
       'expo-router':{useFocusEffect:cb=>React.useEffect(cb,[cb])},'@/services/gameJoinCodeService':{listGameLobbies:()=>task.promise,readGameJoinCodeFailureReason:()=> 'not_authorized'},'@/utils/performanceDiagnostics':measure,
     });return ()=>api.useSquadGameLobbies(input);
   });

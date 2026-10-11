@@ -1,9 +1,11 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { ArrowLeft, CalendarDays, ChevronRight, LockKeyhole, Mail, MoreVertical } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
+import { useAuth } from "@/context/AuthContext";
+import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
 import { Card } from "@/components/Card";
 import { VenueLightningCard } from "@/components/VenueLightningCard";
 import { ChildProfilePicker } from "@/components/ChildProfilePicker";
@@ -31,7 +33,12 @@ export default function ParentTeamHubScreen() {
   const teamId = normalizeParam(params.teamId);
   const notificationId = normalizeParam(params.notificationId);
   const acknowledgedNotificationIds = useRef(new Set<string>());
-  const [summary, setSummary] = useState<ParentTeamSummary | null>(null);
+  const { user } = useAuth();
+  const scope = JSON.stringify([user?.uid, teamId]);
+  const currentScope = useRef(scope); currentScope.current = scope;
+  const [summaryOwner, setSummaryOwner] = useState("");
+  const [storedSummary, setSummary] = useState<ParentTeamSummary | null>(null);
+  const summary = summaryOwner === scope ? storedSummary : null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedChildIds, setSelectedChildIds] = useState<string[]>([]);
@@ -41,26 +48,20 @@ export default function ParentTeamHubScreen() {
   const [loadingOlderAnnouncements, setLoadingOlderAnnouncements] = useState(false);
   const olderAnnouncementsInFlight = useRef(false);
 
-  const loadTeam = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setFeedback(null);
-    try {
-      const nextSummary = await getParentTeamSummary(teamId);
-      setSummary(nextSummary);
-      setSelectedChildIds(nextSummary.children.map((child) => child.id));
+  useEffect(() => { setSummary(null); setError(null); setSelectedChildIds([]); acknowledgedNotificationIds.current.clear(); }, [scope]);
+  const refreshTeam = useCoalescedRefresh(scope, {
+    load: async (_input: boolean) => getParentTeamSummary(teamId), merge: () => true,
+    onStart: () => { setLoading(true); setError(null); setFeedback(null); },
+    onSuccess: (next) => {
+      setSummaryOwner(scope); setSummary(next); setSelectedChildIds(next.children.map((child) => child.id));
       if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
-        acknowledgedNotificationIds.current.add(notificationId);
-        void acknowledgeNotificationAfterOpen(notificationId);
+        acknowledgedNotificationIds.current.add(notificationId); void acknowledgeNotificationAfterOpen(notificationId);
       }
-    } catch (nextError) {
-      console.warn("[ParentTeamHub] load error:", getErrorCode(nextError));
-      setSummary(null);
-      setError(t("myTeams.teamLoadError"));
-    } finally {
-      setLoading(false);
-    }
-  }, [notificationId, t, teamId]);
+    },
+    onError: () => { setSummary(null); setError(t("myTeams.teamLoadError")); },
+    onSettled: () => setLoading(false),
+  });
+  const loadTeam = useCallback(() => refreshTeam(true), [refreshTeam]);
 
   const loadOlderAnnouncements = useCallback(async () => {
     if (!summary?.announcementsCursor || !summary.hasOlderAnnouncements || olderAnnouncementsInFlight.current) return;
@@ -69,6 +70,7 @@ export default function ParentTeamHubScreen() {
     setError(null);
     try {
       const page = await getOlderParentTeamAnnouncementsPage(teamId, summary.announcementsCursor);
+      if (currentScope.current !== scope) return;
       setSummary((current) => current ? {
         ...current,
         announcements: mergeParentAnnouncements(current.announcements, page.announcements),
@@ -82,11 +84,11 @@ export default function ParentTeamHubScreen() {
       olderAnnouncementsInFlight.current = false;
       setLoadingOlderAnnouncements(false);
     }
-  }, [summary, t, teamId]);
+  }, [scope, summary, t, teamId]);
 
   useFocusEffect(useCallback(() => {
-    void loadTeam();
-  }, [loadTeam]));
+    void refreshTeam(true, false);
+  }, [refreshTeam]));
 
   const saveChildLinks = useCallback(async () => {
     setSavingChild(true);

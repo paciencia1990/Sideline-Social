@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { mapConcurrentReads } from './parallelReads';
 
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -42,6 +43,7 @@ import {
   createEmptyGameLobbyDirectory,
   nextGameLobbyNumber,
   normalizeGameLobbyDirectory,
+  preserveUnchangedLobbyTimestamp,
   removeGameLobbyFromDirectory,
   resolveGameLobbyJoinAction,
   sortGameLobbies,
@@ -1858,7 +1860,8 @@ async function listAuthorizedLobbyDirectory(
     mainLobbyId: originalMainStillLive ?? reconciled.mainLobbyId,
     nextLobbyNumber: preservedNextLobbyNumber,
   };
-  if (snapshot.exists && JSON.stringify(directory) !== JSON.stringify(nextDirectory)) {
+  const prunedEntries = Object.keys(readRecord(snapshot.data()?.lobbies)).length !== Object.keys(directory.lobbies).length;
+  if (snapshot.exists && (prunedEntries || JSON.stringify(directory) !== JSON.stringify(nextDirectory))) {
     await withFirestoreContentionRetry('listAuthorizedLobbyDirectory', () =>
       admin.firestore().runTransaction(async (transaction) => {
         const latestSnapshot = await transaction.get(reference);
@@ -1868,9 +1871,11 @@ async function listAuthorizedLobbyDirectory(
           gameType,
           Date.now(),
         );
+        const originalLatest = merged;
+        const pruneLatest = Object.keys(readRecord(latestSnapshot.data()?.lobbies)).length !== Object.keys(merged.lobbies).length;
         Object.values(directory.lobbies).forEach((observedEntry) => {
           const latestEntry = merged.lobbies[observedEntry.lobbyId];
-          if (!latestEntry || latestEntry.sessionId !== observedEntry.sessionId) return;
+          if (!latestEntry || latestEntry.sessionId !== observedEntry.sessionId || latestEntry.updatedAtMs > observedEntry.updatedAtMs) return;
           const liveEntry = nextDirectory.lobbies[observedEntry.lobbyId];
           merged = liveEntry
             ? updateGameLobbyInDirectory(merged, liveEntry)
@@ -1880,7 +1885,9 @@ async function listAuthorizedLobbyDirectory(
           ...merged,
           nextLobbyNumber: Math.max(merged.nextLobbyNumber, nextDirectory.nextLobbyNumber),
         };
-        transaction.set(reference, { ...merged, updatedAt: Timestamp.now() });
+        if (pruneLatest || JSON.stringify(merged) !== JSON.stringify(originalLatest)) {
+          transaction.set(reference, { ...merged, updatedAt: Timestamp.now() });
+        }
       }),
     );
   }
@@ -1935,7 +1942,7 @@ async function hydrateLobbyEntry(
   const hostDisplayName = canonical.hostUserId === entry.hostUserId
     ? entry.hostDisplayName
     : await resolvePlayerDisplayName(canonical.hostUserId);
-  const nextEntry: GameLobbyDirectoryEntry = {
+  const nextEntry = preserveUnchangedLobbyTimestamp(entry, {
     ...entry,
     hostUserId: canonical.hostUserId,
     hostDisplayName,
@@ -1945,7 +1952,7 @@ async function hydrateLobbyEntry(
     capacity: canonical.capacity,
     expiresAtMs,
     updatedAtMs: nowMs,
-  };
+  }, nowMs);
   const joinAction = resolveGameLobbyJoinAction({
     callerState: canonical.callerState,
     status: canonical.status,
@@ -2947,14 +2954,14 @@ async function createNextLobbyRound(
   ) throw safeError('failed-precondition', 'round_not_finished');
 
   const currentParticipants = await readLobbyRoundParticipants(hydrated.entry);
-  const participants: TriviaLobbyParticipant[] = [];
-  for (const participant of currentParticipants) {
+  const eligibleParticipants = await mapConcurrentReads(currentParticipants, 4, async (participant) => {
     const [eligibleStanding, eligibleSquad] = await Promise.all([
       accountCanCommunicate(participant.uid),
       readAuthorizedSquadId(participant.uid, hydrated.entry.squadId),
     ]);
-    if (eligibleStanding && eligibleSquad === hydrated.entry.squadId) participants.push(participant);
-  }
+    return eligibleStanding && eligibleSquad === hydrated.entry.squadId ? participant : null;
+  });
+  const participants = eligibleParticipants.filter((participant): participant is TriviaLobbyParticipant => participant !== null);
   const host = participants.find((participant) => participant.uid === uid);
   if (!host) throw safeError('permission-denied', 'not_authorized');
   const orderedParticipants = [...participants]

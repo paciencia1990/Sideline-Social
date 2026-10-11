@@ -10,13 +10,13 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useFocusEffect } from "expo-router";
 import { MoreHorizontal } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { MessageActionsModal, type MessageModalAction, type MessageReportReason } from "@/components/MessageActionsModal";
 import { VoiceMemoComposer } from "@/components/VoiceMemoComposer";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
+import { usePrivateTeamReadAcknowledgement } from "@/hooks/usePrivateTeamReadAcknowledgement";
 import { Card } from "@/components/Card";
 import { MessageTranslation } from "@/components/MessageTranslation";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -30,7 +30,6 @@ import {
   listenToNewestPrivateTeamMessagesPage,
   getOlderPrivateTeamMessagesPage,
   getPrivateTeamMessage,
-  markPrivateTeamConversationRead,
   reserveVoiceUpload,
   sendPrivateTeamTextMessage,
   uploadReservedVoiceMemo,
@@ -61,6 +60,7 @@ export function PrivateTeamMessageThread({
   targetMessageId?: string;
 }) {
   const { t } = useTranslation();
+  const acknowledgeVisibleMessages = usePrivateTeamReadAcknowledgement(conversationId);
   const [conversation, setConversation] = useState<TeamPrivateConversation | null>(null);
   const [messages, setMessages] = useState<TeamPrivateMessage[]>([]);
   const [olderMessages, setOlderMessages] = useState<TeamPrivateMessage[]>([]);
@@ -129,9 +129,9 @@ export function PrivateTeamMessageThread({
       setMessages(page.messages);
       setHistoryCursor((current) => current ?? page.nextCursor);
       if (!olderPageLoadedRef.current) setHasOlderMessages(page.hasMore);
-      if (targetResolvedRef.current) void markPrivateTeamConversationRead(conversationId).catch(() => {});
+      acknowledgeVisibleMessages(page.messages.at(-1)?.id ?? "", targetResolvedRef.current);
     }, () => setError(t("teamMessages.loadError")));
-  }, [conversationId, t]);
+  }, [acknowledgeVisibleMessages, conversationId, t]);
   useEffect(() => {
     targetResolvedRef.current = !targetMessageId;
     if (!targetMessageId) return () => {};
@@ -144,7 +144,7 @@ export function PrivateTeamMessageThread({
       }
       setOlderMessages((current) => mergeThreadMessages(current, [target]));
       targetResolvedRef.current = true;
-      void markPrivateTeamConversationRead(conversationId).catch(() => {});
+      acknowledgeVisibleMessages(undefined, true);
       if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
         acknowledgedNotificationIds.current.add(notificationId);
         void acknowledgeNotificationAfterOpen(notificationId);
@@ -153,10 +153,7 @@ export function PrivateTeamMessageThread({
       if (active) setError(t("teamMessages.targetUnavailable"));
     });
     return () => { active = false; };
-  }, [conversationId, notificationId, t, targetMessageId]);
-  useFocusEffect(useCallback(() => {
-    if (targetResolvedRef.current) void markPrivateTeamConversationRead(conversationId).catch(() => {});
-  }, [conversationId]));
+  }, [acknowledgeVisibleMessages, conversationId, notificationId, t, targetMessageId]);
   useEffect(() => () => { uploadCancel.current?.(); }, []);
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";

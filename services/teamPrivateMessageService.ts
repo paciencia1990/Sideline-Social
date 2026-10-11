@@ -144,64 +144,58 @@ export function listenToNewestPrivateTeamMessagesPage(
   const pageSize = TEAM_HISTORY_PAGE_SIZES.privateMessages;
   let canonicalMessages: TeamPrivateMessage[] = [];
   let hasMore = false;
-  let hiddenUnsubscribes: Unsubscribe[] = [];
-  let hiddenIdsByChunk = new Map<number, Set<string>>();
-  let receivedHiddenChunks = new Set<number>();
+  type HiddenChunk = { ids: string[]; hidden: Set<string> | null; unsubscribe: Unsubscribe };
+  const hiddenChunks = new Map<string, HiddenChunk>();
+  const attachedChunks = new WeakSet<HiddenChunk>();
+  let disposed = false;
   let failed = false;
+  const active = () => !disposed && !failed && auth.currentUser?.uid === userId;
   const publishVisibleMessages = () => {
-    if (receivedHiddenChunks.size !== hiddenIdsByChunk.size) return;
-    const hiddenMessageIds = new Set(Array.from(hiddenIdsByChunk.values()).flatMap((ids) => Array.from(ids)));
+    if (!active() || Array.from(hiddenChunks.values()).some((chunk) => chunk.hidden === null)) return;
+    const hiddenMessageIds = new Set(Array.from(hiddenChunks.values()).flatMap((chunk) => Array.from(chunk.hidden!)));
     const messages = canonicalMessages.filter((message) => !hiddenMessageIds.has(message.id));
     onValue({ messages, hasMore, nextCursor: cursorForMessage(canonicalMessages[0]) });
   };
   const reportError = (error: Error) => {
-    if (failed) return;
+    if (!active()) return;
     failed = true;
+    onValue({ messages: [], hasMore: false, nextCursor: null });
     onError?.(error);
   };
   const unsubscribeMessages = onSnapshot(
-    query(
-      collection(db, "teamPrivateConversations", conversationId, "messages"),
-      orderBy("createdAt", "desc"),
-      orderBy(documentId(), "desc"),
-      limit(pageSize + 1),
-    ),
+    query(collection(db, "teamPrivateConversations", conversationId, "messages"), orderBy("createdAt", "desc"), orderBy(documentId(), "desc"), limit(pageSize + 1)),
     (snapshot) => {
-      hiddenUnsubscribes.forEach((unsubscribe) => unsubscribe());
-      hiddenUnsubscribes = [];
-      hiddenIdsByChunk = new Map();
-      receivedHiddenChunks = new Set();
+      if (!active()) return;
       hasMore = snapshot.size > pageSize;
-      canonicalMessages = snapshot.docs.slice(0, pageSize)
-        .map((message) => normalizeMessage(message.id, message.data()))
-        .reverse();
+      canonicalMessages = snapshot.docs.slice(0, pageSize).map((message) => normalizeMessage(message.id, message.data())).reverse();
       const chunks = chunkIds(canonicalMessages.map((message) => message.id));
-      if (chunks.length === 0) {
-        publishVisibleMessages();
-        return;
+      const needed = new Set(chunks.map((ids) => JSON.stringify([...ids].sort())));
+      for (const [key, chunk] of hiddenChunks) {
+        if (!needed.has(key)) { hiddenChunks.delete(key); chunk.unsubscribe(); }
       }
-      chunks.forEach((ids, chunkIndex) => {
-        hiddenIdsByChunk.set(chunkIndex, new Set());
-        hiddenUnsubscribes.push(onSnapshot(
-          query(
-            collection(db, "teamPrivateConversations", conversationId, "members", userId, "hiddenMessages"),
-            where(documentId(), "in", ids),
-          ),
-          (hiddenSnapshot) => {
-            hiddenIdsByChunk.set(chunkIndex, new Set(hiddenSnapshot.docs.map((item) => item.id)));
-            receivedHiddenChunks.add(chunkIndex);
-            publishVisibleMessages();
-          },
-          reportError,
-        ));
-      });
-    },
-    reportError,
+      // Register all placeholders before attaching listeners, including cached
+      // synchronous delivery, so no page publishes before every visibility query.
+      for (const ids of chunks) {
+        const key = JSON.stringify([...ids].sort());
+        if (!hiddenChunks.has(key)) hiddenChunks.set(key, { ids, hidden: null, unsubscribe: () => {} });
+      }
+      for (const ids of chunks) {
+        const key = JSON.stringify([...ids].sort());
+        const chunk = hiddenChunks.get(key)!;
+        if (!active()) break;
+        if (chunk.hidden !== null || attachedChunks.has(chunk)) continue;
+        attachedChunks.add(chunk);
+        chunk.unsubscribe = onSnapshot(query(collection(db, "teamPrivateConversations", conversationId, "members", userId, "hiddenMessages"), where(documentId(), "in", ids)), (hiddenSnapshot) => {
+          if (!active() || hiddenChunks.get(key) !== chunk) return;
+          chunk.hidden = new Set(hiddenSnapshot.docs.map((item) => item.id));
+          publishVisibleMessages();
+        }, (error) => { if (hiddenChunks.get(key) === chunk) reportError(error); });
+        if (disposed || hiddenChunks.get(key) !== chunk) chunk.unsubscribe();
+      }
+      publishVisibleMessages();
+    }, reportError,
   );
-  return () => {
-    unsubscribeMessages();
-    hiddenUnsubscribes.forEach((unsubscribe) => unsubscribe());
-  };
+  return () => { disposed = true; unsubscribeMessages(); hiddenChunks.forEach((chunk) => chunk.unsubscribe()); hiddenChunks.clear(); };
 }
 
 export async function getOlderPrivateTeamMessagesPage(

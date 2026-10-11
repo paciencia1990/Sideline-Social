@@ -268,3 +268,11 @@ function readRecord(value: unknown): Record<string, unknown> {
     ? value as Record<string, unknown>
     : {};
 }
+
+// Observation time is not a room change. Keep stored timestamps stable so a
+// directory read only reconciles real canonical changes.
+export function preserveUnchangedLobbyTimestamp(previous: GameLobbyDirectoryEntry, observed: GameLobbyDirectoryEntry, nowMs: number): GameLobbyDirectoryEntry {
+  const changed = (Object.keys(observed) as (keyof GameLobbyDirectoryEntry)[])
+    .some((key) => key !== 'updatedAtMs' && previous[key] !== observed[key]);
+  return changed ? { ...observed, updatedAtMs: Math.max(nowMs, previous.updatedAtMs) } : previous;
+}

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "test:game-efficiency": "node scripts/test-game-efficiency.cjs",
     "test:app-efficiency": "node scripts/test-app-efficiency.cjs",
     "test:team-translation": "npm --prefix functions run build && node scripts/test-team-translation.cjs",
     "test:emulator:team-translation": "npm --prefix functions run build && firebase.cmd emulators:exec --project demo-sideline-translation --only firestore \"node scripts/test-team-translation-emulator.cjs\"",
@@ -162,7 +163,7 @@
     "test:bomb-defusal": "npm --prefix functions run build && node scripts/test-bomb-defusal-core.cjs",
     "test:firestore:game-join-code-rules": "firebase.cmd emulators:exec --project sideline-game-join-code-rules-test --only firestore \"node scripts/test-game-join-code-firestore-rules.cjs\"",
     "test:rtdb:game-join-code-rules": "firebase.cmd emulators:exec --project sideline-game-join-code-rtdb-rules-test --only database \"node scripts/test-game-join-code-rtdb-rules.cjs\"",
-    "test:emulator:game-join-code": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-game-join-code-functions-test --only auth,database,firestore,functions \"node scripts/test-game-lobby-functions-emulator.cjs\"",
+    "test:emulator:game-join-code": "npm --prefix functions run build && firebase.cmd emulators:exec --project demo-game-efficiency --only auth,database,firestore,functions \"node scripts/test-game-lobby-functions-emulator.cjs\"",
     "test:emulator:game-security": "npm --prefix functions run build && firebase.cmd emulators:exec --project sideline-game-security-functions-test --only auth,database,firestore,functions \"node scripts/test-game-security-functions-emulator.cjs\"",
     "test:ios-provider-interaction": "node scripts/test-ios-provider-interaction.cjs",
     "test:child-profile-controls": "node scripts/test-child-profile-controls.cjs",

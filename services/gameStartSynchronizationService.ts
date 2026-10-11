@@ -1,3 +1,4 @@
+import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 import { Asset } from "expo-asset";
 import { doc, onSnapshot } from "firebase/firestore";
 import { get, ref } from "firebase/database";
@@ -26,7 +27,7 @@ export async function acknowledgeSynchronizedGameStart(input: {
   startAttemptId: string;
 }) {
   const callable = httpsCallable<typeof input, GameStartState>(functions, "acknowledgeSynchronizedGameStart");
-  return normalizeGameStartState((await callable(input)).data);
+  return measureDevelopmentPerformance("games.readiness-acknowledgement", async () => normalizeGameStartState((await callable(input)).data));
 }
 
 export function subscribeToSynchronizedGameStart(
@@ -42,7 +43,7 @@ export function subscribeToSynchronizedGameStart(
   );
 }
 
-export async function preloadSynchronizedGameRound(
+async function loadSynchronizedGameRound(
   gameType: GameJoinCodeType,
   sessionId: string,
 ) {
@@ -61,4 +62,8 @@ export async function preloadSynchronizedGameRound(
   const scene = spotDifferenceScenes.find((candidate) => candidate.id === sceneId);
   if (!scene) throw new Error("game_scene_unavailable");
   await Asset.loadAsync([scene.imageA, scene.imageB]);
+}
+
+export function preloadSynchronizedGameRound(gameType: GameJoinCodeType, sessionId: string) {
+  return measureDevelopmentPerformance("games.local-preparation", () => loadSynchronizedGameRound(gameType, sessionId));
 }

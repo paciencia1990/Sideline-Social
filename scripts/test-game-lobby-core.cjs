@@ -181,7 +181,7 @@ function run() {
   assert.match(directoryScreen, /games\.joinCode\.leaveAndCloseTitle/, 'recovery reuses the localized leave-and-close confirmation');
   assert.doesNotMatch(directoryScreen, /disabled=\{!canOfferCreate \|\| createBlocked\}/, 'Start Lobby is not silently disabled by opaque state');
   assert.match(directoryScreen, /createInFlightRef\.current/, 'rapid Start taps are guarded synchronously');
-  assert.match(directoryScreen, /directoryRequestVersionRef\.current/, 'older directory responses cannot restore blocking state');
+  assert.match(directoryScreen, /useSquadGameLobbies/, 'directory reads use the account-scoped coalescing hook; stale behavior is covered by test-game-efficiency');
   assert.match(directoryScreen, /\[GameLobbyDirectory\] eligibility/, 'development diagnostics record the bounded eligibility reason');
   assert.match(directoryScreen, /onPress=\{\(\) => void handleCreate\(\)\}/, 'failed creation exposes the same idempotent create retry');
   assert.doesNotMatch(directoryScreen, /Platform\.(OS|select)[\s\S]{0,120}(eligib|canCreate|Start Lobby)/, 'Android and iOS share one eligibility path');

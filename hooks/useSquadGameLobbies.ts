@@ -1,85 +1,47 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState } from "react-native";
-import { useFocusEffect } from "expo-router";
-
-import {
-  listGameLobbies,
-  readGameJoinCodeFailureReason,
-  type GameJoinCodeFailureReason,
-  type GameLobbySummary,
-} from "@/services/gameJoinCodeService";
+import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "@/context/AuthContext";
+import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
+import { useFocusedGameRefresh } from "@/hooks/useFocusedGameRefresh";
+import { listGameLobbies, readGameJoinCodeFailureReason, type GameJoinCodeFailureReason,
+  type GameJoinCodeType, type GameLobbyDirectoryResult } from "@/services/gameJoinCodeService";
 import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 
 type LobbyDirectoryState = "idle" | "loading" | "ready" | "permission-error" | "network-error";
+type Input = { enabled: boolean; squadId: string | null; gameType?: GameJoinCodeType | null };
 
-type UseSquadGameLobbiesInput = {
-  enabled: boolean;
-  squadId: string | null;
-};
-
-const ACTIVE_LOBBY_REFRESH_MS = 15_000;
-
-export function useSquadGameLobbies({ enabled, squadId }: UseSquadGameLobbiesInput) {
-  const [lobbies, setLobbies] = useState<GameLobbySummary[]>([]);
-  const [resolvedSquadId, setResolvedSquadId] = useState<string | null>(null);
-  const [state, setState] = useState<LobbyDirectoryState>("idle");
-  const [failureReason, setFailureReason] = useState<GameJoinCodeFailureReason | null>(null);
-  const requestVersionRef = useRef(0);
-  const currentScope = useRef({ enabled, squadId });
-  currentScope.current = { enabled, squadId };
-
-  const refresh = useCallback(async (background = false) => {
-    if (!enabled || !squadId) {
-      requestVersionRef.current += 1;
-      setLobbies([]);
-      setResolvedSquadId(null);
-      setFailureReason(null);
-      setState("idle");
-      return;
-    }
-
-    const requestVersion = ++requestVersionRef.current;
-    if (!background) setState("loading");
-    try {
-      const result = await measureDevelopmentPerformance(
-        "games.lobby-directory",
-        () => listGameLobbies({ squadId }),
-      );
-      if (requestVersion !== requestVersionRef.current || !currentScope.current.enabled || currentScope.current.squadId !== squadId) return;
-      setLobbies(result.lobbies);
-      setResolvedSquadId(squadId);
-      setFailureReason(null);
-      setState("ready");
-    } catch (error) {
-      if (requestVersion !== requestVersionRef.current || !currentScope.current.enabled || currentScope.current.squadId !== squadId) return;
+export function useSquadGameLobbies({ enabled, squadId, gameType }: Input) {
+  const { user, firebaseUser } = useAuth();
+  const uid = firebaseUser?.uid ?? user?.uid;
+  const active = Boolean(enabled && uid && squadId);
+  const scope = JSON.stringify([active, uid, squadId, gameType ?? null]);
+  const [result, setResult] = useState<{ scope: string; directory: GameLobbyDirectoryResult } | null>(null);
+  const [phase, setPhase] = useState<{ scope: string; state: LobbyDirectoryState; reason: GameJoinCodeFailureReason | null } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const runRefresh = useCoalescedRefresh(scope, {
+    load: async (background: boolean) => {
+      if (!background && result?.scope === scope) setRefreshing(true);
+      return active && squadId ? measureDevelopmentPerformance("games.lobby-directory", () => listGameLobbies({ squadId, ...(gameType ? { gameType } : {}) })) : null;
+    },
+    merge: (a, b) => a && b,
+    onStart: () => setPhase({ scope, state: result?.scope === scope ? "ready" : "loading", reason: null }),
+    onSuccess: (directory) => {
+      setResult(directory ? { scope, directory } : null);
+      setPhase({ scope, state: directory ? "ready" : "idle", reason: null });
+    },
+    onError: (error) => {
       const reason = readGameJoinCodeFailureReason(error);
-      if (reason === "not_authorized") setLobbies([]);
-      setFailureReason(reason);
-      setState(reason === "not_authorized" ? "permission-error" : "network-error");
-    }
-  }, [enabled, squadId]);
-
-  useEffect(() => {
-    if (!enabled || !squadId) void refresh();
-  }, [enabled, refresh, squadId]);
-
-  useFocusEffect(useCallback(() => {
-    if (!enabled || !squadId) return undefined;
-    void refresh();
-    const interval = setInterval(() => void refresh(true), ACTIVE_LOBBY_REFRESH_MS);
-    return () => clearInterval(interval);
-  }, [enabled, refresh, squadId]));
-
-  useEffect(() => {
-    let previousState = AppState.currentState;
-    const subscription = AppState.addEventListener("change", (nextState) => {
-      if (nextState === "active" && previousState !== "active") void refresh(true);
-      previousState = nextState;
-    });
-    return () => subscription.remove();
-  }, [refresh]);
-
-  return { failureReason, lobbies: enabled && squadId === resolvedSquadId ? lobbies : [], refresh, state };
+      if (reason === "not_authorized") setResult(null);
+      setPhase({ scope, state: reason === "not_authorized" ? "permission-error" : "network-error", reason });
+    },
+    onSettled: () => setRefreshing(false),
+  });
+  const refresh = useCallback((background = false, invalidate = true) => runRefresh(background, invalidate), [runRefresh]);
+  const focusedRefresh = useCallback((background: boolean) => refresh(background, false), [refresh]);
+  useFocusedGameRefresh(active, focusedRefresh);
+  useEffect(() => { if (!active) { setResult(null); setPhase(null); setRefreshing(false); } }, [active, scope]);
+  const directory = active && result?.scope === scope ? result.directory : null;
+  const state = !active ? "idle" : phase?.scope === scope ? phase.state : "loading";
+  return { directory, failureReason: active && phase?.scope === scope ? phase.reason : null,
+    lobbies: directory?.lobbies ?? [], refresh, refreshing, state };
 }
-
 export type { LobbyDirectoryState };

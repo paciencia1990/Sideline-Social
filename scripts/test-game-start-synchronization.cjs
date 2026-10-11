@@ -130,11 +130,8 @@ assert.doesNotMatch(
   /Asset\.loadAsync\(\[[\s\S]*?explosion\.json[\s\S]*?wireCut\.json/u,
   "Android must not treat bundled Lottie JSON as downloadable asset modules.",
 );
-assert.match(
-  gate,
-  /state\.phase === "preparing" \|\| state\.phase === "activating" \|\| state\.phase === "scheduled"[\s\S]*?preloadSynchronizedGameRound\(gameType, sessionId\)[\s\S]*?acknowledgeSynchronizedGameStart/u,
-  "Retry must rerun local preparation before acknowledgement, including when the shared attempt is already scheduled.",
-);
+assert.match(gate, /state\.phase === "preparing" \|\| state\.phase === "activating" \|\| state\.phase === "scheduled"[\s\S]*?prepareAttempt\(true\)/u,
+  "Retry uses the shared preparation operation for preparing and scheduled attempts; actual progress races are covered by test-game-efficiency.");
 assert.match(gate, /preparingAttemptsRef/u, "Preparation must deduplicate in-flight work without permanently blocking retry.");
 assert.match(overlay, /phase\?: "3" \| "2" \| "1" \| "go"/u);
 assert.equal((routes.match(/import SynchronizedGameStartGate/gu) ?? []).length, 3, "All three routes must import the gate.");

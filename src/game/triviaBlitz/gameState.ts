@@ -1,3 +1,4 @@
+import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
 import { httpsCallable } from "firebase/functions";
 
 import { functions } from "@/config/firebase";
@@ -108,6 +109,8 @@ export async function endTriviaGameSession(input: EndTriviaGameSessionInput) {
 
 async function callTriviaFunction<Input, Output>(name: string, input: Input): Promise<Output> {
   const callable = httpsCallable<Input, Output>(functions, name);
+  if (name === "submitTriviaAnswer") return measureDevelopmentPerformance("trivia.answer-response", async () => (await callable(input)).data);
+  if (name === "advanceTriviaGameSession") return measureDevelopmentPerformance("trivia.advance-response", async () => (await callable(input)).data);
   return (await callable(input)).data;
 }
 

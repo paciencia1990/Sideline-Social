@@ -22,6 +22,7 @@ import { GameRewardSummary } from "@/components/GameRewardSummary";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
+import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
 import { useGameRoomDeparture } from "@/hooks/useGameRoomDeparture";
 import { bombViewMatchesPublicState, GAME_BUTTON_HIT_SLOP } from "@/utils/gameInteraction";
 import { buildBombChoiceDescription } from "@/src/game/bombDefusalChoiceText";
@@ -57,7 +58,7 @@ export default function BombDefusalScreen() {
   const params = useLocalSearchParams<{ sessionId?: string | string[]; lobbyId?: string | string[] }>();
   const sessionId = normalizeRouteParam(params.sessionId);
   const lobbyId = normalizeRouteParam(params.lobbyId);
-  const [playerView, setPlayerView] = useState<BombDefusalPlayerView | null>(null);
+  const [storedPlayerView, setPlayerView] = useState<BombDefusalPlayerView | null>(null);
   const [viewLoading, setViewLoading] = useState(Boolean(sessionId));
   const [viewError, setViewError] = useState<GameJoinCodeFailureReason | null>(null);
   const [sessionOutcome, setSessionOutcome] = useState<BombOutcome | null>(null);
@@ -84,9 +85,15 @@ export default function BombDefusalScreen() {
   const publicViewRefreshPendingRef = useRef(false);
   const playerViewRef = useRef<BombDefusalPlayerView | null>(null);
   const locale = i18n.resolvedLanguage?.toLowerCase().startsWith("es") ? "es" : "en";
+  const viewScope = JSON.stringify([user?.uid, sessionId, locale]);
+  const [viewOwner, setViewOwner] = useState("");
+  const playerView = viewOwner === viewScope ? storedPlayerView : null;
+  const mismatchRefreshRef = useRef("");
+  const publicSessionRef = useRef<Parameters<Parameters<typeof subscribeToSession>[1]>[0]>(null);
   const roomDeparture = useGameRoomDeparture({ enabled: Boolean(lobbyId), lobbyId });
 
   const applyPlayerView = useCallback((nextView: BombDefusalPlayerView) => {
+    setViewOwner(viewScope);
     playerViewRef.current = nextView;
     setPlayerView(nextView);
     setViewError(null);
@@ -94,30 +101,48 @@ export default function BombDefusalScreen() {
     const localDeadline = Date.now() + Math.max(0, nextView.endsAtMs - nextView.serverNowMs);
     setDeadlineLocalMs(localDeadline);
     setTimeLeft(Math.max(0, Math.ceil((localDeadline - Date.now()) / 1000)));
-  }, []);
+  }, [viewScope]);
 
-  const refreshPlayerView = useCallback(async (showLoading = false) => {
-    if (!sessionId) {
-      setViewLoading(false);
-      return;
-    }
-    const requestSequence = ++requestSequenceRef.current;
-    if (showLoading) setViewLoading(true);
-    try {
-      const nextView = await getBombDefusalPlayerView({ locale, sessionId });
-      if (requestSequence !== requestSequenceRef.current) return;
-      applyPlayerView(nextView);
-    } catch (error) {
-      if (requestSequence !== requestSequenceRef.current) return;
-      setViewError(readGameJoinCodeFailureReason(error));
-    } finally {
-      if (requestSequence === requestSequenceRef.current) setViewLoading(false);
-    }
-  }, [applyPlayerView, locale, sessionId]);
+  const refreshPrivateView = useCoalescedRefresh(viewScope, {
+    load: async (showLoading: boolean) => {
+      const sequence = requestSequenceRef.current;
+      if (showLoading) setViewLoading(Boolean(sessionId));
+      try { return { sequence, view: sessionId ? await getBombDefusalPlayerView({ locale, sessionId }) : null, reason: null }; }
+      catch (error) { return { sequence, view: null, reason: readGameJoinCodeFailureReason(error) }; }
+    },
+    merge: (a, b) => a || b,
+    onSuccess: ({ sequence, view, reason }) => {
+      if (sequence !== requestSequenceRef.current) return;
+      if (reason) { setViewError(reason); return; }
+      if (!view) return;
+      const latestPublic = publicSessionRef.current;
+      if (latestPublic && !bombViewMatchesPublicState(view, latestPublic)) {
+        const publicIndex = Number(latestPublic.gameState.currentCommandIndex ?? -1);
+        const publicResolved = Number((latestPublic.gameState.lastResult as { resolvedAt?: number } | null)?.resolvedAt ?? 0);
+        const viewIsAhead = view.commandIndex > publicIndex || (view.lastResult?.resolvedAt ?? 0) > publicResolved;
+        if (!viewIsAhead) {
+          if (mismatchRefreshRef.current !== publicSignatureRef.current) {
+            mismatchRefreshRef.current = publicSignatureRef.current;
+            void refreshPlayerView(false);
+          } else setViewError("network_unavailable");
+          return;
+        }
+      }
+      applyPlayerView(view);
+    },
+    onError: (error) => setViewError(readGameJoinCodeFailureReason(error)),
+    onSettled: () => setViewLoading(false),
+  });
+  const refreshPlayerView = useCallback((showLoading = false, invalidate = true) => {
+    if (invalidate) requestSequenceRef.current += 1;
+    return refreshPrivateView(showLoading, invalidate);
+  }, [refreshPrivateView]);
 
   useEffect(() => {
     requestSequenceRef.current += 1;
     publicSignatureRef.current = "";
+    publicSessionRef.current = null;
+    mismatchRefreshRef.current = "";
     timeoutRefreshRef.current = "";
     submissionIdsRef.current.clear();
     actionRequestRef.current += 1;
@@ -136,7 +161,10 @@ export default function BombDefusalScreen() {
 
   useEffect(() => {
     if (!sessionId) return;
-    return subscribeToSession(sessionId, (session) => {
+    let active = true;
+    const unsubscribe = subscribeToSession(sessionId, (session) => {
+      if (!active) return;
+      publicSessionRef.current = session;
       if (!session) {
         setViewError("game_not_found");
         return;
@@ -167,11 +195,14 @@ export default function BombDefusalScreen() {
         String(session.endsAt ?? ""),
       ].join(":");
       if (signature === publicSignatureRef.current) return;
+      const initialSnapshot = publicSignatureRef.current === "";
       publicSignatureRef.current = signature;
       if (bombViewMatchesPublicState(playerViewRef.current, session)) return;
       if (actionInFlightRef.current) { publicViewRefreshPendingRef.current = true; return; }
-      void refreshPlayerView(false);
+      if (!initialSnapshot) { playerViewRef.current = null; setPlayerView(null); setViewError(null); }
+      void refreshPlayerView(false, !initialSnapshot);
     });
+    return () => { active = false; unsubscribe(); };
   }, [refreshPlayerView, sessionId]);
 
   useEffect(() => {
@@ -211,7 +242,7 @@ export default function BombDefusalScreen() {
     return () => { active = false; };
   }, [currentSquad?.squadId, rewardSetupAttempt, sessionId, t]);
 
-  const outcome = sessionOutcome ?? playerView?.outcome ?? "playing";
+  const outcome = (viewOwner === viewScope ? sessionOutcome : null) ?? playerView?.outcome ?? "playing";
 
   const awardCurrentResult = useCallback(async () => {
     if (!playerView || !rewardSessionId || (outcome !== "defused" && outcome !== "exploded")) return;
@@ -357,7 +388,7 @@ export default function BombDefusalScreen() {
     return <BombUnavailable onBack={openLobbyDirectory} onRetry={() => undefined} retryable={false} />;
   }
 
-  if (!playerView && viewLoading && outcome === "playing") {
+  if (!playerView && (viewLoading || !viewError) && outcome === "playing") {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View accessibilityLiveRegion="polite" style={styles.centered}>

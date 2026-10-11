@@ -1,9 +1,11 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AccessibilityInfo, ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { Archive, ArrowLeft, CalendarDays, ChevronDown, ChevronRight, ChevronUp, Shield, Trash2, Users } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
+import { useAuth } from "@/context/AuthContext";
+import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -21,7 +23,10 @@ import {
 
 export default function ParentTeamsScreen() {
   const { i18n, t } = useTranslation();
-  const [overview, setOverview] = useState<ParentTeamsOverview | null>(null);
+  const { user } = useAuth();
+  const [overviewOwner, setOverviewOwner] = useState<string | undefined>();
+  const [storedOverview, setOverview] = useState<ParentTeamsOverview | null>(null);
+  const overview = overviewOwner === user?.uid ? storedOverview : null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pastExpanded, setPastExpanded] = useState(false);
@@ -33,27 +38,28 @@ export default function ParentTeamsScreen() {
   const [pastNextOffset, setPastNextOffset] = useState(0);
   const [removingPastTeamId, setRemovingPastTeamId] = useState<string | null>(null);
 
-  const loadTeams = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [nextOverview, nextPastCount] = await Promise.all([
-        getParentTeamsOverview(),
-        getParentPastTeamCount(),
-      ]);
-      setOverview(nextOverview);
-      setPastCount(nextPastCount);
-    } catch (nextError) {
-      console.warn("[ParentTeams] load error:", nextError);
-      setError(t("myTeams.loadError"));
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
-
+  useEffect(() => {
+    setOverview(null); setError(null); setPastTeams([]); setPastCount(0); setPastExpanded(false);
+    setPastError(null); setPastHasMore(false); setPastNextOffset(0);
+  }, [user?.uid]);
+  const refreshOverview = useCoalescedRefresh(user?.uid ?? "", {
+    load: async (_input: boolean) => getParentTeamsOverview(), merge: () => true,
+    onStart: () => { setLoading(true); setError(null); },
+    onSuccess: (next) => { setOverviewOwner(user?.uid); setOverview(next); },
+    onError: () => { setOverview(null); setError(t("myTeams.loadError")); },
+    onSettled: () => setLoading(false),
+  });
+  const refreshArchiveCount = useCoalescedRefresh(user?.uid ?? "", {
+    load: async (_input: boolean) => getParentPastTeamCount(), merge: () => true,
+    onStart: () => setPastError(null), onSuccess: setPastCount,
+    onError: () => setPastError(t("myTeams.pastTeamsLoadError")),
+  });
+  const loadTeams = useCallback(() => {
+    void refreshArchiveCount(true); return refreshOverview(true);
+  }, [refreshArchiveCount, refreshOverview]);
   useFocusEffect(useCallback(() => {
-    void loadTeams();
-  }, [loadTeams]));
+    void refreshArchiveCount(true, false); void refreshOverview(true, false);
+  }, [refreshArchiveCount, refreshOverview]));
 
   const groups = useMemo(() => groupParentTeamsByChild(overview?.teams ?? []), [overview?.teams]);
 
@@ -193,6 +199,14 @@ export default function ParentTeamsScreen() {
           </View>
         )) : null}
 
+        {!error && pastError && pastCount === 0 ? (
+          <Card style={styles.stateCard}>
+            <Text style={styles.cardText}>{pastError}</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={() => void refreshArchiveCount(true)} style={styles.outlineButton}>
+              <Text style={styles.outlineButtonText}>{t("myTeams.tryAgain")}</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : null}
         {!error && pastCount > 0 ? (
           <PastTeamsSection
             count={pastCount}

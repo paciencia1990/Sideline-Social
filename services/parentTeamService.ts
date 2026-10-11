@@ -171,12 +171,11 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
     };
   }
 
-  const [childProfiles, privateInbox] = await Promise.all([
-    getCurrentUserChildren(),
-    loadParentPrivateInbox(),
+  const [childProfiles, privateInbox, announcementSummaryStates, childLinkRecords] = await Promise.all([
+    getCurrentUserChildren(), loadParentPrivateInbox(),
+    getTeamAnnouncementSummaryStates(memberships.map((membership) => membership.teamId)), loadActiveTeamChildLinkRecords(),
   ]);
-  const announcementSummaryStates = await getTeamAnnouncementSummaryStates(memberships.map((membership) => membership.teamId));
-  const childLinksByTeam = await loadChildLinksByTeam(childProfiles);
+  const childLinksByTeam = resolveChildLinksByTeam(childProfiles, childLinkRecords);
   const summaries = await Promise.all(
     memberships
       .filter((membership) => membership.team)

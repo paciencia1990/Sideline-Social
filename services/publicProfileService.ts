@@ -1,6 +1,6 @@
 import { httpsCallable } from "firebase/functions";
 
-import { functions } from "@/config/firebase";
+import { auth, functions } from "@/config/firebase";
 import {
   getVerifiedFriendUserId,
   inspectPublicUserProfiles,
@@ -29,6 +29,8 @@ export type PublicUserSearchResult = PublicUserProfile & {
 
 const MAX_PUBLIC_PROFILE_IDS = 50;
 
+const profileRequests = new Map<string, Promise<PublicUserProfile[]>>();
+
 export async function getPublicUserProfiles(userIds: string[]) {
   const uniqueUserIds = Array.from(new Set(userIds.filter((userId) => userId.length > 0)));
   if (uniqueUserIds.length === 0) return [];
@@ -36,6 +38,17 @@ export async function getPublicUserProfiles(userIds: string[]) {
     throw createPublicProfileError("public-profile/invalid-user-ids");
   }
 
+  const uid = auth.currentUser?.uid;
+  const key = JSON.stringify([uid, uniqueUserIds]);
+  const existing = profileRequests.get(key);
+  if (existing) return existing;
+  const request = loadPublicUserProfiles(uniqueUserIds).then((profiles) => auth.currentUser?.uid === uid ? profiles : []);
+  const tracked = request.finally(() => { if (profileRequests.get(key) === tracked) profileRequests.delete(key); });
+  profileRequests.set(key, tracked);
+  return tracked;
+}
+
+async function loadPublicUserProfiles(uniqueUserIds: string[]): Promise<PublicUserProfile[]> {
   const loadProfiles = httpsCallable<
     { userIds: string[] },
     { profiles: unknown }

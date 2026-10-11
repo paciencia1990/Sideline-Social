@@ -9,7 +9,10 @@ const {
 } = require('firebase/auth');
 const { connectFunctionsEmulator, getFunctions, httpsCallable } = require('firebase/functions');
 
-const projectId = process.env.GCLOUD_PROJECT || 'sideline-game-join-code-functions-test';
+const projectId = process.env.GCLOUD_PROJECT || '';
+if (!projectId.startsWith('demo-') || !['FIREBASE_AUTH_EMULATOR_HOST', 'FIRESTORE_EMULATOR_HOST', 'FIREBASE_DATABASE_EMULATOR_HOST'].every((name) => process.env[name])) {
+  throw new Error('Lobby emulator verification requires an isolated demo project and local emulator hosts.');
+}
 if (!admin.apps.length) {
   admin.initializeApp({ projectId, databaseURL: `https://${projectId}.firebaseio.com` });
 }
@@ -137,6 +140,12 @@ async function run() {
   assert.equal(initialDirectory.lobbies.length, 1);
   assert.equal(initialDirectory.lobbies[0].isMain, true);
   assert.equal(initialDirectory.lobbies[0].lobbyNumber, 1);
+  const directoryRef = firestore.collection('gameLobbyDirectories').doc(require('node:crypto').createHash('sha256').update(squadA + ':triviaBlitz').digest('hex'));
+  const directoryBeforePolling = await directoryRef.get();
+  await simultaneousJoiners[0].call('listGameLobbies', { gameType: 'triviaBlitz', squadId: squadA });
+  const directoryAfterPolling = await directoryRef.get();
+  assert.equal(directoryAfterPolling.updateTime.toMillis(), directoryBeforePolling.updateTime.toMillis(), 'Unchanged polling must not write the directory');
+  assert.deepEqual(directoryAfterPolling.data(), directoryBeforePolling.data());
   assert.equal('joinCode' in initialDirectory.lobbies[0], false, 'directory summaries never expose join codes');
 
   const sessionsBeforeJoin = (await firestore.collection('sessions').get()).docs

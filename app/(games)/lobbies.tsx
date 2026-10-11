@@ -9,7 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import type { TFunction } from "i18next";
 import { Plus, Users } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -20,6 +20,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAccountStanding } from "@/context/AccountStandingContext";
 import { useAuth } from "@/context/AuthContext";
+import { useSquadGameLobbies } from "@/hooks/useSquadGameLobbies";
 import { useSquad } from "@/context/SquadContext";
 import {
   createGameJoinIdempotencyKey,
@@ -27,7 +28,6 @@ import {
   joinGameLobbyById,
   joinGameLobbyNextRound,
   leaveGameLobby,
-  listGameLobbies,
   readGameJoinCodeFailureReason,
   type GameJoinCodeFailureReason,
   type GameJoinCodeType,
@@ -76,20 +76,14 @@ export default function GameLobbyDirectoryScreen() {
   const gameType = readGameType(normalizeParam(params.gameType));
   const squadId = normalizeParam(params.squadId);
   const notice = normalizeParam(params.notice);
-  const [directory, setDirectory] = useState(createEmptyGameLobbyDirectoryResult);
-  const [directoryResolved, setDirectoryResolved] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [joiningLobbyId, setJoiningLobbyId] = useState<string | null>(null);
   const [leavingActiveLobby, setLeavingActiveLobby] = useState(false);
-  const [directoryError, setDirectoryError] = useState<GameJoinCodeFailureReason | null>(null);
   const [actionError, setActionError] = useState<GameJoinCodeFailureReason | null>(null);
   const [creationError, setCreationError] = useState<GameJoinCodeFailureReason | null>(null);
   const createRequestKeyRef = useRef(createGameJoinIdempotencyKey());
   const createInFlightRef = useRef(false);
   const leaveInFlightRef = useRef(false);
-  const directoryRequestVersionRef = useRef(0);
   const diagnosticKeyRef = useRef("");
   const hasActiveMembership = Boolean(squadId && mySquadIds.includes(squadId));
   const canLoadDirectory = Boolean(
@@ -105,41 +99,11 @@ export default function GameLobbyDirectoryScreen() {
     hasActiveMembership,
   );
 
-  const load = useCallback(async (refresh = false) => {
-    const requestVersion = ++directoryRequestVersionRef.current;
-    if (!canLoadDirectory || !gameType || !squadId) {
-      setDirectory(createEmptyGameLobbyDirectoryResult());
-      setDirectoryResolved(false);
-      setDirectoryError(null);
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-    if (refresh) setRefreshing(true);
-    else setLoading(true);
-    setDirectoryError(null);
-    try {
-      const result = await listGameLobbies({ gameType, squadId });
-      if (requestVersion !== directoryRequestVersionRef.current) return;
-      setDirectory(result);
-      setDirectoryResolved(true);
-    } catch (nextError) {
-      if (requestVersion !== directoryRequestVersionRef.current) return;
-      setDirectoryError(readGameJoinCodeFailureReason(nextError));
-      setDirectoryResolved(true);
-    } finally {
-      if (requestVersion !== directoryRequestVersionRef.current) return;
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [canLoadDirectory, gameType, squadId]);
-
-  useFocusEffect(useCallback(() => {
-    void load();
-    return () => {
-      directoryRequestVersionRef.current += 1;
-    };
-  }, [load]));
+  const { directory: loadedDirectory, state: directoryState, refreshing, failureReason: directoryError, refresh } = useSquadGameLobbies({ enabled: canLoadDirectory, gameType, squadId });
+  const directory = loadedDirectory ?? createEmptyGameLobbyDirectoryResult();
+  const loading = directoryState === "loading";
+  const directoryResolved = directoryState !== "idle" && directoryState !== "loading";
+  const load = useCallback((_manual = false) => refresh(false), [refresh]);
 
   const eligibility = resolveGameLobbyDirectoryEligibility({
     authLoading,
@@ -237,8 +201,6 @@ export default function GameLobbyDirectoryScreen() {
     setActionError(null);
     try {
       await leaveGameLobby({ lobbyId: activeLobby.lobbyId });
-      setDirectory(createEmptyGameLobbyDirectoryResult());
-      setDirectoryResolved(false);
       await load();
     } catch (nextError) {
       setActionError(readGameJoinCodeFailureReason(nextError));

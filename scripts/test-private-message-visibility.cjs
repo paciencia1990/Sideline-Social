@@ -66,18 +66,13 @@ const listener = callableSlice(
 );
 assert.match(listener, /hiddenMessages/);
 assert.match(listener, /canonicalMessages: TeamPrivateMessage\[\] = \[\]/);
-assert.match(listener, /receivedHiddenChunks\.size !== hiddenIdsByChunk\.size/);
+assert.match(listener, /Array\.from\(hiddenChunks\.values\(\)\)\.some\(\(chunk\) => chunk\.hidden === null\)/);
 assert.match(listener, /canonicalMessages\.filter\(\(message\) => !hiddenMessageIds\.has\(message\.id\)\)/);
-assert.ok(
-  listener.indexOf("receivedHiddenChunks.size !== hiddenIdsByChunk.size") < listener.indexOf("onValue({ messages"),
-  "canonical messages cannot publish before every hidden-ID chunk is ready",
-);
-assert.ok(
-  listener.indexOf("hiddenIdsByChunk = new Map()") < listener.indexOf("canonicalMessages = snapshot.docs.slice"),
-  "reconnect snapshots reset hidden state before replacing canonical messages",
-);
-assert.match(listener, /if \(chunks\.length === 0\) \{\s*publishVisibleMessages\(\)/, "empty conversations resolve as a loaded empty page");
-assert.match(listener, /hiddenUnsubscribes\.forEach\(\(unsubscribe\) => unsubscribe\(\)\)/, "old hidden listeners are retired on snapshot replacement and cleanup");
+assert.match(listener, /hiddenChunks\.get\(key\) !== chunk/, "retired query callbacks cannot publish");
+assert.match(listener, /if \(!needed\.has\(key\)\) \{ hiddenChunks\.delete\(key\); chunk\.unsubscribe\(\); \}/, "only changed visibility queries are retired");
+assert.match(listener, /hiddenChunks\.forEach\(\(chunk\) => chunk\.unsubscribe\(\)\)/, "cleanup retires every visibility listener");
+// Actual cached delivery, edit reuse, new/retired chunks, errors and empty pages
+// are exercised against this service by test-game-efficiency.cjs.
 assert.match(service, /functions, "hidePrivateTeamMessageForCurrentUser"/);
 
 function createVisibilityGate() {

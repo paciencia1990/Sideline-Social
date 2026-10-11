@@ -1,0 +1,72 @@
+Game and Team efficiency follow-up — October 10, 2026
+
+This follow-up builds on commit 2eff7bdf33f513c0c8242b4186c1b731413afeb4
+and the earlier combined beta source. It introduces no dependency/native change.
+
+Implemented
+- Game start: local preparation is scoped to the current game/session/attempt.
+  Readiness-count snapshots cannot cancel it. Retry shares pending preparation,
+  old attempts and unmounted screens cannot publish/acknowledge, and countdown
+  ticking runs only in waiting/countdown phases while the app is foreground.
+  Shared server deadlines, safety lead/countdown and readiness authorization remain.
+- Lobby directories: overlapping focus/poll/foreground reads coalesce; foreground
+  listeners and 15-second polling exist only for focused eligible screens. Each
+  game's directory now refreshes while open. Existing cards survive routine refresh;
+  user/Squad/filter changes and revoked access hide old cards. Mutations queue one
+  fresh read rather than accepting a prior in-flight result.
+- Bomb: initial private loading and first public snapshot share a request. Changed
+  commands/roles queue a fresh read; account/locale/session changes hide prior views.
+  Stale reads cannot replace a submitted caller-only next view. A persistent public/
+  private mismatch has bounded recovery instead of an unbounded request loop.
+- Server directory hydration preserves updatedAtMs for semantically unchanged
+  rooms, skips timestamp-only writes, prunes expired/malformed entries when needed,
+  and does not overwrite newer concurrently updated room revisions.
+- Play Again: up to four independent participant eligibility reads run concurrently.
+  Every participant still gets fresh standing and Squad checks. Results keep join
+  order; failed batches wait for their outstanding reads before returning failure.
+- Active Teams render independently of archive counts, with separate archive error/
+  Retry. Team loads coalesce by account/team and retain known cards while refreshing.
+  Independent child/inbox/announcement/link overview reads begin together after
+  membership lookup. Errors still fail closed rather than inventing authorization.
+- Private messages reuse hidden-message subscriptions when page ID chunks are
+  unchanged. New chunks must all resolve before content publishes; retired queries,
+  errors, account changes and unmounts cannot publish stale/hidden content. Fatal
+  visibility failure clears content. Read acknowledgements merge to the latest
+  visible page and stop queuing writes for hidden/background threads.
+- Identical overlapping public-profile reads share a request scoped to the caller;
+  no settled profile, permission or standing cache was added.
+- Added development-only, fixed-label duration markers for preparation/readiness,
+  Bomb private views, rematch, Trivia answer response and advance response. They
+  log no account IDs, content, credentials or locations. They do not change the
+  existing 600ms/1600ms accessible Trivia feedback or scoring/progression.
+
+Scoped backend delivery
+These source changes add listGameLobbies and startGameLobbyRematch to the combined
+checklist's existing supporting targets, for 14 total callables. No endpoint was
+added by this follow-up. Their compiled support includes gameLobbyCore/parallelReads.
+Deliver these two updates under the normal scoped backend review before claiming
+that the no-op-write/rematch backend improvements are live. No deployment occurred.
+The earlier submitBombDefusalStep update remains necessary for its response view;
+notification, child, multi-sport, admin and translation delivery requirements remain.
+
+Validation
+Client/Functions TypeScript, changed client ESLint, actual game-start/Bomb/lobby/
+Teams component and hook tests, reusable visibility/read/profile isolation tests,
+bounded parallel-read/timestamp tests and related game/message/Teams regressions
+passed. The isolated demo Auth/Firestore/RTDB/Functions lobby emulator passed
+creation, idempotency, timestamp-stable polling, concurrent joins, host transfer,
+close/departure/recovery, secure Bomb roles/submission/rematch and cleanup behavior.
+No live Firebase/provider request, moderation acceptance or native/store build was
+performed. Run test:game-efficiency for the focused follow-up. The lobby emulator
+script now requires a demo project and explicit local emulator hosts.
+
+Measurement-dependent follow-up
+No device was connected for the assessment. Spot board restructuring, narrower
+session projections, automatic Trivia progression, paid warm instances, large-Squad
+server search/pagination and leaderboard redesign were conditional recommendations;
+they remain outside this implementation until frame/latency/scale measurements
+support them. Existing Spot WebP assets/preloading, native gestures, paging,
+translation gates and moderation remain intact. Include this source in the same
+next Android and iOS beta builds, then perform one focused release-device/two-player
+pass per game. Measure Ready-to-start, visible tap feedback, answer/next-step delay,
+Play Again, return Home, Team loading and unread/hidden message behavior.
