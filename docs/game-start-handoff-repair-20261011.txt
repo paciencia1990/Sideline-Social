@@ -1,0 +1,46 @@
+Game-start handoff and lobby readiness repair — October 11, 2026
+
+Diagnosis
+The two reported Bomb and Trivia starts were accepted by the staging server
+(HTTP 200). Both start records contained three frozen participants and zero
+preparation acknowledgements. The live read policy authorized those participants
+and the records satisfied the installed client schema. No acknowledgement callable
+ran for either attempt. Read-only inspection did not change either closed lobby.
+
+The shared lobby departure guard resumed the intercepted parent-stack REPLACE
+through a leaf screen's navigation object. That dispatch adds the leaf as source,
+which is not a route in the target parent stack. The installed Expo Router stack
+router returns null for that action, silently leaving the client in the lobby.
+The actual installed router reproduces the original failure in the regression.
+
+Repair
+- Resume the exact intercepted action through the navigation container. Preserve
+  its target, original source, parameters and visited-route symbol. Same-room
+  transitions retain membership; Home/back/exits still require authoritative leave.
+- Use the host's authoritative preparation response as well as the snapshot, with
+  one navigation per start attempt. Immediate duplicate Start taps share a request.
+- Bound a stalled lobby handoff to 30 seconds, show a localized error, and permit
+  manual retry. No automatic start write is triggered by the watchdog.
+- Ignore late responses and retired listeners after account/session changes or
+  departure. Surface start errors in Bomb, Trivia and Spot lobbies.
+- Remove the footer Ready/Unready button. The caller's own readiness badge is the
+  sole toggle, including split-team rosters. Other players' badges remain read-only.
+  Preserve optimistic feedback, in-flight tap protection, rollback on failure,
+  minimum 44-point target, accessibility state/hint, and English/Spanish copy.
+
+Validation
+Client TypeScript and targeted ESLint passed. The new actual-router/hook/component
+regressions passed for the three gameplay destinations, retained membership,
+external departure, response/snapshot deduplication, timeout/manual retry,
+account changes, listener retirement and single self-only readiness control.
+Existing start synchronization, departure, responsiveness, efficiency, active
+session and localization regressions passed. No backend source or security rule
+changed, so prior backend/emulator coverage was reused.
+
+Delivery
+Include this source in the next Android and iOS beta builds. It does not modify
+installed Android 32 or iOS 20; no new native dependency was introduced. No build,
+store submission, cloud deployment, live game action or moderation mutation was
+performed for this repair. A focused multi-device start and rematch check remains
+necessary on the delivered candidates; local tests do not verify native gestures
+or prove the corrected code is present in the already installed beta.

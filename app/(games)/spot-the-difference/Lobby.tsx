@@ -30,6 +30,7 @@ export default function SpotTheDifferenceLobby() {
     readyError,
     startGame,
     startPending,
+    startError,
     showCountdown,
     setShowCountdown,
     continueWithinRoom,
@@ -77,6 +78,7 @@ export default function SpotTheDifferenceLobby() {
         readyError={readyError}
         onStart={startGame}
         startPending={startPending}
+        startError={startError}
       />
       {showCountdown && <CountdownOverlay onComplete={handleComplete} onCancel={() => setShowCountdown(false)} />}
     </View>

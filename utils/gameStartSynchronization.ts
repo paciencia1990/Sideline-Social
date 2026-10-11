@@ -4,6 +4,7 @@ export const GAME_START_SCHEMA_VERSION = 1;
 export const GAME_START_SAFETY_LEAD_MS = 2_500;
 export const GAME_START_COUNTDOWN_MS = 3_800;
 export const GAME_START_READY_TIMEOUT_MS = 20_000;
+export const GAME_START_HANDOFF_TIMEOUT_MS = 30_000;
 
 export type GameStartServerPhase = "preparing" | "activating" | "scheduled" | "failed";
 export type GameStartVisiblePhase = "preparing" | "timedOut" | "3" | "2" | "1" | "go" | "active" | "updateRequired";

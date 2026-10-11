@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Alert } from "react-native";
-import { useNavigation } from "expo-router";
+import { useNavigationContainerRef } from "expo-router";
 import { usePreventRemove } from "expo-router/react-navigation";
 import { useTranslation } from "react-i18next";
 
@@ -38,7 +38,7 @@ export function useGameRoomDeparture({
   presentFailureAlert = true,
 }: UseGameRoomDepartureOptions) {
   const { t } = useTranslation();
-  const navigation = useNavigation();
+  const navigationRef = useNavigationContainerRef();
   const [storedDepartureState, setStoredDepartureState] = useState({
     lobbyId,
     state: INITIAL_DEPARTURE_STATE,
@@ -127,7 +127,11 @@ export function useGameRoomDeparture({
 
   usePreventRemove(enabled && !(controllerRef.current?.hasDeparted() ?? false), ({ data }) => {
     void controllerRef.current
-      ?.handlePreventedRemoval(data.action, () => navigation.dispatch(data.action))
+      // A screen-level dispatch adds its leaf route as `source`. For actions
+      // targeting a parent stack, REPLACE then cannot find that leaf and becomes
+      // a silent no-op. Resume the exact action at the container, preserving its
+      // target, original source and React Navigation's visited-route marker.
+      ?.handlePreventedRemoval(data.action, () => navigationRef.dispatch(data.action))
       .then((departed) => {
         if (!departed) presentFailure();
       });

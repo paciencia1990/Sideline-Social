@@ -84,6 +84,46 @@ export default function LobbyBase({
   const totalPlayers = players.list.length;
   const canStart = totalPlayers >= minPlayers && readyCount === totalPlayers;
   const spokenCode = spokenGameJoinCode(players.joinCode);
+  const readinessDisabled = readyPending || lifecycleAction !== null || startPending
+    || (!isLocal && codeState !== "ready");
+
+  const renderReadyStatus = (player: LobbyPlayer) => {
+    const isSelf = player.id === players.self.id;
+    const badgeStyle = [
+      styles.readyBadge,
+      player.ready ? styles.readyBadgeActive : styles.readyBadgeInactive,
+      isSelf && styles.selfReadyBadge,
+    ];
+    const content = (
+      <>
+        {isSelf && readyPending ? (
+          <ActivityIndicator color={player.ready ? Colors.surface : Colors.textHeading} size="small" />
+        ) : null}
+        <Text style={[
+          styles.readyBadgeText,
+          player.ready ? styles.readyBadgeTextActive : styles.readyBadgeTextInactive,
+        ]}>
+          {isSelf && readyPending ? t("games.joinCode.updatingReady")
+            : player.ready ? t("games.joinCode.ready") : t("games.joinCode.notReady")}
+        </Text>
+      </>
+    );
+    return isSelf ? (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={player.ready ? t("games.joinCode.unready") : t("games.joinCode.ready")}
+        accessibilityHint={t("games.joinCode.readyToggleHint")}
+        accessibilityState={{ selected: player.ready, busy: readyPending, disabled: readinessDisabled }}
+        disabled={readinessDisabled}
+        hitSlop={GAME_BUTTON_HIT_SLOP}
+        unstable_pressDelay={0}
+        onPress={onReadyToggle}
+        style={({ pressed }) => [badgeStyle, pressed && styles.readyBadgePressed]}
+      >
+        {content}
+      </Pressable>
+    ) : <View style={badgeStyle}>{content}</View>;
+  };
 
   const handleShareCode = async () => {
     if (codeState !== "ready" || !players.joinCode) return;
@@ -202,9 +242,7 @@ export default function LobbyBase({
                             {player.name}
                             {isSelf ? ` ${t("games.joinCode.youSuffix")}` : ""}
                           </Text>
-                          <Text style={styles.teamReadyText}>
-                            {player.ready ? t("games.joinCode.ready") : t("games.joinCode.notReady")}
-                          </Text>
+                          {renderReadyStatus(player)}
                         </View>
                       );
                     }) : (
@@ -226,23 +264,7 @@ export default function LobbyBase({
                   {isSelf ? ` ${t("games.joinCode.youSuffix")}` : ""}
                 </Text>
               </View>
-              <View
-                style={[
-                  styles.readyBadge,
-                  player.ready ? styles.readyBadgeActive : styles.readyBadgeInactive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.readyBadgeText,
-                    player.ready
-                      ? styles.readyBadgeTextActive
-                      : styles.readyBadgeTextInactive,
-                  ]}
-                >
-                  {player.ready ? t("games.joinCode.ready") : t("games.joinCode.notReady")}
-                </Text>
-              </View>
+              {renderReadyStatus(player)}
             </View>
           );
         })}
@@ -267,34 +289,10 @@ export default function LobbyBase({
           </View>
         ) : null}
         {readyError ? <Text accessibilityLiveRegion="polite" style={styles.lifecycleErrorText}>{t("games.joinCode.readyUpdateFailed")}</Text> : null}
-        <View style={styles.actions}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ busy: readyPending, disabled: readyPending || lifecycleAction !== null || startPending }}
-            disabled={readyPending || lifecycleAction !== null || startPending}
-            hitSlop={GAME_BUTTON_HIT_SLOP}
-            unstable_pressDelay={0}
-            style={({ pressed }) => [
-              styles.button,
-              players.self.ready ? styles.secondaryButton : styles.primaryButton,
-              pressed && { opacity: 0.8 },
-            ]}
-            onPress={onReadyToggle}
-          >
-            {readyPending ? <ActivityIndicator color={players.self.ready ? Colors.textHeading : Colors.surface} size="small" /> : null}
-            <Text
-              style={[
-                styles.buttonText,
-                players.self.ready ? styles.secondaryButtonText : styles.primaryButtonText,
-              ]}
-            >
-              {readyPending ? t("games.joinCode.updatingReady") : players.self.ready ? t("games.joinCode.unready") : t("games.joinCode.ready")}
-            </Text>
-          </Pressable>
-
-          {players.isHost && (
+        {players.isHost ? (
+          <View style={styles.actions}>
             <Pressable
-              accessibilityState={{ busy: startPending, disabled: !canStart || startPending || readyPending }}
+              accessibilityState={{ busy: startPending, disabled: !canStart || startPending || readyPending || lifecycleAction !== null }}
               accessibilityRole="button"
               disabled={!canStart || startPending || readyPending || lifecycleAction !== null}
               hitSlop={GAME_BUTTON_HIT_SLOP}
@@ -302,14 +300,13 @@ export default function LobbyBase({
               style={[styles.button, styles.primaryButton, (!canStart || startPending) && styles.disabledButton]}
               onPress={onStart}
             >
-              {startPending ? (
-                <ActivityIndicator color={Colors.surface} size="small" />
-              ) : (
-                <Text style={[styles.buttonText, styles.primaryButtonText]}>{t("games.joinCode.startGame")}</Text>
-              )}
+              {startPending ? <ActivityIndicator color={Colors.surface} size="small" /> : null}
+              <Text style={[styles.buttonText, styles.primaryButtonText]}>
+                {t(startPending ? "games.joinCode.startingGame" : "games.joinCode.startGame")}
+              </Text>
             </Pressable>
-          )}
-        </View>
+          </View>
+        ) : null}
         {!isLocal ? (
           <View style={styles.lifecycleActions}>
             <Pressable
@@ -526,11 +523,6 @@ const styles = StyleSheet.create({
     fontFamily: Typography.bodySemiBold,
     fontSize: 14,
   },
-  teamReadyText: {
-    color: Colors.textPrimary,
-    fontFamily: Typography.bodyMedium,
-    fontSize: 11,
-  },
   teamEmpty: {
     color: Colors.textPrimary,
     fontFamily: Typography.bodyMedium,
@@ -564,11 +556,19 @@ const styles = StyleSheet.create({
   },
   readyBadge: {
     alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
     borderRadius: 8,
+    minHeight: 44,
     minWidth: 86,
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
+  selfReadyBadge: {
+    borderWidth: 2,
+    borderColor: Colors.textHeading,
+  },
+  readyBadgePressed: { opacity: 0.75 },
   readyBadgeActive: {
     backgroundColor: Colors.accentGreen,
   },
@@ -671,19 +671,11 @@ const styles = StyleSheet.create({
   primaryButton: {
     backgroundColor: Colors.primary,
   },
-  secondaryButton: {
-    backgroundColor: Colors.surface,
-    borderColor: Colors.primary,
-    borderWidth: 1,
-  },
   buttonText: {
     fontFamily: Typography.bodyBold,
     fontSize: 15,
   },
   primaryButtonText: {
     color: Colors.surface,
-  },
-  secondaryButtonText: {
-    color: Colors.primary,
   },
 });

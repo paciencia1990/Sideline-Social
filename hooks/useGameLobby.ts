@@ -24,6 +24,7 @@ import {
 import { togglePlayerReady } from '@/src/game/triviaBlitz/gameState';
 import { getTriviaParentSessionRef, getTriviaPlayersRef } from '@/src/game/triviaBlitz/firebaseUtils';
 import { createReadyToggleController, type ReadyToggleState } from '@/utils/gameInteraction';
+import { GAME_START_HANDOFF_TIMEOUT_MS, type GameStartState } from '@/utils/gameStartSynchronization';
 
 type LobbyGameId = 'bomb-defusal' | 'trivia-blitz' | 'spot-the-difference';
 
@@ -132,6 +133,8 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   const lastLifecycleActionRef = useRef<'leaving' | 'closing'>('leaving');
   const lifecycleInFlightRef = useRef(false);
   const navigatedStartAttemptRef = useRef('');
+  const startRequestRef = useRef<Promise<void> | null>(null);
+  const startLifecycleRef = useRef(0);
   const roomDeparture = useGameRoomDeparture({
     enabled: !isLocal && Boolean(lobbyId),
     lobbyId,
@@ -280,35 +283,63 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   }, [fallbackPlayerName, gameType, handleRemoteClosure, isLocal, sessionId]);
 
   useEffect(() => {
-    if (isLocal || !sessionId) return;
-    return subscribeToSynchronizedGameStart(
+    setStartPending(false);
+    setStartError(null);
+    navigatedStartAttemptRef.current = '';
+    startRequestRef.current = null;
+    return () => { startLifecycleRef.current += 1; };
+  }, [currentUserId, gameType, sessionId]);
+
+  const openPreparedGame = useCallback((state: GameStartState | null) => {
+    if (
+      !state ||
+      state.gameType !== gameType ||
+      state.sessionId !== sessionId ||
+      suppressLobbyEventsRef.current ||
+      departureCompletedRef.current ||
+      navigatedStartAttemptRef.current === state.startAttemptId
+    ) return;
+    navigatedStartAttemptRef.current = state.startAttemptId;
+    setStartError(null);
+    setStartPending(true);
+    roomDeparture.continueWithinRoom((retainedParams) => router.replace({
+      pathname: playPathForGame(gameId),
+      params: {
+        ...retainedParams,
+        sessionId,
+        startAttemptId: state.startAttemptId,
+        ...(lobbyId ? { lobbyId } : {}),
+      },
+    } as never));
+  }, [gameId, gameType, lobbyId, roomDeparture, sessionId]);
+
+  useEffect(() => {
+    if (isLocal || !sessionId || !currentUserId) return;
+    let active = true;
+    const unsubscribe = subscribeToSynchronizedGameStart(
       gameType,
       sessionId,
-      (state) => {
-        if (
-          !state ||
-          state.sessionId !== sessionId ||
-          navigatedStartAttemptRef.current === state.startAttemptId
-        ) return;
-        navigatedStartAttemptRef.current = state.startAttemptId;
-        setStartError(null);
-        setStartPending(true);
-        roomDeparture.continueWithinRoom((retainedParams) => router.replace({
-          pathname: playPathForGame(gameId),
-          params: {
-            ...retainedParams,
-            sessionId,
-            startAttemptId: state.startAttemptId,
-            ...(lobbyId ? { lobbyId } : {}),
-          },
-        } as never));
-      },
+      (state) => { if (active) openPreparedGame(state); },
       (error) => {
+        if (!active || suppressLobbyEventsRef.current || departureCompletedRef.current) return;
         setStartPending(false);
         setStartError(readGameStartFailureReason(error));
       },
     );
-  }, [gameId, gameType, isLocal, lobbyId, roomDeparture, sessionId]);
+    return () => { active = false; unsubscribe(); };
+  }, [currentUserId, gameType, isLocal, openPreparedGame, sessionId]);
+
+  useEffect(() => {
+    if (!startPending || isLocal) return;
+    const timeout = setTimeout(() => {
+      // A discarded navigation or unavailable stream must not strand the lobby.
+      // This offers a manual retry; it never issues another server request.
+      navigatedStartAttemptRef.current = '';
+      setStartPending(false);
+      setStartError('start_failed');
+    }, GAME_START_HANDOFF_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [isLocal, startPending]);
 
   const activePlayerList = isLocal ? localPlayers : playerList;
   const effectiveUserId = currentUserId || 'local-player';
@@ -363,7 +394,8 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
   }, [currentUserId, isLocal, readyController, roomDeparture.departing, sessionId, startPending]);
 
   const startGame = useCallback(() => {
-    if (!players.isHost || startPending || readyState.pending) return;
+    if (!players.isHost || startPending || startRequestRef.current || readyState.pending
+      || lifecycleInFlightRef.current || departureCompletedRef.current || roomDeparture.departing) return;
     setStartError(null);
     if (isLocal) {
       setShowCountdown(true);
@@ -371,12 +403,25 @@ export function useGameLobby(gameId: LobbyGameId): GameLobbyState {
     }
     if (!sessionId) return;
     setStartPending(true);
-    void prepareSynchronizedGameStart({ gameType, sessionId })
+    const startedIn = startLifecycleRef.current;
+    const request = Promise.resolve().then(() => prepareSynchronizedGameStart({ gameType, sessionId }))
+      .then((state) => {
+        if (startedIn !== startLifecycleRef.current || suppressLobbyEventsRef.current || departureCompletedRef.current) return;
+        if (!state || state.gameType !== gameType || state.sessionId !== sessionId) throw new Error('start_failed');
+        // Use the authoritative response too; the host need not wait for an
+        // additional snapshot. Both paths share the same attempt guard.
+        openPreparedGame(state);
+      })
       .catch((error) => {
+        if (startedIn !== startLifecycleRef.current || suppressLobbyEventsRef.current || departureCompletedRef.current) return;
+        navigatedStartAttemptRef.current = '';
         setStartPending(false);
         setStartError(readGameStartFailureReason(error));
+      }).finally(() => {
+        if (startRequestRef.current === request) startRequestRef.current = null;
       });
-  }, [gameType, isLocal, players.isHost, readyState.pending, sessionId, startPending]);
+    startRequestRef.current = request;
+  }, [gameType, isLocal, openPreparedGame, players.isHost, readyState.pending, roomDeparture.departing, sessionId, startPending]);
 
   const performLifecycleAction = useCallback(async (action: 'leaving' | 'closing') => {
     if (lifecycleInFlightRef.current) return;
