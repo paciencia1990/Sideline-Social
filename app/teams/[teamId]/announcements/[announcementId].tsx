@@ -353,9 +353,9 @@ export default function ParentAnnouncementScreen() {
                   </TouchableOpacity>
                 ) : null}
               </View>
-              {!announcement.isDeleted ? <AnnouncementBody body={announcement.body} style={styles.announcementBody} /> : null}
+              {!announcement.isDeleted ? <AnnouncementBody body={announcement.body} style={styles.announcementBody} squadId={summary?.team.squadId} teamId={teamId} /> : null}
               {!announcement.isDeleted && !announcement.isModerated && announcement.createdBy !== auth.currentUser?.uid ? (
-                <MessageTranslation source={{ kind: 'announcement', teamId, messageId: announcement.id }} sourceText={announcementTranslationText(announcement.title, announcement.body)} />
+                <MessageTranslation source={{ kind: 'announcement', teamId, messageId: announcement.id }} sourceText={announcementTranslationText(announcement.title, announcement.body)} squadId={summary?.team.squadId} />
               ) : null}
               {!announcement.isDeleted && announcement.contentType === "voice" && announcement.voiceMemo ? (
                 <VoiceMemoPlayer

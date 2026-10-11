@@ -20,7 +20,7 @@ import {
 } from "@/services/coachResourcesService";
 import { getCurrentUserTeamMemberships, hasCoachAccess, isTeamActive, type TeamMembership } from "@/services/teamService";
 import { resolveCoachCommunicationTeamDraft } from "@/utils/coachCommunicationDraftCore";
-import { resolveVenueLightningSource } from "@/utils/venueLightning";
+import { useSquadWeather } from "@/hooks/useSquadWeather";
 import { composeWeatherDelayMessage } from "@/utils/weatherDelayLightning";
 
 export default function CoachCommunicationTemplateScreen() {
@@ -37,7 +37,7 @@ export default function CoachCommunicationTemplateScreen() {
     [locale, template, user?.displayName],
   );
   const [draftMessage, setDraftMessage] = useState(initialMessage);
-  const [confirmedLightningTeams, setConfirmedLightningTeams] = useState<Record<string, boolean>>({});
+  const [confirmedLightningTeams, setConfirmedLightningTeams] = useState<Record<string, string>>({});
   const [validation, setValidation] = useState<string | null>(null);
   const activeDraftKey = useRef("");
   const currentMessage = useRef(initialMessage);
@@ -58,11 +58,14 @@ export default function CoachCommunicationTemplateScreen() {
   }, []);
 
   const selectedMembership = memberships.find((entry) => entry.teamId === selectedTeamId) ?? null;
-  const lightningSource = resolveVenueLightningSource({ squadId: selectedMembership?.team?.squadId });
+  const weather = useSquadWeather({ squadId: templateId === 'weather-delay' ? selectedMembership?.team?.squadId : null, teamId: selectedTeamId });
+  const lightningSource = weather.source;
+  const lightningKey = lightningSource ? `${lightningSource.id}:${lightningSource.url}` : '';
   const message = composeWeatherDelayMessage({
     templateId,
     binding: { squadId: selectedMembership?.team?.squadId },
-    confirmedVenue: confirmedLightningTeams[selectedTeamId] === true,
+    source: lightningSource,
+    confirmedVenue: Boolean(lightningKey) && confirmedLightningTeams[selectedTeamId] === lightningKey,
     message: draftMessage,
     linkLabel: t("venueLightning.messageLink", { venue: lightningSource?.venueName ?? "" }),
     safetyNote: t("venueLightning.messageSafety"),
@@ -182,15 +185,20 @@ export default function CoachCommunicationTemplateScreen() {
           />
           {templateId === "weather-delay" ? (
             <WeatherDelayLightningOption
-              checked={confirmedLightningTeams[selectedTeamId] === true}
+              source={lightningSource}
+              checked={Boolean(lightningKey) && confirmedLightningTeams[selectedTeamId] === lightningKey}
               onChange={(checked) => {
                 if (!selectedTeamId) return;
-                setConfirmedLightningTeams((previous) => ({ ...previous, [selectedTeamId]: checked }));
+                setConfirmedLightningTeams((previous) => ({ ...previous, [selectedTeamId]: checked ? lightningKey : '' }));
                 setValidation(null);
               }}
               squadId={selectedMembership?.team?.squadId}
             />
           ) : null}
+          {templateId === 'weather-delay' && weather.failed ? <View>
+            <Text accessibilityRole="alert" style={styles.unresolvedTitle}>{t('venueWeather.loadError')}</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={() => void weather.reload()}><Text>{t('common.retry')}</Text></TouchableOpacity>
+          </View> : null}
           {unresolved.length > 0 ? (
             <View accessibilityLiveRegion="polite" style={styles.unresolvedBox}>
               <Text style={styles.unresolvedTitle}>{t("coach.resources.unresolvedTitle")}</Text>

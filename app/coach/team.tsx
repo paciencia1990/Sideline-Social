@@ -408,7 +408,7 @@ export default function CoachTeamScreen() {
               ) : <Text style={styles.archivedStatus}>{t("coach.team.archivedStatus")}</Text>}
             </Card>
 
-            <VenueLightningCard context="team" squadId={selectedTeam.squadId} />
+            <VenueLightningCard context="team" squadId={selectedTeam.squadId} teamId={selectedTeam.id} />
 
             <TouchableOpacity
               accessibilityLabel={t("schedule.teamSchedule", { teamName: selectedTeam.name })}

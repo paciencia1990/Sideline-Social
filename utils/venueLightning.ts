@@ -2,6 +2,7 @@ import {
   APPROVED_VENUE_LIGHTNING_SOURCES,
   type ApprovedVenueLightningSource,
 } from '@/constants/venueLightning';
+import { isPublicWeatherUrl } from '@/functions/src/squadWeatherCore';
 
 export type VenueLightningBinding = {
   venueId?: string | null;
@@ -9,14 +10,7 @@ export type VenueLightningBinding = {
 };
 
 export function isValidVenueLightningUrl(value: string): boolean {
-  if (!value || value.length > 2048 || value !== value.trim()) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && Boolean(url.hostname) &&
-      !url.username && !url.password && !url.hash && (!url.port || url.port === '443');
-  } catch {
-    return false;
-  }
+  return isPublicWeatherUrl(value);
 }
 
 export function resolveVenueLightningSource(

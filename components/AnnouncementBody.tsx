@@ -5,17 +5,24 @@ import { useTranslation } from 'react-i18next';
 import { Colors, Radius, Spacing, Typography } from '@/constants/theme';
 import { openApprovedLightningMessageUrl } from '@/services/venueLightningService';
 import { getLightningMessageSegments } from '@/utils/weatherDelayLightning';
+import { APPROVED_VENUE_LIGHTNING_SOURCES } from '@/constants/venueLightning';
+import { useSquadWeather } from '@/hooks/useSquadWeather';
 
-type Props = { body: string; style?: StyleProp<TextStyle> };
+type Props = { body: string; style?: StyleProp<TextStyle>; squadId?: string | null; teamId?: string | null };
 
-export function AnnouncementBody({ body, style }: Props) {
+export function AnnouncementBody({ body, style, squadId, teamId }: Props) {
   const { t } = useTranslation();
+  const weather = useSquadWeather({ squadId, teamId });
+  // Bound announcements honor current removals and replacements. Legacy text
+  // without a Squad binding retains only the original owner-reviewed links.
+  const sources = squadId ? weather.source ? [weather.source] : [] : APPROVED_VENUE_LIGHTNING_SOURCES;
+  const linkIdentity = `${body}|${squadId ?? ''}|${weather.source?.id ?? ''}|${weather.source?.url ?? ''}`;
   const [opening, setOpening] = useState(false);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const pending = useRef(false);
   const generation = useRef(0);
-  const currentBody = useRef(body);
-  currentBody.current = body;
+  const currentBody = useRef(linkIdentity);
+  currentBody.current = linkIdentity;
 
   useEffect(() => {
     generation.current += 1;
@@ -23,18 +30,18 @@ export function AnnouncementBody({ body, style }: Props) {
     setOpening(false);
     setFailedUrl(null);
     return () => { generation.current += 1; };
-  }, [body]);
+  }, [linkIdentity]);
 
   const openLink = async (url: string) => {
     if (pending.current) return;
     pending.current = true;
     const requestGeneration = generation.current;
-    const requestBody = body;
+    const requestBody = linkIdentity;
     const isCurrent = () => generation.current === requestGeneration && currentBody.current === requestBody;
     setOpening(true);
     setFailedUrl(null);
     try {
-      await openApprovedLightningMessageUrl(url);
+      await openApprovedLightningMessageUrl(url, sources);
     } catch {
       if (isCurrent()) setFailedUrl(url);
     } finally {
@@ -48,7 +55,7 @@ export function AnnouncementBody({ body, style }: Props) {
   return (
     <View>
       <Text style={style}>
-        {getLightningMessageSegments(body).map((segment, index) => segment.source ? (
+        {getLightningMessageSegments(body, sources).map((segment, index) => segment.source ? (
           <Text
             accessibilityHint={t('venueLightning.openHint', { provider: segment.source.providerName })}
             accessibilityLabel={t('venueLightning.openForVenue', { venue: segment.source.venueName })}

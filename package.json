@@ -46,6 +46,8 @@
     "test:trivia-answer-feedback": "node scripts/test-trivia-answer-feedback.cjs",
     "test:game-responsiveness": "node scripts/test-game-responsiveness.cjs",
     "test:venue-lightning": "node scripts/test-venue-lightning.cjs",
+    "test:squad-weather": "npm --prefix functions run build && node scripts/test-squad-weather.cjs",
+    "test:squad-weather-emulator": "npm --prefix functions run build && firebase.cmd emulators:exec --project demo-sideline-squad-weather --only auth,firestore \"node scripts/test-squad-weather-emulator.cjs\"",
     "test:weather-delay-lightning": "node scripts/test-weather-delay-lightning.cjs",
     "test:coach-home-recovery": "node scripts/test-coach-home-recovery.cjs",
     "test:emulator:bomb-response-view": "npm --prefix functions run build && firebase.cmd emulators:exec --project demo-game-responsiveness-20261010 --only auth,database,firestore,functions \"node scripts/test-bomb-response-view-emulator.cjs\"",

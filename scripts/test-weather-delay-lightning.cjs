@@ -24,7 +24,7 @@ function load(source, modules = {}) {
   return module.exports;
 }
 const registry = load(read('constants/venueLightning.ts'));
-const venueCore = load(read('utils/venueLightning.ts'), { '@/constants/venueLightning': registry });
+const venueCore = load(read('utils/venueLightning.ts'), { '@/constants/venueLightning': registry, '@/functions/src/squadWeatherCore': require('../functions/lib/squadWeatherCore') });
 const core = load(read('utils/weatherDelayLightning.ts'), {
   '@/constants/venueLightning': registry, '@/utils/venueLightning': venueCore,
 });
@@ -141,6 +141,7 @@ const hasText = (tree, text) => JSON.stringify(tree.props?.children).includes(te
   assert.equal(option.render({ squadId: 'unknown', checked: true, onChange: () => {} }), null);
 
   const shared = [], navigated = [];
+  let configuredHome = approved;
   const memberships = [
     { teamId: 'home', team: { name: 'Home Team', squadId: known.squadId } },
     { teamId: 'away', team: { name: 'Away Team', squadId: 'another-venue__baseball' } },
@@ -163,7 +164,8 @@ const hasText = (tree, text) => JSON.stringify(tree.props?.children).includes(te
     },
     '@/services/teamService': { getCurrentUserTeamMemberships: async () => memberships, hasCoachAccess: () => true, isTeamActive: () => true },
     '@/utils/coachCommunicationDraftCore': load(read('utils/coachCommunicationDraftCore.ts')),
-    '@/utils/venueLightning': venueCore, '@/utils/weatherDelayLightning': core,
+    '@/hooks/useSquadWeather': { useSquadWeather: (binding) => ({ source: binding.squadId === known.squadId ? configuredHome : null, failed: false }) },
+    '@/utils/weatherDelayLightning': core,
   }).default);
   route.render(); await flush(); tree = route.render();
   findAll(tree, (node) => node.props.accessibilityRole === 'radio')[0].props.onPress();
@@ -203,11 +205,24 @@ const hasText = (tree, text) => JSON.stringify(tree.props?.children).includes(te
   find(tree, (node) => node.type === 'TouchableOpacity' && hasText(node, 'coach.resources.sendToTeam')).props.onPress();
   assert.equal(navigated.length, 1, 'a long suffix must not overflow or be silently truncated by the team composer');
 
+  configuredHome = { ...approved, id: 'squad-weather:home:2', url: 'https://weather.example.org/facility#venue' };
+  tree = route.render();
+  assert.equal(find(tree, (node) => node.type === 'WeatherDelayLightningOption').props.checked, false, 'Changing a saved link requires fresh venue confirmation');
+  find(tree, (node) => node.type === 'TextInput').props.onChangeText(input.message);
+  find(tree, (node) => node.type === 'WeatherDelayLightningOption').props.onChange(true);
+  tree = route.render();
+  find(tree, (node) => node.type === 'TouchableOpacity' && hasText(node, 'coach.resources.shareMessage')).props.onPress(); await flush();
+  assert.ok(shared.at(-1).message.includes(configuredHome.url)); assert.ok(!shared.at(-1).message.includes(approved.url));
+  configuredHome = null; tree = route.render();
+  find(tree, (node) => node.type === 'TouchableOpacity' && hasText(node, 'coach.resources.shareMessage')).props.onPress(); await flush();
+  assert.equal(shared.at(-1).message, input.message, 'Removal suppresses the optional link without losing the coach draft');
+
   let browser = deferred();
   const opened = [];
   const service = load(read('services/venueLightningService.ts'), {
     'expo-web-browser': { WebBrowserResultType: { LOCKED: 'locked' }, openBrowserAsync: (url) => { opened.push(url); return browser.promise; } },
     '@/constants/theme': theme, '@/utils/venueLightning': venueCore, '@/utils/weatherDelayLightning': core,
+    '@/functions/src/squadWeatherCore': require('../functions/lib/squadWeatherCore'),
   });
   const first = service.openApprovedLightningMessageUrl(approved.url);
   assert.equal(service.openVenueLightningStatus(known), first, 'card and announcement opens coalesce');
@@ -221,6 +236,8 @@ const hasText = (tree, text) => JSON.stringify(tree.props?.children).includes(te
   const announcement = harness((React) => load(read('components/AnnouncementBody.tsx'), {
     react: React, 'react-native': native, 'react-i18next': translation, '@/constants/theme': theme,
     '@/utils/weatherDelayLightning': core,
+    '@/constants/venueLightning': registry,
+    '@/hooks/useSquadWeather': { useSquadWeather: () => ({ source: null, failed: false }) },
     '@/services/venueLightningService': { openApprovedLightningMessageUrl: () => { calls += 1; return request.promise; } },
   }).AnnouncementBody);
   tree = announcement.render({ body: combined });

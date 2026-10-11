@@ -9,7 +9,7 @@ import { AnnouncementBody } from '@/components/AnnouncementBody';
 import { getTranslationLanguage, openTranslationInformation, saveTranslationLanguage, translateTeamMessage, type TeamTranslationSource } from '@/services/teamTranslationService';
 import { TEAM_TRANSLATION_LANGUAGES, translationErrorKey, translationLanguageForLocale } from '@/utils/teamTranslation';
 
-export function MessageTranslation({ source, sourceText }: { source: TeamTranslationSource; sourceText: string }) {
+export function MessageTranslation({ source, sourceText, squadId }: { source: TeamTranslationSource; sourceText: string; squadId?: string | null }) {
   const { t, i18n } = useTranslation();
   const [uid, setUid] = useState(auth.currentUser?.uid ?? null);
   const [open, setOpen] = useState(false);
@@ -84,7 +84,7 @@ export function MessageTranslation({ source, sourceText }: { source: TeamTransla
       {result ? (
         <View accessibilityLiveRegion="polite" style={styles.result}>
           <Text style={styles.heading}>{t('messageTranslation.resultHeading', { language: TEAM_TRANSLATION_LANGUAGES.find((item) => item.code === result.language)?.name })}</Text>
-          <AnnouncementBody body={result.text} style={[styles.body, ['ar', 'he', 'fa', 'ur'].includes(result.language) && styles.rtl]} />
+          <AnnouncementBody body={result.text} style={[styles.body, ['ar', 'he', 'fa', 'ur'].includes(result.language) && styles.rtl]} squadId={squadId} teamId={source.kind === 'announcement' ? source.teamId : undefined} />
           <Image accessibilityLabel="powered by Google Translate" resizeMode="contain" source={require('@/assets/images/google-translate-attribution.png')} style={styles.attribution} />
           <Text style={styles.note}>{t('messageTranslation.accuracy')}</Text>
           <TouchableOpacity accessibilityRole="link" onPress={() => { void openInfo(); }} style={styles.button}><Text style={styles.action}>{t('messageTranslation.info')}</Text></TouchableOpacity>

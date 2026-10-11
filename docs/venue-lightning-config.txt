@@ -1,28 +1,35 @@
-Venue lightning shortcut — first release
+Venue weather and lightning links
 
-The app owner maintains constants/venueLightning.ts as a reviewed registry.
-This first release includes only the owner-provided Earth Networks page labeled
+The app owner maintains constants/venueLightning.ts as a fallback registry.
+It includes the owner-provided Earth Networks page labeled
 Dr Phillips Park, bound to existing venue_1l4q16f. The venue identifier was read
 from staging on 2026-10-10 without changing a record. The provider label must
 remain visible; this URL is not a universal Little League or sports alert feed.
 
-Authorized configuration process
-1. The owner or delegated staff obtains the facility's public weather page.
-2. Confirm the provider's displayed facility and coverage with the venue operator.
-3. Bind the approved source to the exact venue identifiers. Do not match by sport,
-   free-text names, the user's current GPS position, or a selected unrelated Squad.
-4. Set environment to indoor, outdoor, or both. Indoor/disabled entries do not
-   display the shortcut. Both supports facilities that also host outdoor activity.
-5. Add an HTTPS source to the registry through the reviewed app release process.
-   Other providers are supported as approved public HTTPS links. Do not let an
-   ordinary member supply an arbitrary weather URL to this card.
-6. For legacy noncanonical Squads, add only independently verified squadIds.
-   Duplicate matching entries or conflicting identifiers fail closed.
+Admin configuration process (requires the client update after Android 32/iOS 20)
+1. An active Squad admin opens Squad details, Manage Squad, Weather & Lightning.
+2. Obtain the facility's official public weather page and confirm its coverage
+   with the venue operator. A link for another facility must not be reused.
+3. Enter the venue name, provider name, and public HTTPS link. Select Outdoor
+   or Indoor and outdoor. This setting is optional for venues with outdoor use.
+4. Preview the exact link, return to the app, and confirm that it covers the venue.
+   Changing any draft field invalidates the preview and confirmation.
+5. Save once. Only getSquadWeather and updateSquadWeather are required server
+   functions. No new native library, Rules, index, or runtime role is required.
+6. Admins may edit or remove the link. Concurrent edits require a reload; a failed
+   or ambiguous write is never automatically retried. Removal suppresses the
+   fallback for that Squad and its linked Teams without deleting old messages.
 
-This is owner-controlled release configuration, not an in-app staff editor.
-No new cloud configuration document, callable, index, Rules, or role is required.
-Adding another registry entry needs a client update. A remotely editable staff
-registry can be designed separately if many facilities need frequent changes.
+Settings are saved on the exact Squad, not shared with other Squads at a venue.
+Only active, permanent-account Squad admins may write, with App Check and current
+account standing enforced. Historic creator status never overrides a demotion.
+Server-only change records contain the editor, revision, time, and operation.
+Readers receive only venue-link fields, not admin identities or membership data.
+Private Squads additionally require active Squad or linked Team membership.
+Fresh reads occur on focus/resume, with concurrent requests shared. Removed or
+unavailable settings do not display a cached link or an all-clear status.
+Once the editor is delivered, individual link changes need no additional build.
+Until then, installed Android 32 and iOS 20 retain the existing owner preset.
 
 Placement
 - Squad details: the verified venue card is below the Squad identity.
@@ -35,7 +42,7 @@ Placement
 
 Weather Delay messages
 - The Communications template offers an unchecked venue-confirmation checkbox
-  only when the selected team's own Squad resolves to an approved outdoor source.
+  only when the selected team's own Squad resolves to a current outdoor source.
   The coach confirms the activity is at that named venue before including a link.
 - The optional suffix shows the facility name, full public HTTPS URL, and venue
   safety instructions. Share and the announcement composer receive the same text.
@@ -43,8 +50,9 @@ Weather Delay messages
 - Venue confirmation is saved separately for each team draft while the screen is
   open. New team drafts do not inherit another team's confirmation or weather URL.
   Unchecking removes the generated suffix, without deleting manually edited text.
-- Parent and Coach announcement details make only exact approved weather URLs
-  tappable through the existing provider browser. Other URLs remain ordinary text.
+- Parent and Coach announcement details make only the current Squad's exact
+  weather URL tappable through the provider browser. Replaced and removed links
+  remain ordinary text in preserved historical messages.
   Deleted/removed announcements keep their existing visibility checks.
 - The link is optional for rain-only delays, indoor activities and away venues.
   No message is sent automatically, and provider status never resumes play.
@@ -62,9 +70,10 @@ connection failure is not detected by openBrowserAsync: the card explains how to
 handle it and never treats it as all clear. The venue's safety plan governs play.
 
 Delivery
-Include this UI in the same upcoming Android and iOS candidates as the pending
-repairs. No native dependency or cloud deployment is added by this feature.
-Keep live moderation unchanged. Existing repair-specific server delivery remains
-scoped to deleteChildProfile and submitBombDefusalStep.
-Check on both real platforms: correct venue label/link, opening and closing/back,
-offline/provider unavailable behavior, readable larger text and screen readers.
+Keep live moderation unchanged. Deploy only the two weather callables; do not
+redeploy moderation or unrelated functions. Include the editor in the next Android
+and iOS candidates; no build starts as part of this change.
+Check on both real platforms after delivery: admin add/edit/remove, preview return,
+non-admin visibility, linked Team and Weather Delay behavior, offline Retry,
+larger text and screen readers. Local behavior and demo-emulator coverage validate
+permissions, standing, App Check, revisions, preservation, and stale replies.

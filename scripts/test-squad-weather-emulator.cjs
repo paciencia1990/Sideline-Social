@@ -1,0 +1,67 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const { initializeTestEnvironment, assertFails } = require('@firebase/rules-unit-testing');
+const { doc, updateDoc, setDoc, getDoc } = require('firebase/firestore');
+const admin = require('../functions/node_modules/firebase-admin');
+const projectId = process.env.GCLOUD_PROJECT;
+assert.ok(projectId?.startsWith('demo-') && process.env.FIRESTORE_EMULATOR_HOST && process.env.FIREBASE_AUTH_EMULATOR_HOST, 'Isolated demo emulators required');
+admin.initializeApp({ projectId });
+const db = admin.firestore();
+const { getSquadWeather: get, updateSquadWeather: update } = require('../functions/lib/squadWeather');
+const context = (uid, app = true, provider = 'password') => ({ auth: { uid, token: { firebase: { sign_in_provider: provider } } }, ...(app ? { app: { appId: 'demo' } } : {}) });
+const link = { venueName: 'Synthetic YMCA', providerName: 'Facility Weather', environment: 'both', url: 'https://weather.example.org/venue/ymca?id=123' };
+const save = (squadId, revision, uid = 'admin-a', next = link) => update.run({ squadId, expectedRevision: revision, confirmedVenue: true, link: next }, context(uid));
+const denied = (promise, code = 'permission-denied') => assert.rejects(promise, e => e.code === code);
+const timeout = setTimeout(() => { console.error('Squad weather emulator timed out'); process.exit(1); }, 55000);
+(async () => {
+  const original = { isActive: true, createdBy: 'admin-a', venueId: 'ymca', name: 'YMCA', memberCount: 3, sportIds: ['baseball', 'swimming'], currentSeasonId: 'season' };
+  await db.doc('squads/a').set(original); await db.doc('squads/b').set({ ...original, venueId: 'other' });
+  for (const [uid, role] of [['admin-a', 'admin'], ['admin-b', 'admin'], ['parent', 'member']]) {
+    await db.doc(`squadMemberships/a__${uid}`).set({ squadId: 'a', userId: uid, squadRole: role, membershipStatus: 'active' });
+  }
+  assert.equal((await get.run({ squadId: 'a' }, context('parent'))).mode, 'default');
+  await denied(save('a', 0, 'parent')); await denied(save('a', 0, 'outsider')); await denied(save('b', 0));
+  await denied(update.run({ squadId: 'a', expectedRevision: 0, link, confirmedVenue: false }, context('admin-a')), 'invalid-argument');
+  await denied(update.run({ squadId: 'a', expectedRevision: 0, link, confirmedVenue: true }, context('admin-a', false)), 'failed-precondition');
+  await denied(update.run({ squadId: 'a', expectedRevision: 0, link, confirmedVenue: true }, context('admin-a', true, 'anonymous')));
+  await denied(get.run({ squadId: 'a' }, {}), 'unauthenticated');
+  await db.doc('accountStanding/admin-a').set({ status: 'suspended' }); await denied(save('a', 0)); await denied(get.run({ squadId: 'a' }, context('admin-a'))); await db.doc('accountStanding/admin-a').delete();
+  await db.doc('accountStanding/admin-a').set({ messagingRestricted: true }); await denied(save('a', 0)); await get.run({ squadId: 'a' }, context('admin-a')); await db.doc('accountStanding/admin-a').delete();
+  const races = await Promise.allSettled([save('a', 0), save('a', 0, 'admin-b', { ...link, url: 'https://weather.example.org/other' })]);
+  assert.equal(races.filter(r => r.status === 'fulfilled').length, 1, 'Only one concurrent edit commits');
+  assert.equal(races.find(r => r.status === 'rejected').reason.code, 'aborted');
+  const winner = races.find(r => r.status === 'fulfilled').value;
+  assert.equal(winner.revision, 1); assert.equal((await save('a', 1, 'admin-a', winner.link)).revision, 1, 'No-op save is idempotent');
+  const published = await get.run({ squadId: 'a' }, context('parent'));
+  assert.deepEqual(Object.keys(published).sort(), ['squadId', 'venueId', 'revision', 'mode', 'link'].sort());
+  assert.deepEqual(published.link, winner.link);
+  assert.equal((await get.run({ squadId: 'b' }, context('parent'))).mode, 'default', 'Venue configuration stays scoped to its Squad');
+  const changed = (await db.doc('squads/a').get()).data();
+  assert.deepEqual(Object.fromEntries(Object.keys(original).map(key => [key, changed[key]])), original, 'Membership, sports, season and identity preserved');
+  assert.equal((await db.collection('squads/a/weatherLinkChanges').get()).size, 1);
+  assert.equal((await save('a', 1, 'admin-b', null)).mode, 'disabled');
+  assert.equal((await get.run({ squadId: 'a' }, context('parent'))).mode, 'disabled', 'Removal cannot resurrect an owner preset');
+  await db.doc('squadMemberships/a__admin-a').update({ squadRole: 'member' });
+  await db.doc('squadMemberships/stale-admin').set({ squadId: 'a', userId: 'admin-a', squadRole: 'admin', membershipStatus: 'active' });
+  await denied(save('a', 2), 'permission-denied');
+  await db.doc('squads/private').set({ ...original, visibility: 'private', weatherLink: link });
+  await denied(get.run({ squadId: 'private' }, context('outsider')));
+  await db.doc('teams/team').set({ squadId: 'private', status: 'active' });
+  await db.doc('teams/team/members/parent').set({ status: 'active', role: 'parent' });
+  assert.equal((await get.run({ squadId: 'private', teamId: 'team' }, context('parent'))).mode, 'custom');
+  await db.doc('teams/team/members/parent').update({ status: 'inactive' }); await denied(get.run({ squadId: 'private', teamId: 'team' }, context('parent')));
+  await db.doc('squads/legacy').set({ ...original, createdBy: 'legacy-admin' });
+  await db.doc('squadMemberships/legacy-member').set({ squadId: 'legacy', userId: 'legacy-admin', membershipStatus: 'active' });
+  await save('legacy', 0, 'legacy-admin');
+  await db.doc('squads/a').update({ status: 'archived' }); await denied(save('a', 2, 'admin-b'), 'not-found');
+  const [host, port] = process.env.FIRESTORE_EMULATOR_HOST.split(':');
+  const environment = await initializeTestEnvironment({ projectId, firestore: { host, port: Number(port), rules: fs.readFileSync('firestore.rules', 'utf8') } });
+  try {
+    const client = environment.authenticatedContext('admin-b', { firebase: { sign_in_provider: 'password' } }).firestore();
+    await assertFails(updateDoc(doc(client, 'squads/a'), { weatherLink: link }));
+    await assertFails(setDoc(doc(client, 'squads/a/weatherLinkChanges/forged'), { changedBy: 'admin-b' }));
+    await assertFails(getDoc(doc(client, 'squads/a/weatherLinkChanges/1')));
+  } finally { await environment.cleanup(); }
+  console.log('Squad weather emulator passed: admin/standing/App Check boundaries, concurrent edits, removal, public projection, private Team access and direct-write denial.');
+})().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => clearTimeout(timeout));

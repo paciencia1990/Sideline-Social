@@ -5,6 +5,10 @@ paciencia1990/Sideline-Social. This is the combined candidate; do not reapply
 older isolated child, lobby, gameplay, or weather copies on top of it.
 
 Included client changes
+The list below describes the delivered Android 32/iOS 20 baseline. The subsequent
+Squad-admin weather editor is documented in docs/venue-lightning-config.txt and
+must be included in the next client candidates; it does not exist in 32/20.
+
 1. Lobby departure: Play Again retains the room; Home, Games, lobby-list,
    Exit and platform back wait for authoritative cleanup. Retry keeps the
    intended destination, and repeated exits share one leave request.

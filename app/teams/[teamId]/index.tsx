@@ -282,7 +282,7 @@ export default function ParentTeamHubScreen() {
               </TouchableOpacity> : null}
             </Card>
 
-            <VenueLightningCard context="team" squadId={summary.team.squadId} />
+            <VenueLightningCard context="team" squadId={summary.team.squadId} teamId={teamId} />
 
             <TouchableOpacity
               accessibilityLabel={t("schedule.teamSchedule", { teamName: summary.team.name })}

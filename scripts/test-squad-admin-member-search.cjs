@@ -66,6 +66,7 @@ function card({ initial = null, get = null } = {}) {
       'lucide-react-native': { ShieldCheck: 'ShieldCheck', UserPlus: 'UserPlus' }, 'expo-router': { useFocusEffect: (callback) => React.useEffect(callback, [callback]) },
       'react-i18next': { useTranslation: () => ({ t }) }, '@/components/Card': { Card: 'Card' },
       '@/components/SquadSportsEditor': { SquadSportsEditor: 'SquadSportsEditor' },
+      '@/components/SquadWeatherEditor': { SquadWeatherEditor: 'SquadWeatherEditor' },
       '@/constants/theme': { Colors: {}, Radius: {}, Spacing: {}, Typography: {} },
       '@/context/AuthContext': { useAuth: () => ({ user: { uid } }) },
       '@/utils/squadAdminMemberSearch': search,

@@ -4,20 +4,31 @@ import { Colors } from '@/constants/theme';
 import { resolveVenueLightningSource, type VenueLightningBinding } from '@/utils/venueLightning';
 import { resolveApprovedLightningMessageUrl } from '@/utils/weatherDelayLightning';
 import type { ApprovedVenueLightningSource } from '@/constants/venueLightning';
+import { isPublicWeatherUrl } from '@/functions/src/squadWeatherCore';
 
 let opening: { sourceId: string; request: Promise<void> } | null = null;
 
-export function openVenueLightningStatus(binding: VenueLightningBinding): Promise<void> {
-  // Resolve again at the launch boundary; callers cannot supply an arbitrary URL.
-  const source = resolveVenueLightningSource(binding);
+export function openVenueLightningStatus(binding: VenueLightningBinding, savedSource?: ApprovedVenueLightningSource): Promise<void> {
+  // Resolve again at launch using the exact Squad-bound server projection or
+  // the owner registry. Never turn a message's arbitrary URL into a weather link.
+  const matchesBinding = savedSource && (savedSource.squadIds.includes(binding.squadId ?? '') ||
+    resolveVenueLightningSource(binding, [savedSource]));
+  const source = savedSource
+    ? matchesBinding ? resolveApprovedLightningMessageUrl(savedSource.url, [savedSource]) : null
+    : resolveVenueLightningSource(binding);
   if (!source) return Promise.reject(new Error('VENUE_LIGHTNING_UNAVAILABLE'));
   return openSource(source);
 }
 
-export function openApprovedLightningMessageUrl(url: string): Promise<void> {
-  const source = resolveApprovedLightningMessageUrl(url);
+export function openApprovedLightningMessageUrl(url: string, sources?: readonly ApprovedVenueLightningSource[]): Promise<void> {
+  const source = resolveApprovedLightningMessageUrl(url, sources);
   if (!source) return Promise.reject(new Error('VENUE_LIGHTNING_UNAVAILABLE'));
   return openSource(source);
+}
+
+export function openSquadWeatherPreview(url: string): Promise<void> {
+  if (!isPublicWeatherUrl(url)) return Promise.reject(new Error('VENUE_LIGHTNING_UNAVAILABLE'));
+  return openSource({ id: `preview:${url}`, url, enabled: true, environment: 'outdoor', venueName: '', providerName: '', venueIds: [], squadIds: [] });
 }
 
 function openSource(source: ApprovedVenueLightningSource): Promise<void> {

@@ -6,13 +6,15 @@ import { useTranslation } from 'react-i18next';
 import { Card } from '@/components/Card';
 import { Colors, Radius, Spacing, Typography } from '@/constants/theme';
 import { openVenueLightningStatus } from '@/services/venueLightningService';
-import { resolveVenueLightningSource, type VenueLightningBinding } from '@/utils/venueLightning';
+import type { VenueLightningBinding } from '@/utils/venueLightning';
+import { useSquadWeather } from '@/hooks/useSquadWeather';
 
-type Props = VenueLightningBinding & { context?: 'squad' | 'team' };
+type Props = VenueLightningBinding & { context?: 'squad' | 'team'; teamId?: string | null };
 
-export function VenueLightningCard({ venueId, squadId, context = 'squad' }: Props) {
+export function VenueLightningCard({ venueId, squadId, teamId, context = 'squad' }: Props) {
   const { t } = useTranslation();
-  const source = resolveVenueLightningSource({ venueId, squadId });
+  const weather = useSquadWeather({ venueId, squadId, teamId });
+  const source = weather.source;
   const [opening, setOpening] = useState(false);
   const [failed, setFailed] = useState(false);
   const pendingRef = useRef(false);
@@ -39,7 +41,7 @@ export function VenueLightningCard({ venueId, squadId, context = 'squad' }: Prop
     setOpening(true);
     setFailed(false);
     try {
-      await openVenueLightningStatus({ venueId, squadId });
+      await openVenueLightningStatus({ venueId, squadId }, source);
     } catch {
       // Never display raw browser errors, URLs, or stale weather as a safe status.
       if (isCurrent()) setFailed(true);
@@ -51,7 +53,10 @@ export function VenueLightningCard({ venueId, squadId, context = 'squad' }: Prop
     }
   };
 
-  if (!source) return null;
+  if (!source) return weather.failed ? <View style={styles.card}>
+    <Text accessibilityRole="alert" style={styles.error}>{t('venueWeather.loadError')}</Text>
+    <TouchableOpacity accessibilityRole="button" onPress={() => void weather.reload()} style={styles.button}><Text style={styles.buttonText}>{t('common.retry')}</Text></TouchableOpacity>
+  </View> : null;
 
   return (
     <Card style={styles.card}>

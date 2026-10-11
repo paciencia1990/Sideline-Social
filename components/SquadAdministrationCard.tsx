@@ -5,6 +5,7 @@ import { useFocusEffect } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { SquadSportsEditor } from "@/components/SquadSportsEditor";
+import { SquadWeatherEditor } from "@/components/SquadWeatherEditor";
 import { Card } from "@/components/Card";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -233,6 +234,7 @@ export const SquadAdministrationCard = forwardRef<SquadAdministrationCardHandle,
 
       {state.callerIsAdmin ? (
         <>
+          <SquadWeatherEditor key={`weather:${identity}`} squadId={squadId} disabled={loading || Boolean(busyAction)} />
           {Array.isArray(state.sportIds) && Number.isSafeInteger(state.sportsRevision) ? (
             <SquadSportsEditor
               key={squadId}

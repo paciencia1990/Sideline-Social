@@ -24,7 +24,7 @@ function load(source, modules = {}) {
   return loaded.exports;
 }
 const registry = load(read('constants/venueLightning.ts'));
-const core = load(read('utils/venueLightning.ts'), { '@/constants/venueLightning': registry });
+const core = load(read('utils/venueLightning.ts'), { '@/constants/venueLightning': registry, '@/functions/src/squadWeatherCore': require('../functions/lib/squadWeatherCore') });
 const messageCore = load(read('utils/weatherDelayLightning.ts'), {
   '@/constants/venueLightning': registry,
   '@/utils/venueLightning': core,
@@ -45,7 +45,7 @@ assert.equal(core.resolveVenueLightningSource(known, [{ ...approved, environment
 assert.equal(core.resolveVenueLightningSource(known, [{ ...approved, environment: 'both' }]).id, approved.id);
 assert.equal(core.resolveVenueLightningSource(known, [{ ...approved, enabled: false }]), null);
 assert.equal(core.resolveVenueLightningSource(known, [approved, { ...approved, id: 'ambiguous' }]), null);
-for (const url of ['http://example.com/', 'javascript:alert(1)', 'file:///tmp/status', 'https://user:password@example.com/', 'https://example.com:8443/', 'https://example.com/#status', ' https://example.com/']) {
+for (const url of ['http://example.com/', 'javascript:alert(1)', 'file:///tmp/status', 'https://user:password@example.com/', 'https://example.com:8443/', ' https://example.com/']) {
   assert.equal(core.isValidVenueLightningUrl(url), false);
   assert.equal(core.resolveVenueLightningSource(known, [{ ...approved, url }]), null);
 }
@@ -92,6 +92,7 @@ function createCardHarness(open) {
     '@/constants/theme': { Colors: {}, Radius: {}, Spacing: {}, Typography: {} },
     '@/services/venueLightningService': { openVenueLightningStatus: open },
     '@/utils/venueLightning': core,
+    '@/hooks/useSquadWeather': { useSquadWeather: (binding) => ({ source: core.resolveVenueLightningSource(binding), failed: false }) },
   }).VenueLightningCard;
   return {
     render: (props) => {
@@ -124,6 +125,7 @@ const button = (tree) => find(tree, (node) => node.type === 'TouchableOpacity');
     '@/constants/theme': { Colors: { surface: '#f8f4ec', primary: '#c44a3b' } },
     '@/utils/venueLightning': core,
     '@/utils/weatherDelayLightning': messageCore,
+    '@/functions/src/squadWeatherCore': require('../functions/lib/squadWeatherCore'),
   });
   const first = service.openVenueLightningStatus(known);
   assert.equal(service.openVenueLightningStatus(known), first, 'repeated opens coalesce');

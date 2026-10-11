@@ -54,6 +54,7 @@ export default function AnnouncementThreadScreen() {
   const [sendingQuickReplyId, setSendingQuickReplyId] = useState<QuickReplyId | null>(null);
   const [canModerateReplies, setCanModerateReplies] = useState(false);
   const [canDeleteAnnouncement, setCanDeleteAnnouncement] = useState(false);
+  const [weatherSquadId, setWeatherSquadId] = useState<string | null>(null);
   const [actionTarget, setActionTarget] = useState<MessageActionTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
   const replySubmissionInFlight = useRef(false);
@@ -75,6 +76,7 @@ export default function AnnouncementThreadScreen() {
         const membership = memberships.find((item) => item.teamId === teamId);
         if (isMounted) {
           setAnnouncement(nextAnnouncement);
+          setWeatherSquadId(membership?.team?.squadId ?? null);
           setCanModerateReplies(Boolean(
             membership?.status === "active" && hasCoachAccess(membership) && isTeamActive(membership.team),
           ));
@@ -306,7 +308,7 @@ export default function AnnouncementThreadScreen() {
             </View>
             {announcement.isDeleted
               ? <Text accessibilityLiveRegion="polite" style={styles.deletedMessage}>{t("teamMessages.messageDeleted")}</Text>
-              : <AnnouncementBody body={announcement.body} style={styles.cardText} />}
+              : <AnnouncementBody body={announcement.body} style={styles.cardText} squadId={weatherSquadId} teamId={teamId} />}
             {!announcement.isDeleted && announcement.contentType === "voice" && announcement.voiceMemo ? (
               <VoiceMemoPlayer
                 durationMilliseconds={announcement.voiceMemo.durationMilliseconds}

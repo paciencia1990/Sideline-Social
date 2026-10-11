@@ -5,12 +5,13 @@ import { useTranslation } from 'react-i18next';
 
 import { Colors, Radius, Spacing, Typography } from '@/constants/theme';
 import { resolveVenueLightningSource, type VenueLightningBinding } from '@/utils/venueLightning';
+import type { ApprovedVenueLightningSource } from '@/constants/venueLightning';
 
-type Props = VenueLightningBinding & { checked: boolean; onChange: (checked: boolean) => void };
+type Props = VenueLightningBinding & { source?: ApprovedVenueLightningSource | null; checked: boolean; onChange: (checked: boolean) => void };
 
-export function WeatherDelayLightningOption({ venueId, squadId, checked, onChange }: Props) {
+export function WeatherDelayLightningOption({ venueId, squadId, source: suppliedSource, checked, onChange }: Props) {
   const { t } = useTranslation();
-  const source = resolveVenueLightningSource({ venueId, squadId });
+  const source = suppliedSource === undefined ? resolveVenueLightningSource({ venueId, squadId }) : suppliedSource;
   if (!source) return null;
 
   return (

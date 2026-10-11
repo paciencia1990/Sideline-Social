@@ -138,6 +138,7 @@ import { finalizeSpotDifferenceRoundForRewards } from './gameJoinCodes';
 import { BOMB_COMMAND_COUNT, BOMB_ROLE_SCHEMA_VERSION } from './bombDefusalCore';
 import { readSquadSports } from './squadSportsCore';
 export { findOrCreateVenueSportSquad, updateSquadSports } from './venueSquad';
+export { getSquadWeather, updateSquadWeather } from './squadWeather';
 export { translateTeamMessage } from './teamTranslation';
 
 const functions = permanentAccountFunctions(firebaseFunctions);
