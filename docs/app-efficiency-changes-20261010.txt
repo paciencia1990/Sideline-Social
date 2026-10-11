@@ -1,0 +1,41 @@
+Home, Friends and chat efficiency — October 10, 2026
+
+This client-only follow-up builds on the combined beta source. It adds no native
+package, backend endpoint, index, standing cache or permission bypass.
+
+Friends: overlapping screen refreshes share a serialized operation; changed
+sections are merged into one trailing refresh. Request-only events reload
+requests without reloading friends/profile/suggestions after initial hydration.
+A full refresh still runs on focus/foreground, manual Retry and completed actions.
+Suggestions have their own loading/error/Retry state and do not delay actual
+friends and requests. Friends listeners stop when the tab is not focused.
+Overlapping private-profile reads share one request, discarded on completion.
+
+Home: overlapping parent-team summary reads share an operation. Simultaneous
+team consumers share full membership loads only when lookup strictness matches.
+The caller's active membership is still read before the Team record. Routine
+same-account Squad refreshes preserve loaded content while the new read runs;
+a failed read clears membership content and shows recovery. Removed membership,
+account changes and Squad changes hide stale cards/directories. Unread chat
+counts keep the existing 25-conversation bound and membership/last-message
+visibility checks, without public-name/photo hydration.
+
+Chat: sender profiles, the caller's reactions and hidden/starred states begin
+in parallel. Messages are emitted only after hydration, with existing blocked,
+moderated and per-user hidden filtering. Page sizes and media access stay as before.
+
+Validation: behavioral concurrency tests exercise burst invalidations, effect
+replay, partial/full refresh coverage, fresh retries, account switching, inactive
+memberships, unread-count visibility, independent suggestions, parallel message
+hydration, actual Home/Squad state and directory changes. Related Home, Friends,
+Coach, chat deletion and lobby regressions also passed. Client TypeScript and
+changed-file ESLint pass. No broad backend/moderation cycle is needed for this
+client-only change.
+
+Next delivery: include these changes in the same next Android and iOS beta
+builds as the other approved repairs. On installed release builds, compare cold
+start, return Home, Friends, and opening an existing chat on the same network;
+confirm unread counts, current membership and hidden messages. No device was
+connected during this assessment, so no measured speedup is claimed. The earlier
+12-callable and translation-provider delivery requirements remain in the combined
+release checklist. No build or deployment was started for this optimization.

@@ -88,6 +88,9 @@ export function SquadProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const activeUserId = useRef(user?.uid);
+  activeUserId.current = user?.uid;
+  const [resolvedMembershipUserId, setResolvedMembershipUserId] = useState<string | null>(null);
+  const resolvedMembershipUserIdRef = useRef<string | null>(null);
   const membershipLoad = useRef<{ userId: string | null; promise: Promise<void> } | null>(null);
   const membershipRequestId = useRef(0);
   const squadSearchRequestId = useRef(0);
@@ -99,6 +102,8 @@ export function SquadProvider({ children }: { children: ReactNode }) {
     const request = measureDevelopmentPerformance("squads.membership-hydration", async () => {
       const requestId = ++membershipRequestId.current;
       if (!requestUserId) {
+        resolvedMembershipUserIdRef.current = null;
+        setResolvedMembershipUserId(null);
         setMySquadIds([]);
         setMySquads([]);
         setSelectedSquadId(null);
@@ -108,7 +113,7 @@ export function SquadProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      setMembershipLoading(true);
+      setMembershipLoading(resolvedMembershipUserIdRef.current !== requestUserId);
       setMembershipError(null);
       try {
         const state = await fetchUserSquadState(requestUserId);
@@ -121,6 +126,8 @@ export function SquadProvider({ children }: { children: ReactNode }) {
           ? state.selectedSquadId
           : null;
 
+        resolvedMembershipUserIdRef.current = requestUserId;
+        setResolvedMembershipUserId(requestUserId);
         setMySquadIds(validIds);
         setMySquads(squads);
         setSelectedSquadId(nextSelected);
@@ -136,6 +143,8 @@ export function SquadProvider({ children }: { children: ReactNode }) {
       } catch (nextError) {
         if (activeUserId.current === requestUserId && requestId === membershipRequestId.current) {
           logContextDiagnostic("load-memberships", nextError);
+          resolvedMembershipUserIdRef.current = null;
+          setResolvedMembershipUserId(null);
           setMySquadIds([]);
           setMySquads([]);
           setSelectedSquadId(null);
@@ -156,8 +165,6 @@ export function SquadProvider({ children }: { children: ReactNode }) {
   }, [user?.uid]);
 
   useEffect(() => {
-    activeUserId.current = user?.uid;
-    membershipRequestId.current += 1;
     squadSearchRequestId.current += 1;
     setNearbySquads([]);
     setError(null);
@@ -247,19 +254,20 @@ export function SquadProvider({ children }: { children: ReactNode }) {
     if (user?.uid && mySquadIds.length > 0) await updateMemberLastActive();
   }, [mySquadIds.length, user?.uid]);
 
+  const membershipMatchesUser = Boolean(user?.uid && resolvedMembershipUserId === user.uid);
   const currentSquad = useMemo(
-    () => mySquads.find((squad) => squad.squadId === selectedSquadId) ?? null,
-    [mySquads, selectedSquadId],
+    () => membershipMatchesUser ? mySquads.find((squad) => squad.squadId === selectedSquadId) ?? null : null,
+    [membershipMatchesUser, mySquads, selectedSquadId],
   );
 
   const value = useMemo<SquadContextType>(() => ({
     nearbySquads,
-    mySquadIds,
-    mySquads,
-    selectedSquadId,
+    mySquadIds: membershipMatchesUser ? mySquadIds : [],
+    mySquads: membershipMatchesUser ? mySquads : [],
+    selectedSquadId: membershipMatchesUser ? selectedSquadId : null,
     currentSquad,
     loading,
-    membershipLoading,
+    membershipLoading: membershipLoading || Boolean(user?.uid && !membershipMatchesUser && !membershipError),
     membershipError,
     selectionWasStale,
     error,
@@ -283,6 +291,8 @@ export function SquadProvider({ children }: { children: ReactNode }) {
     loading,
     membershipError,
     membershipLoading,
+    membershipMatchesUser,
+    user?.uid,
     mySquadIds,
     mySquads,
     nearbySquads,

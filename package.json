@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "test:app-efficiency": "node scripts/test-app-efficiency.cjs",
     "test:team-translation": "npm --prefix functions run build && node scripts/test-team-translation.cjs",
     "test:emulator:team-translation": "npm --prefix functions run build && firebase.cmd emulators:exec --project demo-sideline-translation --only firestore \"node scripts/test-team-translation-emulator.cjs\"",
     "start": "expo start",

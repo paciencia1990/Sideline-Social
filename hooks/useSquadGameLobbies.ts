@@ -21,14 +21,18 @@ const ACTIVE_LOBBY_REFRESH_MS = 15_000;
 
 export function useSquadGameLobbies({ enabled, squadId }: UseSquadGameLobbiesInput) {
   const [lobbies, setLobbies] = useState<GameLobbySummary[]>([]);
+  const [resolvedSquadId, setResolvedSquadId] = useState<string | null>(null);
   const [state, setState] = useState<LobbyDirectoryState>("idle");
   const [failureReason, setFailureReason] = useState<GameJoinCodeFailureReason | null>(null);
   const requestVersionRef = useRef(0);
+  const currentScope = useRef({ enabled, squadId });
+  currentScope.current = { enabled, squadId };
 
   const refresh = useCallback(async (background = false) => {
     if (!enabled || !squadId) {
       requestVersionRef.current += 1;
       setLobbies([]);
+      setResolvedSquadId(null);
       setFailureReason(null);
       setState("idle");
       return;
@@ -41,13 +45,15 @@ export function useSquadGameLobbies({ enabled, squadId }: UseSquadGameLobbiesInp
         "games.lobby-directory",
         () => listGameLobbies({ squadId }),
       );
-      if (requestVersion !== requestVersionRef.current) return;
+      if (requestVersion !== requestVersionRef.current || !currentScope.current.enabled || currentScope.current.squadId !== squadId) return;
       setLobbies(result.lobbies);
+      setResolvedSquadId(squadId);
       setFailureReason(null);
       setState("ready");
     } catch (error) {
-      if (requestVersion !== requestVersionRef.current) return;
+      if (requestVersion !== requestVersionRef.current || !currentScope.current.enabled || currentScope.current.squadId !== squadId) return;
       const reason = readGameJoinCodeFailureReason(error);
+      if (reason === "not_authorized") setLobbies([]);
       setFailureReason(reason);
       setState(reason === "not_authorized" ? "permission-error" : "network-error");
     }
@@ -73,7 +79,7 @@ export function useSquadGameLobbies({ enabled, squadId }: UseSquadGameLobbiesInp
     return () => subscription.remove();
   }, [refresh]);
 
-  return { failureReason, lobbies, refresh, state };
+  return { failureReason, lobbies: enabled && squadId === resolvedSquadId ? lobbies : [], refresh, state };
 }
 
 export type { LobbyDirectoryState };

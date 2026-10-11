@@ -68,7 +68,7 @@ assert.doesNotMatch(openParentTeam, /teamName|row\.teamName/, "Navigation must n
 assert.match(home, /onViewTeams=\{\(\) => router\.push\("\/teams" as never\)\}/, "View Teams must open the existing My Teams list");
 assert.match(myTeamsCard, /<Card style=\{styles\.myTeamsCard\}>[\s\S]*onPress=\{onViewTeams\}/, "The header must be static and View Teams must be a separate sibling action");
 assert.match(myTeamsCard, /loading && !summary[\s\S]*summary\?\.rows\.map[\s\S]*summary\?\.totalTeams === 0[\s\S]*error && summary/, "Loading, cached/partial, empty, and recovery states must remain explicit");
-assert.match(home, /myTeamsRequestId\.current[\s\S]*requestId === myTeamsRequestId\.current/, "Slow or restored-session team loads must not replace a newer Home summary");
+assert.match(home, /useCoalescedRefresh\(user\?\.uid/, "Home refreshes must be serialized and account scoped; behavioral races are covered by test-app-efficiency");
 
 for (const key of ["homeTeamLabel", "openTeamForChild"]) {
   assert.equal((translations.match(new RegExp(`\\b${key}:`, "g")) ?? []).length, 2, `${key} must be translated in English and Spanish`);

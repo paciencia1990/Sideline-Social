@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
 import { useAuth } from "@/context/AuthContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
@@ -43,6 +44,10 @@ import { acknowledgeNotificationAfterOpen } from "@/services/notificationService
 import { formatPublicUserName, getFriendNameInitials } from "@/utils/friendPrivacy";
 import { getSentAge, reconcilePendingFriendRequests } from "@/utils/friendRequestState";
 import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
+
+type FriendsRefreshSections = { profile: boolean; friends: boolean; requests: boolean };
+const ALL_FRIENDS_SECTIONS: FriendsRefreshSections = { profile: true, friends: true, requests: true };
+const REQUESTS_SECTION: FriendsRefreshSections = { profile: false, friends: false, requests: true };
 
 function SectionTitle({ title, count }: { title: string; count?: number }) {
   return (
@@ -379,12 +384,15 @@ export default function FriendsScreen() {
   const [incomingExpanded, setIncomingExpanded] = useState(false);
   const [outgoingExpanded, setOutgoingExpanded] = useState(false);
   const [suggestedUsers, setSuggestedUsers] = useState<SuggestedFriendProfile[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(true);
+  const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
   const [searchResults, setSearchResults] = useState<FriendSearchResult[]>([]);
   const [searchCompleted, setSearchCompleted] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchRefreshVersion, setSearchRefreshVersion] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [displayUserId, setDisplayUserId] = useState(user?.uid);
   const [refreshing, setRefreshing] = useState(false);
   const [searching, setSearching] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -396,6 +404,10 @@ export default function FriendsScreen() {
   const acknowledgedNotificationIds = useRef(new Set<string>());
   const incomingExpansionInitialized = useRef(false);
   const previousIncomingCount = useRef(0);
+  const focused = useRef(false);
+  const knownFriends = useRef<FriendProfile[]>([]);
+  const overviewLoaded = useRef(false);
+  const knownRequests = useRef<{ incoming: HydratedIncomingFriendRequest[]; outgoing: FriendRequest[] }>({ incoming: [], outgoing: [] });
 
   const outgoingUserIds = useMemo(
     () => new Set(outgoingRequests.map((request) => request.toUserId)),
@@ -411,67 +423,78 @@ export default function FriendsScreen() {
     [normalizedSearchText],
   );
 
-  const loadFriends = useCallback(async () => {
-    const requestSequence = ++friendsLoadSequence.current;
-    if (!user) {
-      setCurrentProfile(null);
-      setFriends([]);
-      setIncomingRequests([]);
-      setOutgoingRequests([]);
-      setSuggestedUsers([]);
-      setSearchResults([]);
-      setSearchCompleted(false);
-      setSearchError(null);
-      setLoading(false);
-      return;
-    }
+  useEffect(() => {
+    setDisplayUserId(user?.uid);
+    friendsLoadSequence.current += 1;
+    overviewLoaded.current = false;
+    knownFriends.current = [];
+    knownRequests.current = { incoming: [], outgoing: [] };
+    setCurrentProfile(null); setFriends([]); setIncomingRequests([]); setOutgoingRequests([]);
+    setSuggestedUsers([]); setSuggestionsError(null); setSuggestionsLoading(Boolean(user?.uid));
+    setLoading(Boolean(user?.uid)); setRefreshing(false); setLoadError(null);
+    acknowledgedNotificationIds.current.clear();
+    incomingExpansionInitialized.current = false;
+    previousIncomingCount.current = 0;
+  }, [user?.uid]);
 
-    setLoadError(null);
-    try {
-      const [profile, nextFriends, nextRequestGroups, nextSuggested] = await measureDevelopmentPerformance(
-        "friends.overview",
-        () => Promise.all([
-          getCurrentUserProfile(),
-          getFriends(user.uid),
-          getFriendRequestGroups(user.uid),
-          searchUsers(""),
-        ]),
-      );
-      if (friendsLoadSequence.current !== requestSequence) return;
-      const reconciledRequests = reconcilePendingFriendRequests(
-        nextRequestGroups.incoming,
-        nextRequestGroups.outgoing,
-        new Set(nextFriends.map((friend) => friend.id)),
-      );
-      setCurrentProfile(profile);
-      setFriends(nextFriends);
-      setIncomingRequests(reconciledRequests.incoming);
-      setOutgoingRequests(reconciledRequests.outgoing);
-      setSuggestedUsers(nextSuggested);
+  const refreshFriendSections = useCoalescedRefresh(user?.uid ?? "", {
+    load: async (requested: FriendsRefreshSections) => {
+      const sections = overviewLoaded.current ? requested : ALL_FRIENDS_SECTIONS;
+      const sequence = friendsLoadSequence.current;
+      const [profile, nextFriends, requests] = await measureDevelopmentPerformance("friends.overview", () => Promise.all([
+        sections.profile ? getCurrentUserProfile() : Promise.resolve(null),
+        sections.friends && user?.uid ? getFriends(user.uid) : Promise.resolve(null),
+        sections.requests && user?.uid ? getFriendRequestGroups(user.uid) : Promise.resolve(null),
+      ]));
+      return { sequence, sections, profile, nextFriends, requests };
+    },
+    merge: (a, b) => ({ profile: a.profile || b.profile, friends: a.friends || b.friends, requests: a.requests || b.requests }),
+    covers: (scheduled, requested) => (!requested.profile || scheduled.profile)
+      && (!requested.friends || scheduled.friends) && (!requested.requests || scheduled.requests),
+    onStart: () => setLoadError(null),
+    onSuccess: ({ sequence, sections, profile, nextFriends, requests }) => {
+      if (sequence !== friendsLoadSequence.current) return;
+      if (sections.profile && sections.friends) overviewLoaded.current = true;
+      if (sections.profile) setCurrentProfile(profile);
+      if (nextFriends) { knownFriends.current = nextFriends; setFriends(nextFriends); }
+      if (requests) knownRequests.current = requests;
+      const reconciled = reconcilePendingFriendRequests(knownRequests.current.incoming, knownRequests.current.outgoing,
+        new Set(knownFriends.current.map((friend) => friend.id)));
+      setIncomingRequests(reconciled.incoming); setOutgoingRequests(reconciled.outgoing);
       if (notificationId && !acknowledgedNotificationIds.current.has(notificationId)) {
         acknowledgedNotificationIds.current.add(notificationId);
         void acknowledgeNotificationAfterOpen(notificationId);
       }
-    } catch (nextError) {
-      if (friendsLoadSequence.current !== requestSequence) return;
-      logFriendsScreenIssue("loadFriends", nextError);
-      setLoadError(t("friends.errorBody"));
-    } finally {
-      if (friendsLoadSequence.current === requestSequence) {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    }
-  }, [notificationId, t, user]);
+    },
+    onError: (error) => { logFriendsScreenIssue("loadFriends", error); setLoadError(t("friends.errorBody")); },
+    onSettled: () => { setLoading(false); setRefreshing(false); },
+  });
+  const refreshSuggestions = useCoalescedRefresh(user?.uid ?? "", {
+    load: async (_input: boolean) => user?.uid ? searchUsers("") : [],
+    merge: () => true,
+    onStart: () => { setSuggestionsLoading(true); setSuggestionsError(null); },
+    onSuccess: setSuggestedUsers,
+    onError: (error) => { logFriendsScreenIssue("suggestions", error); setSuggestionsError(t("friends.suggestionsUnavailable")); },
+    onSettled: () => setSuggestionsLoading(false),
+  });
+  const loadFriends = useCallback((invalidate = true) => {
+    void refreshSuggestions(true, invalidate);
+    return refreshFriendSections(ALL_FRIENDS_SECTIONS, invalidate);
+  }, [refreshFriendSections, refreshSuggestions]);
 
   useFocusEffect(useCallback(() => {
-    if (!authLoading) void loadFriends();
-  }, [authLoading, loadFriends]));
-
-  useEffect(() => {
-    if (!user?.uid) return;
-    return subscribeToFriendRequestChanges(user.uid, () => void loadFriends());
-  }, [loadFriends, user?.uid]);
+    focused.current = true;
+    if (authLoading) return () => { focused.current = false; };
+    void loadFriends(false);
+    const unsubscribe = user?.uid ? subscribeToFriendRequestChanges(user.uid, (section) => {
+      if (section === "requests") void refreshFriendSections(REQUESTS_SECTION);
+      else void loadFriends();
+    }) : () => {};
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") void loadFriends(false);
+    });
+    return () => { focused.current = false; unsubscribe(); subscription.remove(); };
+  }, [authLoading, loadFriends, refreshFriendSections, user?.uid]));
 
   useEffect(() => {
     if (loading) return;
@@ -500,17 +523,9 @@ export default function FriendsScreen() {
       Math.max(0, nextExpiry - Date.now()) + 250,
       2_147_483_647,
     );
-    const timeout = setTimeout(() => void loadFriends(), delay);
+    const timeout = setTimeout(() => { if (focused.current) void refreshFriendSections(REQUESTS_SECTION); }, delay);
     return () => clearTimeout(timeout);
-  }, [incomingRequests, loadFriends, outgoingRequests]);
-
-  useEffect(() => {
-    if (!user?.uid) return;
-    const subscription = AppState.addEventListener("change", (nextState) => {
-      if (nextState === "active") void loadFriends();
-    });
-    return () => subscription.remove();
-  }, [loadFriends, user?.uid]);
+  }, [incomingRequests, refreshFriendSections, outgoingRequests]);
 
   useEffect(() => {
     const requestSequence = ++searchRequestSequence.current;
@@ -674,7 +689,7 @@ export default function FriendsScreen() {
     void loadFriends();
   }, [loadFriends]);
 
-  if (authLoading || loading) {
+  if (authLoading || loading || displayUserId !== user?.uid) {
     return (
       <ScreenWrapper>
         <View style={styles.centeredState}>
@@ -945,6 +960,15 @@ export default function FriendsScreen() {
         )}
 
         <SectionTitle title={t("friends.suggested")} />
+        {suggestionsError ? (
+          <Card style={styles.errorCard}>
+            <Text style={styles.errorBody}>{suggestionsError}</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={() => void refreshSuggestions(true)} style={styles.retryButton}>
+              <Text style={styles.retryText}>{t("friends.retry")}</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : null}
+        {suggestionsLoading && suggestedUsers.length === 0 ? <ActivityIndicator color={Colors.primary} /> : null}
         {suggestedUsers.length > 0 ? (
           suggestedUsers.map((profile) => {
             const pending = outgoingUserIds.has(profile.id);
@@ -969,7 +993,7 @@ export default function FriendsScreen() {
             );
           })
         ) : (
-          <EmptyState title={t("friends.noSuggestionsTitle")} body={t("friends.noSuggestionsBody")} />
+          !suggestionsLoading && !suggestionsError ? <EmptyState title={t("friends.noSuggestionsTitle")} body={t("friends.noSuggestionsBody")} /> : null
         )}
       </KeyboardAwareScrollView>
     </ScreenWrapper>

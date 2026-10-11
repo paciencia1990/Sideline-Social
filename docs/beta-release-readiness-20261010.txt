@@ -29,6 +29,13 @@ Included client changes
 10. Admin member search: public-name filtering, 20-row results, Show more/Clear,
     preserved invitation/acceptance process and complete names beyond 250 members.
 
+11. Home/Friends/chat efficiency: share overlapping reads, refresh Friend requests
+    separately, load suggestions independently, pause offscreen Friends listeners,
+    keep loaded Squad content visible during background refresh, count unread chats
+    without public-profile hydration, and start independent message reads together.
+    Account changes discard old responses; active membership and message visibility
+    checks remain in force. See docs/app-efficiency-changes-20261010.txt.
+
 Notifications
 The existing source already contains the two dismissal callables. The retained
 October 7 read-only assessment found them absent from staging, explaining why

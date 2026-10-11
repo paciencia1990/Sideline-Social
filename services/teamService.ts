@@ -157,9 +157,25 @@ export function isEligibleStaffRoleTarget(
     !hasTeamRole(membership, "coach");
 }
 
-export async function getCurrentUserTeamMemberships(options: TeamLookupOptions = {}): Promise<TeamMembership[]> {
+const membershipRequests = new Map<string, Promise<TeamMembership[]>>();
+
+export function getCurrentUserTeamMemberships(options: TeamLookupOptions = {}): Promise<TeamMembership[]> {
   const user = auth.currentUser;
-  if (!user) return [];
+  if (!user) return Promise.resolve([]);
+  // Share overlapping reads only. Strict and permissive callers stay separate.
+  const key = JSON.stringify([user.uid, Boolean(options.requireComplete), Boolean(options.throwOnError)]);
+  const existing = membershipRequests.get(key);
+  if (existing) return existing;
+  const request = loadCurrentUserTeamMemberships(user, { requireComplete: Boolean(options.requireComplete), throwOnError: Boolean(options.throwOnError) }).then((memberships) =>
+    auth.currentUser?.uid === user.uid ? memberships : []);
+  const tracked = request.finally(() => {
+    if (membershipRequests.get(key) === tracked) membershipRequests.delete(key);
+  });
+  membershipRequests.set(key, tracked);
+  return tracked;
+}
+
+async function loadCurrentUserTeamMemberships(user: { uid: string }, options: TeamLookupOptions): Promise<TeamMembership[]> {
 
   try {
     const userSnapshot = await getUserTeamIndex(user.uid);

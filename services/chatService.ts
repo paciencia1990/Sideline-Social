@@ -507,7 +507,27 @@ export function subscribeToFriendChatInvitations(
 }
 
 export function subscribeToUnreadFriendConversationCount(uid: string, onNext: (count: number) => void) {
-  return subscribeToFriendConversations(uid, (items) => onNext(items.filter((item) => item.unread).length), () => onNext(0));
+  let generation = 0, stopped = false;
+  const active = () => !stopped && auth.currentUser?.uid === uid;
+  const unsubscribe = onSnapshot(
+    query(collection(db, "friendConversations"), where("activeParticipantIds", "array-contains", uid), orderBy("lastMessageAt", "desc"), limit(CHAT_LIST_LIMIT)),
+    async (snapshot) => {
+      const currentGeneration = ++generation;
+      try {
+        const conversations = snapshot.docs.map((item) => toConversation({ id: item.id, data: () => item.data() }));
+        // Counting needs membership and last-message visibility, not names/photos.
+        const [members, lastMessageStates] = await Promise.all([
+          Promise.all(conversations.map((item) => loadOwnMember(item.conversationId, uid))),
+          Promise.all(conversations.map((item) => loadOwnConversationLastMessageState(item, uid))),
+        ]);
+        if (!active() || currentGeneration !== generation) return;
+        onNext(conversations.filter((conversation, index) => members[index]?.status === "active"
+          && !lastMessageStates[index]?.hiddenForMe && isConversationUnread(conversation, members[index]!, uid)).length);
+      } catch { if (active() && currentGeneration === generation) onNext(0); }
+    },
+    () => { generation += 1; if (active()) onNext(0); },
+  );
+  return () => { stopped = true; generation += 1; unsubscribe(); };
 }
 
 export async function getFriendConversationAccess(conversationId: string): Promise<ConversationAccess | null> {
@@ -683,8 +703,8 @@ function hydrateConversationNames(conversation: FriendConversation, profiles: Re
 }
 
 async function hydrateChatMessages(messages: FriendChatMessage[], uid: string) {
-  const profiles = await loadCurrentChatProfiles(messages.flatMap((message) => message.senderUserId ? [message.senderUserId] : []));
-  const [ownReactions, ownStates] = await Promise.all([
+  const [profiles, ownReactions, ownStates] = await Promise.all([
+    loadCurrentChatProfiles(messages.flatMap((message) => message.senderUserId ? [message.senderUserId] : [])),
     loadOwnMessageReactions(messages, uid),
     loadOwnMessageStates(messages, uid),
   ]);

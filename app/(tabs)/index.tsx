@@ -25,6 +25,7 @@ import { getLocalPerkPreviewOffer, LOCAL_PERK_AD_PREVIEW_ENABLED } from "@/const
 import { useAuth } from "@/context/AuthContext";
 import { useSquad } from "@/context/SquadContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
+import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
 import { useSquadGameLobbies } from "@/hooks/useSquadGameLobbies";
 import {
   retryPendingNotificationAcknowledgements,
@@ -74,10 +75,10 @@ export default function HomeScreen() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [myTeamsSummary, setMyTeamsSummary] = useState<ParentHomeTeamsSummary | null>(null);
+  const [myTeamsOwner, setMyTeamsOwner] = useState<string | undefined>(undefined);
   const [myTeamsLoading, setMyTeamsLoading] = useState(true);
   const [myTeamsError, setMyTeamsError] = useState<string | null>(null);
   const [openingTeamId, setOpeningTeamId] = useState<string | null>(null);
-  const myTeamsRequestId = useRef(0);
   const teamNavigationInFlight = useRef<string | null>(null);
   const [activeChallenge, setActiveChallenge] = useState<UserWeeklyChallenge | null>(null);
   const [challengeError, setChallengeError] = useState<string | null>(null);
@@ -103,29 +104,22 @@ export default function HomeScreen() {
   const unreadBadge = formatUnreadBadgeCount(safeUnreadCount);
   const localPerkPreviewOffer = LOCAL_PERK_AD_PREVIEW_ENABLED ? getLocalPerkPreviewOffer(t) : null;
 
-  const loadMyTeams = useCallback(async () => {
-    const requestId = ++myTeamsRequestId.current;
-    if (!user?.uid) {
-      setMyTeamsSummary(null);
-      setMyTeamsError(null);
-      setMyTeamsLoading(false);
-      return;
-    }
-    setMyTeamsLoading(true);
+  const refreshMyTeams = useCoalescedRefresh(user?.uid ?? "", {
+    load: async (_input: boolean) => user?.uid
+      ? measureDevelopmentPerformance("home.parent-teams", getParentHomeTeamsSummary)
+      : null,
+    merge: () => true,
+    onStart: () => { setMyTeamsLoading(true); setMyTeamsError(null); },
+    onSuccess: (summary) => { setMyTeamsOwner(user?.uid); setMyTeamsSummary(summary); },
+    onError: () => setMyTeamsError(t("myTeams.loadError")),
+    onSettled: () => setMyTeamsLoading(false),
+  });
+  const loadMyTeams = useCallback(() => refreshMyTeams(true), [refreshMyTeams]);
+  useEffect(() => {
+    setMyTeamsSummary(null);
     setMyTeamsError(null);
-    try {
-      const nextSummary = await measureDevelopmentPerformance(
-        "home.parent-teams",
-        getParentHomeTeamsSummary,
-      );
-      if (requestId === myTeamsRequestId.current) setMyTeamsSummary(nextSummary);
-    } catch (nextError) {
-      console.warn("[HomeScreen] My Teams load error:", nextError);
-      if (requestId === myTeamsRequestId.current) setMyTeamsError(t("myTeams.loadError"));
-    } finally {
-      if (requestId === myTeamsRequestId.current) setMyTeamsLoading(false);
-    }
-  }, [t, user?.uid]);
+    setMyTeamsLoading(Boolean(user?.uid));
+  }, [user?.uid]);
   const openParentTeam = useCallback(async (teamId: string) => {
     if (teamNavigationInFlight.current) return;
     teamNavigationInFlight.current = teamId;
@@ -191,8 +185,8 @@ export default function HomeScreen() {
   useFocusEffect(useCallback(() => {
     teamNavigationInFlight.current = null;
     setOpeningTeamId(null);
-    void loadMyTeams();
-  }, [loadMyTeams]));
+    void refreshMyTeams(true, false);
+  }, [refreshMyTeams]));
   useFocusEffect(useCallback(() => {
     void reloadMemberships();
   }, [reloadMemberships]));
@@ -315,7 +309,7 @@ export default function HomeScreen() {
           onRetry={loadMyTeams}
           onViewTeams={() => router.push("/teams" as never)}
           openingTeamId={openingTeamId}
-          summary={myTeamsSummary}
+          summary={myTeamsOwner === user?.uid ? myTeamsSummary : null}
         />
         {error ? <StateCard title={t("home.errorTitle")} body={error} /> : null}
 

@@ -174,10 +174,16 @@ function dataToRequest(value: unknown): FriendRequest | null {
   };
 }
 
-async function getPrivateUserProfile(userId: string): Promise<PrivateFriendProfile | null> {
-  const userDoc = await getDoc(doc(db, USERS_COLLECTION, userId));
-  if (!userDoc.exists()) return null;
-  return docToPrivateProfile({ id: userDoc.id, data: () => userDoc.data() });
+let privateProfileRequest: { userId: string; promise: Promise<PrivateFriendProfile | null> } | null = null;
+function getPrivateUserProfile(userId: string): Promise<PrivateFriendProfile | null> {
+  if (privateProfileRequest?.userId === userId) return privateProfileRequest.promise;
+  const request = getDoc(doc(db, USERS_COLLECTION, userId)).then((userDoc) => {
+    if (auth.currentUser?.uid !== userId || !userDoc.exists()) return null;
+    return docToPrivateProfile({ id: userDoc.id, data: () => userDoc.data() });
+  });
+  const tracked = request.finally(() => { if (privateProfileRequest?.promise === tracked) privateProfileRequest = null; });
+  privateProfileRequest = { userId, promise: tracked };
+  return tracked;
 }
 
 export async function getCurrentUserProfile(): Promise<FriendProfile | null> {
@@ -332,17 +338,17 @@ export async function getOutgoingFriendRequests(userId: string): Promise<FriendR
 
 export function subscribeToFriendRequestChanges(
   userId: string,
-  onChange: () => void,
+  onChange: (section: "requests" | "friendship") => void,
 ): Unsubscribe {
   if (auth.currentUser?.uid !== userId) return () => {};
-  const createSnapshotHandler = () => {
+  const createSnapshotHandler = (section: "requests" | "friendship") => {
     let initialized = false;
     return () => {
       if (!initialized) {
         initialized = true;
         return;
       }
-      onChange();
+      onChange(section);
     };
   };
   const handleError = (error: unknown) => logFriendsIssue("subscribeFriendRequests", error);
@@ -354,7 +360,7 @@ export function subscribeToFriendRequestChanges(
       where("expiresAt", ">", Timestamp.now()),
       limit(100),
     ),
-    createSnapshotHandler(),
+    createSnapshotHandler("requests"),
     handleError,
   );
   const unsubscribeOutgoing = onSnapshot(
@@ -365,12 +371,12 @@ export function subscribeToFriendRequestChanges(
       where("expiresAt", ">", Timestamp.now()),
       limit(100),
     ),
-    createSnapshotHandler(),
+    createSnapshotHandler("requests"),
     handleError,
   );
   const unsubscribeFriendship = onSnapshot(
     doc(db, USERS_COLLECTION, userId),
-    createSnapshotHandler(),
+    createSnapshotHandler("friendship"),
     (error) => logFriendsIssue("subscribeFriendships", error),
   );
   return () => {
