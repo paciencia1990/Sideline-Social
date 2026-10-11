@@ -15,9 +15,10 @@ Backend scope
   findOrCreateVenueSportSquad, findNearbyVenueSportSquads, searchVenueSportSquads,
   getVenueSportSquadDetail and getSquadAdministration.
 - Existing source updates preserved each target's runtime configuration and
-  invocation policy. New callables use the normal public HTTPS callable
-  transport with permanent-account authorization and App Check in the source.
-  HTTP invoker permission does not grant message or child-profile access.
+  invocation policy. Callables use the normal public HTTPS callable transport
+  with permanent-account authorization. Translation and Squad sports editing
+  additionally enforce App Check in their source. HTTP invoker permission does
+  not grant message or child-profile access.
 
 Translation
 - Enabled the translate.googleapis.com service under existing project billing.
