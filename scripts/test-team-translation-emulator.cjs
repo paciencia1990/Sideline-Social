@@ -72,6 +72,10 @@ const timeout = setTimeout(() => { console.error('Local translation emulator tim
   } finally { await environment.cleanup(); }
   await assert.rejects(callable.run(request, { auth: { uid: 'parent-a', token: {} } }), (error) => error.code === 'failed-precondition');
   await assert.rejects(callable.run(request, { app: { appId: 'demo-app' }, auth: null }), (error) => error.code === 'unauthenticated');
+  await assert.rejects(callable.run(request, {
+    app: { appId: 'demo-app' },
+    auth: { uid: 'parent-a', token: { firebase: { sign_in_provider: 'anonymous' } } },
+  }), (error) => error.code === 'permission-denied' && error.details?.reason === 'permanent_account_required', 'Verified app context cannot grant translation to an anonymous account');
   await assert.rejects(callable.run(request, { app: { appId: 'demo-app' }, auth: { uid: 'parent-a', token: {} } }), (error) => error.code === 'unavailable');
   console.log('Translation emulator: authorized received text/captions, audience, membership, standing, takedown, hidden messages, concurrent budget and account-counter deletion passed. No provider calls.');
 })().catch((error) => { console.error(error); process.exitCode = 1; }).finally(async () => { clearTimeout(timeout); await admin.app().delete(); });

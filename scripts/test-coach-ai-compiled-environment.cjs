@@ -78,6 +78,8 @@ const syntheticProfiles = {
 
 const usesEasPreview = process.env.COACH_AI_REQUIRE_EAS_PREVIEW === "true";
 const usesEasProduction = process.env.COACH_AI_REQUIRE_EAS_PRODUCTION === "true";
+const exportPlatform = process.env.COACH_AI_COMPILED_PLATFORM ?? "android";
+assert.ok(["android", "ios"].includes(exportPlatform), "Compiled bundle verification requires Android or iOS");
 if (usesEasPreview && usesEasProduction) {
   throw new Error("Only one EAS environment may be verified per compiled-environment invocation.");
 }
@@ -110,7 +112,7 @@ try {
   fs.rmSync(resolvedTemporaryDirectory, { recursive: true, force: true });
 }
 
-console.log(`Coach AI compiled Firebase isolation and Expo export tests passed (${profiles.map((profile) => profile.label).join(", ")}).`);
+console.log(`Coach AI compiled Firebase isolation and ${exportPlatform} Expo export tests passed (${profiles.map((profile) => profile.label).join(", ")}).`);
 
 function selectProfiles() {
   if (usesEasPreview) {
@@ -142,6 +144,8 @@ function selectProfiles() {
 function readRequiredPreviewEnvironment() {
   const environment = {};
   for (const name of [...requiredFirebaseVariables, ...betaVariables]) {
+    // Node-only fixture reads the selected environment keys before Expo compiles the app.
+    // eslint-disable-next-line expo/no-dynamic-env-var
     const value = process.env[name];
     if (value) environment[name] = value;
   }
@@ -165,6 +169,8 @@ function readRequiredPreviewEnvironment() {
 function readProductionEnvironment(profile) {
   const environment = {};
   for (const name of managedVariables) {
+    // Node-only fixture reads the selected environment keys before Expo compiles the app.
+    // eslint-disable-next-line expo/no-dynamic-env-var
     const value = process.env[name];
     if (value) environment[name] = value;
   }
@@ -318,7 +324,7 @@ function runAndInspectExpoExport(profile) {
   };
   const result = childProcess.spawnSync(
     executable,
-    ["expo", "export", "--platform", "android", "--output-dir", outputDirectory],
+    ["expo", "export", "--platform", exportPlatform, "--output-dir", outputDirectory],
     {
       cwd: projectRoot,
       encoding: "utf8",
@@ -336,7 +342,7 @@ function runAndInspectExpoExport(profile) {
   }
 
   const bundleFiles = listFiles(outputDirectory).filter((file) => /\.(?:hbc|js)$/u.test(file));
-  assert.equal(bundleFiles.length > 0, true, `${profile.label} did not produce an Android JavaScript bundle.`);
+  assert.equal(bundleFiles.length > 0, true, `${profile.label} did not produce an ${exportPlatform} JavaScript bundle.`);
   const bundleBuffers = bundleFiles.map((file) => fs.readFileSync(file));
   assert.equal(
     bundleBuffers.some((buffer) => buffer.includes(Buffer.from(profile.expectedProjectId))),

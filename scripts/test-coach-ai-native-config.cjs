@@ -156,7 +156,7 @@ try {
   }), /project ID does not match/);
   assert.throws(() => assertStagingNativeFirebaseConfig({ ...valid, androidPackage: "com.wrong.app" }), /exactly one/);
   assert.throws(() => assertStagingNativeFirebaseConfig({ ...valid, androidAppId: "1:123:android:wrong" }), /app identity/);
-  assert.throws(() => assertStagingNativeFirebaseConfig({ ...valid, androidSha1: "00112233" }), /SHA-1 OAuth client/);
+  assert.throws(() => assertStagingNativeFirebaseConfig({ ...valid, androidSha1: "00112233" }), /approved same-project Android and web OAuth association/);
   assert.throws(() => assertStagingNativeFirebaseConfig({ ...valid, webClientId: "wrong.apps.googleusercontent.com" }), /explicit web OAuth client/);
   assert.throws(() => assertStagingNativeFirebaseConfig({ ...valid, iosBundleIdentifier: "com.wrong.app" }), /must target/);
   assert.throws(() => assertStagingNativeFirebaseConfig({ ...valid, iosFile: path.join(temporaryDirectory, "missing.plist") }), /missing or invalid/);

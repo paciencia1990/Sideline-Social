@@ -57,7 +57,10 @@ async function run() {
   assert.doesNotMatch(lobbyHook, /LOCAL_JOIN_CODE|["']LOCAL["']/);
   assert.doesNotMatch(lobbyHook, /createGameJoinCode|createGameLobby|releaseGameJoinCode/);
   assert.match(lobbyHook, /getGameJoinCodeForSession/);
-  assert.match(lobbyHook, /leaveGameLobby/);
+  assert.match(lobbyHook, /useGameRoomDeparture/);
+  const departureHook = fs.readFileSync(path.join(process.cwd(), 'hooks', 'useGameRoomDeparture.ts'), 'utf8');
+  assert.match(departureHook, /await leaveGameLobby\(\{ lobbyId \}\)/);
+  assert.match(lobbyHook, /await roomDeparture\.depart\(\)/);
   assert.match(lobbyBase, /spokenGameJoinCode/);
   assert.match(lobbyBase, /accessibilityLabel/);
   assert.match(lobbyBase, /Share\.share/);

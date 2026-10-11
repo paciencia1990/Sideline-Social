@@ -1,0 +1,97 @@
+Sideline Social prebuild assessment - 2026-10-11
+
+Result
+The candidate passes the automated checks in this assessment and is ready for
+the next Android and iOS beta builds. Installed-device acceptance is still
+required for the resulting artifacts. No new beta build was started.
+
+Assessed application source: 736f0b20f1c82be0fd5070a29634fa2d1ab04c58
+Previously delivered Android 32 / iOS 20 source:
+1d0012efef5f60d0ad1f014171135a435a385ae1
+
+The assessment changed only tests and this report. App behavior, dependencies,
+native configuration, backend source, Rules and indexes were not changed.
+
+Candidate coverage
+- Game-start navigation handoff, bounded preparation/retry, synchronized start,
+  responsive answer handling, self-row Ready toggle, rematch and departure.
+- Persistent Parent Mode navigation on Leaderboard, Chat, Teams, schedules,
+  Squads and all three game directories and waiting rooms. Lobby exits retain
+  authoritative cleanup, retry and latest-destination handling.
+- Child edit/save/delete, authentication and suspended-account access,
+  notification acknowledgement and Clear All, friend requests and search,
+  chat media loading, Coach recovery, translation, weather links, multi-sport
+  Squads and admin search.
+
+Passed verification
+1. Client and Functions TypeScript checks.
+2. 130 local regression suites. Six stale assertions were corrected to match
+   the delivered native baseline, scoped translations, delegated departure,
+   retained transitions and the existing translation authorization contract.
+   Two initial local permission failures passed with the required filesystem
+   and localhost access. The original failed results were retained separately.
+3. Twelve distinct isolated Firebase integration/rules suites covering games,
+   lobby lifecycle, notifications, friend requests, weather administration,
+   multi-sport Squads, 360-member admin lists, translation, Team messages,
+   friend chat, account standing and Parent Teams/child privacy.
+4. Complete multiplayer journeys for Bomb Defusal (3 players, 6 commands),
+   Trivia Blitz (3 players, 10 questions) and Spot the Differences (4 players,
+   10 discoveries). Real server countdown, authenticated listener delivery,
+   gameplay completion, results, duplicate submissions, rematch and departure
+   passed. Separate lifecycle coverage includes host transfer, queued players,
+   readiness cleanup and repeated leave.
+5. Translation authorization rejects anonymous accounts even with verified
+   App Check context; protected audience, membership, standing, hidden content
+   and budget checks passed. No external translation request was made here.
+6. Full app ESLint: zero errors, eleven existing warnings in unchanged files.
+   All eight changed test scripts: zero errors and zero warnings.
+7. Android and iOS identity/configuration parity, external-testing packaging,
+   Firebase/OAuth/App Check/Maps checks, Android Gradle configuration fixtures
+   and iOS generated-project fixtures. No Xcode build or pod installation ran.
+8. Local JavaScript/Hermes exports for Android and iOS passed three synthetic
+   configuration profiles, including Firebase isolation and release gates.
+   These checks did not submit an EAS build or create a native beta artifact.
+9. Read-only cloud checks found 30 relevant app endpoints ACTIVE with unchanged
+   descriptors, translation enabled with its existing monthly cap, and the
+   Team replies index READY. All 19 checked moderation descriptors remained
+   ACTIVE and unchanged; the existing activation flags and alert secret
+   version 2 binding were preserved. Moderation remains live.
+10. Whitespace and scoped credential/private-data checks passed.
+
+Emulator reconciliation
+The first combined run had three trigger timeouts after resets between suites.
+A fresh isolated project without those inter-suite resets passed friend
+requests, Team messages and account standing. The newly added anonymous
+translation assertion initially expected the wrong error code; the actual
+permanent-account denial was correct. Its exact permission-denied reason is
+now asserted and passed in a fresh translation emulator run. These were test
+harness/assertion issues; no product or cloud repair was needed.
+
+Limits and next device pass
+Automated results do not establish native gesture behavior or perceived latency
+on the next installed builds. Windows fixtures cannot prove real Apple/Google
+account chooser behavior on an iPhone. After installing the resulting beta
+artifacts, check these paths on Android and iOS:
+- Start and complete each game with multiple devices; verify self-row Ready,
+  answer feedback, results, Play Again, Home/Leave and host departure.
+- Check the Parent menu on requested detail screens, safe areas, chat keyboard,
+  Android hardware/gesture back and iOS swipe-back. Test offline leave/Retry.
+- Edit, save and delete a benign child profile, then reopen to confirm persistence.
+- Complete Google and Apple sign-in on their supported platforms.
+- Read notifications and use Clear All; reopen after a cold start to confirm
+  they stay cleared. Verify incoming friend requests on the intended account.
+- Open chat images/voice; translate a Team/Coach message to Spanish, hide the
+  translation and confirm replies load. Confirm consent and language selection.
+- Edit a Squad weather link as an admin and return from the provider page;
+  verify multi-sport editing, member search and Coach Retry/Parent Mode escape.
+
+Delivery preparation
+Android 32 and iOS 20 contain the previous delivered baseline. They do not
+contain the later game-start handoff, persistent Parent menu or Squad weather
+editor client changes assessed here. Use the existing protected external-testing
+configuration for future builds. Read the remote counters, verify platform
+identifiers and bind the new source commit before submitting either build.
+
+No cloud configuration writes, live fixture actions, store submissions,
+moderation changes or Android/iOS beta builds occurred in this assessment.
+Detailed logs and reconciled receipts are retained privately outside the repo.

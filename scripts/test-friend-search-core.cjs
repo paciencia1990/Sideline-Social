@@ -160,6 +160,16 @@ assert.ok(service.includes('functions, "searchPublicUserProfiles"'));
 assert.ok(rules.includes("allow list: if false;"));
 assert.ok(audit.includes("isSearchablePublicProfileProjection"));
 assert.ok(audit.includes("displayNameLower"));
+const translationAst = ts.createSourceFile("i18n/index.ts", translations, ts.ScriptTarget.Latest, true);
+const friendBlocks = [];
+function findFriends(node) {
+  if (ts.isPropertyAssignment(node) && node.name.getText(translationAst) === "friends" && ts.isObjectLiteralExpression(node.initializer)) {
+    friendBlocks.push(node.initializer);
+  }
+  ts.forEachChild(node, findFriends);
+}
+findFriends(translationAst);
+assert.equal(friendBlocks.length, 2, "Friends translations exist in both languages");
 for (const key of [
   "findParents",
   "searchResults",
@@ -172,7 +182,11 @@ for (const key of [
   "respondToRequest",
   "reportSearchResult",
 ]) {
-  assert.equal((translations.match(new RegExp(`${key}:`, "g")) || []).length, 2, `${key} needs English and Spanish copy`);
+  for (const block of friendBlocks) {
+    const values = block.properties.filter(property => ts.isPropertyAssignment(property) && property.name.getText(translationAst) === key);
+    assert.equal(values.length, 1, `${key} needs English and Spanish Friends copy`);
+    assert.ok(ts.isStringLiteral(values[0].initializer) && values[0].initializer.text.trim(), `${key} must contain text`);
+  }
 }
 
 console.log("Friend Search projection, prefix, ranking, relationship, privacy, stale-response, UI-separation, and localization tests passed.");

@@ -104,7 +104,7 @@ assert.doesNotMatch(triviaSource, /Team Points|pointsAwarded\} points|Trivia Sco
 lobbySources.forEach((lobbySource) => {
   assert.match(
     lobbySource,
-    /params:\s*sessionId\s*\?\s*\{\s*sessionId/,
+    /params:\s*sessionId\s*\?\s*\{\s*\.\.\.retainedParams,\s*sessionId/,
     "each canonical lobby session reaches its game route",
   );
   assert.match(

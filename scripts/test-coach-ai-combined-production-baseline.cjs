@@ -5,7 +5,9 @@ const Module = require("node:module");
 const path = require("node:path");
 
 const projectRoot = path.resolve(__dirname, "..");
-const baselineCommit = "665ccd3fa38dbcec1f6be6c2aab51c6facd2e5fd";
+// Android 32 / iOS 20 already include the reviewed App Check, Maps and SDK
+// configuration. Compare the next candidate with that delivered baseline.
+const baselineCommit = "1d0012efef5f60d0ad1f014171135a435a385ae1";
 const appConfigPath = path.join(projectRoot, "app.config.js");
 const easPath = path.join(projectRoot, "eas.json");
 const managedEnvironmentNames = [
@@ -38,23 +40,21 @@ try {
   assert.deepEqual(
     combinedAppConfig,
     baselineAppConfig,
-    "The normal production Expo configuration must remain identical to 665ccd3.",
+    "The normal production Expo configuration must match the delivered Android 32 / iOS 20 baseline.",
   );
 
   const baselineEas = JSON.parse(readBaselineFile("eas.json"));
   const combinedEas = JSON.parse(fs.readFileSync(easPath, "utf8"));
-  const productionProfileWithoutVariantCommand = structuredClone(combinedEas.build.production);
-  delete productionProfileWithoutVariantCommand.android.gradleCommand;
   assert.deepEqual(
-    productionProfileWithoutVariantCommand,
+    combinedEas.build.production,
     baselineEas.build.production,
-    "The normal production EAS build profile must remain identical to 665ccd3 apart from the explicit supported native variant.",
+    "The normal production EAS build profile must match the delivered baseline.",
   );
   assert.equal(combinedEas.build.production.android.gradleCommand, ":app:bundleProductionRelease");
   assert.deepEqual(
     combinedEas.submit.production,
     baselineEas.submit.production,
-    "The normal production EAS submit profile must remain identical to 665ccd3.",
+    "The normal production EAS submit profile must match the delivered baseline.",
   );
   assert.equal(combinedEas.build.production.env?.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED, undefined);
   assert.equal(combinedEas.build.production.env?.EXPO_PUBLIC_AI_COACH_BETA_BUILD, undefined);
