@@ -92,6 +92,7 @@
     "test:friend-chat-selection-menu": "node scripts/test-friend-chat-selection-menu.cjs",
     "test:friend-chat-image-picker": "node scripts/test-friend-chat-image-picker-resume.cjs",
     "test:friend-chat-image-performance": "node scripts/test-friend-chat-image-performance.cjs",
+    "test:friend-chat-image-loading": "node scripts/test-friend-chat-image-loading.cjs",
     "test:native-upload-blobs": "node scripts/test-friend-chat-native-blob.cjs",
     "test:firestore:friend-chat-rules": "firebase.cmd emulators:exec --only firestore \"node scripts/test-friend-chat-firestore-rules.cjs\"",
     "test:storage:friend-chat-media": "firebase.cmd emulators:exec --project sideline-friend-chat-media-storage-rules-test --only firestore,storage \"node scripts/test-friend-chat-media-storage-rules.cjs\"",

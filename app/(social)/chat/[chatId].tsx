@@ -163,6 +163,7 @@ export default function FriendConversationScreen() {
   const [accessResolvedChatId, setAccessResolvedChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<FriendChatMessage[]>([]);
   const [mediaLoadMessageIds, setMediaLoadMessageIds] = useState<string[]>([]);
+  const [visibleImageMessageIds, setVisibleImageMessageIds] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState<LocalVoiceMemoDraft | null>(null);
@@ -197,15 +198,19 @@ export default function FriendConversationScreen() {
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<FriendChatMessage>[] }) => {
     const currentMessages = messagesRef.current;
     const next = new Set<string>();
+    const visible = new Set<string>();
     viewableItems.forEach((token) => {
       if (token.index == null) return;
+      const visibleMessage = currentMessages[token.index];
+      if (visibleMessage?.messageType === "image" && visibleMessage.image && visibleMessage.status === "active" && !visibleMessage.isModerated) visible.add(visibleMessage.messageId);
       for (let index = Math.max(0, token.index - 2); index <= Math.min(currentMessages.length - 1, token.index + 2); index += 1) {
         const message = currentMessages[index];
-        if (message?.messageType === "image" && message.image && message.status === "active") next.add(message.messageId);
+        if (message?.messageType === "image" && message.image && message.status === "active" && !message.isModerated) next.add(message.messageId);
       }
     });
     const nextIds = [...next];
     setMediaLoadMessageIds((current) => current.length === nextIds.length && current.every((id) => next.has(id)) ? current : nextIds);
+    setVisibleImageMessageIds((current) => current.length === visible.size && current.every((id) => visible.has(id)) ? current : [...visible]);
   }).current;
 
   const scrollToLatest = useCallback((animated: boolean) => {
@@ -225,6 +230,7 @@ export default function FriendConversationScreen() {
     return messages.filter((message) => selected.has(message.messageId));
   }, [messages, selectedMessageIds]);
   const selectionMode = selectedMessageIds.length > 0;
+  const mediaLoadExtraData = useMemo(() => ({ mediaLoadMessageIds, visibleImageMessageIds }), [mediaLoadMessageIds, visibleImageMessageIds]);
   const viewerMessage = useMemo(() => viewerMessageId
     ? messages.find((message) => message.messageId === viewerMessageId && isFriendChatMessageInteractive(message)) ?? null
     : null, [messages, viewerMessageId]);
@@ -1006,8 +1012,8 @@ export default function FriendConversationScreen() {
           ref={listRef}
           contentContainerStyle={messages.length ? styles.messages : styles.emptyMessages}
           data={messages}
-          extraData={mediaLoadMessageIds}
-          keyExtractor={(item) => item.messageId}
+          extraData={mediaLoadExtraData}
+          keyExtractor={(item) => `${user?.uid}:${chatId}:${item.messageId}`}
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={hasMore ? <TouchableOpacity accessibilityRole="button" disabled={loadingEarlier} onPress={() => void loadEarlier()} style={styles.loadEarlier}>{loadingEarlier ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.loadEarlierText}>{t("chat.loadEarlier")}</Text>}</TouchableOpacity> : null}
@@ -1037,6 +1043,7 @@ export default function FriendConversationScreen() {
                   isMine={item.senderUserId === user?.uid}
                    message={item}
                    loadMedia={mediaLoadMessageIds.includes(item.messageId)}
+                  mediaPriority={visibleImageMessageIds.includes(item.messageId) ? "visible" : "nearby"}
                   onActions={() => setActionMessage(item)}
                   onOpenImage={() => setViewerMessageId(item.messageId)}
                   onOpenReactions={beginSelection}
@@ -1134,6 +1141,7 @@ export default function FriendConversationScreen() {
         </View>
       </KeyboardAvoidingView>
       <FriendChatImageViewer
+        key={`${user?.uid}:${chatId}`}
         message={viewerMessage}
         onBack={() => setViewerMessageId(null)}
         onForward={() => {
@@ -1239,6 +1247,7 @@ function MessageBubble({
   message,
   isMine,
   loadMedia,
+  mediaPriority,
   onActions,
   onOpenImage,
   onOpenReactions,
@@ -1251,6 +1260,7 @@ function MessageBubble({
 }: {
   isMine: boolean;
   loadMedia: boolean;
+  mediaPriority: "visible" | "nearby";
   message: FriendChatMessage;
   onActions: () => void;
   onOpenImage: () => void;
@@ -1355,6 +1365,7 @@ function MessageBubble({
                 conversationId={message.conversationId}
                 image={message.image}
                 loadMedia={loadMedia}
+                priority={mediaPriority}
                 messageId={message.messageId}
                 onLongPress={openReactionTray}
                 onOpen={onOpenImage}

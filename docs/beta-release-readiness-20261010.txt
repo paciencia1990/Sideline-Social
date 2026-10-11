@@ -54,6 +54,14 @@ Included client changes
     while the thread is visible. Public-profile reads share only in-flight work.
     See docs/game-and-team-efficiency-20261010.txt for validation and profiling.
 
+16. Chat images: shared cache lookup/downloads, one in-memory manifest, nonblocking
+    batched cache-access persistence, visible/viewer priority over nearby previews,
+    scoped invalidation and cleanup barriers, stale-grant guards and explicit Retry
+    after display failures. Existing protected byte/cache limits and server access
+    checks are preserved. No additional backend or native dependency is needed.
+    See docs/chat-image-loading-repair-20261010.txt for behavioral checks and the
+    synthetic before/after operation comparison. Device timing awaits delivery.
+
 Notifications
 The existing source already contains the two dismissal callables. The retained
 October 7 read-only assessment found them absent from staging, explaining why

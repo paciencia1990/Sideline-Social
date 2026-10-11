@@ -271,10 +271,16 @@ async function run() {
   assert.match(privateThread, /<VoiceMemoUnavailable \/>/);
   assert.match(composer, /kind: "local-draft", uri: draft\.uri/);
   assert.doesNotMatch(composer, /storagePath:\s*draft\.uri/);
-  assert.match(messageService, /blob\.size < 1 \|\| blob\.size !== draft\.sizeBytes/);
+  const nativeBlob = read("utils", "nativeUploadBlob.ts");
+  assert.match(nativeBlob, /!Number\.isSafeInteger\(expectedSizeBytes\) \|\| expectedSizeBytes < 1/);
+  assert.match(nativeBlob, /!blob \|\| blob\.size !== expectedSizeBytes/);
+  assert.match(messageService, /const blob = await readNativeUploadBlob\(draft\.uri, draft\.sizeBytes,/);
   assert.match(messageService, /snapshot\.metadata\.contentType !== draft\.mimeType/);
+  const uploadService = messageService.slice(messageService.indexOf("export async function uploadReservedVoiceMemo"));
+  const localReadIndex = uploadService.indexOf("const blob = await readNativeUploadBlob");
+  const uploadIndex = uploadService.indexOf("task = uploadBytesResumable");
   assert.ok(
-    messageService.indexOf("await (await fetch(draft.uri)).blob()") < messageService.indexOf("const task = uploadBytesResumable"),
+    localReadIndex >= 0 && uploadIndex > localReadIndex,
     "the exact locally previewed URI is read before upload starts",
   );
   assert.match(functionsSource, /messageSnapshot\.data\(\)\?\.voiceMemo\?\.storagePath !== storagePath/);

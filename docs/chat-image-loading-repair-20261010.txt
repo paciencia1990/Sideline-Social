@@ -1,0 +1,59 @@
+Chat image loading repair — October 10, 2026
+
+Friend-chat thumbnails and full-screen photos now share their entire local
+cache lookup and download, including concurrent timeline/viewer requests.
+The cache manifest loads once per process. Cache hits still validate file size,
+but neither wait behind unrelated manifest writes nor write last-access metadata
+before displaying the image. Access timestamps update in memory immediately and
+persist together after one second. File insertion, eviction and deletion stay
+serialized; the cache retains its existing 64 MiB and 128-entry limits.
+
+The download queue prioritizes an opened full image, then visible thumbnails,
+then the existing two-row nearby preview window. Full photos remain lazy until
+the viewer opens, and the viewer keeps the thumbnail while the full photo loads.
+There are still at most three grant/download operations in progress. Work already
+transferring can finish; queued work with no remaining consumers is cancelled.
+
+Account and invalidation guards now cover key hashing, cache hits, grants and
+file publication. Clearing a message affects only that message; new consumers
+wait for its cleanup. Full-cache cleanup also forms a barrier for new consumers.
+Old asynchronous completions cannot replace a newer request's bookkeeping or
+repopulate cleared media-grant entries. Account changes reset mounted image rows
+and the viewer. Local filenames and manifest identifiers remain hashed; protected
+URLs are kept only in memory, and network misses still use the existing authorized
+grant and media endpoints. App Check, Rules and server authorization are intact.
+
+Thumbnail display failures now keep the localized Retry state until an explicit
+retry, rather than automatically repeating requests. Retry taps share cleanup,
+wait for it to settle, and cannot update an unmounted thumbnail.
+
+Validation
+- Client TypeScript and targeted ESLint passed, with no errors or warnings.
+- The new behavioral loading suite exercises actual cache service, grant adapter
+  and thumbnail component code with synthetic native/storage/network adapters.
+  It covers concurrent consumers, cache hits during busy transfers/writes,
+  queued priority/cancellation, corrupt bytes, message/account invalidation,
+  cleanup barriers, count/byte limits, late grant completions and explicit Retry.
+- Existing image-profile, save/forward/action, deletion, selection/reaction,
+  picker recovery, native Blob, upload diagnostics, local-state cleanup, chat
+  layout/navigation and app-efficiency regressions pass.
+- Comparing the previous service with the repaired service in the same synthetic
+  adapter: ten sequential cache hits previously made 20 manifest reads and 10
+  manifest writes before returning. The repair made zero of those operations
+  before returning; both versions validated ten local files and downloaded none.
+  A cache hit previously waited for an unrelated blocked manifest write; the
+  repaired hit returned while that write remained blocked.
+
+These counts establish removed work, not a native latency percentage. The
+connected Android runs version 31, which lacks this repair. First-time images
+still require authorized network transfers. After the next normal beta delivery,
+check cold thumbnails, reopening the same chat, rapid scrolling/full-photo opening
+and explicit offline Retry on Android and iOS. Development-only timings separate
+cache lookup, queue wait, grant, download, decode and total request-to-display;
+they contain only fixed names and durations, never protected identifiers or URLs.
+
+Delivery
+Include this shared client repair in the same next Android/iOS beta candidate.
+No dependency, native configuration or additional backend target changed here.
+Earlier combined-candidate backend and translation readiness requirements remain.
+No build, deployment, store delivery or live moderation change was performed.

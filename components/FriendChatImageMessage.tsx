@@ -27,6 +27,7 @@ type Props = {
   image: StoredFriendChatImage;
   loadMedia: boolean;
   messageId: string;
+  priority: "visible" | "nearby";
   onLongPress: () => void;
   onOpen: () => void;
   onSelect: () => void;
@@ -42,6 +43,7 @@ export function FriendChatImageMessage({
   image,
   loadMedia,
   messageId,
+  priority,
   onLongPress,
   onOpen,
   onSelect,
@@ -52,21 +54,30 @@ export function FriendChatImageMessage({
   const lastLongPressAtRef = useRef(0);
   const onUnavailableRef = useRef(onUnavailable);
   const decodeTraceRef = useRef<(() => number) | null>(null);
+  const loadTraceRef = useRef<(() => number) | null>(null);
+  const retryInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => { onUnavailableRef.current = onUnavailable; }, [onUnavailable]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
-    if (!loadMedia || thumbnailUri) return;
+    if (!loadMedia || thumbnailUri || error) return;
     const controller = new AbortController();
+    loadTraceRef.current = startDevelopmentPerformanceTrace("friend-chat.image-thumbnail-load");
     setError(false);
     void loadFriendChatImageMedia({
       conversationId,
       expectedSizeBytes: image.thumbnailSizeBytes,
       mediaProfileVersion: image.mediaProfileVersion,
       messageId,
+      priority,
       signal: controller.signal,
       storagePath: image.thumbnailPath,
       variant: "thumbnail",
@@ -82,12 +93,18 @@ export function FriendChatImageMessage({
         onUnavailableRef.current();
       });
     return () => controller.abort();
-  }, [conversationId, image.mediaProfileVersion, image.thumbnailPath, image.thumbnailSizeBytes, loadMedia, messageId, retryKey, thumbnailUri]);
+  }, [conversationId, error, image.mediaProfileVersion, image.thumbnailPath, image.thumbnailSizeBytes, loadMedia, messageId, priority, retryKey, thumbnailUri]);
 
   const retry = () => {
-    setError(false);
+    if (retryInFlightRef.current) return;
+    retryInFlightRef.current = true;
     setThumbnailUri(null);
-    void clearFriendChatImageCacheForMessages([messageId]).finally(() => setRetryKey((value) => value + 1));
+    void clearFriendChatImageCacheForMessages([messageId]).catch(() => undefined).finally(() => {
+      retryInFlightRef.current = false;
+      if (!mountedRef.current) return;
+      setError(false);
+      setRetryKey((value) => value + 1);
+    });
   };
 
   const handlePress = () => {
@@ -150,10 +167,13 @@ export function FriendChatImageMessage({
         <Image
           accessibilityIgnoresInvertColors
           cachePolicy="memory"
+          recyclingKey={`${conversationId}:${messageId}:${image.thumbnailPath}`}
           contentFit="cover"
           onDisplay={() => {
             decodeTraceRef.current?.();
             decodeTraceRef.current = null;
+            loadTraceRef.current?.();
+            loadTraceRef.current = null;
           }}
           onError={() => {
             setThumbnailUri(null);

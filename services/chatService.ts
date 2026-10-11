@@ -1052,9 +1052,16 @@ export async function getFriendChatMediaDownloadUrl(input: {
       input,
     );
     const normalized = normalizeVoicePlaybackUrlResponse(result, { allowLocalHttp: __DEV__ });
+    if (auth.currentUser?.uid !== uid || friendChatMediaGrantRequests.get(key) !== request) {
+      const error = new Error("media_grant_cancelled");
+      error.name = "AbortError";
+      throw error;
+    }
     friendChatMediaGrantCache.set(key, normalized);
     return normalized;
-  }).finally(() => friendChatMediaGrantRequests.delete(key));
+  }).finally(() => {
+    if (friendChatMediaGrantRequests.get(key) === request) friendChatMediaGrantRequests.delete(key);
+  });
   friendChatMediaGrantRequests.set(key, request);
   return request;
 }

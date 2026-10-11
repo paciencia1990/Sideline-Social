@@ -58,6 +58,7 @@ export function FriendChatImageViewer({
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const displayTraceRef = useRef<(() => number) | null>(null);
+  const loadTraceRef = useRef<(() => number) | null>(null);
   const onUnavailableRef = useRef(onUnavailable);
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
@@ -106,6 +107,7 @@ export function FriendChatImageViewer({
       return;
     }
     const controller = new AbortController();
+    loadTraceRef.current = startDevelopmentPerformanceTrace("friend-chat.image-full-load");
     setFullUri(null);
     setThumbnailUri(null);
     setUnavailable(false);
@@ -268,11 +270,14 @@ export function FriendChatImageViewer({
                   accessibilityIgnoresInvertColors
                   accessibilityLabel={t("chat.fullScreenPhotoAccessibility", { sender: senderName, timestamp })}
                   cachePolicy="memory"
+                  recyclingKey={`${messageConversationId}:${messageId}`}
                   contentFit="contain"
                   onDisplay={() => {
                     if (!fullUri) return;
                     displayTraceRef.current?.();
                     displayTraceRef.current = null;
+                    loadTraceRef.current?.();
+                    loadTraceRef.current = null;
                   }}
                   onError={() => {
                     setUnavailable(true);

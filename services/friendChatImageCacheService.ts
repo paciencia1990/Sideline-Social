@@ -13,7 +13,7 @@ import {
   type FriendChatImageCacheEntry,
   type FriendChatImageCacheVariant,
 } from "@/utils/friendChatImageCacheCore";
-import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
+import { measureDevelopmentPerformance, startDevelopmentPerformanceTrace } from "@/utils/performanceDiagnostics";
 
 type ExpoImageCacheApi = {
   Image?: {
@@ -32,6 +32,7 @@ export type FriendChatImageMediaRequest = {
   mediaProfileVersion: 1 | 2;
   messageId: string;
   signal?: AbortSignal;
+  priority?: "visible" | "nearby";
   storagePath: string;
   variant: FriendChatImageCacheVariant;
 };
@@ -43,6 +44,9 @@ type DownloadTask = {
   promise: Promise<string>;
   reject: (error: unknown) => void;
   request: FriendChatImageMediaRequest;
+  uid: string;
+  priority: number;
+  finishQueueWait: (() => number) | null;
   resolve: (uri: string) => void;
   started: boolean;
   subscribers: Set<symbol>;
@@ -57,27 +61,35 @@ const inFlightDownloads = new Map<string, DownloadTask>();
 const downloadQueue: DownloadTask[] = [];
 let activeDownloadCount = 0;
 let cacheGeneration = 0;
+const messageInvalidations = new Map<string, number>();
+const pendingMessageClears = new Map<string, Promise<void>>();
 let manifestQueue = Promise.resolve();
+let manifestLoad: Promise<CacheManifest> | null = null;
+let accessWriteTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingCacheClear: Promise<void> | null = null;
 
 export async function loadFriendChatImageMedia(request: FriendChatImageMediaRequest) {
   const uid = currentUserId();
+  const generation = cacheGeneration;
+  const messageKey = messageScopeKey(uid, request.messageId);
+  const invalidation = messageInvalidations.get(messageKey) ?? 0;
+  if (request.signal?.aborted) throw abortError();
   const key = await mediaKey(uid, request);
-  const cachedUri = await cachedMediaUri(key, request.expectedSizeBytes);
-  if (cachedUri) {
-    logCacheResult("hit");
-    return cachedUri;
-  }
-  logCacheResult("miss");
-
+  if (pendingCacheClear) await pendingCacheClear;
+  const pendingMessageClear = pendingMessageClears.get(messageKey);
+  if (pendingMessageClear) await pendingMessageClear;
+  if (request.signal?.aborted || generation !== cacheGeneration || invalidation !== (messageInvalidations.get(messageKey) ?? 0) || auth.currentUser?.uid !== uid) throw abortError();
   let task = inFlightDownloads.get(key);
   if (!task) {
-    task = createDownloadTask(key, request);
+    task = createDownloadTask(uid, key, request);
     inFlightDownloads.set(key, task);
     const subscription = subscribeToDownload(task, request.signal);
-    downloadQueue.push(task);
-    pumpDownloadQueue();
+    // Share the cache lookup as well as the grant/download. Cache hits never wait
+    // behind network work or manifest writes for unrelated images.
+    void prepareDownloadTask(task);
     return subscription;
   }
+  task.priority = Math.min(task.priority, downloadPriority(request));
   return subscribeToDownload(task, request.signal);
 }
 
@@ -85,54 +97,85 @@ export async function primeFriendChatImageCache(input: Omit<FriendChatImageMedia
   localUri: string;
 }) {
   const uid = currentUserId();
+  const generation = cacheGeneration;
+  const messageKey = messageScopeKey(uid, input.messageId);
+  const invalidation = messageInvalidations.get(messageKey) ?? 0;
   const key = await mediaKey(uid, input);
+  if (pendingCacheClear) await pendingCacheClear;
+  const pendingMessageClear = pendingMessageClears.get(messageKey);
+  if (pendingMessageClear) await pendingMessageClear;
   const sourceInfo = await FileSystem.getInfoAsync(input.localUri);
   const sourceSize = (sourceInfo as { exists?: boolean; size?: number }).size;
   if (!sourceInfo.exists || sourceSize !== input.expectedSizeBytes) return false;
   const destination = cacheFileUri(key);
   await ensureCacheDirectory();
-  await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
-  await FileSystem.copyAsync({ from: input.localUri, to: destination });
-  await recordCacheEntry(uid, input.messageId, key, input.expectedSizeBytes);
+  await recordCacheEntry(uid, input.messageId, key, input.expectedSizeBytes, async () => {
+    if (generation !== cacheGeneration || invalidation !== (messageInvalidations.get(messageKey) ?? 0) || auth.currentUser?.uid !== uid) throw abortError();
+    await FileSystem.deleteAsync(destination, { idempotent: true });
+    await FileSystem.copyAsync({ from: input.localUri, to: destination });
+    if (generation !== cacheGeneration || invalidation !== (messageInvalidations.get(messageKey) ?? 0) || auth.currentUser?.uid !== uid) {
+      await FileSystem.deleteAsync(destination, { idempotent: true });
+      throw abortError();
+    }
+  });
   return true;
 }
 
 export async function clearFriendChatImageCacheForMessages(messageIds: readonly string[]) {
   if (!messageIds.length) return;
-  cacheGeneration += 1;
   clearFriendChatMediaGrantCache(messageIds);
   const uid = auth.currentUser?.uid;
   if (!uid) return;
-  const messageHashes = new Set(await Promise.all(messageIds.map((messageId) => secureHash(`${uid}\u001f${messageId}`))));
-  await withManifest(async (manifest) => {
-    const removed = manifest.entries.filter((entry) => messageHashes.has(entry.messageHash));
-    await Promise.allSettled(removed.map((entry) => FileSystem.deleteAsync(cacheFileUri(entry.mediaKey), { idempotent: true })));
-    manifest.entries = manifest.entries.filter((entry) => !messageHashes.has(entry.messageHash));
-    await persistManifest(manifest);
+  const targets = new Set(messageIds);
+  const scopeKeys = messageIds.map((messageId) => messageScopeKey(uid, messageId));
+  const priorClears = scopeKeys.flatMap((key) => pendingMessageClears.get(key) ?? []);
+  scopeKeys.forEach((key) => messageInvalidations.set(key, (messageInvalidations.get(key) ?? 0) + 1));
+  for (const task of inFlightDownloads.values()) {
+    if (task.uid === uid && targets.has(task.request.messageId)) cancelDownloadTask(task);
+  }
+  const clearing = Promise.allSettled(priorClears).then(async () => {
+    const messageHashes = new Set(await Promise.all(messageIds.map((messageId) => secureHash(`${uid}\u001f${messageId}`))));
+    await withManifest(async (manifest) => {
+      const removed = manifest.entries.filter((entry) => messageHashes.has(entry.messageHash));
+      await Promise.allSettled(removed.map((entry) => FileSystem.deleteAsync(cacheFileUri(entry.mediaKey), { idempotent: true })));
+      manifest.entries = manifest.entries.filter((entry) => !messageHashes.has(entry.messageHash));
+      await persistManifest(manifest);
+    });
+    await clearExpoImageMemoryCache();
   });
-  await clearExpoImageMemoryCache();
+  scopeKeys.forEach((key) => pendingMessageClears.set(key, clearing));
+  try { await clearing; } finally {
+    scopeKeys.forEach((key) => { if (pendingMessageClears.get(key) === clearing) pendingMessageClears.delete(key); });
+  }
 }
 
 export async function clearFriendChatImageMemoryCache() {
   cacheGeneration += 1;
+  messageInvalidations.clear();
   clearFriendChatMediaGrantCache();
-  downloadQueue.splice(0).forEach((task) => {
-    task.cancelled = true;
-    task.reject(abortError());
-    inFlightDownloads.delete(task.key);
+  for (const task of inFlightDownloads.values()) cancelDownloadTask(task);
+  downloadQueue.splice(0);
+  if (accessWriteTimer) clearTimeout(accessWriteTimer);
+  accessWriteTimer = null;
+  const clearing = Promise.resolve(pendingCacheClear).catch(() => undefined).then(async () => {
+    await Promise.all([
+      clearExpoImageMemoryCache(),
+      withManifest(async (manifest) => {
+        manifest.entries = [];
+        await Promise.allSettled([
+          removeCacheDirectory(),
+          AsyncStorage.removeItem(CACHE_MANIFEST_KEY),
+        ]);
+      }),
+    ]);
   });
-  await Promise.all([
-    clearExpoImageMemoryCache(),
-    withManifest(async () => {
-      await Promise.allSettled([
-        removeCacheDirectory(),
-        AsyncStorage.removeItem(CACHE_MANIFEST_KEY),
-      ]);
-    }),
-  ]);
+  pendingCacheClear = clearing;
+  try { await clearing; } finally {
+    if (pendingCacheClear === clearing) pendingCacheClear = null;
+  }
 }
 
-function createDownloadTask(key: string, request: FriendChatImageMediaRequest): DownloadTask {
+function createDownloadTask(uid: string, key: string, request: FriendChatImageMediaRequest): DownloadTask {
   let resolve!: (uri: string) => void;
   let reject!: (error: unknown) => void;
   const promise = new Promise<string>((resolvePromise, rejectPromise) => {
@@ -146,6 +189,9 @@ function createDownloadTask(key: string, request: FriendChatImageMediaRequest): 
     promise,
     reject,
     request,
+    uid,
+    priority: downloadPriority(request),
+    finishQueueWait: null,
     resolve,
     started: false,
     subscribers: new Set(),
@@ -159,48 +205,93 @@ function subscribeToDownload(task: DownloadTask, signal?: AbortSignal) {
     const removeSubscriber = () => {
       task.subscribers.delete(subscriber);
       if (!task.started && task.subscribers.size === 0) {
-        task.cancelled = true;
-        pumpDownloadQueue();
+        cancelDownloadTask(task);
       }
     };
     const onAbort = () => {
       removeSubscriber();
       reject(abortError());
     };
-    if (signal?.aborted) {
-      onAbort();
-      return;
-    }
-    signal?.addEventListener("abort", onAbort, { once: true });
-    task.promise.then(resolve, reject).finally(() => {
+    const cleanup = () => {
       signal?.removeEventListener("abort", onAbort);
       removeSubscriber();
-    });
+    };
+    task.promise.then((uri) => { cleanup(); resolve(uri); }, (error) => { cleanup(); reject(error); });
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function downloadPriority(request: FriendChatImageMediaRequest) {
+  return request.variant === "display" ? 0 : request.priority === "nearby" ? 2 : 1;
+}
+
+function messageScopeKey(uid: string, messageId: string) {
+  return `${uid}\u001f${messageId}`;
+}
+
+function cancelDownloadTask(task: DownloadTask) {
+  task.cancelled = true;
+  task.finishQueueWait?.();
+  task.finishQueueWait = null;
+  task.reject(abortError());
+  releaseDownloadTask(task);
+}
+
+function releaseDownloadTask(task: DownloadTask) {
+  if (inFlightDownloads.get(task.key) === task) inFlightDownloads.delete(task.key);
+}
+
+function assertDownloadCurrent(task: DownloadTask) {
+  if (task.cancelled || task.generation !== cacheGeneration || auth.currentUser?.uid !== task.uid) throw abortError();
+}
+
+async function prepareDownloadTask(task: DownloadTask) {
+  try {
+    assertDownloadCurrent(task);
+    const cachedUri = await measureDevelopmentPerformance("friend-chat.image-cache-lookup", () => cachedMediaUri(task));
+    assertDownloadCurrent(task);
+    logCacheResult(cachedUri ? "hit" : "miss");
+    if (cachedUri) {
+      task.resolve(cachedUri);
+      releaseDownloadTask(task);
+      return;
+    }
+    task.finishQueueWait = startDevelopmentPerformanceTrace("friend-chat.image-download-queue");
+    downloadQueue.push(task);
+    pumpDownloadQueue();
+  } catch (error) {
+    task.reject(error);
+    releaseDownloadTask(task);
+  }
 }
 
 function pumpDownloadQueue() {
   while (activeDownloadCount < MAX_CONCURRENT_DOWNLOADS && downloadQueue.length > 0) {
+    downloadQueue.sort((first, second) => first.priority - second.priority);
     const task = downloadQueue.shift()!;
     if (task.cancelled || task.subscribers.size === 0) {
       task.reject(abortError());
-      inFlightDownloads.delete(task.key);
+      releaseDownloadTask(task);
       continue;
     }
     task.started = true;
+    task.finishQueueWait?.();
+    task.finishQueueWait = null;
     activeDownloadCount += 1;
     void runDownloadTask(task)
       .then(task.resolve, task.reject)
       .finally(() => {
         activeDownloadCount -= 1;
-        inFlightDownloads.delete(task.key);
+        releaseDownloadTask(task);
         pumpDownloadQueue();
       });
   }
 }
 
 async function runDownloadTask(task: DownloadTask) {
-  const uid = currentUserId();
+  assertDownloadCurrent(task);
+  const uid = task.uid;
   const destination = cacheFileUri(task.key);
   const temporaryUri = `${destination}.${Crypto.randomUUID()}.download`;
   await ensureCacheDirectory();
@@ -209,6 +300,7 @@ async function runDownloadTask(task: DownloadTask) {
       messageId: task.request.messageId,
       storagePath: task.request.storagePath,
     });
+    assertDownloadCurrent(task);
     const traceName = task.request.variant === "thumbnail"
       ? "friend-chat.image-thumbnail-download"
       : "friend-chat.image-full-download";
@@ -220,10 +312,17 @@ async function runDownloadTask(task: DownloadTask) {
     const info = await FileSystem.getInfoAsync(temporaryUri);
     const downloadedSize = (info as { exists?: boolean; size?: number }).size;
     if (!info.exists || downloadedSize !== task.request.expectedSizeBytes) throw new Error("image_download_failed");
-    if (task.generation !== cacheGeneration || auth.currentUser?.uid !== uid) throw abortError();
-    await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
-    await FileSystem.moveAsync({ from: temporaryUri, to: destination });
-    await recordCacheEntry(uid, task.request.messageId, task.key, task.request.expectedSizeBytes);
+    assertDownloadCurrent(task);
+    await recordCacheEntry(uid, task.request.messageId, task.key, task.request.expectedSizeBytes, async () => {
+      assertDownloadCurrent(task);
+      await FileSystem.deleteAsync(destination, { idempotent: true });
+      await FileSystem.moveAsync({ from: temporaryUri, to: destination });
+      try { assertDownloadCurrent(task); } catch (error) {
+        await FileSystem.deleteAsync(destination, { idempotent: true });
+        throw error;
+      }
+    });
+    assertDownloadCurrent(task);
     return destination;
   } catch (error) {
     await FileSystem.deleteAsync(temporaryUri, { idempotent: true }).catch(() => undefined);
@@ -231,30 +330,33 @@ async function runDownloadTask(task: DownloadTask) {
   }
 }
 
-async function cachedMediaUri(key: string, expectedSizeBytes: number) {
-  const entry = await withManifest(async (manifest) => manifest.entries.find((candidate) => candidate.mediaKey === key) ?? null);
+async function cachedMediaUri(task: DownloadTask) {
+  const { key, request: { expectedSizeBytes } } = task;
+  const manifest = await readManifest();
+  assertDownloadCurrent(task);
+  const entry = manifest.entries.find((candidate) => candidate.mediaKey === key);
   if (!entry || entry.sizeBytes !== expectedSizeBytes) return null;
   const uri = cacheFileUri(key);
   const info = await FileSystem.getInfoAsync(uri);
+  assertDownloadCurrent(task);
   const actualSize = (info as { exists?: boolean; size?: number }).size;
   if (!info.exists || actualSize !== expectedSizeBytes) {
     await removeCacheEntries(new Set([key]));
     return null;
   }
-  await withManifest(async (manifest) => {
-    const current = manifest.entries.find((candidate) => candidate.mediaKey === key);
-    if (current) current.lastAccessedAt = Date.now();
-    await persistManifest(manifest);
-  });
+  if (!manifest.entries.includes(entry)) return null;
+  entry.lastAccessedAt = Date.now();
+  scheduleAccessWrite();
   return uri;
 }
 
-async function recordCacheEntry(uid: string, messageId: string, key: string, sizeBytes: number) {
+async function recordCacheEntry(uid: string, messageId: string, key: string, sizeBytes: number, storeFile: () => Promise<void>) {
   const [accountHash, messageHash] = await Promise.all([
     secureHash(uid),
     secureHash(`${uid}\u001f${messageId}`),
   ]);
   await withManifest(async (manifest) => {
+    await storeFile();
     manifest.entries = manifest.entries.filter((entry) => entry.mediaKey !== key);
     manifest.entries.push({ accountHash, lastAccessedAt: Date.now(), mediaKey: key, messageHash, sizeBytes });
     const evictions = selectFriendChatImageCacheEvictions(manifest.entries, {
@@ -282,7 +384,21 @@ function withManifest<T>(operation: (manifest: CacheManifest) => Promise<T>) {
   return result;
 }
 
-async function readManifest(): Promise<CacheManifest> {
+function scheduleAccessWrite() {
+  if (accessWriteTimer) return;
+  accessWriteTimer = setTimeout(() => {
+    accessWriteTimer = null;
+    void withManifest(persistManifest).catch(() => undefined);
+  }, 1_000);
+}
+
+function readManifest(): Promise<CacheManifest> {
+  // One shared load per process; mutations keep this same manifest current.
+  manifestLoad ??= loadManifest();
+  return manifestLoad;
+}
+
+async function loadManifest(): Promise<CacheManifest> {
   try {
     const raw = await AsyncStorage.getItem(CACHE_MANIFEST_KEY);
     if (!raw) return { entries: [], version: 2 };

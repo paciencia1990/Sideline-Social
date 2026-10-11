@@ -31,7 +31,11 @@ export function selectFriendChatImageCacheEvictions(
   entries: readonly FriendChatImageCacheEntry[],
   limits: { maxBytes: number; maxEntries: number },
 ) {
-  const newestFirst = [...entries].sort((first, second) => second.lastAccessedAt - first.lastAccessedAt);
+  // Entries are appended on insertion. Preserve the newest insertion when
+  // several completions share the same millisecond timestamp.
+  const newestFirst = entries.map((entry, index) => ({ entry, index }))
+    .sort((first, second) => second.entry.lastAccessedAt - first.entry.lastAccessedAt || second.index - first.index)
+    .map(({ entry }) => entry);
   let retainedBytes = 0;
   let retainedEntries = 0;
   const evicted = new Set<string>();

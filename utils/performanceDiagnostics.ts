@@ -1,5 +1,9 @@
 export type PerformanceTraceName =
   | "friend-chat.image-compression"
+  | "friend-chat.image-cache-lookup"
+  | "friend-chat.image-download-queue"
+  | "friend-chat.image-thumbnail-load"
+  | "friend-chat.image-full-load"
   | "friend-chat.image-finalization"
   | "friend-chat.image-full-download"
   | "friend-chat.image-full-visible"
