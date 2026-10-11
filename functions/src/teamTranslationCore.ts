@@ -7,6 +7,12 @@ export type TranslationSource =
 export type TranslationRequest = TranslationSource & { targetLanguage: string; consentVersion: 1 };
 export const TRANSLATION_MAX_CHARACTERS = 2400;
 const allowedLanguages = new Set(languages.map(([code]) => code));
+export function resolveTranslationProject(environment: Record<string, string | undefined>): string | null {
+  // A user-managed setting survives configuration PATCHes without relying on
+  // legacy provider-reserved variables being represented or injected.
+  const value = environment.TEAM_TRANSLATION_PROJECT_ID ?? environment.GCLOUD_PROJECT ?? environment.GOOGLE_CLOUD_PROJECT ?? environment.GCP_PROJECT;
+  return value && /^[a-z][a-z0-9-]{4,62}$/.test(value) ? value : null;
+}
 export function parseTranslationRequest(value: unknown): TranslationRequest {
   if (!value || typeof value !== 'object') throw new Error('invalid-argument');
   const data = value as Record<string, unknown>;

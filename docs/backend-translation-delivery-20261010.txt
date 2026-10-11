@@ -1,5 +1,18 @@
 Scoped beta backend and Google Translation delivery — October 10, 2026
 
+October 11 runtime correction
+The original operator provider check did not exercise the authenticated native
+callable through its deployed runtime. A real Android 32 request passed App Check
+and authorized-message loading, reserved usage, then returned unavailable.
+The provider now supports explicit TEAM_TRANSLATION_PROJECT_ID configuration
+instead of depending on the legacy reserved project variable. Fixed-stage,
+numeric-status diagnostics exclude all account/message/provider-body details.
+The replies index declared below was absent in staging: replyType ASCENDING,
+createdAt DESCENDING (document name DESCENDING). Its additive publication supports
+the existing parent reply query without changing Rules or needing a client build.
+The scoped repair preserves the translation runtime identity, role, App Check,
+consent, membership/standing checks and character caps. Keep moderation live.
+
 Project: sideline-social-staging-2026, us-central1
 Moderation stayed live. No moderation Function, source, gate, identity, trigger,
 secret, case, report, alert, consequence or appeal was changed by this delivery.

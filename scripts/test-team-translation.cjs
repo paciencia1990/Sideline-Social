@@ -131,6 +131,7 @@ const find = (tree, predicate) => all(tree, predicate)[0];
   assert.equal(find(tree, (node) => node.props?.accessibilityRole === 'alert'), undefined);
   ui.unmount(); assert.equal(ui.lateWrites(), 0);
   const functions = require('../functions/node_modules/firebase-functions');
+  const diagnostics = [];
   const documents = new Map([
     ['teams/team-a', { status: 'active', inviteCode: 'SCYTYR' }],
     ['teams/team-a/members/parent-a', { status: 'active', roles: { parent: true } }],
@@ -140,7 +141,7 @@ const find = (tree, predicate) => all(tree, predicate)[0];
   const ref = (address) => ({ collection: (name) => ref(`${address}/${name}`), doc: (name) => ref(`${address}/${name}`), get: async () => ({ exists: documents.has(address), data: () => documents.get(address) }) });
   const backend = load('functions/src/teamTranslation.ts', {
     'firebase-admin': { app: () => ({ options: { credential: { getAccessToken: async () => ({ access_token: 'synthetic-not-a-real-token' }) } } }), firestore: () => ({ collection: (name) => ref(name) }) },
-    'firebase-functions': functions,
+    'firebase-functions': { ...functions, logger: { warn: (_message, fields) => diagnostics.push(fields) } },
     './permanentAuth': { requirePermanentUid: () => 'parent-a', requireAccountCapability: async () => {} },
     './teamMembershipCore': require('../functions/lib/teamMembershipCore'), './teamVoiceMessagingCore': require('../functions/lib/teamVoiceMessagingCore'),
     './teamTranslationCore': core,
@@ -156,9 +157,15 @@ const find = (tree, predicate) => all(tree, predicate)[0];
   const english = resources.en.translation.messageTranslation, spanish = resources.es.translation.messageTranslation;
   assert.deepEqual(Object.keys(english).sort(), Object.keys(spanish).sort());
   for (const key of Object.keys(english)) assert.deepEqual(english[key].match(/\{\{.*?\}\}/g), spanish[key].match(/\{\{.*?\}\}/g));
-  const originalFetch = global.fetch, originalProject = process.env.GCLOUD_PROJECT;
+  const originalFetch = global.fetch;
+  const projectKeys = ['TEAM_TRANSLATION_PROJECT_ID', 'GCLOUD_PROJECT', 'GOOGLE_CLOUD_PROJECT', 'GCP_PROJECT'];
+  const originalProjects = Object.fromEntries(projectKeys.map(key => [key, process.env[key]]));
   try {
-    process.env.GCLOUD_PROJECT = 'demo-sideline-translation';
+    projectKeys.forEach(key => delete process.env[key]);
+    global.fetch = async () => { throw new Error('Must not request Google without an intended project'); };
+    await assert.rejects(backend.translateWithGoogle(['Bring water.'], 'es'), error => error.code === 'unavailable');
+    assert.deepEqual(diagnostics.at(-1), { stage: 'configuration' });
+    process.env.TEAM_TRANSLATION_PROJECT_ID = 'demo-sideline-translation';
     global.fetch = async (url, options) => {
       assert.equal(url, 'https://translation.googleapis.com/v3/projects/demo-sideline-translation/locations/global:translateText');
       assert.equal(options.method, 'POST'); assert.equal(options.redirect, 'error'); assert.ok(options.signal);
@@ -172,10 +179,24 @@ const find = (tree, predicate) => all(tree, predicate)[0];
       return { ok: true, json: async () => ({ translations: [{ translatedText: 'Traigan agua.' }] }) };
     };
     assert.deepEqual(await backend.translateWithGoogle(['Bring water.'], 'es'), ['Traigan agua.']);
+    assert.equal(process.env.GCLOUD_PROJECT, undefined, 'The provider works without the removed legacy project variable');
+    assert.equal(core.resolveTranslationProject({ TEAM_TRANSLATION_PROJECT_ID: '../wrong-project', GCLOUD_PROJECT: 'demo-sideline-translation' }), null, 'Invalid explicit configuration never silently switches projects');
+    assert.equal(core.resolveTranslationProject({ GOOGLE_CLOUD_PROJECT: 'demo-sideline-translation' }), 'demo-sideline-translation');
     let providerCalls = 0;
-    global.fetch = async () => { providerCalls++; return { ok: false, json: async () => { throw new Error('Must not read private provider body'); } }; };
+    global.fetch = async () => { providerCalls++; return { ok: false, status: 403, json: async () => { throw new Error('Must not read private provider body'); } }; };
     await assert.rejects(backend.translateWithGoogle(['Bring water.'], 'es'), (error) => error.code === 'unavailable');
     assert.equal(providerCalls, 1);
-  } finally { global.fetch = originalFetch; if (originalProject === undefined) delete process.env.GCLOUD_PROJECT; else process.env.GCLOUD_PROJECT = originalProject; }
+    assert.deepEqual(diagnostics.at(-1), { stage: 'provider_response', httpStatus: 403 });
+    global.fetch = async () => ({ ok: false, status: 403, json: async () => ({ error: { status: 'PERMISSION_DENIED', message: 'private token and message', details: [{ reason: 'SERVICE_DISABLED', metadata: { credential: 'private-token' } }] } }) });
+    await assert.rejects(backend.translateWithGoogle(['Bring water.'], 'es'), error => error.code === 'unavailable');
+    assert.deepEqual(diagnostics.at(-1), { stage: 'provider_response', httpStatus: 403, providerCode: 'SERVICE_DISABLED' });
+    global.fetch = async () => { throw new Error('private token and message in transport details'); };
+    await assert.rejects(backend.translateWithGoogle(['Bring water.'], 'es'), error => error.code === 'unavailable');
+    assert.deepEqual(diagnostics.at(-1), { stage: 'provider_transport' });
+    assert.ok(!JSON.stringify(diagnostics).includes('Bring water') && !JSON.stringify(diagnostics).includes('token'));
+  } finally {
+    global.fetch = originalFetch;
+    for (const key of projectKeys) { if (originalProjects[key] === undefined) delete process.env[key]; else process.env[key] = originalProjects[key]; }
+  }
   console.log('Team translation: consent, languages, code/URL preservation, cache access checks, budgets, duplicate taps, account changes and stale replies passed.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

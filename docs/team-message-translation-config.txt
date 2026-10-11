@@ -26,6 +26,14 @@ Provider and access controls
 - The server reuses at most 100 results in process memory for up to five minutes of cache eligibility; expired entries are pruned on provider completion and instances can end at any time. No persistent translation cache, message rewrite or translation history is created. Client state is cleared on source/account change or screen departure.
 
 Cost controls
+- TEAM_TRANSLATION_PROJECT_ID explicitly identifies the provider and quota project.
+  Set it to the same verified Firebase project as the dedicated runtime identity.
+  It is user-managed configuration; do not depend on the GCLOUD_PROJECT reserved
+  variable surviving environment updates. Existing platform project variables
+  are fallback-only for legacy deployments. Invalid explicit values fail closed.
+- Failures log only a fixed stage, numeric HTTP/backend status, and an optional
+  allowlisted provider code. Error bodies are parsed in memory and discarded.
+  No message text, account ID, token, provider body, or arbitrary exception is logged.
 - TEAM_TRANSLATION_ENABLED must be exactly true. Otherwise the endpoint is unavailable without a provider call. Default is disabled until delivery readiness is reviewed.
 - TEAM_TRANSLATION_MONTHLY_CHAR_LIMIT defaults to 500000 and may be lowered. Values above 500000 or invalid values fail closed. The monthly cap counts this callable’s reserved provider source characters in UTC calendar months.
 - Per account: 20000 characters/day and 10 uncached translation reservations/minute. In-process identical concurrent requests share provider work; existing authorized cache results do not consume new source-character quota.
