@@ -66,8 +66,8 @@ node scripts/validate-retained-launch-backend.cjs
 
 Release blockers retained
 Real iPhone Apple sign-in/deletion and voice-message checks; continuous stuck-
-work detection and proven alert inbox delivery; first RTDB backup and restore
-validation (daily scheduling is now enabled); media restoration proof after
+work detection and proven alert inbox delivery; RTDB restore validation
+(daily scheduling and the first backup are verified); media restoration proof after
 the stopped 403 attempt; approved staffing/escalation/retention;
 publication of the owner-selected business-day review wording; final store
 metadata, seller identity and payment decisions. Do not describe the app as

@@ -34,8 +34,12 @@ enabled for sideline-social-staging-2026-default-rtdb. The dedicated bucket
 sideline-social-staging-2026-default-rtdb-backups has a verified 30-day
 deletion lifecycle and a seven-day soft-delete window. Deleted backups may
 therefore remain recoverable for another seven days, with storage charges.
-The first snapshot and a separate-instance restore still require verification;
-no manual backup or restore was submitted as part of schedule activation.
+The first scheduled backup completed on October 12 at 15:00:26 UTC
+(11:00:26 AM Eastern), with Firebase reporting an 11-second runtime. Separate
+data.json.gz and rules.json.gz objects were independently verified by metadata.
+Neither the bucket IAM policy nor default object ACL grants public access.
+Restore into a separate instance still requires validation. No manual backup
+or restore was submitted as part of schedule activation.
 The media bucket also has seven-day soft deletion. Its isolated benign
 restore drill stopped on the first upload attempt with HTTP 403. No delete
 or restore was attempted. Read-only reconciliation of that object also
@@ -108,8 +112,8 @@ enforcement blindly and strand the live clients or moderation console.
 Release gates still outside this backend repair
 Real iPhone Apple sign-in and Apple deletion/revocation check; controlled
 device voice send/playback/delete; full installed-build acceptance; confirmed
-moderator coverage; retention/legal escalation approval; first RTDB snapshot,
-RTDB/Storage recovery and inbox delivery checks; dependency rollout validation; Apple seller/
+moderator coverage; retention/legal escalation approval; RTDB/Storage restore
+and inbox delivery checks; dependency rollout validation; Apple seller/
 legal entity and production metadata; reviewer access and the free/paid Coach
 AI launch decision. Do not infer App Store approval from external TestFlight.
 Do not create native builds or submit production releases under this task.
