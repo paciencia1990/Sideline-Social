@@ -1,8 +1,9 @@
+import { getFirestore } from 'firebase-admin/firestore';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import { setGameLobbyLifecycleForSession } from './gameLobbyStore';
 import { permanentAccountFunctions, requirePermanentUid } from './permanentAuth';
@@ -59,7 +60,7 @@ if (questionBank.length < DEFAULT_QUESTION_COUNT) {
   throw new Error('Trivia Blitz requires at least ten valid bilingual questions.');
 }
 
-const firestore = () => admin.firestore();
+const firestore = () => getFirestore();
 const parentRef = (sessionId: string) => firestore().collection('sessions').doc(sessionId);
 const gameRef = (sessionId: string) => parentRef(sessionId).collection('games').doc('triviaBlitz');
 const playersRef = (sessionId: string) => gameRef(sessionId).collection('players');

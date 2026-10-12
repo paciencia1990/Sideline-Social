@@ -1,0 +1,12 @@
+'use strict';
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const { validateBinding } = require('./verify-live-deployment-binding.cjs');
+const content = Buffer.from('reviewed fixture');
+const binding = { project: 'sideline-social-staging-2026', targets: ['fixtureCallable'], files: [{ path: 'functions/src/fixture.ts', sha256: crypto.createHash('sha256').update(content).digest('hex') }] };
+assert.equal(validateBinding(binding, binding.project, () => content), true);
+assert.throws(() => validateBinding(binding, 'sideline-squad', () => content));
+assert.throws(() => validateBinding(binding, binding.project, () => Buffer.from('drift')));
+assert.throws(() => validateBinding({ ...binding, files: [{ path: '../private', sha256: binding.files[0].sha256 }] }, binding.project, () => content));
+assert.throws(() => validateBinding({ ...binding, targets: [] }, binding.project, () => content));
+console.log('Deployment binding rejects legacy project, source drift, escaped paths, and missing target scope.');

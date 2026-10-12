@@ -1,0 +1,74 @@
+SIDELINE SOCIAL — SECURITY CHECKPOINT — OCTOBER 12, 2026
+
+Scope
+Current retained-backend launch changes, before another native build.
+Moderation remains live. No Android/iOS build or store release was created.
+This checkpoint supplements the historical August 19 dependency report; its
+older counts and bundle evidence must not be presented as current results.
+
+Backend
+The source-preserving dependency rollout and isolated reporting-Function
+patch have completed independent verification. Their exact isolated runtime
+audits reported zero findings. Repository source uses the modular Admin SDK
+and pinned backend packages. The deleted-Squad projection guard in index.ts
+is an additional local change; it was not part of those cloud source updates.
+Its behavioral test executes the actual exported handler and covers a missing
+Squad, deletion during a transaction conflict, existing metadata preservation,
+duplicate members, zero presence, malformed events, and query failure. This
+is a unit-level transaction model, not a new live or emulator execution.
+
+Mobile dependency findings
+The October 12 npm production audit reports 39 package-level findings:
+0 critical, 28 high, 11 moderate. Parent-package amplification contributes
+to the total. These findings remain in the lockfile and are not a clean audit.
+
+Package                  Current treatment and limitation
+@grpc/grpc-js            Firebase pins the old Node transport. The actual
+                        Metro resolver selects Firestore's index.rn.js for
+                        Android and iOS, which does not import @grpc. Do not
+                        force an unsupported Firebase downgrade. Keep Node
+                        consumers isolated; revisit with the Firebase upgrade.
+decode-uri-component    Mobile Metro replaces this recursive decoder with
+                        a native bounded decoder. Valid OAuth/Unicode query
+                        values and malformed input tests pass. query-string
+                        normalizes '+' itself; the replacement otherwise
+                        preserves raw '+'. This mitigation needs a future
+                        client build and does not change Node-tool resolution.
+braces                  No patched compatible release found in the current
+                        registry check. Build-tool glob inputs must remain
+                        trusted repository configuration, not app/user input.
+image-size              Metro uses the 1.x API. No compatible 1.x fix found;
+                        do not force 2.x without a Metro compatibility review.
+                        Process only reviewed local build assets. This is not
+                        the in-app remote-image decoder.
+node-forge              Used by Expo CLI/code-signing tooling. Current 1.4.0
+                        still has the audit finding. Do not accept untrusted
+                        certificates or enable update-signing based solely on
+                        these checks. Track the upstream fix.
+uuid                    xcode tooling uses uuid.v4() without an output buffer;
+                        the reported v3/v5/v6 buffer issue is not that call.
+                        Avoid an unverified major override of xcode's dependency.
+
+Evidence limits
+The new Metro check validates current dependency entry selection and decoder
+mapping on both platforms. It does not inspect an installed IPA/APK or replace
+real-device sign-in/link tests. The current beta binaries do not contain the
+new decoder. No current full-bundle absence claim is made for all tool packages.
+Re-audit the locked candidate and inspect shipped artifacts at the next
+authorized release. Remaining upstream findings require continued triage.
+
+Local validation
+node scripts/test-mobile-runtime-boundary.cjs
+node scripts/test-safe-uri-decoding.cjs
+node scripts/test-active-member-projection.cjs
+node scripts/test-live-deployment-binding.cjs
+node scripts/validate-retained-launch-backend.cjs
+
+Release blockers retained
+Real iPhone Apple sign-in/deletion and voice-message checks; continuous stuck-
+work detection and proven alert inbox delivery; first RTDB backup and restore
+validation (daily scheduling is now enabled); media restoration proof after
+the stopped 403 attempt; approved staffing/escalation/retention;
+publication of the owner-selected business-day review wording; final store
+metadata, seller identity and payment decisions. Do not describe the app as
+fully production-ready on the basis of these local checks.

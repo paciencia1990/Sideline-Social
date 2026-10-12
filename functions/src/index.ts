@@ -1,3 +1,9 @@
+import { getAuth } from 'firebase-admin/auth';
+import { getDatabase } from 'firebase-admin/database';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
+import { getMessaging } from 'firebase-admin/messaging';
+import { getApp, initializeApp } from 'firebase-admin/app';
 /**
  * Sideline Squad — Firebase Cloud Functions
  *
@@ -9,9 +15,8 @@
  */
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
 import { FieldPath, FieldValue, GeoPoint, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 import { distanceBetween, geohashForLocation, geohashQueryBounds } from 'geofire-common';
 import {
   countMutualConnections,
@@ -275,7 +280,7 @@ export {
   teamCalendarSubscription,
 } from './teamCalendar';
 
-admin.initializeApp();
+initializeApp();
 
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
@@ -314,7 +319,7 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
     input.actorUserId &&
     !await accountCanCommunicate(input.actorUserId)
   ) return false;
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const notificationRef = firestore
     .collection('userNotifications')
     .doc(input.recipientUserId)
@@ -380,18 +385,18 @@ async function createPersonalNotificationAndPush(input: PersonalNotificationInpu
 
 async function getPrivateNotificationActorName(userId: unknown, fallback = 'Sideline Social member') {
   if (typeof userId !== 'string' || !userId) return fallback;
-  const snapshot = await admin.firestore().collection('users').doc(userId).get();
+  const snapshot = await getFirestore().collection('users').doc(userId).get();
   const firestoreName = resolveCanonicalPublicName(snapshot.data())?.displayName;
   if (firestoreName) return firestoreName;
   try {
-    const authUser = await admin.auth().getUser(userId);
+    const authUser = await getAuth().getUser(userId);
     return resolveCanonicalPublicName({ displayName: authUser.displayName })?.displayName || fallback;
   } catch {
     return fallback;
   }
 }
 
-type SquadDocument = admin.firestore.DocumentData & {
+type SquadDocument = FirebaseFirestore.DocumentData & {
   squadId?: string;
   venueId?: string;
   venueName?: string;
@@ -483,7 +488,7 @@ function readLocalRewardGameType(value: unknown): 'spotDifferences' | 'bombDefus
 }
 
 async function hasDurableSquadMembership(uid: string, squadId: string) {
-  const snapshot = await admin.firestore().collection('squadMemberships').doc(`${squadId}__${uid}`).get();
+  const snapshot = await getFirestore().collection('squadMemberships').doc(`${squadId}__${uid}`).get();
   return snapshot.exists && snapshot.data()?.membershipStatus === 'active';
 }
 
@@ -498,7 +503,7 @@ async function readTriviaRewardEligibility(
   sessionId: string,
   uid: string,
 ): Promise<RewardEligibility | null> {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const parentRef = firestore.collection('sessions').doc(sessionId);
   const gameRef = parentRef.collection('games').doc('triviaBlitz');
   const playerRef = gameRef.collection('players').doc(uid);
@@ -537,7 +542,7 @@ async function readLocalGameRewardEligibility(
   sessionId: string,
   uid: string,
 ): Promise<RewardEligibility | null> {
-  const sessionRef = admin.firestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
+  const sessionRef = getFirestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
   const sessionSnapshot = await transaction.get(sessionRef);
   if (!sessionSnapshot.exists) return null;
   const session = sessionSnapshot.data()!;
@@ -601,7 +606,7 @@ function legacySportIdForSquad(squad: SquadDocument): SquadSportId {
   return normalizeSportId(squad.sportId ?? squad.sportDisplayName ?? squad.sport) ?? 'other';
 }
 
-function squadProjection(snapshot: admin.firestore.DocumentSnapshot) {
+function squadProjection(snapshot: FirebaseFirestore.DocumentSnapshot) {
   const squad = (snapshot.data() ?? {}) as SquadDocument;
   const sportId = legacySportIdForSquad(squad);
   const venueName = typeof squad.venueName === 'string' && squad.venueName.trim()
@@ -634,7 +639,7 @@ function squadProjection(snapshot: admin.firestore.DocumentSnapshot) {
   };
 }
 
-function nearbySquadProjection(snapshot: admin.firestore.DocumentSnapshot) {
+function nearbySquadProjection(snapshot: FirebaseFirestore.DocumentSnapshot) {
   const squad = (snapshot.data() ?? {}) as SquadDocument;
   const point = squad.venueLocation;
   return {
@@ -647,9 +652,9 @@ function nearbySquadProjection(snapshot: admin.firestore.DocumentSnapshot) {
 
 async function hasAuthorizedSquadMembership(
   uid: string,
-  squadSnapshot: admin.firestore.DocumentSnapshot,
+  squadSnapshot: FirebaseFirestore.DocumentSnapshot,
 ) {
-  const membership = await admin.firestore()
+  const membership = await getFirestore()
     .collection('squadMemberships')
     .doc(`${squadSnapshot.id}__${uid}`)
     .get();
@@ -664,9 +669,9 @@ async function hasAuthorizedSquadMembership(
 }
 
 async function readSquadMemberPreviews(
-  squadSnapshot: admin.firestore.DocumentSnapshot,
+  squadSnapshot: FirebaseFirestore.DocumentSnapshot,
 ) {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const squadId = squadSnapshot.id;
   const squad = (squadSnapshot.data() ?? {}) as SquadDocument;
   const previewIds: string[] = [];
@@ -719,7 +724,7 @@ export const joinVenueSportSquad = communicationFunctions.https.onCall(async (da
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to join a Squad.');
   const squadId = readCallableSquadId(data?.squadId);
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const squadRef = firestore.collection('squads').doc(squadId);
   const userRef = firestore.collection('users').doc(uid);
   const membershipRef = firestore.collection('squadMemberships').doc(`${squadId}__${uid}`);
@@ -803,8 +808,8 @@ export const setSelectedSquad = functions.https.onCall(async (data, context) => 
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to select a Squad.');
   const selectedSquadId = data?.squadId == null ? null : readCallableSquadId(data.squadId);
-  const userRef = admin.firestore().collection('users').doc(uid);
-  return admin.firestore().runTransaction(async (transaction) => {
+  const userRef = getFirestore().collection('users').doc(uid);
+  return getFirestore().runTransaction(async (transaction) => {
     const userSnapshot = await transaction.get(userRef);
     if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
     const squadIds = Array.isArray(userSnapshot.data()?.squadIds) ? userSnapshot.data()!.squadIds as string[] : [];
@@ -822,7 +827,7 @@ export const setSelectedSquad = functions.https.onCall(async (data, context) => 
 export const refreshSquadPresence = communicationFunctions.https.onCall(async (_data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to update Squad presence.');
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const userSnapshot = await firestore.collection('users').doc(uid).get();
   const squadIds = Array.isArray(userSnapshot.data()?.squadIds)
     ? Array.from(new Set(userSnapshot.data()!.squadIds as string[])).slice(0, 25)
@@ -855,7 +860,7 @@ export const findNearbyVenueSportSquads = functions.https.onCall(async (data, co
   const requestedRadius = typeof data?.radiusMiles === 'number' ? data.radiusMiles : DEFAULT_SQUAD_RADIUS_MILES;
   const radiusMiles = Math.min(MAX_SQUAD_RADIUS_MILES, Math.max(0.25, requestedRadius));
   const bounds = geohashQueryBounds([latitude, longitude], radiusMiles * SQUAD_MILES_TO_METERS);
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const snapshots = await Promise.all(bounds.map(([lower, upper]) => firestore.collection('squads')
     .where('venueGeohash', '>=', lower)
     .where('venueGeohash', '<=', upper)
@@ -885,11 +890,11 @@ export const searchVenueSportSquads = functions.https.onCall(async (data, contex
   if (queryText.length < 2 || queryText.length > 80) {
     throw new functions.https.HttpsError('invalid-argument', 'Enter at least two characters of the venue name.');
   }
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const pageSize = 50;
   const maxScannedPages = 3;
   const matches: ReturnType<typeof squadProjection>[] = [];
-  let cursor: admin.firestore.QueryDocumentSnapshot | null = null;
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
   for (let page = 0; page < maxScannedPages && matches.length < pageSize; page += 1) {
     let query = firestore.collection('squads')
       .where('isActive', '==', true)
@@ -915,7 +920,7 @@ export const getVenueSportSquadDetail = functions.https.onCall(async (data, cont
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to view this Squad.');
   const squadId = readCallableSquadId(data?.squadId);
-  const snapshot = await admin.firestore().collection('squads').doc(squadId).get();
+  const snapshot = await getFirestore().collection('squads').doc(squadId).get();
   if (!snapshot.exists || snapshot.data()?.isActive === false) {
     throw new functions.https.HttpsError('not-found', 'This Squad is unavailable.');
   }
@@ -956,15 +961,13 @@ export const updateActiveMemberCount = functions.firestore
 
     const threeHoursAgo = Date.now() - THREE_HOURS_MS;
 
-    const canonicalSnapshot = await admin
-      .firestore()
+    const canonicalSnapshot = await getFirestore()
       .collection('squadMemberships')
       .where('squadId', '==', squadId)
       .where('membershipStatus', '==', 'active')
       .where('lastSeenAt', '>=', new Date(threeHoursAgo))
       .get();
-    const legacySnapshot = await admin
-      .firestore()
+    const legacySnapshot = await getFirestore()
       .collection('squadMemberships')
       .where('squadId', '==', squadId)
       .where('isActive', '==', true)
@@ -980,7 +983,15 @@ export const updateActiveMemberCount = functions.firestore
 
     const update: Record<string, unknown> = { activeMemberCount, lastActivityAt };
 
-    await admin.firestore().collection('squads').doc(squadId).update(update);
+    const firestore = getFirestore();
+    const squadRef = firestore.collection('squads').doc(squadId);
+    const updated = await firestore.runTransaction(async (transaction) => {
+      const squad = await transaction.get(squadRef);
+      if (!squad.exists) return false;
+      transaction.update(squadRef, update);
+      return true;
+    });
+    if (!updated) return null;
 
     console.log(
       `[updateActiveMemberCount] Squad ${squadId} — activeMemberCount set to ${activeMemberCount}`
@@ -997,7 +1008,7 @@ export const activateWeeklyChallenge = functions.pubsub
   .schedule('0 5 * * 1') // 5 AM UTC = midnight ET
   .timeZone('America/New_York')
   .onRun(async () => {
-    const db = admin.firestore();
+    const db = getFirestore();
     const now = Timestamp.now();
     const batch = db.batch();
 
@@ -1036,8 +1047,8 @@ export const sendWeeklyChallengeNotification = functions.pubsub
   .schedule('0 13 * * 1') // 1 PM UTC = 8 AM ET
   .timeZone('America/New_York')
   .onRun(async () => {
-    const db = admin.firestore();
-    const messaging = admin.messaging();
+    const db = getFirestore();
+    const messaging = getMessaging();
 
     // Get active challenge
     const challengeSnap = await db.collection('challenges').where('isActive', '==', true).limit(1).get();
@@ -1153,7 +1164,7 @@ async function runFriendsCallable<T>(
 }
 
 async function readBlockedRelationshipIds(userId: string) {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const [outgoing, incoming] = await Promise.all([
     firestore.collection('userBlocks').doc(userId).collection('blockedUsers').limit(500).get(),
     firestore.collectionGroup('blockedUsers').where('blockedUserId', '==', userId).limit(500).get(),
@@ -1167,7 +1178,7 @@ async function readBlockedRelationshipIds(userId: string) {
   ]);
 }
 
-function publicFriendRequest(document: admin.firestore.QueryDocumentSnapshot, expiresAtMillis: number) {
+function publicFriendRequest(document: FirebaseFirestore.QueryDocumentSnapshot, expiresAtMillis: number) {
   const request = document.data();
   return {
     id: document.id,
@@ -1191,7 +1202,7 @@ export const getActiveFriendRequests = functions.https.onCall(async (_data, cont
   setValidationStage('authentication');
   const userId = context.auth?.uid;
   if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to view friend requests.');
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const now = Timestamp.now();
   setValidationStage('friend-request-and-block-query');
   const [incomingSnapshot, outgoingSnapshot, blockedUserIds, viewerSnapshot] = await Promise.all([
@@ -1209,10 +1220,10 @@ export const getActiveFriendRequests = functions.https.onCall(async (_data, cont
     firestore.collection('users').doc(userId).get(),
   ]);
 
-  const active: { direction: 'incoming' | 'outgoing'; document: admin.firestore.QueryDocumentSnapshot; expiresAt: number }[] = [];
-  const expired: admin.firestore.QueryDocumentSnapshot[] = [];
-  const superseded: admin.firestore.QueryDocumentSnapshot[] = [];
-  const needsExpiryProjection: { document: admin.firestore.QueryDocumentSnapshot; expiresAt: number }[] = [];
+  const active: { direction: 'incoming' | 'outgoing'; document: FirebaseFirestore.QueryDocumentSnapshot; expiresAt: number }[] = [];
+  const expired: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+  const superseded: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+  const needsExpiryProjection: { document: FirebaseFirestore.QueryDocumentSnapshot; expiresAt: number }[] = [];
   const friendUserIds = new Set(readStringArray(viewerSnapshot.data()?.friendIds));
   const activeOtherUserIds = new Set<string>();
   const candidates = [
@@ -1296,7 +1307,7 @@ export const sendFriendRequest = communicationFunctions.https.onCall(async (data
     throw new functions.https.HttpsError('invalid-argument', 'You cannot send a friend request to yourself.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const senderRef = firestore.collection('users').doc(senderUserId);
   const targetRef = firestore.collection('users').doc(targetUserId);
   const requestId = friendRequestIdFor(senderUserId, targetUserId);
@@ -1412,7 +1423,7 @@ export const respondToFriendRequest = communicationFunctions.https.onCall(async 
     throw new functions.https.HttpsError('invalid-argument', 'The friend request response is invalid.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const requestRef = firestore.collection('friendRequests').doc(requestId);
   const result = await firestore.runTransaction(async (transaction) => {
     const requestSnapshot = await transaction.get(requestRef);
@@ -1484,8 +1495,8 @@ export const cancelFriendRequest = communicationFunctions.https.onCall(async (da
   if (!/^[A-Za-z0-9_-]{1,300}$/u.test(requestId)) {
     throw new functions.https.HttpsError('invalid-argument', 'A valid friend request is required.');
   }
-  const requestRef = admin.firestore().collection('friendRequests').doc(requestId);
-  const result = await admin.firestore().runTransaction(async (transaction) => {
+  const requestRef = getFirestore().collection('friendRequests').doc(requestId);
+  const result = await getFirestore().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(requestRef);
     if (!snapshot.exists) return { status: 'notFound' as const, recipientUserId: '', notificationId: null };
     const request = snapshot.data() ?? {};
@@ -1528,7 +1539,7 @@ export const removeFriendConnection = functions.https.onCall(async (data, contex
   }
   if (friendUserId === userId) return { removed: false };
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const requestRefs = [
     firestore.collection('friendRequests').doc(friendRequestIdFor(userId, friendUserId)),
     firestore.collection('friendRequests').doc(friendRequestIdFor(friendUserId, userId)),
@@ -1564,7 +1575,7 @@ export const expirePendingFriendRequests = functions.region('us-central1').pubsu
   .schedule('15 4 * * *')
   .timeZone('Etc/UTC')
   .onRun(async () => {
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     let expiredCount = 0;
     let pageCount = 0;
     while (true) {
@@ -1677,8 +1688,8 @@ export const onSquadMemberJoined = functions.firestore
       || membership.notificationEligible === false
     ) return null;
 
-    const db = admin.firestore();
-    const messaging = admin.messaging();
+    const db = getFirestore();
+    const messaging = getMessaging();
 
     // Get squad
     const squadDoc = await db.collection('squads').doc(membership.squadId).get();
@@ -1718,8 +1729,7 @@ export const deactivateInactiveMembers = functions.pubsub
   .onRun(async () => {
     const cutoff = Date.now() - TWENTY_FOUR_HOURS_MS;
 
-    const snapshot = await admin
-      .firestore()
+    const snapshot = await getFirestore()
       .collection('squadMemberships')
       .where('membershipStatus', '==', 'active')
       .where('lastSeenAt', '<', new Date(cutoff))
@@ -1737,7 +1747,7 @@ export const deactivateInactiveMembers = functions.pubsub
 
     for (let i = 0; i < docs.length; i += BATCH_LIMIT) {
       const chunk = docs.slice(i, i + BATCH_LIMIT);
-      const batch = admin.firestore().batch();
+      const batch = getFirestore().batch();
       let writes = 0;
       chunk.forEach((doc) => {
         if (doc.data().presenceStatus !== 'away') {
@@ -1782,7 +1792,7 @@ export const createGameRewardSession = communicationFunctions.https.onCall(async
   const requestedSourceSquadId = data?.sourceSquadId == null ? null : readCallableSquadId(data.sourceSquadId);
   let sourceSquadId = requestedSourceSquadId;
 
-  const realtimeSnapshot = await admin.database().ref(`/gameSessions/${requestedSessionId}`).once('value');
+  const realtimeSnapshot = await getDatabase().ref(`/gameSessions/${requestedSessionId}`).once('value');
   if (!realtimeSnapshot.exists()) {
     throw new functions.https.HttpsError('failed-precondition', 'The multiplayer game session was not found.');
   }
@@ -1800,8 +1810,8 @@ export const createGameRewardSession = communicationFunctions.https.onCall(async
     ? readSpotRewardAssignmentIds((realtimeSession.gameState as Record<string, unknown> | undefined)?.teamAssignments)
     : [uid];
   const participantIdsForCreate = initialParticipantIds.includes(uid) ? initialParticipantIds : [uid];
-  const sessionRef = admin.firestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
-  const result = await admin.firestore().runTransaction(async (transaction) => {
+  const sessionRef = getFirestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
+  const result = await getFirestore().runTransaction(async (transaction) => {
     const existing = await transaction.get(sessionRef);
     if (existing.exists) {
       const participantIds = readStringArray(existing.data()?.participantIds);
@@ -1842,7 +1852,7 @@ export const recordGameSessionResult = communicationFunctions.https.onCall(async
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to finish this game.');
   const gameType = readLocalRewardGameType(data?.gameType);
   const sessionId = readGameSessionId(data?.sessionId);
-  const sessionRef = admin.firestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
+  const sessionRef = getFirestore().collection('gameRewardSessions').doc(`${gameType}_${sessionId}`);
   const initialRewardSession = await sessionRef.get();
   if (
     !initialRewardSession.exists ||
@@ -1862,7 +1872,7 @@ export const recordGameSessionResult = communicationFunctions.https.onCall(async
   if (
     initialRewardSession.data()?.status !== 'completed'
   ) {
-    const realtimeSnapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+    const realtimeSnapshot = await getDatabase().ref(`/gameSessions/${sessionId}`).once('value');
     const realtimeSession = realtimeSnapshot.val() as Record<string, unknown> | null;
     const expectedLegacyType = gameType === 'spotDifferences' ? 'spot_difference' : 'bomb_defusal';
     const participants = realtimeSession?.players as Record<string, unknown> | undefined;
@@ -1893,7 +1903,7 @@ export const recordGameSessionResult = communicationFunctions.https.onCall(async
     }
   }
 
-  return admin.firestore().runTransaction(async (transaction) => {
+  return getFirestore().runTransaction(async (transaction) => {
     const sessionSnapshot = await transaction.get(sessionRef);
     if (!sessionSnapshot.exists || !readStringArray(sessionSnapshot.data()?.participantIds).includes(uid)) {
       throw new functions.https.HttpsError('permission-denied', 'You are not a participant in this game session.');
@@ -1951,7 +1961,7 @@ export const finalizeGameReward = communicationFunctions.https.onCall(async (dat
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to receive Sideline Stars.');
   const gameType = readRewardGameType(data?.gameType);
   const sessionId = readGameSessionId(data?.sessionId);
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const userRef = firestore.collection('users').doc(uid);
   const rewardId = gameRewardId(gameType, sessionId, uid);
   const rewardRef = userRef.collection('rewardTransactions').doc(rewardId);
@@ -2020,7 +2030,7 @@ export const finalizeGameReward = communicationFunctions.https.onCall(async (dat
 export const cleanupExpiredGameSessions = functions.pubsub
   .schedule('every 10 minutes')
   .onRun(async () => {
-    const rtdb = admin.database();
+    const rtdb = getDatabase();
     const cutoff = Date.now() - 5 * 60 * 1000; // 5 minutes ago
 
     const snap = await rtdb.ref('/gameSessions').once('value');
@@ -2049,7 +2059,7 @@ export const cleanupExpiredGameSessions = functions.pubsub
       [`gameSessionSecrets/${id}`]: null,
     })));
 
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const expiredTrivia = await firestore.collection('sessions')
       .where('expiresAt', '<=', Timestamp.now())
       .limit(100)
@@ -2099,7 +2109,7 @@ export const getCurrentWeeklyChallenge = functions.https.onCall(async (data, con
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in to view your weekly challenge.');
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const userRef = firestore.collection('users').doc(uid);
   const userSnapshot = await userRef.get();
   if (!userSnapshot.exists) throw new functions.https.HttpsError('failed-precondition', 'User profile not found.');
@@ -2148,7 +2158,7 @@ export const completeWeeklyChallenge = communicationFunctions.https.onCall(async
     throw new functions.https.HttpsError('invalid-argument', 'A valid weekly challenge key is required.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const userRef = firestore.collection('users').doc(uid);
   const assignmentRef = userRef.collection('weeklyChallenges').doc(weekKey);
   const rewardId = `weeklyChallenge_${weekKey}`;
@@ -2266,7 +2276,7 @@ export const registerDeviceNotificationToken = functions.https.onCall(async (dat
     throw new functions.https.HttpsError('invalid-argument', 'A valid Expo push token is required on iOS.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const tokenId = createHash('sha256').update(token).digest('hex');
   await Promise.all([
     firestore.collection('notificationTokens').doc(tokenId).set({
@@ -2295,7 +2305,7 @@ export const unregisterDeviceNotificationToken = functions.https.onCall(async (d
   }
 
   const tokenId = createHash('sha256').update(token).digest('hex');
-  const tokenRef = admin.firestore().collection('notificationTokens').doc(tokenId);
+  const tokenRef = getFirestore().collection('notificationTokens').doc(tokenId);
   const tokenSnapshot = await tokenRef.get();
   if (tokenSnapshot.exists && tokenSnapshot.data()?.uid === uid) {
     await tokenRef.delete();
@@ -2331,7 +2341,7 @@ export const notifyParentsOfTeamAnnouncement = functions.firestore
 
     const teamId = context.params.teamId as string;
     const announcementId = context.params.announcementId as string;
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const teamSnapshot = await firestore.collection('teams').doc(teamId).get();
     if (!teamSnapshot.exists || !isTeamActive(teamSnapshot.data())) return null;
 
@@ -2460,7 +2470,7 @@ export const getTeamAnnouncementRecipientCounts = communicationTeamMessagingFunc
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
     const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const teamRef = firestore.collection('teams').doc(teamId);
     const [teamSnapshot, senderSnapshot, membersSnapshot] = await Promise.all([
       teamRef.get(),
@@ -2487,7 +2497,7 @@ export const getEligiblePrivateTeamParents = communicationTeamMessagingFunctions
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
     const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const teamRef = firestore.collection('teams').doc(teamId);
     const [teamSnapshot, coachSnapshot, membersSnapshot] = await Promise.all([
       teamRef.get(),
@@ -2540,7 +2550,7 @@ export const getOrCreatePrivateTeamConversation = communicationTeamMessagingFunc
     const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
     const parentUserId = readRequiredIdentifier(data?.parentUserId, 'invalid_parent_id');
     if (uid === parentUserId) throw new Error('invalid_parent_id');
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const teamRef = firestore.collection('teams').doc(teamId);
     const coachMemberRef = teamRef.collection('members').doc(uid);
     const parentMemberRef = teamRef.collection('members').doc(parentUserId);
@@ -2657,7 +2667,7 @@ export const sendPrivateTeamTextMessage = communicationTeamMessagingFunctions.ht
     const clientMessageId = readClientIdentifier(data?.clientMessageId);
     const text = readBoundedText(data?.text, 1, 2000, 'invalid_message_text');
     assertUserContentAllowed(text);
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     await enforceTeamMessageRateLimit(firestore, uid, 'privateText', 60);
     const result = await createPrivateTeamMessageTransaction(firestore, {
       caption: undefined,
@@ -2686,7 +2696,7 @@ export const createTeamVoiceMemoUpload = communicationTeamMessagingFunctions.htt
     if (kind !== 'announcement' && kind !== 'privateMessage') throw new Error('invalid_voice_target');
     const clientMessageId = readClientIdentifier(data?.clientMessageId ?? `legacy_${randomBytes(16).toString('hex')}`);
     const voiceMemo = validateVoiceMemoMetadata(data?.voiceMemo);
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     await enforceTeamMessageRateLimit(firestore, uid, 'voiceUpload', 20);
     const reservationRef = firestore.collection('teamVoiceUploadReservations').doc(
       teamVoiceReservationId(kind, teamId, uid, clientMessageId),
@@ -2800,7 +2810,7 @@ export const finalizeTeamVoiceAnnouncement = communicationTeamMessagingFunctions
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
     const reservationId = readRequiredIdentifier(data?.reservationId, 'invalid_reservation_id');
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const reservationRef = firestore.collection('teamVoiceUploadReservations').doc(reservationId);
     const initialSnapshot = await reservationRef.get();
     const initial = initialSnapshot.data();
@@ -2859,7 +2869,7 @@ export const finalizePrivateTeamVoiceMessage = communicationTeamMessagingFunctio
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
     const reservationId = readRequiredIdentifier(data?.reservationId, 'invalid_reservation_id');
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const reservationRef = firestore.collection('teamVoiceUploadReservations').doc(reservationId);
     const initialSnapshot = await reservationRef.get();
     const initial = initialSnapshot.data();
@@ -2891,7 +2901,7 @@ export const deletePrivateTeamMessage = teamMessagingFunctions.https.onCall(asyn
   try {
     const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
     const messageId = readRequiredIdentifier(data?.messageId, 'invalid_message_id');
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const conversationRef = firestore.collection('teamPrivateConversations').doc(conversationId);
     const messageRef = conversationRef.collection('messages').doc(messageId);
     let status: 'deleted' | 'alreadyDeleted' = 'alreadyDeleted';
@@ -3000,7 +3010,7 @@ export const hidePrivateTeamMessageForCurrentUser = teamMessagingFunctions.https
   try {
     const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
     const messageId = readRequiredIdentifier(data?.messageId, 'invalid_message_id');
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const conversationRef = firestore.collection('teamPrivateConversations').doc(conversationId);
     const messageRef = conversationRef.collection('messages').doc(messageId);
     const memberRef = conversationRef.collection('members').doc(uid);
@@ -3066,7 +3076,7 @@ export const markPrivateTeamConversationRead = teamMessagingFunctions.https.onCa
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
   try {
     const conversationId = readRequiredIdentifier(data?.conversationId, 'invalid_conversation_id');
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const conversationRef = firestore.collection('teamPrivateConversations').doc(conversationId);
     await firestore.runTransaction(async (transaction) => {
       const conversationSnapshot = await transaction.get(conversationRef);
@@ -3105,7 +3115,7 @@ export const getTeamPrivateMessageInbox = teamMessagingFunctions.https.onCall(as
     if (cursor && (!Number.isFinite(cursor.timestampMillis) || cursor.timestampMillis < 0)) {
       throw new Error('invalid_conversation_cursor');
     }
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const userSnapshot = await firestore.collection('users').doc(uid).get();
     const activeTeamIds = new Set(readStringArray(
       requestedRole === 'coach'
@@ -3181,7 +3191,7 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
       (requestedMessageId && requestedMessageId !== storageReference.messageId) ||
       (requestedMessageKind && requestedMessageKind !== storageReference.kind)
     ) throw new Error('voice_message_unavailable');
-    const reservationSnapshot = await admin.firestore()
+    const reservationSnapshot = await getFirestore()
       .collection('teamVoiceUploadReservations')
       .doc(storageReference.reservationId)
       .get();
@@ -3198,7 +3208,7 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
     ) {
       throw new Error('voice_message_unavailable');
     }
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     if (reservation.kind === 'announcement') {
       const teamId = readRequiredIdentifier(reservation.teamId, 'invalid_team_id');
       const [memberSnapshot, announcementSnapshot] = await Promise.all([
@@ -3237,7 +3247,7 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
       }
     }
     const expiresAtMillis = Date.now() + TEAM_VOICE_SIGNED_URL_MS;
-    const bucket = admin.storage().bucket();
+    const bucket = getStorage().bucket();
     const storageEmulatorHost = process.env.STORAGE_EMULATOR_HOST;
     const storageEmulatorOrigin = storageEmulatorHost && /^https?:\/\//u.test(storageEmulatorHost)
       ? storageEmulatorHost
@@ -3275,7 +3285,7 @@ export const getTeamVoiceMemoDownloadUrl = teamMessagingFunctions.https.onCall(a
         userId: uid,
         createdAt: FieldValue.serverTimestamp(),
       });
-      const projectId = process.env.GCLOUD_PROJECT || admin.app().options.projectId;
+      const projectId = process.env.GCLOUD_PROJECT || getApp().options.projectId;
       if (!projectId) throw new Error('playback_grant_failed');
       url = `https://us-central1-${projectId}.cloudfunctions.net/streamTeamVoiceMemo?grant=${grantToken}`;
     }
@@ -3294,7 +3304,7 @@ export const getTeamAnnouncementSummaries = teamMessagingFunctions.https.onCall(
   const teamIds = Array.from(new Set(Array.isArray(data?.teamIds) ? data.teamIds : []))
     .map((value) => readRequiredIdentifier(value, 'invalid_team_id'));
   if (teamIds.length > 50) throw new functions.https.HttpsError('invalid-argument', 'Too many teams were requested.');
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const membershipSnapshots = teamIds.length > 0
     ? await firestore.getAll(...teamIds.map((teamId) => firestore.collection('teams').doc(teamId).collection('members').doc(uid)))
     : [];
@@ -3322,7 +3332,7 @@ export const markTeamAnnouncementRead = teamMessagingFunctions.https.onCall(asyn
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.');
   const teamId = readRequiredIdentifier(data?.teamId, 'invalid_team_id');
   const announcementId = readRequiredIdentifier(data?.announcementId, 'invalid_announcement_id');
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const announcementRef = teamRef.collection('announcements').doc(announcementId);
   const membershipRef = teamRef.collection('members').doc(uid);
@@ -3373,7 +3383,7 @@ export const streamTeamVoiceMemo = teamMessagingFunctions.https.onRequest(async 
   }
 
   try {
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const grantId = createHash('sha256').update(grantToken).digest('hex');
     const grantSnapshot = await firestore.collection('teamVoicePlaybackGrants').doc(grantId).get();
     const grant = grantSnapshot.data();
@@ -3397,7 +3407,7 @@ export const streamTeamVoiceMemo = teamMessagingFunctions.https.onRequest(async 
       return;
     }
 
-    const file = admin.storage().bucket().file(storagePath);
+    const file = getStorage().bucket().file(storagePath);
     const [metadata] = await file.getMetadata();
     const sizeBytes = Number(metadata.size);
     const mimeType = typeof metadata.contentType === 'string' ? metadata.contentType : '';
@@ -3445,7 +3455,7 @@ export const streamTeamVoiceMemo = teamMessagingFunctions.https.onRequest(async 
 export const cleanupAbandonedTeamVoiceUploads = teamMessagingFunctions.pubsub
   .schedule('every 24 hours')
   .onRun(async () => {
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const snapshot = await firestore.collection('teamVoiceUploadReservations')
       .where('status', '==', 'pending')
       .where('expiresAt', '<=', Timestamp.now())
@@ -3455,7 +3465,7 @@ export const cleanupAbandonedTeamVoiceUploads = teamMessagingFunctions.pubsub
     await Promise.all(snapshot.docs.map(async (document) => {
       const storagePath = document.data()?.storagePath;
       if (typeof storagePath === 'string' && storagePath.startsWith('teamVoiceMemos/')) {
-        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         deletedObjects += 1;
       }
       await document.ref.delete();
@@ -3468,7 +3478,7 @@ export const cleanupAbandonedTeamVoiceUploads = teamMessagingFunctions.pubsub
       const storagePath = document.data()?.storagePath;
       if (typeof storagePath !== 'string' || !parseTeamVoiceStoragePath(storagePath)) return;
       try {
-        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         await document.ref.delete();
         deletedObjects += 1;
       } catch {
@@ -3596,7 +3606,7 @@ function voicePlaybackAuthorizationFailureStage(error: unknown) {
 async function deleteTeamVoiceStorageObject(storagePath: string) {
   const storageReference = parseTeamVoiceStoragePath(storagePath);
   if (!storageReference) return 'cleanupPending' as const;
-  const reservationRef = admin.firestore().collection('teamVoiceUploadReservations')
+  const reservationRef = getFirestore().collection('teamVoiceUploadReservations')
     .doc(storageReference.reservationId);
   try {
     await reservationRef.set({
@@ -3608,7 +3618,7 @@ async function deleteTeamVoiceStorageObject(storagePath: string) {
     functions.logger.warn('team_voice_cleanup_marker_deferred', { hasStoragePath: true });
   }
   try {
-    await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+    await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
     try {
       await reservationRef.delete();
     } catch {
@@ -3792,9 +3802,9 @@ async function requireActivePrivateConversation(
 async function verifyUploadedVoiceMemo(reservation: Record<string, unknown>) {
   const storagePath = readBoundedText(reservation.storagePath, 1, 1024, 'invalid_storage_path');
   const declared = validateVoiceMemoMetadata(reservation.voiceMemo);
-  const [exists] = await admin.storage().bucket().file(storagePath).exists();
+  const [exists] = await getStorage().bucket().file(storagePath).exists();
   if (!exists) throw new Error('upload_failed');
-  const [metadata] = await admin.storage().bucket().file(storagePath).getMetadata();
+  const [metadata] = await getStorage().bucket().file(storagePath).getMetadata();
   const actualSize = Number(metadata.size);
   const actualMime = typeof metadata.contentType === 'string' ? metadata.contentType : '';
   if (!Number.isInteger(actualSize) || actualSize < 1 || actualSize > TEAM_VOICE_MAX_SIZE_BYTES || actualSize !== declared.sizeBytes) {
@@ -4007,7 +4017,7 @@ async function reconcileAnnouncementUnreadSummaries(
   const afterRecipients = storedAnnouncementRecipientUserIds(after?.recipientUserIds) ?? [];
   const recipientUserIds = Array.from(new Set([...beforeRecipients, ...afterRecipients]));
   const afterVisible = Boolean(after) && after?.isDeleted !== true && !contentIsModerated(after);
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   for (let start = 0; start < recipientUserIds.length; start += 25) {
     await Promise.all(recipientUserIds.slice(start, start + 25).map(async (userId) => {
       const summaryRef = announcementSummaryRef(firestore, userId, teamId);
@@ -4057,7 +4067,7 @@ async function reconcileAnnouncementUnreadSummaries(
 }
 
 async function reconcileLegacyAnnouncementRead(teamId: string, announcementId: string, userId: string) {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const summaryRef = announcementSummaryRef(firestore, userId, teamId);
   const markerRef = summaryRef.collection('unreadAnnouncements').doc(announcementId);
   await firestore.runTransaction(async (transaction) => {
@@ -4119,7 +4129,7 @@ function throwTeamMessagingError(error: unknown): never {
 export const syncPublicUserProfile = functions.firestore
   .document('users/{userId}')
   .onWrite(async (change, context) => {
-    const publicRef = admin.firestore().collection('publicUserProfiles').doc(context.params.userId);
+    const publicRef = getFirestore().collection('publicUserProfiles').doc(context.params.userId);
     if (!change.after.exists) {
       await publicRef.delete();
       return null;
@@ -4142,7 +4152,7 @@ export const updatePublicUserProfile = communicationFunctions.https.onCall(async
   const firstName = typeof data?.firstName === 'string' ? data.firstName : '';
   const lastName = typeof data?.lastName === 'string' ? data.lastName : '';
   const requestedPhotoURL = data?.photoURL;
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const privateRef = firestore.collection('users').doc(userId);
   const publicRef = firestore.collection('publicUserProfiles').doc(userId);
   const profile = await firestore.runTransaction(async (transaction) => {
@@ -4175,7 +4185,7 @@ export const updatePublicUserProfile = communicationFunctions.https.onCall(async
     return { privateProfile: next, publicProfile };
   });
   try {
-    await admin.auth().updateUser(userId, { displayName: profile.privateProfile.displayName, photoURL: profile.privateProfile.photoURL ?? undefined });
+    await getAuth().updateUser(userId, { displayName: profile.privateProfile.displayName, photoURL: profile.privateProfile.photoURL ?? undefined });
   } catch (error) {
     console.warn('[updatePublicUserProfile] auth projection unavailable', {
       code: typeof error === 'object' && error && 'code' in error ? String(error.code) : 'unknown',
@@ -4192,7 +4202,7 @@ export const getPublicUserProfiles = functions.https.onCall(async (data, context
   const userIds = normalizePublicProfileIds(data?.userIds);
   if (userIds.length === 0) return { profiles: [] };
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const publicSnapshots = await firestore.getAll(
     ...userIds.map((userId) => firestore.collection('publicUserProfiles').doc(userId)),
   );
@@ -4218,7 +4228,7 @@ export const getPublicUserProfiles = functions.https.onCall(async (data, context
 
   const authFallbackIds = fallbackIds.filter((userId) => !resolved.has(userId));
   if (authFallbackIds.length > 0) {
-    const authUsers = await admin.auth().getUsers(authFallbackIds.map((uid) => ({ uid })));
+    const authUsers = await getAuth().getUsers(authFallbackIds.map((uid) => ({ uid })));
     authUsers.users.forEach((authUser) => {
       existingUserIds.add(authUser.uid);
       const profile = resolveCanonicalPublicProfile(authUser.uid, undefined, authUser.displayName);
@@ -4285,7 +4295,7 @@ const LEGACY_PUBLIC_USER_SEARCH_FIELDS = [
 ] as const;
 
 async function enforcePublicUserSearchRateLimit(userId: string) {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const reference = firestore.collection('publicUserSearchRateLimits').doc(userId);
   const nowMillis = Date.now();
   try {
@@ -4349,7 +4359,7 @@ export const searchPublicUserProfiles = communicationFunctions.https.onCall(asyn
   setValidationStage('rate-limit');
   await enforcePublicUserSearchRateLimit(uid);
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const queryLimit = Math.min(PUBLIC_USER_SEARCH_MAX_RESULTS * 2, resultLimit * 3);
   setValidationStage('viewer-block-and-profile-query');
   const [viewerSnapshot, blockedUserIds, ...prefixSnapshots] = await Promise.all([
@@ -4410,7 +4420,7 @@ export const searchPublicUserProfiles = communicationFunctions.https.onCall(asyn
   );
   setValidationStage('auth-account-validation');
   const activeAuthUserIds = rankedProjectionCandidates.length > 0
-    ? new Set((await admin.auth().getUsers(
+    ? new Set((await getAuth().getUsers(
       rankedProjectionCandidates.map((profile) => ({ uid: profile.userId })),
     )).users.map((authUser) => authUser.uid))
     : new Set<string>();
@@ -4487,7 +4497,7 @@ export const getSuggestedConnections = communicationFunctions.https.onCall(async
     throw new functions.https.HttpsError('invalid-argument', 'Search text is too long.');
   }
   const normalizedQuery = queryText.toLocaleLowerCase();
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   setValidationStage('viewer-profile-query');
   const viewerSnapshot = await firestore.collection('users').doc(uid).get();
   if (!viewerSnapshot.exists) return { suggestions: [] };
@@ -4497,7 +4507,7 @@ export const getSuggestedConnections = communicationFunctions.https.onCall(async
   setValidationStage('block-query');
   const blockedUserIds = await readBlockedRelationshipIds(uid);
   const excludedUserIds = new Set([uid, ...viewerFriendIds, ...blockedUserIds]);
-  let candidateSnapshots: admin.firestore.QueryDocumentSnapshot[];
+  let candidateSnapshots: FirebaseFirestore.QueryDocumentSnapshot[];
   setValidationStage('candidate-query');
   if (normalizedQuery) {
     const prefixSnapshot = await firestore.collection('users')
@@ -4587,7 +4597,7 @@ export const deleteTeamAnnouncement = functions.https.onCall(async (data, contex
 
   const teamId = readReplyPathId(data?.teamId, 'team');
   const announcementId = readReplyPathId(data?.announcementId, 'announcement');
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const memberRef = teamRef.collection('members').doc(uid);
   const announcementRef = teamRef.collection('announcements').doc(announcementId);
@@ -4656,7 +4666,7 @@ export const createTeamAnnouncement = communicationTeamMessagingFunctions.https.
     const audience = readAnnouncementAudience(data?.audience);
     const allowReplies = data?.allowReplies !== false;
     assertUserContentAllowed(title, body);
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const teamRef = firestore.collection('teams').doc(teamId);
     const announcementRef = teamRef.collection('announcements').doc(teamAnnouncementId(teamId, uid, clientMessageId));
     const clientRequestHash = createHash('sha256')
@@ -4731,7 +4741,7 @@ export const createTeamAnnouncementReply = communicationFunctions.https.onCall(a
   }
   assertUserContentAllowed(body);
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const memberRef = teamRef.collection('members').doc(uid);
   const announcementRef = teamRef.collection('announcements').doc(announcementId);
@@ -4821,7 +4831,7 @@ export const deleteTeamAnnouncementReply = functions.https.onCall(async (data, c
   const teamId = readReplyPathId(data?.teamId, 'team');
   const announcementId = readReplyPathId(data?.announcementId, 'announcement');
   const replyId = readReplyPathId(data?.replyId, 'reply');
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const memberRef = teamRef.collection('members').doc(uid);
   const announcementRef = teamRef.collection('announcements').doc(announcementId);
@@ -4895,7 +4905,7 @@ export const joinParentTeamByInviteCode = communicationFunctions.https.onCall(as
     throw new functions.https.HttpsError('invalid-argument', 'A valid team code is required.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamQuery = await firestore.collection('teams').where('inviteCode', '==', inviteCode).limit(2).get();
   const teamSnapshot = teamQuery.docs[0];
   if (!teamSnapshot) throw new functions.https.HttpsError('not-found', 'Team invite code was not found.');
@@ -5015,7 +5025,7 @@ export const setTeamStaffRole = communicationFunctions.https.onCall(async (data,
     throw new functions.https.HttpsError('permission-denied', 'You cannot manage your own team role.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const requesterRef = teamRef.collection('members').doc(uid);
   const targetRef = teamRef.collection('members').doc(targetUserId);
@@ -5084,7 +5094,7 @@ export const setParentTeamChildLinks = communicationFunctions.https.onCall(async
     throw new functions.https.HttpsError('invalid-argument', 'A valid team is required.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const userRef = firestore.collection('users').doc(uid);
   const memberRef = teamRef.collection('members').doc(uid);
@@ -5140,7 +5150,7 @@ export const leaveParentTeam = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('invalid-argument', 'A valid team is required.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const memberRef = teamRef.collection('members').doc(uid);
   const userRef = firestore.collection('users').doc(uid);
@@ -5220,7 +5230,7 @@ export const setTeamArchived = communicationFunctions.https.onCall(async (data, 
     throw new functions.https.HttpsError('invalid-argument', 'A valid team and archive state are required.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const requesterRef = teamRef.collection('members').doc(uid);
   const replacementInviteCode = archived ? null : await generateAvailableTeamInviteCode(firestore, teamId);
@@ -5332,7 +5342,7 @@ export const removeArchivedParentTeamFromAccount = functions.https.onCall(async 
     throw new functions.https.HttpsError('invalid-argument', 'A valid past team is required.', { reason: 'invalid-team' });
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const memberRef = teamRef.collection('members').doc(uid);
   const userRef = firestore.collection('users').doc(uid);
@@ -5663,7 +5673,7 @@ export const deleteChildProfile = functions.https.onCall(async (data, context) =
     throw new functions.https.HttpsError('permission-denied', 'Child profile reference is invalid or unavailable.');
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const userRef = firestore.collection('users').doc(uid);
   const childRef = userRef.collection('children').doc(childId);
   const linksQuery = userRef.collection('teamChildLinks');

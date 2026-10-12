@@ -1,8 +1,9 @@
+import { getFirestore } from 'firebase-admin/firestore';
 import { createHash, randomUUID } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 import {
   createCoachHelpSafetyResult,
   isCoachHelpSafetySensitive,
@@ -50,7 +51,7 @@ export const generateCoachResourceHelp = coachHelpFunctions.https.onCall(async (
   if (!serverTestingEnabled()) {
     throw new functions.https.HttpsError('failed-precondition', 'AI Coach testing is disabled.', { reason: 'server_testing_disabled' });
   }
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   if (!await requireCoachAiRuntimeEnabled(firestore)) {
     throw new functions.https.HttpsError('failed-precondition', 'AI Coach is temporarily unavailable.', { reason: 'coach_ai_disabled' });
   }

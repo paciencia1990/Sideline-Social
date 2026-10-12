@@ -1,8 +1,9 @@
+import { getFirestore } from 'firebase-admin/firestore';
 import { createHash } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import { canAccessTeamAnnouncement, isTeamActive } from './teamMembershipCore';
 import { isExplicitConversationParticipant } from './teamVoiceMessagingCore';
@@ -24,7 +25,7 @@ export const reportTeamContent = moderationFunctions.https.onCall(async (data, c
   const teamId = readId(data?.teamId, 'team');
   const parentId = readId(data?.parentId, kind === 'privateTeamMessage' ? 'conversation' : 'announcement');
   const contentId = kind === 'announcement' ? parentId : readId(data?.contentId, 'content');
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamRef = firestore.collection('teams').doc(teamId);
   const memberRef = teamRef.collection('members').doc(reporterUserId);
   const [team, member] = await Promise.all([teamRef.get(), memberRef.get()]);

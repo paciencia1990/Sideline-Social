@@ -1,6 +1,7 @@
-import * as admin from "firebase-admin";
+import { getFirestore } from "firebase-admin/firestore";
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { Timestamp } from "firebase-admin/firestore";
-import * as functions from "firebase-functions";
+import * as functions from "firebase-functions/v1";
 
 export type AccountCapability = "app" | "communication" | "safety";
 
@@ -59,7 +60,7 @@ export async function resolveAccountStanding(
   uid: string,
   nowMillis = Date.now(),
 ): Promise<ResolvedAccountStanding> {
-  const snapshot = await admin.firestore().collection("accountStanding").doc(uid).get();
+  const snapshot = await getFirestore().collection("accountStanding").doc(uid).get();
   if (!snapshot.exists) return activeStanding();
 
   return resolveAccountStandingData(snapshot.data() ?? {}, nowMillis);

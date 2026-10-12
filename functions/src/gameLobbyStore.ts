@@ -1,6 +1,7 @@
+import { getFirestore } from 'firebase-admin/firestore';
 import { createHash } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { Timestamp } from 'firebase-admin/firestore';
 
 import {
@@ -12,10 +13,10 @@ import {
 } from './gameLobbyCore';
 import type { GameJoinCodeType } from './gameJoinCodeCore';
 
-export const gameLobbyDirectories = () => admin.firestore().collection('gameLobbyDirectories');
-export const gameLobbyCreateRequests = () => admin.firestore().collection('gameLobbyCreateRequests');
-export const activeGameLobbyMemberships = () => admin.firestore().collection('activeGameLobbyMemberships');
-export const gameLobbyCreationRateLimits = () => admin.firestore().collection('gameLobbyCreationRateLimits');
+export const gameLobbyDirectories = () => getFirestore().collection('gameLobbyDirectories');
+export const gameLobbyCreateRequests = () => getFirestore().collection('gameLobbyCreateRequests');
+export const activeGameLobbyMemberships = () => getFirestore().collection('activeGameLobbyMemberships');
+export const gameLobbyCreationRateLimits = () => getFirestore().collection('gameLobbyCreationRateLimits');
 
 export function gameLobbyDirectoryId(squadId: string, gameType: GameJoinCodeType) {
   return createHash('sha256').update(`${squadId}:${gameType}`).digest('hex');
@@ -34,7 +35,7 @@ export async function setGameLobbyLifecycleForSession(
     'activePlayerCount' | 'queuedPlayerCount' | 'hostUserId' | 'hostDisplayName' | 'expiresAtMs'
   >> = {},
 ) {
-  const link = await admin.firestore()
+  const link = await getFirestore()
     .collection('gameJoinSessionLinks')
     .doc(hashIdentifier(`${gameType}:${sessionId}`))
     .get();
@@ -43,7 +44,7 @@ export async function setGameLobbyLifecycleForSession(
   const squadId = readIdentifier(linkData?.squadId);
   if (!link.exists || !lobbyId || !squadId || linkData?.gameType !== gameType) return false;
   const reference = gameLobbyDirectoryRef(squadId, gameType);
-  return admin.firestore().runTransaction(async (transaction) => {
+  return getFirestore().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reference);
     const nowMs = Date.now();
     const directory = normalizeGameLobbyDirectory(snapshot.data(), squadId, gameType, nowMs);
@@ -69,7 +70,7 @@ export async function removeGameLobbyDirectoryEntry(input: {
   squadId: string;
 }) {
   const reference = gameLobbyDirectoryRef(input.squadId, input.gameType);
-  return admin.firestore().runTransaction(async (transaction) => {
+  return getFirestore().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reference);
     if (!snapshot.exists) return false;
     const nowMs = Date.now();

@@ -19,7 +19,7 @@ Server-side severe-content screening covers friend chat, text/voice team announc
 
 1. Monitor `chatModerationReports` and `contentModerationReports` through a restricted administrative process; never grant ordinary clients access.
 2. Triage credible threats, child-privacy exposure, sexual content involving minors, and imminent safety risks immediately.
-3. Target initial review within **24 hours for urgent safety reports** and **72 hours for other reports**. Owner/legal counsel must approve these commitments before publication.
+3. Owner-selected service aim (October 12, 2026): begin initial human review within **one business day** and begin appeal review within **two business days**. Business days are Monday through Friday (Eastern Time); Saturday and Sunday are excluded. These are initial-review aims, not final-resolution guarantees. The corresponding website, support, and console wording is prepared locally and still needs publication. Escalate urgent safety issues when identified; do not imply 24/7 staffing.
 4. Preserve the report and minimum evidence required by the approved retention policy. Avoid copying child information into external tickets.
 5. Remove violating content with existing trusted deletion/moderation functions or restricted Firebase administration.
 6. Restrict or disable abusive Firebase Authentication accounts and revoke sessions when warranted. Record the decision and reviewer without exposing it to clients.

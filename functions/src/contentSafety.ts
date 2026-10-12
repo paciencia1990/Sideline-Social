@@ -1,4 +1,5 @@
-import * as functions from 'firebase-functions';
+
+import * as functions from 'firebase-functions/v1';
 
 const BLOCKED_CONTENT_PATTERNS = [
   /\bkill\s+(?:yourself|urself|your\s*self)\b/iu,

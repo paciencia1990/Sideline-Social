@@ -1,8 +1,10 @@
+import { getFirestore } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import { formatSuggestedConnectionName, resolvePublicProfileName } from './friendSuggestionCore';
 import { friendRequestIdFor } from './friendRequestCore';
@@ -60,9 +62,9 @@ const communicationFunctions = permanentAccountFunctions(firebaseFunctions, "com
 const communicationChatFunctions = communicationFunctions.region('us-central1');
 const safetyFunctions = permanentAccountFunctions(firebaseFunctions, "safety");
 const safetyChatFunctions = safetyFunctions.region('us-central1');
-const firestore = () => admin.firestore();
+const firestore = () => getFirestore();
 
-type ConversationData = admin.firestore.DocumentData & {
+type ConversationData = FirebaseFirestore.DocumentData & {
   conversationType?: 'direct' | 'group';
   ownerUserId?: string | null;
   adminUserIds?: string[];
@@ -73,7 +75,7 @@ type ConversationData = admin.firestore.DocumentData & {
   lastMessageId?: string | null;
 };
 
-type FriendChatMediaUploadReservation = admin.firestore.DocumentData & {
+type FriendChatMediaUploadReservation = FirebaseFirestore.DocumentData & {
   caption?: string | null;
   clientMessageId?: string;
   conversationId?: string;
@@ -126,7 +128,7 @@ function failed(message: string): never {
   throw new functions.https.HttpsError('failed-precondition', message);
 }
 
-function safeName(data: admin.firestore.DocumentData | undefined) {
+function safeName(data: FirebaseFirestore.DocumentData | undefined) {
   return formatSuggestedConnectionName(resolvePublicProfileName(data)) || '';
 }
 
@@ -189,12 +191,12 @@ function timestampMillis(value: unknown) {
   return null;
 }
 
-function contentIsModerated(value: admin.firestore.DocumentData | undefined) {
+function contentIsModerated(value: FirebaseFirestore.DocumentData | undefined) {
   return value?.moderationState === 'hidden' ||
     value?.moderationState === 'removed';
 }
 
-function messageIsUnavailableForUser(message: admin.firestore.DocumentData | undefined, userId: string) {
+function messageIsUnavailableForUser(message: FirebaseFirestore.DocumentData | undefined, userId: string) {
   return !message ||
     message.status === 'removed' ||
     contentIsModerated(message) ||
@@ -202,7 +204,7 @@ function messageIsUnavailableForUser(message: admin.firestore.DocumentData | und
     !readIds(message.visibleToUserIds).includes(userId);
 }
 
-function safeMessageExcerpt(message: admin.firestore.DocumentData) {
+function safeMessageExcerpt(message: FirebaseFirestore.DocumentData) {
   const messageType = message.messageType === 'image'
     ? 'image'
     : message.messageType === 'voice'
@@ -215,7 +217,7 @@ function safeMessageExcerpt(message: admin.firestore.DocumentData) {
 }
 
 async function resolveReplyContext(
-  transaction: admin.firestore.Transaction,
+  transaction: FirebaseFirestore.Transaction,
   conversationId: string,
   messageId: string | null | undefined,
   userId: string,
@@ -251,7 +253,7 @@ function hashId(value: string) {
 }
 
 function assertMediaReservationThrottle(
-  rateSnapshot: admin.firestore.DocumentSnapshot,
+  rateSnapshot: FirebaseFirestore.DocumentSnapshot,
   reservationId: string,
   now: Timestamp,
 ) {
@@ -272,7 +274,7 @@ function assertMediaReservationThrottle(
 }
 
 function setMediaReservationThrottle(
-  transaction: admin.firestore.Transaction,
+  transaction: FirebaseFirestore.Transaction,
   userId: string,
   reservationId: string,
   now: Timestamp,
@@ -326,7 +328,7 @@ function memberProfile(input: { userId: string; displayNameSnapshot: string; sta
 }
 
 async function getBlockSnapshots(
-  transaction: admin.firestore.Transaction,
+  transaction: FirebaseFirestore.Transaction,
   pairs: Array<[string, string]>,
 ) {
   const refs = Array.from(new Map(pairs.flatMap(([a, b]) => [
@@ -509,7 +511,7 @@ export const createOrOpenDirectConversation = communicationChatFunctions.https.o
       });
     }
 
-    const writeDirectMember = (snapshot: admin.firestore.DocumentSnapshot, userId: string) => {
+    const writeDirectMember = (snapshot: FirebaseFirestore.DocumentSnapshot, userId: string) => {
       const member = baseMember({
         userId,
         displayNameSnapshot: names[userId],
@@ -1331,7 +1333,7 @@ type ForwardPlan = {
 function readForwardSourceImage(
   conversationId: string,
   messageId: string,
-  message: admin.firestore.DocumentData,
+  message: FirebaseFirestore.DocumentData,
 ): ForwardSourceImage | null {
   const image = message.image;
   if (!image || typeof image !== 'object' || Array.isArray(image)) return null;
@@ -1407,7 +1409,7 @@ async function loadForwardImageBytes(userId: string, source: ForwardSourceImage)
     canAccessFriendChatMedia(firestore(), userId, source.thumbnailPath),
   ]);
   if (!fullAuthorized || !thumbnailAuthorized) denied('Media is unavailable.');
-  const bucket = admin.storage().bucket();
+  const bucket = getStorage().bucket();
   const fullFile = bucket.file(source.fullPath);
   const thumbnailFile = bucket.file(source.thumbnailPath);
   const [[fullMetadata], [thumbnailMetadata], [fullBytes], [thumbnailBytes]] = await Promise.all([
@@ -1433,7 +1435,7 @@ async function cleanupUnreferencedForwardMedia(
   await Promise.allSettled(copied.map(async ({ messageRef, storagePath }) => {
     const message = await messageRef.get();
     if (message.exists && readIds(message.data()?.mediaStoragePaths).includes(storagePath)) return;
-    await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+    await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
   }));
 }
 
@@ -1566,12 +1568,12 @@ export const forwardFriendChatMessages = communicationChatFunctions.https.onCall
       const bytes = imageBytes.get(plan.source.messageId);
       if (!bytes || !plan.fullPath || !plan.thumbnailPath) failed('Media is unavailable.');
       const messageRef = conversationRef(plan.destination.conversationId).collection('messages').doc(plan.messageId);
-      await admin.storage().bucket().file(plan.fullPath).save(bytes.fullBytes, {
+      await getStorage().bucket().file(plan.fullPath).save(bytes.fullBytes, {
         metadata: { cacheControl: 'private, max-age=0, no-store', contentType: plan.source.image.metadata.main.mimeType },
         resumable: false,
       });
       copied.push({ messageRef, storagePath: plan.fullPath });
-      await admin.storage().bucket().file(plan.thumbnailPath).save(bytes.thumbnailBytes, {
+      await getStorage().bucket().file(plan.thumbnailPath).save(bytes.thumbnailBytes, {
         metadata: { cacheControl: 'private, max-age=0, no-store', contentType: plan.source.image.metadata.thumbnail.mimeType },
         resumable: false,
       });
@@ -2009,7 +2011,7 @@ export const getFriendChatMediaDownloadUrl = communicationChatFunctions.https.on
   if (!authorized) denied('Media is unavailable.');
 
   const expiresAtMillis = Date.now() + FRIEND_CHAT_MEDIA_SIGNED_URL_MS;
-  const bucket = admin.storage().bucket();
+  const bucket = getStorage().bucket();
   const storageEmulatorHost = process.env.STORAGE_EMULATOR_HOST;
   const storageEmulatorOrigin = storageEmulatorHost && /^https?:\/\//u.test(storageEmulatorHost)
     ? storageEmulatorHost
@@ -2042,7 +2044,7 @@ export const getFriendChatMediaDownloadUrl = communicationChatFunctions.https.on
       userId: uid,
       createdAt: FieldValue.serverTimestamp(),
     });
-    const projectId = process.env.GCLOUD_PROJECT || admin.app().options.projectId;
+    const projectId = process.env.GCLOUD_PROJECT || getApp().options.projectId;
     if (!projectId) failed('Media access is unavailable.');
     url = `https://us-central1-${projectId}.cloudfunctions.net/streamFriendChatMedia?grant=${grantToken}`;
   }
@@ -2076,7 +2078,7 @@ export const streamFriendChatMedia = chatFunctions.https.onRequest(async (reques
       response.status(404).end();
       return;
     }
-    const file = admin.storage().bucket().file(storagePath);
+    const file = getStorage().bucket().file(storagePath);
     const [metadata] = await file.getMetadata();
     const sizeBytes = Number(metadata.size);
     const mimeType = typeof metadata.contentType === 'string' ? metadata.contentType : '';
@@ -2132,7 +2134,7 @@ export const cleanupAbandonedFriendChatMediaUploads = chatFunctions.pubsub
     await Promise.all(snapshot.docs.map(async (document) => {
       const storagePaths = storagePathsForReservation(document.data() as FriendChatMediaUploadReservation);
       await Promise.all(storagePaths.map(async (storagePath) => {
-        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         deletedObjects += 1;
       }));
       await document.ref.delete();
@@ -2144,7 +2146,7 @@ export const cleanupAbandonedFriendChatMediaUploads = chatFunctions.pubsub
     await Promise.all(deletePendingSnapshot.docs.map(async (document) => {
       const storagePaths = storagePathsForReservation(document.data() as FriendChatMediaUploadReservation);
       await Promise.all(storagePaths.map(async (storagePath) => {
-        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         deletedObjects += 1;
       }));
       await document.ref.delete();
@@ -2177,7 +2179,7 @@ async function verifyUploadedFriendVoiceMemo(reservation: FriendChatMediaUploadR
     !voiceMemo
   ) failed('Upload expired.');
   if ((timestampMillis(reservation.expiresAt) ?? 0) <= Date.now()) failed('Upload expired.');
-  const [metadata] = await admin.storage().bucket().file(storagePath).getMetadata();
+  const [metadata] = await getStorage().bucket().file(storagePath).getMetadata();
   const sizeBytes = Number(metadata.size);
   const mimeType = typeof metadata.contentType === 'string' ? metadata.contentType : '';
   if (
@@ -2207,8 +2209,8 @@ async function verifyUploadedFriendImage(reservation: FriendChatMediaUploadReser
     thumbnailReference.messageId !== reservation.targetId
   ) failed('Upload expired.');
   if ((timestampMillis(reservation.expiresAt) ?? 0) <= Date.now()) failed('Upload expired.');
-  const fullFile = admin.storage().bucket().file(fullPath);
-  const thumbnailFile = admin.storage().bucket().file(thumbnailPath);
+  const fullFile = getStorage().bucket().file(fullPath);
+  const thumbnailFile = getStorage().bucket().file(thumbnailPath);
   const [fullMetadata, thumbnailMetadata] = await Promise.all([
     fullFile.getMetadata().then(([metadata]) => metadata),
     thumbnailFile.getMetadata().then(([metadata]) => metadata),
@@ -2342,7 +2344,7 @@ async function deleteFriendChatStorageObjects(storagePaths: string[]) {
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
     }
-    await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+    await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
   }));
   await Promise.allSettled(validPaths.map(async (storagePath) => {
     const storageReference = parseFriendChatMediaStoragePath(storagePath);

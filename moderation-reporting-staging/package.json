@@ -25,5 +25,10 @@
     "@types/node": "22.20.1",
     "typescript": "5.9.3"
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "gaxios": {
+      "uuid": "11.1.1"
+    }
+  }
 }

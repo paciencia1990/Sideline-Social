@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "sideline-squad"
+    "default": "sideline-social-staging-2026",
+    "live": "sideline-social-staging-2026",
+    "legacy": "sideline-squad"
   }
 }

@@ -1,9 +1,10 @@
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore } from 'firebase-admin/firestore';
 import { readSquadSports } from './squadSportsCore';
 import { createHash } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import { formatPublicUserName, resolvePublicProfileName } from './friendSuggestionCore';
 import { accountCanCommunicate, permanentAccountFunctions } from './permanentAuth';
@@ -133,7 +134,7 @@ async function assertSquadAccess(input: {
 }) {
   const userId = input.context.auth?.uid;
   if (!userId) throw new functions.https.HttpsError('unauthenticated', 'Sign in to access Squad seasons.');
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const squadSnapshot = await firestore.collection('squads').doc(input.squadId).get();
   if (!squadSnapshot.exists || !isActiveSquadRecord(squadSnapshot.data() ?? {})) {
     throw new functions.https.HttpsError('not-found', 'This Squad is unavailable.');
@@ -396,7 +397,7 @@ function calendarDateInTimeZone(value: Timestamp, timeZone: string): string {
 }
 
 export async function synchronizeSquadSeasonStates(squadId: string, now = Timestamp.now()) {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const squadRef = firestore.collection('squads').doc(squadId);
   const seasonsRef = squadRef.collection('seasons');
   return firestore.runTransaction(async (transaction) => {
@@ -700,7 +701,7 @@ export const getSquadSeasons = regionalFunctions.https.onCall(async (data, conte
 });
 
 async function getUserDocuments(userIds: string[]) {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const snapshots: FirebaseFirestore.DocumentSnapshot[] = [];
   for (let index = 0; index < userIds.length; index += 100) {
     snapshots.push(...await firestore.getAll(...userIds.slice(index, index + 100)
@@ -773,7 +774,7 @@ export const getSquadLeaderboard = regionalFunctions.https.onCall(async (data, c
   ]));
   const missingNameIds = candidateIds.filter((userId) => !publicNames.get(userId));
   for (let index = 0; index < missingNameIds.length; index += 100) {
-    const authResult = await admin.auth().getUsers(missingNameIds.slice(index, index + 100)
+    const authResult = await getAuth().getUsers(missingNameIds.slice(index, index + 100)
       .map((userId) => ({ uid: userId })));
     authResult.users.forEach((user) => publicNames.set(
       user.uid,
@@ -830,7 +831,7 @@ export async function readSeasonEligibleSquadIds(
   transaction: FirebaseFirestore.Transaction,
   userId: string,
 ): Promise<string[]> {
-  const snapshot = await transaction.get(admin.firestore().collection('squadMemberships')
+  const snapshot = await transaction.get(getFirestore().collection('squadMemberships')
     .where('userId', '==', userId));
   return Array.from(new Set(snapshot.docs
     .filter((document) => {
@@ -870,7 +871,7 @@ function readTrustedReward(rewardId: string, data: FirebaseFirestore.DocumentDat
 
 async function projectRewardToSquad(userId: string, reward: TrustedReward, squadId: string) {
   await synchronizeSquadSeasonStates(squadId);
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const seasonsSnapshot = await firestore.collection('squads').doc(squadId).collection('seasons').get();
   const matching = seasonsSnapshot.docs.filter((document) => {
     const season = document.data() as SeasonData;
@@ -970,7 +971,7 @@ export const syncSquadSeasonStates = regionalFunctions.pubsub
   .timeZone('UTC')
   .onRun(async () => {
     const now = Timestamp.now();
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const [ending, starting] = await Promise.all([
       firestore.collectionGroup('seasons').where('status', '==', 'active').where('endAt', '<=', now).get(),
       firestore.collectionGroup('seasons').where('status', '==', 'upcoming').where('startAt', '<=', now).get(),

@@ -118,10 +118,11 @@
       }
     },
     "production": {
+      "extends": "external-testing",
       "autoIncrement": true,
       "developmentClient": false,
       "distribution": "store",
-      "environment": "production",
+      "environment": "preview",
       "node": "24.16.0",
       "env": {
         "APP_VARIANT": "production",

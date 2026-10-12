@@ -1,8 +1,9 @@
+import { getFirestore } from "firebase-admin/firestore";
 import { randomUUID } from "node:crypto";
 
-import * as admin from "firebase-admin";
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
-import * as firebaseFunctions from "firebase-functions";
+import * as firebaseFunctions from "firebase-functions/v1";
 
 import { isAcceptedFriend } from "./friendChatCore";
 import { canAccessTeamAnnouncement, isTeamActive } from "./teamMembershipCore";
@@ -91,7 +92,7 @@ export const submitModerationReportV2 = moderationFunctions.https.onCall(async (
     );
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const reporterReference = firestore.collection("users").doc(reporterUserId);
   const reportReference = firestore.collection("moderationReports").doc();
   const reporterLinkReference = firestore.collection("moderationReporterLinks").doc(reportReference.id);
@@ -243,7 +244,7 @@ export const listMyModerationReports = moderationFunctions.https.onCall(async (_
   requireModerationReportingEnabled();
   recordAppCheckObservation(context);
   const uid = requirePermanentUid(context);
-  const snapshot = await admin.firestore().collection("moderationReports")
+  const snapshot = await getFirestore().collection("moderationReports")
     .where("reporterHash", "==", moderationHash(uid))
     .orderBy("createdAt", "desc")
     .limit(50)
@@ -272,7 +273,7 @@ export async function createCoachAiUnsafeModerationReport(input: {
   reporterUserId: string;
 }) {
   if (!coachAiModerationIngestionEnabled(process.env)) return null;
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const reportId = `ai_${moderationHash(`${input.reporterUserId}:${input.requestId}`).slice(0, 60)}`;
   const reportReference = firestore.collection("moderationReports").doc(reportId);
   const reporterLinkReference = firestore.collection("moderationReporterLinks").doc(reportId);
@@ -384,7 +385,7 @@ async function resolveReportTarget(
     throw new firebaseFunctions.https.HttpsError("failed-precondition", "You cannot report your own account.");
   }
   if (reportedUserId) {
-    const profile = await transaction.get(admin.firestore().collection("publicUserProfiles").doc(reportedUserId));
+    const profile = await transaction.get(getFirestore().collection("publicUserProfiles").doc(reportedUserId));
     if (!profile.exists) {
       throw new firebaseFunctions.https.HttpsError("not-found", "The referenced account is unavailable.");
     }
@@ -410,7 +411,7 @@ async function resolveFriendMessageTarget(
 ): Promise<ResolvedReportTarget> {
   const conversationId = readRequiredDocumentId(target.conversationId, "conversation");
   const messageId = readRequiredDocumentId(target.messageId, "message");
-  const conversationReference = admin.firestore().collection("friendConversations").doc(conversationId);
+  const conversationReference = getFirestore().collection("friendConversations").doc(conversationId);
   const memberReference = conversationReference.collection("members").doc(reporterUserId);
   const messageReference = conversationReference.collection("messages").doc(messageId);
   const [member, message] = await Promise.all([
@@ -467,7 +468,7 @@ async function resolveTeamContentTarget(
   const contentId = kind === "announcement"
     ? parentId
     : readRequiredDocumentId(target.contentId, "content");
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const teamReference = firestore.collection("teams").doc(teamId);
   const memberReference = teamReference.collection("members").doc(reporterUserId);
   const [team, member] = await Promise.all([
@@ -556,9 +557,9 @@ async function resolveUserProfileTarget(
   if (reportedUserId === reporterUserId) {
     throw new firebaseFunctions.https.HttpsError("failed-precondition", "You cannot report your own profile.");
   }
-  const reporterReference = admin.firestore().collection("users").doc(reporterUserId);
-  const reportedUserReference = admin.firestore().collection("users").doc(reportedUserId);
-  const profileReference = admin.firestore().collection("publicUserProfiles").doc(reportedUserId);
+  const reporterReference = getFirestore().collection("users").doc(reporterUserId);
+  const reportedUserReference = getFirestore().collection("users").doc(reportedUserId);
+  const profileReference = getFirestore().collection("publicUserProfiles").doc(reportedUserId);
   const [reporter, reportedUser, profile] = await Promise.all([
     transaction.get(reporterReference),
     transaction.get(reportedUserReference),
@@ -578,7 +579,7 @@ async function resolveUserProfileTarget(
   }
   const conversationId = readOptionalDocumentId(target.conversationId);
   if (conversationId) {
-    const conversationReference = admin.firestore().collection("friendConversations").doc(conversationId);
+    const conversationReference = getFirestore().collection("friendConversations").doc(conversationId);
     const [reporterMember, reportedMember] = await Promise.all([
       transaction.get(conversationReference.collection("members").doc(reporterUserId)),
       transaction.get(conversationReference.collection("members").doc(reportedUserId)),
@@ -612,7 +613,7 @@ async function resolveCoachAiTarget(
   target: Record<string, unknown>,
 ): Promise<ResolvedReportTarget> {
   const requestId = readRequiredDocumentId(target.requestId, "Coach AI request");
-  const requestReference = admin.firestore().collection("coachAiRequests").doc(`${reporterUserId}_${requestId}`);
+  const requestReference = getFirestore().collection("coachAiRequests").doc(`${reporterUserId}_${requestId}`);
   const request = await transaction.get(requestReference);
   const data = request.data() ?? {};
   if (!request.exists || data.userId !== reporterUserId || data.status !== "completed") {

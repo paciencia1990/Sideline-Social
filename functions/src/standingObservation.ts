@@ -1,5 +1,6 @@
+
 import { createHash, randomBytes } from 'node:crypto';
-import { logger } from 'firebase-functions';
+import { logger } from 'firebase-functions/v1';
 
 // Same sanitized envelope as the Safety delivery observer. outboxHash is an
 // opaque subject-path hash here; no account identifier or event payload is logged.

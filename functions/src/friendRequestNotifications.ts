@@ -1,4 +1,5 @@
-import * as admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldValue } from 'firebase-admin/firestore';
 
 export function friendRequestNotificationId(requestId: string, createdAtMillis: number | string) {
@@ -11,11 +12,11 @@ export async function resolveFriendRequestNotification(
   explicitNotificationId?: string | null,
 ) {
   if (!recipientUserId || !requestId) return 0;
-  const notifications = admin.firestore()
+  const notifications = getFirestore()
     .collection('userNotifications')
     .doc(recipientUserId)
     .collection('notifications');
-  const documents = new Map<string, admin.firestore.QueryDocumentSnapshot | admin.firestore.DocumentSnapshot>();
+  const documents = new Map<string, FirebaseFirestore.QueryDocumentSnapshot | FirebaseFirestore.DocumentSnapshot>();
 
   if (explicitNotificationId) {
     const direct = await notifications.doc(explicitNotificationId).get();
@@ -33,7 +34,7 @@ export async function resolveFriendRequestNotification(
   });
   if (active.length === 0) return 0;
 
-  const batch = admin.firestore().batch();
+  const batch = getFirestore().batch();
   active.forEach((document) => batch.update(document.ref, {
     isRead: true,
     readAt: document.data()?.readAt ?? FieldValue.serverTimestamp(),

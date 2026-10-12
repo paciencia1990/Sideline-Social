@@ -1,4 +1,5 @@
 const { getDefaultConfig } = require("expo/metro-config");
+const path = require("node:path");
 
 const config = getDefaultConfig(__dirname);
 
@@ -7,5 +8,18 @@ const config = getDefaultConfig(__dirname);
 // component registries, so use Metro's React Native/main-field resolution
 // until Firebase is migrated to a version with consistent RN exports.
 config.resolver.unstable_enablePackageExports = false;
+
+const previousResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === "decode-uri-component") {
+    return {
+      type: "sourceFile",
+      filePath: path.join(__dirname, "config", "safeUriDecoder.cjs"),
+    };
+  }
+  return previousResolveRequest
+    ? previousResolveRequest(context, moduleName, platform)
+    : context.resolveRequest(context, moduleName, platform);
+};
 
 module.exports = config;

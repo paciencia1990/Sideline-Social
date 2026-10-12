@@ -1,6 +1,6 @@
-import * as admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
 import { FieldValue, GeoPoint } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 import { distanceBetween, geohashForLocation, geohashQueryBounds } from 'geofire-common';
 import { permanentAccountFunctions } from './permanentAuth';
 import { assertValidCoordinates, canonicalVenueId, isPubliclyDiscoverableSquad, normalizeSportId, normalizeVenueName, validateVenueId } from './squadCore';
@@ -26,10 +26,10 @@ export const findOrCreateVenueSportSquad = functions.https.onCall(async (data, c
   if (data?.venueId != null && !suppliedVenueId) throw error('invalid-argument', 'The venue reference is invalid.');
   const normalizedVenueName = normalizeVenueName(venueName);
   const venueId = suppliedVenueId ?? canonicalVenueId(venueName, latitude, longitude);
-  const db = admin.firestore();
+  const db = getFirestore();
   const directoryRef = db.doc(`venueSquadDirectory/${venueId}`);
   const bounds = geohashQueryBounds([latitude, longitude], 250);
-  const matchesVenue = (squad: admin.firestore.DocumentData) => {
+  const matchesVenue = (squad: FirebaseFirestore.DocumentData) => {
     const point = squad.venueLocation;
     const name = squad.venueName ?? squad.name;
     return isPubliclyDiscoverableSquad(squad) && point instanceof GeoPoint && typeof name === 'string'
@@ -44,7 +44,7 @@ export const findOrCreateVenueSportSquad = functions.https.onCall(async (data, c
         .where('venueGeohash', '<=', upper).where('isActive', '==', true).limit(51))];
     const snapshots = await Promise.all(queries.map((query) => transaction.get(query)));
     if (snapshots.some((snapshot) => snapshot.size === 51)) throw error('failed-precondition', 'This venue requires review.', 'duplicate-candidates');
-    const candidates = new Map<string, admin.firestore.DocumentSnapshot>();
+    const candidates = new Map<string, FirebaseFirestore.DocumentSnapshot>();
     snapshots.forEach((snapshot) => snapshot.docs.forEach((document) => {
       if (matchesVenue(document.data())) candidates.set(document.id, document);
     }));
@@ -92,7 +92,7 @@ export const updateSquadSports = functions.region('us-central1').runWith({ enfor
   const expectedRevision = data?.expectedRevision;
   if (typeof squadId !== 'string' || !/^[A-Za-z0-9_-]{1,360}$/.test(squadId) || !sports
     || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw error('invalid-argument', 'Valid Squad sports are required.');
-  const db = admin.firestore();
+  const db = getFirestore();
   return db.runTransaction(async (transaction) => {
     const squadRef = db.collection('squads').doc(squadId);
     const squadSnapshot = await transaction.get(squadRef);

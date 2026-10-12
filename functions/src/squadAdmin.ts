@@ -1,7 +1,8 @@
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore } from 'firebase-admin/firestore';
 import { readSquadSports, squadSportsRevision } from './squadSportsCore';
-import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import { permanentAccountFunctions } from './permanentAuth';
 import { isCanonicalPublicProfile, resolveCanonicalPublicProfile, toMinimalPublicUserProfile } from './publicUserProfileCore';
@@ -81,7 +82,7 @@ type SquadNotificationInput = {
 };
 
 function firestore() {
-  return admin.firestore();
+  return getFirestore();
 }
 
 function authenticatedUserId(context: firebaseFunctions.https.CallableContext): string {
@@ -220,7 +221,7 @@ async function loadPublicMemberProfiles(userIds: string[]) {
       else authFallbackIds.push(snapshot.id);
     });
     for (let index = 0; index < authFallbackIds.length; index += 100) {
-      const authUsers = await admin.auth().getUsers(authFallbackIds.slice(index, index + 100).map((uid) => ({ uid })));
+      const authUsers = await getAuth().getUsers(authFallbackIds.slice(index, index + 100).map((uid) => ({ uid })));
       authUsers.users.forEach((authUser) => {
         const profile = resolveCanonicalPublicProfile(authUser.uid, undefined, authUser.displayName);
         resolved.set(authUser.uid, profile

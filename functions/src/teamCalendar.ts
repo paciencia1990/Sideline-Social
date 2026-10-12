@@ -1,8 +1,9 @@
+import { getFirestore } from 'firebase-admin/firestore';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import { permanentAccountFunctions, resolveAccountStanding } from './permanentAuth';
 import { notifyScheduleMembers } from './teamSchedule';
@@ -43,7 +44,7 @@ const PREVIEW_TTL_MS = 15 * 60 * 1000;
 const MAX_FEEDS_PER_JOB = 10;
 
 type Manager = { teamRef: FirebaseFirestore.DocumentReference; teamName: string };
-function firestore() { return admin.firestore(); }
+function firestore() { return getFirestore(); }
 
 export const previewTeamScheduleIcs = calendarFunctions.https.onCall(async (data, context) => {
   const userId = authenticatedUserId(context);

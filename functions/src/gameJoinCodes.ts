@@ -1,9 +1,10 @@
+import { getDatabase } from 'firebase-admin/database';
+import { getFirestore } from 'firebase-admin/firestore';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { mapConcurrentReads } from './parallelReads';
 
-import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import {
   BOMB_COMMAND_COUNT,
@@ -105,7 +106,7 @@ const LOBBY_CREATE_BLOCK_MS = 10 * 60 * 1000;
 const PROVISIONING_TIMEOUT_MS = 60 * 1000;
 const LOBBY_DEPARTURE_STALE_MS = 30 * 1000;
 const FIRESTORE_CONTENTION_RETRY_LIMIT = 4;
-const gameStartStates = () => admin.firestore().collection('gameStartStates');
+const gameStartStates = () => getFirestore().collection('gameStartStates');
 
 function isRetryableFirestoreContention(error: unknown) {
   if (!error || typeof error !== 'object') return false;
@@ -137,10 +138,10 @@ async function withFirestoreContentionRetry<T>(
   throw new Error('unreachable');
 }
 
-const registry = () => admin.firestore().collection('gameJoinCodes');
-const sessionLinks = () => admin.firestore().collection('gameJoinSessionLinks');
-const requests = () => admin.firestore().collection('gameJoinRequests');
-const rateLimits = () => admin.firestore().collection('gameJoinRateLimits');
+const registry = () => getFirestore().collection('gameJoinCodes');
+const sessionLinks = () => getFirestore().collection('gameJoinSessionLinks');
+const requests = () => getFirestore().collection('gameJoinRequests');
+const rateLimits = () => getFirestore().collection('gameJoinRateLimits');
 
 type JoinResult = {
   gameType: GameJoinCodeType;
@@ -355,7 +356,7 @@ export const prepareSynchronizedGameStart = functions.https.onCall(async (data, 
     throw safeError('failed-precondition', 'participant_unavailable');
   }
 
-  const state = await admin.firestore().runTransaction(async (transaction) => {
+  const state = await getFirestore().runTransaction(async (transaction) => {
     const existing = await transaction.get(stateRef);
     const existingData = existing.data();
     const existingStillUsable = existing.exists &&
@@ -415,7 +416,7 @@ export const acknowledgeSynchronizedGameStart = functions.https.onCall(async (da
   const startAttemptId = readStartAttemptId(data?.startAttemptId);
   const stateRef = gameStartStates().doc(gameStartStateId(gameType, sessionId));
   const nowMs = Date.now();
-  const acknowledgement = await admin.firestore().runTransaction(async (transaction) => {
+  const acknowledgement = await getFirestore().runTransaction(async (transaction) => {
     const [stateSnapshot, participantSnapshot] = await Promise.all([
       transaction.get(stateRef),
       transaction.get(stateRef.collection('participants').doc(uid)),
@@ -516,7 +517,7 @@ export const acknowledgeSynchronizedGameStart = functions.https.onCall(async (da
       await setJoinCodeStatus(gameType, sessionId, state.hostUserId, 'started');
       await setGameLobbyLifecycleForSession(gameType, sessionId, 'inProgress');
     }
-    const scheduled = await admin.firestore().runTransaction(async (transaction) => {
+    const scheduled = await getFirestore().runTransaction(async (transaction) => {
       const latest = await transaction.get(stateRef);
       if (latest.data()?.startAttemptId !== startAttemptId) {
         throw safeError('failed-precondition', 'stale_start_attempt');
@@ -622,7 +623,7 @@ export const createGameJoinCode = functions.https.onCall(async (data, context): 
 
   try {
     return await retryGameJoinCodeReservation(async (candidate) => {
-      const firestore = admin.firestore();
+      const firestore = getFirestore();
       return firestore.runTransaction(async (transaction): Promise<ReservationResult | null> => {
         const requestRef = requests().doc(requestId);
         const linkRef = sessionLinks().doc(linkId);
@@ -709,7 +710,7 @@ export const createGameJoinCode = functions.https.onCall(async (data, context): 
     });
   } catch (error) {
     if (createdRealtimeSession) {
-      await admin.database().ref().update({
+      await getDatabase().ref().update({
         [`gameSessions/${sessionId}`]: null,
         [`gameSessionSecrets/${sessionId}`]: null,
       }).catch(() => undefined);
@@ -795,7 +796,7 @@ export const getActiveSquadGameSession = functions.https.onCall(async (data, con
   const squadId = await readAuthorizedSquadId(uid, requestedSquadId);
   if (!squadId) throw safeError('permission-denied', 'not_authorized');
 
-  const snapshot = await admin.database()
+  const snapshot = await getDatabase()
     .ref('/gameSessions')
     .orderByChild('squadId')
     .equalTo(squadId)
@@ -903,7 +904,7 @@ export const updateGameJoinCodeStatus = functions.https.onCall(async (data, cont
   await setJoinCodeStatus(gameType, sessionId, uid, status);
   if (gameType !== 'triviaBlitz') {
     const serverNowMs = Date.now();
-    await admin.database().ref(`/gameSessions/${sessionId}`).update({
+    await getDatabase().ref(`/gameSessions/${sessionId}`).update({
       status: status === 'ended' ? 'completed' : 'failed',
       completedAt: serverNowMs,
       updatedAt: serverNowMs,
@@ -924,8 +925,8 @@ export const releaseGameJoinCode = functions.https.onCall(async (data, context) 
   await assertHostOwnsCanonicalSession(uid, gameType, sessionId, true);
   await setJoinCodeStatus(gameType, sessionId, uid, 'canceled');
   if (gameType === 'triviaBlitz') {
-    const parentRef = admin.firestore().collection('sessions').doc(sessionId);
-    await admin.firestore().runTransaction(async (transaction) => {
+    const parentRef = getFirestore().collection('sessions').doc(sessionId);
+    await getFirestore().runTransaction(async (transaction) => {
       const parent = await transaction.get(parentRef);
       const now = Timestamp.now();
       const currentExpiry = readTimestampMillis(parent.data()?.expiresAt);
@@ -945,7 +946,7 @@ export const releaseGameJoinCode = functions.https.onCall(async (data, context) 
       );
     });
   } else {
-    await admin.database().ref(`/gameSessions/${sessionId}`).update({ status: 'failed', completedAt: Date.now() });
+    await getDatabase().ref(`/gameSessions/${sessionId}`).update({ status: 'failed', completedAt: Date.now() });
   }
   return { status: 'canceled' as const };
 });
@@ -958,7 +959,7 @@ export const setRealtimeGamePlayerReady = functions.https.onCall(async (data, co
   }
   const ready = data.ready;
   let reason: string | null = null;
-  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const reference = getDatabase().ref(`/gameSessions/${sessionId}`);
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) throw safeError('not-found', 'game_not_found');
   const initialSession = initialSnapshot.val();
@@ -1018,7 +1019,7 @@ export const leaveRealtimeGameSession = functions.https.onCall(async (data, cont
   const sessionId = readSessionId(data?.sessionId);
   let reason: string | null = null;
   let changed = false;
-  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const reference = getDatabase().ref(`/gameSessions/${sessionId}`);
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) throw safeError('not-found', 'game_not_found');
   const initialSession = initialSnapshot.val();
@@ -1082,7 +1083,7 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
   let matchedDifferenceId = '';
   let teamId: SpotTeamId | null = null;
   let foundByName = '';
-  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const reference = getDatabase().ref(`/gameSessions/${sessionId}`);
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) throw safeError('not-found', 'game_not_found');
   const initialSession = initialSnapshot.val() as Record<string, unknown>;
@@ -1120,7 +1121,7 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
     throw safeError('failed-precondition', 'game_already_started');
   }
   if (!match) {
-    const teamSnapshot = await admin.database().ref(`/gameSessionTeamState/${sessionId}/${teamId}`).once('value');
+    const teamSnapshot = await getDatabase().ref(`/gameSessionTeamState/${sessionId}/${teamId}`).once('value');
     foundCount = readSpotFoundIds(teamSnapshot.val()).length;
     return {
       found: false,
@@ -1134,7 +1135,7 @@ export const recordSpotDifferenceFound = functions.https.onCall(async (data, con
   }
 
   matchedDifferenceId = match.id;
-  const teamReference = admin.database().ref(`/gameSessionTeamState/${sessionId}/${teamId}`);
+  const teamReference = getDatabase().ref(`/gameSessionTeamState/${sessionId}/${teamId}`);
   const result = await teamReference.transaction((stateValue) => {
     const state = readRecord(stateValue);
     if (readPositiveNumber(state.expiresAt) != null && Number(state.expiresAt) <= Date.now()) {
@@ -1206,8 +1207,8 @@ export const getBombDefusalPlayerView = functions.https.onCall(async (data, cont
   if (timedOut) await markGameJoinCodeEndedFromServer('bombDefusal', sessionId);
 
   const [sessionSnapshot, secretSnapshot] = await Promise.all([
-    admin.database().ref(`/gameSessions/${sessionId}`).once('value'),
-    admin.database().ref(`/gameSessionSecrets/${sessionId}`).once('value'),
+    getDatabase().ref(`/gameSessions/${sessionId}`).once('value'),
+    getDatabase().ref(`/gameSessionSecrets/${sessionId}`).once('value'),
   ]);
   if (!sessionSnapshot.exists()) throw safeError('not-found', 'game_not_found');
   return buildBombPlayerView(sessionId, uid, locale, readRecord(sessionSnapshot.val()), readRecord(secretSnapshot.val()));
@@ -1291,7 +1292,7 @@ function buildBombPlayerView(
 }
 
 async function expireBombDefusalRoundIfNeeded(sessionId: string) {
-  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const reference = getDatabase().ref(`/gameSessions/${sessionId}`);
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) return false;
   const initialSession = initialSnapshot.val();
@@ -1349,8 +1350,8 @@ export const submitBombDefusalStep = functions.https.onCall(async (data, context
   const action = readBombAction(data?.action);
   const actionHash = hashIdentifier(JSON.stringify(action));
   const submissionKey = hashIdentifier(uid + ':' + submissionId);
-  const reference = admin.database().ref('/gameSessions/' + sessionId);
-  const secretReference = admin.database().ref('/gameSessionSecrets/' + sessionId);
+  const reference = getDatabase().ref('/gameSessions/' + sessionId);
+  const secretReference = getDatabase().ref('/gameSessionSecrets/' + sessionId);
   const [initialSnapshot, secretSnapshot] = await Promise.all([
     reference.once('value'),
     secretReference.once('value'),
@@ -1606,7 +1607,7 @@ async function allocateGameLobby(input: {
       const membershipRef = activeGameLobbyMemberships().doc(input.uid);
       const candidateRef = registry().doc(candidate);
       const requestedLinkRef = sessionLinks().doc(hashIdentifier(`${input.gameType}:${requestedSessionId}`));
-      return admin.firestore().runTransaction(async (transaction): Promise<LobbyAllocation | null> => {
+      return getFirestore().runTransaction(async (transaction): Promise<LobbyAllocation | null> => {
         const [request, directorySnapshot, membership, candidateSnapshot] = await Promise.all([
           transaction.get(requestRef),
           transaction.get(directoryRef),
@@ -1751,7 +1752,7 @@ async function completeGameLobbyProvisioning(
 ) {
   const directoryRef = gameLobbyDirectoryRef(allocation.squadId, allocation.gameType);
   const requestRef = gameLobbyCreateRequests().doc(allocation.requestId);
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const [directorySnapshot, request] = await Promise.all([
       transaction.get(directoryRef),
       transaction.get(requestRef),
@@ -1787,7 +1788,7 @@ async function rollbackGameLobbyAllocation(allocation: LobbyAllocation, uid: str
   const membershipRef = activeGameLobbyMemberships().doc(uid);
   const mappingRef = registry().doc(allocation.joinCode);
   const linkRef = sessionLinks().doc(hashIdentifier(`${allocation.gameType}:${allocation.sessionId}`));
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const [directorySnapshot, request, membership, mapping, link] = await Promise.all([
       transaction.get(directoryRef),
       transaction.get(requestRef),
@@ -1815,10 +1816,10 @@ async function rollbackGameLobbyAllocation(allocation: LobbyAllocation, uid: str
     transaction.delete(requestRef);
   });
   if (allocation.gameType === 'triviaBlitz') {
-    await admin.firestore().collection('triviaGameSecrets').doc(allocation.sessionId).delete().catch(() => undefined);
-    await admin.firestore().recursiveDelete(admin.firestore().collection('sessions').doc(allocation.sessionId)).catch(() => undefined);
+    await getFirestore().collection('triviaGameSecrets').doc(allocation.sessionId).delete().catch(() => undefined);
+    await getFirestore().recursiveDelete(getFirestore().collection('sessions').doc(allocation.sessionId)).catch(() => undefined);
   } else {
-    await admin.database().ref().update({
+    await getDatabase().ref().update({
       [`gameSessions/${allocation.sessionId}`]: null,
       [`gameSessionSecrets/${allocation.sessionId}`]: null,
       [`gameSessionTeamState/${allocation.sessionId}`]: null,
@@ -1863,7 +1864,7 @@ async function listAuthorizedLobbyDirectory(
   const prunedEntries = Object.keys(readRecord(snapshot.data()?.lobbies)).length !== Object.keys(directory.lobbies).length;
   if (snapshot.exists && (prunedEntries || JSON.stringify(directory) !== JSON.stringify(nextDirectory))) {
     await withFirestoreContentionRetry('listAuthorizedLobbyDirectory', () =>
-      admin.firestore().runTransaction(async (transaction) => {
+      getFirestore().runTransaction(async (transaction) => {
         const latestSnapshot = await transaction.get(reference);
         let merged = normalizeGameLobbyDirectory(
           latestSnapshot.data(),
@@ -1994,7 +1995,7 @@ async function readRealtimeLobbySnapshot(
   entry: GameLobbyDirectoryEntry,
   uid: string,
 ): Promise<CanonicalLobbySnapshot | null> {
-  const snapshot = await admin.database().ref(`/gameSessions/${entry.sessionId}`).once('value');
+  const snapshot = await getDatabase().ref(`/gameSessions/${entry.sessionId}`).once('value');
   const session = readRecord(snapshot.val());
   if (
     !snapshot.exists() ||
@@ -2023,8 +2024,8 @@ async function readTriviaLobbySnapshot(
   uid: string,
 ): Promise<CanonicalLobbySnapshot | null> {
   const [parent, game] = await Promise.all([
-    admin.firestore().collection('sessions').doc(entry.sessionId).get(),
-    admin.firestore().collection('sessions').doc(entry.sessionId).collection('games').doc('triviaBlitz').get(),
+    getFirestore().collection('sessions').doc(entry.sessionId).get(),
+    getFirestore().collection('sessions').doc(entry.sessionId).collection('games').doc('triviaBlitz').get(),
   ]);
   const parentData = parent.data();
   if (
@@ -2183,7 +2184,7 @@ async function reserveLobbyMembership(input: {
   const reference = activeGameLobbyMemberships().doc(input.uid);
   const directoryRef = gameLobbyDirectoryRef(input.squadId, input.gameType);
   return withFirestoreContentionRetry('reserveLobbyMembership', () =>
-    admin.firestore().runTransaction(async (transaction) => {
+    getFirestore().runTransaction(async (transaction) => {
     const [membership, directorySnapshot] = await Promise.all([
       transaction.get(reference),
       transaction.get(directoryRef),
@@ -2227,7 +2228,7 @@ async function finalizeLobbyMembership(input: {
   state: 'active' | 'queued';
 }) {
   const reference = activeGameLobbyMemberships().doc(input.uid);
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reference);
     if (snapshot.data()?.lobbyId !== input.entry.lobbyId) {
       throw safeError('failed-precondition', 'already_participating_elsewhere');
@@ -2303,7 +2304,7 @@ async function queueRealtimeLobbyParticipant(input: {
   displayName: string;
 }) {
   let reason = 'round_in_progress';
-  const reference = admin.database().ref(`/gameSessions/${input.entry.sessionId}`);
+  const reference = getDatabase().ref(`/gameSessions/${input.entry.sessionId}`);
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) throw safeError('not-found', 'lobby_closed_or_expired');
   const initialSession = initialSnapshot.val();
@@ -2350,10 +2351,10 @@ async function queueTriviaLobbyParticipant(input: {
   entry: GameLobbyDirectoryEntry;
   displayName: string;
 }) {
-  const parentRef = admin.firestore().collection('sessions').doc(input.entry.sessionId);
+  const parentRef = getFirestore().collection('sessions').doc(input.entry.sessionId);
   const gameRef = parentRef.collection('games').doc('triviaBlitz');
   const queueRef = gameRef.collection('queuedPlayers').doc(input.uid);
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const [parent, game, queued] = await Promise.all([
       transaction.get(parentRef),
       transaction.get(gameRef),
@@ -2397,7 +2398,7 @@ async function refreshGameLobbyDirectoryEntry(entry: GameLobbyDirectoryEntry, ui
   }
   const reference = gameLobbyDirectoryRef(entry.squadId, entry.gameType);
   await withFirestoreContentionRetry('refreshGameLobbyDirectoryEntry', () =>
-    admin.firestore().runTransaction(async (transaction) => {
+    getFirestore().runTransaction(async (transaction) => {
       const snapshot = await transaction.get(reference);
       const directory = normalizeGameLobbyDirectory(
         snapshot.data(),
@@ -2417,7 +2418,7 @@ async function refreshGameLobbyDirectoryEntry(entry: GameLobbyDirectoryEntry, ui
 
 async function clearLobbyMembershipIfMatches(uid: string, lobbyId: string) {
   const reference = activeGameLobbyMemberships().doc(uid);
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reference);
     if (snapshot.data()?.lobbyId === lobbyId) transaction.delete(reference);
   });
@@ -2425,7 +2426,7 @@ async function clearLobbyMembershipIfMatches(uid: string, lobbyId: string) {
 
 async function beginLobbyDeparture(uid: string, lobbyId: string) {
   const reference = activeGameLobbyMemberships().doc(uid);
-  return admin.firestore().runTransaction(async (transaction): Promise<StoredLobbyMembership | null> => {
+  return getFirestore().runTransaction(async (transaction): Promise<StoredLobbyMembership | null> => {
     const snapshot = await transaction.get(reference);
     if (!snapshot.exists) return null;
     const membership = readStoredLobbyMembership(snapshot.data());
@@ -2509,7 +2510,7 @@ async function leaveRealtimeLobbyParticipant(uid: string, entry: GameLobbyDirect
   let promotedUserId: string | null = null;
   let closed = false;
   let roundEnded = false;
-  const reference = admin.database().ref(`/gameSessions/${entry.sessionId}`);
+  const reference = getDatabase().ref(`/gameSessions/${entry.sessionId}`);
   const initialSnapshot = await reference.once('value');
   const initialSession = initialSnapshot.val();
   let mayUseInitialCacheFallback = true;
@@ -2628,10 +2629,10 @@ async function leaveRealtimeLobbyParticipant(uid: string, entry: GameLobbyDirect
 }
 
 async function leaveTriviaLobbyParticipant(uid: string, entry: GameLobbyDirectoryEntry) {
-  const parentRef = admin.firestore().collection('sessions').doc(entry.sessionId);
+  const parentRef = getFirestore().collection('sessions').doc(entry.sessionId);
   const gameRef = parentRef.collection('games').doc('triviaBlitz');
-  const secretRef = admin.firestore().collection('triviaGameSecrets').doc(entry.sessionId);
-  const result = await admin.firestore().runTransaction(async (transaction) => {
+  const secretRef = getFirestore().collection('triviaGameSecrets').doc(entry.sessionId);
+  const result = await getFirestore().runTransaction(async (transaction) => {
     const [parent, game, players, queuedPlayers] = await Promise.all([
       transaction.get(parentRef),
       transaction.get(gameRef),
@@ -2714,7 +2715,7 @@ async function leaveTriviaLobbyParticipant(uid: string, entry: GameLobbyDirector
 }
 
 async function removeRealtimeQueuedParticipant(uid: string, entry: GameLobbyDirectoryEntry) {
-  const reference = admin.database().ref(`/gameSessions/${entry.sessionId}`);
+  const reference = getDatabase().ref(`/gameSessions/${entry.sessionId}`);
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) return;
   const initialSession = initialSnapshot.val();
@@ -2738,10 +2739,10 @@ async function removeRealtimeQueuedParticipant(uid: string, entry: GameLobbyDire
 }
 
 async function removeTriviaQueuedParticipant(uid: string, entry: GameLobbyDirectoryEntry) {
-  const parentRef = admin.firestore().collection('sessions').doc(entry.sessionId);
+  const parentRef = getFirestore().collection('sessions').doc(entry.sessionId);
   const gameRef = parentRef.collection('games').doc('triviaBlitz');
   const queueRef = gameRef.collection('queuedPlayers').doc(uid);
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const [parent, queued] = await Promise.all([
       transaction.get(parentRef),
       transaction.get(queueRef),
@@ -2758,7 +2759,7 @@ async function transferLobbyHostRecords(entry: GameLobbyDirectoryEntry, hostUser
   const displayName = await resolvePlayerDisplayName(hostUserId);
   const directoryRef = gameLobbyDirectoryRef(entry.squadId, entry.gameType);
   const linkRef = sessionLinks().doc(hashIdentifier(`${entry.gameType}:${entry.sessionId}`));
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const [directorySnapshot, link] = await Promise.all([
       transaction.get(directoryRef),
       transaction.get(linkRef),
@@ -2816,21 +2817,21 @@ async function closeCanonicalGameLobby(uid: string, lobbyId: string) {
   if (!hydrated) throw safeError('not-found', 'lobby_closed_or_expired');
   if (entry.gameType === 'triviaBlitz') {
     const now = Timestamp.now();
-    await admin.firestore().collection('sessions').doc(entry.sessionId).set({
+    await getFirestore().collection('sessions').doc(entry.sessionId).set({
       status: 'results',
       completedAt: now,
       completionReason: 'closedByHost',
       rewardEligible: false,
       updatedAt: now,
     }, { merge: true });
-    await admin.firestore().collection('sessions').doc(entry.sessionId).collection('games').doc('triviaBlitz').set({
+    await getFirestore().collection('sessions').doc(entry.sessionId).collection('games').doc('triviaBlitz').set({
       status: 'results',
       completionReason: 'closedByHost',
       rewardEligible: false,
       updatedAt: now,
     }, { merge: true });
   } else {
-    const reference = admin.database().ref(`/gameSessions/${entry.sessionId}`);
+    const reference = getDatabase().ref(`/gameSessions/${entry.sessionId}`);
     const initialSnapshot = await reference.once('value');
     const initialSession = initialSnapshot.val();
     let mayUseInitialCacheFallback = true;
@@ -2887,7 +2888,7 @@ async function closeLobbyDirectoryRecords(
 ) {
   const linkRef = sessionLinks().doc(hashIdentifier(`${entry.gameType}:${entry.sessionId}`));
   const directoryRef = gameLobbyDirectoryRef(entry.squadId, entry.gameType);
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const [link, directorySnapshot] = await Promise.all([
       transaction.get(linkRef),
       transaction.get(directoryRef),
@@ -2916,7 +2917,7 @@ async function closeLobbyDirectoryRecords(
   });
   const memberships = await activeGameLobbyMemberships().where('lobbyId', '==', entry.lobbyId).get();
   if (!memberships.empty) {
-    const batch = admin.firestore().batch();
+    const batch = getFirestore().batch();
     memberships.docs.forEach((membership) => batch.delete(membership.ref));
     await batch.commit();
   }
@@ -3020,7 +3021,7 @@ async function createNextLobbyRound(
 
 async function readLobbyRoundParticipants(entry: GameLobbyDirectoryEntry): Promise<TriviaLobbyParticipant[]> {
   if (entry.gameType === 'triviaBlitz') {
-    const gameRef = admin.firestore().collection('sessions').doc(entry.sessionId).collection('games').doc('triviaBlitz');
+    const gameRef = getFirestore().collection('sessions').doc(entry.sessionId).collection('games').doc('triviaBlitz');
     const [players, queuedPlayers] = await Promise.all([
       gameRef.collection('players').get(),
       gameRef.collection('queuedPlayers').get(),
@@ -3034,7 +3035,7 @@ async function readLobbyRoundParticipants(entry: GameLobbyDirectoryEntry): Promi
       }))
       .sort((left, right) => left.joinOrder - right.joinOrder || left.uid.localeCompare(right.uid));
   }
-  const snapshot = await admin.database().ref(`/gameSessions/${entry.sessionId}`).once('value');
+  const snapshot = await getDatabase().ref(`/gameSessions/${entry.sessionId}`).once('value');
   const session = readRecord(snapshot.val());
   const players = readRecord(session.players);
   const queuedPlayers = readRecord(session.queuedPlayers);
@@ -3061,7 +3062,7 @@ async function reserveLobbyRematch(input: {
   const directoryRef = gameLobbyDirectoryRef(input.entry.squadId, input.entry.gameType);
   const oldLinkRef = sessionLinks().doc(hashIdentifier(`${input.entry.gameType}:${input.entry.sessionId}`));
   const newLinkRef = sessionLinks().doc(hashIdentifier(`${input.entry.gameType}:${input.newSessionId}`));
-  return admin.firestore().runTransaction(async (transaction) => {
+  return getFirestore().runTransaction(async (transaction) => {
     const [directorySnapshot, oldLink, newLink] = await Promise.all([
       transaction.get(directoryRef),
       transaction.get(oldLinkRef),
@@ -3135,7 +3136,7 @@ async function completeLobbyRematch(input: {
   participants: TriviaLobbyParticipant[];
 }) {
   const directoryRef = gameLobbyDirectoryRef(input.entry.squadId, input.entry.gameType);
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(directoryRef);
     const directory = normalizeGameLobbyDirectory(
       snapshot.data(),
@@ -3158,7 +3159,7 @@ async function completeLobbyRematch(input: {
   });
   const participantIds = new Set(input.participants.map((participant) => participant.uid));
   const memberships = await activeGameLobbyMemberships().where('lobbyId', '==', input.entry.lobbyId).get();
-  const writer = admin.firestore().bulkWriter();
+  const writer = getFirestore().bulkWriter();
   memberships.docs.forEach((membership) => {
     if (!participantIds.has(membership.id)) writer.delete(membership.ref);
   });
@@ -3185,7 +3186,7 @@ async function rollbackLobbyRematch(input: {
   const oldLinkRef = sessionLinks().doc(hashIdentifier(`${input.entry.gameType}:${input.entry.sessionId}`));
   const newLinkRef = sessionLinks().doc(hashIdentifier(`${input.entry.gameType}:${input.newSessionId}`));
   const mappingRef = registry().doc(input.joinCode);
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const [directorySnapshot, mapping, newLink] = await Promise.all([
       transaction.get(directoryRef),
       transaction.get(mappingRef),
@@ -3216,10 +3217,10 @@ async function rollbackLobbyRematch(input: {
     if (newLink.data()?.lobbyId === input.entry.lobbyId) transaction.delete(newLinkRef);
   });
   if (input.entry.gameType === 'triviaBlitz') {
-    await admin.firestore().collection('triviaGameSecrets').doc(input.newSessionId).delete().catch(() => undefined);
-    await admin.firestore().recursiveDelete(admin.firestore().collection('sessions').doc(input.newSessionId)).catch(() => undefined);
+    await getFirestore().collection('triviaGameSecrets').doc(input.newSessionId).delete().catch(() => undefined);
+    await getFirestore().recursiveDelete(getFirestore().collection('sessions').doc(input.newSessionId)).catch(() => undefined);
   } else {
-    await admin.database().ref().update({
+    await getDatabase().ref().update({
       [`gameSessions/${input.newSessionId}`]: null,
       [`gameSessionSecrets/${input.newSessionId}`]: null,
       [`gameSessionTeamState/${input.newSessionId}`]: null,
@@ -3231,7 +3232,7 @@ export const cleanupExpiredGameJoinCodes = functions.pubsub.schedule('every 30 m
   const now = Timestamp.now();
   const snapshot = await registry().where('expiresAt', '<=', now).limit(CLEANUP_BATCH_SIZE).get();
   if (!snapshot.empty) {
-    const batch = admin.firestore().batch();
+    const batch = getFirestore().batch();
     for (const document of snapshot.docs) {
       const gameType = readGameJoinCodeType(document.data()?.gameType);
       const sessionId = readStoredSessionId(document.data()?.sessionId);
@@ -3255,7 +3256,7 @@ export const cleanupExpiredGameJoinCodes = functions.pubsub.schedule('every 30 m
     .limit(CLEANUP_BATCH_SIZE)
     .get();
   if (!expiredRequests.empty) {
-    const requestBatch = admin.firestore().batch();
+    const requestBatch = getFirestore().batch();
     expiredRequests.docs.forEach((document) => requestBatch.delete(document.ref));
     await requestBatch.commit();
   }
@@ -3265,7 +3266,7 @@ export const cleanupExpiredGameJoinCodes = functions.pubsub.schedule('every 30 m
     .limit(CLEANUP_BATCH_SIZE)
     .get();
   if (!staleMemberships.empty) {
-    const membershipBatch = admin.firestore().batch();
+    const membershipBatch = getFirestore().batch();
     staleMemberships.docs.forEach((document) => membershipBatch.delete(document.ref));
     await membershipBatch.commit();
   }
@@ -3277,7 +3278,7 @@ export const cleanupExpiredGameJoinCodes = functions.pubsub.schedule('every 30 m
     const gameType = readGameJoinCodeType(data?.gameType);
     if (!squadId || !gameType) continue;
     await withFirestoreContentionRetry('cleanupExpiredGameLobbyDirectory', () =>
-      admin.firestore().runTransaction(async (transaction) => {
+      getFirestore().runTransaction(async (transaction) => {
         const latestSnapshot = await transaction.get(document.ref);
         if (!latestSnapshot.exists) return;
         const normalized = normalizeGameLobbyDirectory(
@@ -3314,7 +3315,7 @@ async function readCanonicalGameStartSnapshot(
   sessionId: string,
 ): Promise<CanonicalGameStartSnapshot> {
   if (gameType === 'triviaBlitz') {
-    const parentRef = admin.firestore().collection('sessions').doc(sessionId);
+    const parentRef = getFirestore().collection('sessions').doc(sessionId);
     const gameRef = parentRef.collection('games').doc('triviaBlitz');
     const [parent, game, players] = await Promise.all([
       parentRef.get(),
@@ -3345,7 +3346,7 @@ async function readCanonicalGameStartSnapshot(
     };
   }
 
-  const sessionSnapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+  const sessionSnapshot = await getDatabase().ref(`/gameSessions/${sessionId}`).once('value');
   const session = readRecord(sessionSnapshot.val());
   const expiresAtMs = readPositiveNumber(session.expiresAt) ?? 0;
   if (
@@ -3459,7 +3460,7 @@ async function createRealtimeSession(input: {
   previousBombFingerprints?: string[];
 }) {
   const sessionId = input.sessionId ?? `game_${randomBytes(18).toString('base64url')}`;
-  const existing = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+  const existing = await getDatabase().ref(`/gameSessions/${sessionId}`).once('value');
   if (existing.exists()) {
     const session = readRecord(existing.val());
     if (
@@ -3566,7 +3567,7 @@ async function createRealtimeSession(input: {
     updates[`gameSessionTeamState/${sessionId}/A`] = createEmptySpotTeamState('A', session.expiresAt);
     updates[`gameSessionTeamState/${sessionId}/B`] = createEmptySpotTeamState('B', session.expiresAt);
   }
-  await admin.database().ref().update(updates);
+  await getDatabase().ref().update(updates);
   return sessionId;
 }
 
@@ -3602,7 +3603,7 @@ async function expireRealtimeGameSession(
   sessionId: string,
   serverNowMs: number,
 ) {
-  await admin.database().ref(`/gameSessions/${sessionId}`).transaction((session) => {
+  await getDatabase().ref(`/gameSessions/${sessionId}`).transaction((session) => {
     if (!session || typeof session !== 'object') return session;
     if (['completed', 'failed', 'ended', 'expired', 'canceled', 'cancelled', 'abandoned'].includes(session.status)) {
       return session;
@@ -3616,7 +3617,7 @@ async function expireRealtimeGameSession(
   });
 
   const linkRef = sessionLinks().doc(hashIdentifier(`${gameType}:${sessionId}`));
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const link = await transaction.get(linkRef);
     const linkData = link.data();
     const code = normalizeGameJoinCode(linkData?.code);
@@ -3636,7 +3637,7 @@ async function expireRealtimeGameSession(
     await removeGameLobbyDirectoryEntry({ gameType, lobbyId, squadId }).catch(() => undefined);
     const memberships = await activeGameLobbyMemberships().where('lobbyId', '==', lobbyId).get();
     if (!memberships.empty) {
-      const batch = admin.firestore().batch();
+      const batch = getFirestore().batch();
       memberships.docs.forEach((membership) => batch.delete(membership.ref));
       await batch.commit();
     }
@@ -3651,8 +3652,8 @@ async function assertHostOwnsCanonicalSession(
 ) {
   if (gameType === 'triviaBlitz') {
     const [parent, game] = await Promise.all([
-      admin.firestore().collection('sessions').doc(sessionId).get(),
-      admin.firestore().collection('sessions').doc(sessionId).collection('games').doc('triviaBlitz').get(),
+      getFirestore().collection('sessions').doc(sessionId).get(),
+      getFirestore().collection('sessions').doc(sessionId).collection('games').doc('triviaBlitz').get(),
     ]);
     if (!parent.exists || !game.exists || parent.data()?.hostPlayerId !== uid) {
       throw safeError('permission-denied', 'not_authorized');
@@ -3665,7 +3666,7 @@ async function assertHostOwnsCanonicalSession(
     }
     return;
   }
-  const snapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+  const snapshot = await getDatabase().ref(`/gameSessions/${sessionId}`).once('value');
   const session = snapshot.val() as Record<string, unknown> | null;
   if (!session || session.hostUserId !== uid || session.gameType !== legacyRealtimeGameType(gameType)) {
     throw safeError('permission-denied', 'not_authorized');
@@ -3683,7 +3684,7 @@ async function assertHostOwnsCanonicalSession(
 
 async function assertParticipant(uid: string, gameType: GameJoinCodeType, sessionId: string) {
   if (gameType === 'triviaBlitz') {
-    const parent = await admin.firestore().collection('sessions').doc(sessionId).get();
+    const parent = await getFirestore().collection('sessions').doc(sessionId).get();
     const participantIds = readStringArray(parent.data()?.playerIds);
     if (!parent.exists || (parent.data()?.hostPlayerId !== uid && !participantIds.includes(uid))) {
       throw safeError('permission-denied', 'not_authorized');
@@ -3693,7 +3694,7 @@ async function assertParticipant(uid: string, gameType: GameJoinCodeType, sessio
     }
     return;
   }
-  const snapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+  const snapshot = await getDatabase().ref(`/gameSessions/${sessionId}`).once('value');
   if (!snapshot.exists() || !snapshot.child(`players/${uid}`).exists()) {
     throw safeError('permission-denied', 'not_authorized');
   }
@@ -3714,7 +3715,7 @@ async function joinRealtimeSession(input: {
 }): Promise<'joined' | 'reconnected'> {
   let reason: string | null = null;
   let participantState: 'joined' | 'reconnected' = 'joined';
-  const reference = admin.database().ref(`/gameSessions/${input.sessionId}`);
+  const reference = getDatabase().ref(`/gameSessions/${input.sessionId}`);
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) throw safeError('not-found', 'invalid_or_expired_code');
   const initialSession = initialSnapshot.val();
@@ -3820,7 +3821,7 @@ async function joinTriviaSession(input: {
   expectedLobbyId?: string;
   expectedSquadId?: string;
 }): Promise<'joined' | 'reconnected'> {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const parentRef = firestore.collection('sessions').doc(input.sessionId);
   const gameRef = parentRef.collection('games').doc('triviaBlitz');
   const playerRef = gameRef.collection('players').doc(input.uid);
@@ -3883,7 +3884,7 @@ async function setJoinCodeStatus(
   status: Exclude<GameJoinCodeStatus, 'lobby' | 'expired'>,
 ) {
   const linkRef = sessionLinks().doc(hashIdentifier(`${gameType}:${sessionId}`));
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const link = await transaction.get(linkRef);
     const code = normalizeGameJoinCode(link.data()?.code);
     if (!link.exists || link.data()?.hostUserId !== uid || !code) {
@@ -3918,8 +3919,8 @@ async function assertCanonicalSessionCanStart(
 ) {
   if (gameType === 'triviaBlitz') {
     const [parent, game] = await Promise.all([
-      admin.firestore().collection('sessions').doc(sessionId).get(),
-      admin.firestore().collection('sessions').doc(sessionId).collection('games').doc('triviaBlitz').get(),
+      getFirestore().collection('sessions').doc(sessionId).get(),
+      getFirestore().collection('sessions').doc(sessionId).collection('games').doc('triviaBlitz').get(),
     ]);
     const parentStatus = parent.data()?.status;
     const gameStatus = game.data()?.status;
@@ -3935,7 +3936,7 @@ async function assertCanonicalSessionCanStart(
     return;
   }
 
-  const snapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+  const snapshot = await getDatabase().ref(`/gameSessions/${sessionId}`).once('value');
   const session = readRecord(snapshot.val());
   const gameState = readRecord(session.gameState);
   if (
@@ -3964,7 +3965,7 @@ async function startRealtimeGameSession(sessionId: string, options: {
     | null = null;
   let startedNow = false;
   let startedAtMs = 0;
-  const reference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const reference = getDatabase().ref(`/gameSessions/${sessionId}`);
   const initialSnapshot = await reference.once('value');
   if (!initialSnapshot.exists()) {
     throw safeError('not-found', 'game_not_found');
@@ -3972,7 +3973,7 @@ async function startRealtimeGameSession(sessionId: string, options: {
   const initialSession = initialSnapshot.val();
   let bombCommands: BombPrivateCommand[] = [];
   if (initialSession?.gameType === 'bomb_defusal') {
-    const secretSnapshot = await admin.database().ref('/gameSessionSecrets/' + sessionId).once('value');
+    const secretSnapshot = await getDatabase().ref('/gameSessionSecrets/' + sessionId).once('value');
     const secret = readRecord(secretSnapshot.val());
     const rawCommands = Array.isArray(secret.bombSteps) ? secret.bombSteps : [];
     if (
@@ -4141,7 +4142,7 @@ async function rollbackRealtimeGameSessionStart(
   startedAtMs: number,
 ) {
   if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) return;
-  await admin.database().ref(`/gameSessions/${sessionId}`).transaction((session) => {
+  await getDatabase().ref(`/gameSessions/${sessionId}`).transaction((session) => {
     if (
       !session ||
       session.status !== 'active' ||
@@ -4165,7 +4166,7 @@ async function markGameJoinCodeEndedFromServer(
 ) {
   const linkRef = sessionLinks().doc(hashIdentifier(`${gameType}:${sessionId}`));
   try {
-    await admin.firestore().runTransaction(async (transaction) => {
+    await getFirestore().runTransaction(async (transaction) => {
       const link = await transaction.get(linkRef);
       const code = normalizeGameJoinCode(link.data()?.code);
       if (!link.exists || link.data()?.sessionId !== sessionId || link.data()?.gameType !== gameType || !code) {
@@ -4203,7 +4204,7 @@ async function assertPlayersReadyForStart(
   sessionId: string,
 ) {
   if (gameType === 'triviaBlitz') {
-    const players = await admin.firestore()
+    const players = await getFirestore()
       .collection('sessions')
       .doc(sessionId)
       .collection('games')
@@ -4219,7 +4220,7 @@ async function assertPlayersReadyForStart(
     return;
   }
 
-  const snapshot = await admin.database().ref(`/gameSessions/${sessionId}`).once('value');
+  const snapshot = await getDatabase().ref(`/gameSessions/${sessionId}`).once('value');
   const session = readRecord(snapshot.val());
   const players = readRecord(session.players);
   const entries = Object.values(players);
@@ -4253,7 +4254,7 @@ function readStoredLifecycleStatus(value: unknown): GameJoinCodeStatus | null {
 async function consumeJoinAttempt(uid: string) {
   const reference = rateLimits().doc(hashIdentifier(uid));
   const now = Date.now();
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reference);
     const data = snapshot.data();
     const blockedUntil = readTimestampMillis(data?.blockedUntil);
@@ -4286,7 +4287,7 @@ async function consumeJoinAttempt(uid: string) {
 async function consumeLobbyCreateAttempt(uid: string) {
   const reference = gameLobbyCreationRateLimits().doc(hashIdentifier(uid));
   const now = Date.now();
-  await admin.firestore().runTransaction(async (transaction) => {
+  await getFirestore().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reference);
     const data = snapshot.data();
     const blockedUntil = readTimestampMillis(data?.blockedUntil);
@@ -4319,7 +4320,7 @@ async function requireAuthorizedSquadId(uid: string, value: unknown) {
 async function readAuthorizedSquadId(uid: string, value: unknown) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,360}$/.test(value.trim())) return null;
   const squadId = value.trim();
-  const membership = await admin.firestore().collection('squadMemberships').doc(`${squadId}__${uid}`).get();
+  const membership = await getFirestore().collection('squadMemberships').doc(`${squadId}__${uid}`).get();
   return membership.exists && membership.data()?.membershipStatus === 'active' ? squadId : null;
 }
 
@@ -4378,7 +4379,7 @@ function capacityForGameType(gameType: GameJoinCodeType) {
 }
 
 async function resolvePlayerDisplayName(uid: string, token?: Record<string, unknown>) {
-  const profile = await admin.firestore().collection('users').doc(uid).get();
+  const profile = await getFirestore().collection('users').doc(uid).get();
   return (resolveCanonicalPublicName(profile.data())
     ?? resolveCanonicalPublicName({ displayName: token?.name }))?.displayName
     || 'Sideline Social member';
@@ -4388,11 +4389,11 @@ export async function finalizeSpotDifferenceRoundForRewards(
   sessionId: string,
   uid: string,
 ): Promise<FinalizedSpotDifferenceRound> {
-  const sessionReference = admin.database().ref(`/gameSessions/${sessionId}`);
+  const sessionReference = getDatabase().ref(`/gameSessions/${sessionId}`);
   const [sessionSnapshot, teamASnapshot, teamBSnapshot] = await Promise.all([
     sessionReference.once('value'),
-    admin.database().ref(`/gameSessionTeamState/${sessionId}/A`).once('value'),
-    admin.database().ref(`/gameSessionTeamState/${sessionId}/B`).once('value'),
+    getDatabase().ref(`/gameSessionTeamState/${sessionId}/A`).once('value'),
+    getDatabase().ref(`/gameSessionTeamState/${sessionId}/B`).once('value'),
   ]);
   if (!sessionSnapshot.exists()) throw safeError('not-found', 'game_not_found');
   const session = readRecord(sessionSnapshot.val());
@@ -4636,7 +4637,7 @@ function readBombAction(value: unknown): Record<string, string | number> {
 }
 
 async function readStoredBombFingerprintHistory(sessionId: string) {
-  const snapshot = await admin.database().ref(`/gameSessionSecrets/${sessionId}`).once('value');
+  const snapshot = await getDatabase().ref(`/gameSessionSecrets/${sessionId}`).once('value');
   const secret = readRecord(snapshot.val());
   const storedHistory = normalizeBombRecentHistory(readStringArray(secret.recentChallengeFingerprints));
   if (storedHistory.length > 0) return storedHistory;

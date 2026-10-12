@@ -1,10 +1,14 @@
+import { getAuth } from "firebase-admin/auth";
+import { getDatabase } from "firebase-admin/database";
+import { getFirestore } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
 import { orderedStandingProjection, deleteStandingProjection } from './standingProjection';
 import { observeStandingDelivery } from './standingObservation';
 import { createHash } from "node:crypto";
 
-import * as admin from "firebase-admin";
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
-import * as firebaseFunctions from "firebase-functions";
+import * as firebaseFunctions from "firebase-functions/v1";
 
 import {
   permanentAccountFunctions,
@@ -55,9 +59,9 @@ export const acknowledgeMyModerationWarning = safetyFunctions.https.onCall(
       );
     }
 
-    const reference = admin.firestore().collection("moderationUserNotices").doc(uid);
+    const reference = getFirestore().collection("moderationUserNotices").doc(uid);
     let alreadyAcknowledged = false;
-    await admin.firestore().runTransaction(async (transaction) => {
+    await getFirestore().runTransaction(async (transaction) => {
       const current = await transaction.get(reference);
       if (!current.exists || current.data()?.warningId !== warningId) {
         throw new firebaseFunctions.https.HttpsError(
@@ -115,7 +119,7 @@ export const submitMyModerationAppeal = safetyFunctions.https.onCall(
       );
     }
 
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const caseSnapshot = await findAppealCase(uid);
     if (!caseSnapshot) {
       throw new firebaseFunctions.https.HttpsError(
@@ -279,7 +283,7 @@ export const onAccountStandingChanged = firebaseFunctions
   .onWrite(async (change, context) => {
     return observeStandingDelivery(context.eventId, context.params.uid, async () => {
     const uid = context.params.uid;
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const publicReference = firestore
       .collection("accountStandingPublic")
       .doc(uid);
@@ -312,14 +316,14 @@ export const onAccountStandingChanged = firebaseFunctions
       if (Number.isSafeInteger(beforeRevision) && beforeRevision > 0) {
         if (!change.before.updateTime) throw new Error('standing_version_missing');
         const deletedVersion = `${change.before.updateTime.seconds}:${change.before.updateTime.nanoseconds}`;
-        await admin.database().ref(`accountStanding/${uid}`).transaction(
+        await getDatabase().ref(`accountStanding/${uid}`).transaction(
           current => deleteStandingProjection(current, beforeRevision, deletedVersion), undefined, false,
         );
       }
       return;
     }
     const { standing } = snapshot;
-    await admin.database().ref(`accountStanding/${uid}`).transaction(current => orderedStandingProjection(current, {
+    await getDatabase().ref(`accountStanding/${uid}`).transaction(current => orderedStandingProjection(current, {
       status: standing.effective,
       messagingRestricted: standing.effective === 'messagingRestricted',
       expiresAt: standing.expiresAtMillis, revision: standing.revision, updatedAt: Date.now(), version: snapshot.version,
@@ -330,13 +334,13 @@ export const onAccountStandingChanged = firebaseFunctions
       standing.effective === "suspended" ||
       standing.effective === "banned"
     ) {
-      await admin.auth().revokeRefreshTokens(uid);
+      await getAuth().revokeRefreshTokens(uid);
     }
     });
   });
 
 async function readSafeStanding(uid: string) {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const [standing, canonical, notice] = await Promise.all([
     resolveAccountStanding(uid),
     firestore.collection("accountStanding").doc(uid).get(),
@@ -393,7 +397,7 @@ function safePendingWarning(snapshot: FirebaseFirestore.DocumentSnapshot) {
 }
 
 async function findAppealCase(uid: string) {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const canonical = await firestore.collection("accountStanding").doc(uid).get();
   const data = canonical.data() ?? {};
   const caseId = typeof data.caseId === "string"
@@ -412,7 +416,7 @@ async function cancelRestrictedArtifacts(
   standing: "active" | "messagingRestricted" | "suspended" | "banned",
 ) {
   if (standing === "active") return;
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const [uploadReservations, friendMediaReservations, friendMediaGrants, outgoingRequests] = await Promise.all([
     firestore.collection("teamVoiceUploadReservations")
       .where("userId", "==", uid)
@@ -481,10 +485,10 @@ async function cancelRestrictedArtifacts(
   }
   await writer.close();
   await Promise.allSettled(Array.from(friendMediaStoragePaths).map((storagePath) =>
-    admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true })));
+    getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true })));
 }
 
-function friendMediaReservationStoragePaths(data: admin.firestore.DocumentData | undefined) {
+function friendMediaReservationStoragePaths(data: FirebaseFirestore.DocumentData | undefined) {
   if (!data) return [];
   return [
     typeof data.storagePath === "string" ? data.storagePath : "",

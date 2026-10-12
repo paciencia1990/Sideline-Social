@@ -1,5 +1,6 @@
-import * as admin from 'firebase-admin';
-import * as functions from 'firebase-functions';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getApp } from 'firebase-admin/app';
+import * as functions from 'firebase-functions/v1';
 import { requireAccountCapability, requirePermanentUid } from './permanentAuth';
 import { canAccessTeamAnnouncement, hasParentRole, isTeamActive } from './teamMembershipCore';
 import { isExplicitConversationParticipant } from './teamVoiceMessagingCore';
@@ -23,7 +24,7 @@ const visible = (data: FirebaseFirestore.DocumentData | undefined) => data && da
 
 export async function loadAuthorizedTranslationText(uid: string, request: TranslationRequest) {
   await requireAccountCapability(uid, 'app'); // Reading remains available during a messaging restriction.
-  const db = admin.firestore();
+  const db = getFirestore();
   if (request.kind === 'announcement') {
     const teamRef = db.collection('teams').doc(request.teamId);
     const [team, member, message] = await Promise.all([
@@ -62,7 +63,7 @@ export async function reserveTranslationCharacters(uid: string, characters: numb
   const rawLimit = process.env.TEAM_TRANSLATION_MONTHLY_CHAR_LIMIT ?? '500000';
   const monthlyLimit = Number(rawLimit);
   if (!/^\d+$/.test(rawLimit) || !Number.isSafeInteger(monthlyLimit) || monthlyLimit < 1 || monthlyLimit > 500_000) throw unavailable();
-  const db = admin.firestore();
+  const db = getFirestore();
   const globalRef = db.collection('teamTranslationUsage').doc('current');
   // Server-only subcollection; recursive account deletion already deletes it.
   const userRef = db.collection('users').doc(uid).collection('translationUsage').doc('current');
@@ -83,7 +84,7 @@ export async function reserveTranslationCharacters(uid: string, characters: numb
 export async function translateWithGoogle(texts: string[], targetLanguageCode: string) {
   const projectId = resolveTranslationProject(process.env);
   if (!projectId) throw providerUnavailable('configuration');
-  const credential = admin.app().options.credential;
+  const credential = getApp().options.credential;
   if (!credential) throw providerUnavailable('credentials');
   let token;
   try { token = await credential.getAccessToken(); } catch { throw providerUnavailable('credentials'); }

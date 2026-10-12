@@ -1,8 +1,12 @@
+import { getAuth } from 'firebase-admin/auth';
+import { getDatabase } from 'firebase-admin/database';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
 import { createHash, randomUUID } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import { activeSquadAdminIds, isActiveSquadAdmin } from './squadAdminCore';
 import { hasCoachAccess, isTeamActive } from './teamMembershipCore';
@@ -55,7 +59,7 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, cont
     );
   }
 
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const blockers = await findOwnershipBlockers(firestore, uid);
   if (blockers.teams.length || blockers.squads.length) {
     throw new functions.https.HttpsError(
@@ -157,7 +161,7 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, cont
 
   // Deleting Auth last ensures a partial Firestore/Storage failure can be
   // retried by the same authenticated user without privileged support.
-  await admin.auth().deleteUser(uid);
+  await getAuth().deleteUser(uid);
   if (appleRevocationRef) {
     await appleRevocationRef.delete().catch((error: unknown) => {
       functions.logger.warn('apple_revocation_marker_cleanup_failed', {
@@ -175,7 +179,7 @@ async function ensureAppleAuthorizationRevoked(
   uid: string,
   authorizationCode: string | null,
 ) {
-  const authUser = await admin.auth().getUser(uid);
+  const authUser = await getAuth().getUser(uid);
   const appleProvider = authUser.providerData.find((provider) => provider.providerId === 'apple.com');
   let requiredAuthorizationCode: string | null;
   try {
@@ -311,11 +315,11 @@ async function deleteAuthoredMessagesAndAudio(
       const retainEvidence = moderationEvidenceMustBeRetained(message.data());
       const storagePath = stringValue(message.data()?.voiceMemo?.storagePath);
       if (!retainEvidence && storagePath?.startsWith('teamVoiceMemos/')) {
-        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
       for (const friendStoragePath of retainEvidence ? [] : friendChatMediaStoragePaths(message.data())) {
-        await admin.storage().bucket().file(friendStoragePath).delete({ ignoreNotFound: true });
+        await getStorage().bucket().file(friendStoragePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
       await message.ref.set({
@@ -355,7 +359,7 @@ async function deleteAuthoredAnnouncements(
       await deleteTeamAnnouncementData(firestore, announcement.ref, memberIds);
       summary.deletedDocuments += 1;
       if (!retainEvidence && storagePath?.startsWith('teamVoiceMemos/')) {
-        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
     }
@@ -374,7 +378,7 @@ async function deleteVoiceUploadReservations(
       const storagePath = stringValue(reservation.data()?.storagePath);
       const retainEvidence = await teamVoiceReservationEvidenceRetained(firestore, reservation.data());
       if (!retainEvidence && storagePath?.startsWith('teamVoiceMemos/')) {
-        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
       if (retainEvidence) {
@@ -403,7 +407,7 @@ async function deleteFriendChatMediaUploadReservations(
     await Promise.all(snapshot.docs.map(async (reservation) => {
       const retainEvidence = await friendMediaReservationEvidenceRetained(firestore, reservation.data());
       for (const storagePath of retainEvidence ? [] : friendChatMediaStoragePaths(reservation.data())) {
-        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
         summary.deletedStorageObjects += 1;
       }
       if (retainEvidence) {
@@ -895,7 +899,7 @@ async function anonymizeModerationQuery(
   while (true) {
     const snapshot = await query.limit(200).get();
     if (snapshot.empty) return;
-    const writer = admin.firestore().bulkWriter();
+    const writer = getFirestore().bulkWriter();
     snapshot.docs.forEach((document) => writer.set(document.ref, update, { merge: true }));
     await writer.close();
     summary.anonymizedDocuments += snapshot.size;
@@ -922,7 +926,7 @@ async function anonymizeNotificationReferences(
 }
 
 async function deleteRealtimeGameParticipation(uid: string) {
-  const root = admin.database().ref();
+  const root = getDatabase().ref();
   const snapshot = await root.child('gameSessions').get();
   if (!snapshot.exists()) return;
   const updates: Record<string, null> = {};

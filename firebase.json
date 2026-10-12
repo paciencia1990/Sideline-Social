@@ -3,6 +3,7 @@
     "source": "functions",
     "runtime": "nodejs22",
     "predeploy": [
+      "node scripts/verify-live-deployment-binding.cjs",
       "npm --prefix \"$RESOURCE_DIR\" run build"
     ]
   },

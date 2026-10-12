@@ -1,5 +1,7 @@
 # Dependency security triage
 
+Historical report. For the October 12 launch candidate, see `launch-security-checkpoint-20261012.txt`; do not reuse the older counts or bundle results below as current evidence.
+
 **Repository:** Sideline Social mobile application and Firebase Cloud Functions
 
 **Audit date:** 2026-08-19 (America/New_York)

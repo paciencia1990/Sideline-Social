@@ -1,0 +1,115 @@
+SIDELINE SOCIAL — RETAINED BACKEND OPERATIONS
+Owner decision: retain sideline-social-staging-2026 for public operation.
+The project ID contains "staging" but is the backend used by Android 33 and
+iOS 21. Promotion of those binaries does not require moving accounts or data.
+sideline-squad is a separate legacy project; do not deploy launch changes there.
+
+Verified repairs
+Apple's provider is enabled for com.sidelinesocial.app with the existing
+9352TP7XD3 team credential. No new Apple key was created. A dedicated
+deleteOwnAccount callable supports recent-auth account deletion and Apple
+authorization revocation. Its four secrets are local to the retained project,
+with explicit access granted to its dedicated runtime identity.
+Friend-chat voice Storage creation now requires a live server reservation,
+matching caller/path/type/size/duration, and communicating account standing.
+Direct reads, updates, and deletes remain denied by client Rules.
+
+Recovery
+Firestore has deletion protection and seven-day point-in-time recovery.
+Daily scheduled backups retain snapshots for fourteen days. History starts
+accruing when PITR is enabled; this does not create seven days of past history.
+The first daily backup was verified READY on October 12, 2026, with a
+05:02:06 UTC snapshot and an October 26 expiration.
+Restore into a separate, access-restricted database. Compare status-only
+counts and representative schema/relationship invariants, then document
+restore duration and any loss window. Never overwrite (default) as a drill.
+A PITR clone into a deny-all temporary database completed on October 12.
+Status-only counts matched for users, standing, cases, requests, outbox and
+moderator directory. The temporary database was independently verified
+deleted afterward. This validates restoration and those count checks, not
+every document relationship or content invariant.
+Realtime Database daily data and Rules backups were enabled once on October
+12 with compression selected. Firebase independently shows daily backups
+enabled for sideline-social-staging-2026-default-rtdb. The dedicated bucket
+sideline-social-staging-2026-default-rtdb-backups has a verified 30-day
+deletion lifecycle and a seven-day soft-delete window. Deleted backups may
+therefore remain recoverable for another seven days, with storage charges.
+The first snapshot and a separate-instance restore still require verification;
+no manual backup or restore was submitted as part of schedule activation.
+The media bucket also has seven-day soft deletion. Its isolated benign
+restore drill stopped on the first upload attempt with HTTP 403. No delete
+or restore was attempted. Read-only reconciliation of that object also
+returned 403; the current credential lacks storage.objects.get. No successful
+object creation is acknowledged, but absence is not independently proven.
+Resolve access for the synthetic test path and obtain fresh authorization
+before another write attempt. Do not broaden access to user media or retry
+the consumed runner. Firestore recovery does not cover RTDB or Storage.
+
+Operational failure alerts
+Cloud Monitoring sends Gen 1 execution-failure and Gen 2 server-error alerts
+to info@joinsidelinesocial.com. The threshold is three failures for one
+service within five minutes. Inspect redacted logs and the affected service.
+Avoid repeated enforcement, duplicate reports, or automatic operator retries.
+The two policies are enabled; real inbox delivery has not been demonstrated.
+A separate synthetic alert attempt on October 12 encountered a network
+failure during the sole event write. Read-only reconciliation found no event.
+Its temporary test policy was removed and deletion independently verified.
+No automatic retry was made; another event requires fresh authorization.
+These policies do not prove coverage of caught application errors or stuck
+queues. Inspect nonterminal requests/outbox and active executions separately.
+
+Human review and escalation — weekday coverage
+Primary moderator: J Garcia, info@joinsidelinesocial.com (Info).
+Backup and independent appeal reviewer: Joann Pollard,
+joann@joinsidelinesocial.com (Me). An appeal reviewer must not have applied
+the appealed action; reassign conflicted work rather than bypassing this rule.
+On October 12 the owner requested initial human review within one business
+day because weekend staffing is not available. Prepared wording defines
+business days as Monday through Friday (Eastern Time), excluding Saturday
+and Sunday. This means beginning a review, not guaranteeing final resolution.
+The existing appeal-review aim remains two business days.
+Website, support, console-policy and SOP source changes are prepared locally;
+publication is still pending. Until publication, the live 24-hour wording has
+not been replaced. Verify it after an authorized website/console release.
+Arrange named weekday check-in times and absence cover before launch. A
+Friday report must enter the Monday review queue; do not restart its age
+when assigning it. Prioritize safety and overdue work at each check-in.
+Urgent safety escalation and absence coverage remain operational launch
+gates. Sideline Social is not an emergency service. Do not imply around-the-
+clock staffing or treat business-day wording as permission to delay a legally
+required response to a safety issue already known to the service.
+Triage urgent safety issues first; record the review and next action. Keep
+the independent appeal/reversal boundary and historical moderation records.
+Classify existing new/assigned cases as fixtures or genuine work through
+human review; do not bulk-close or delete them as a readiness shortcut.
+
+Child-safety procedure
+Communication categorization changes Google's Social/Dating declaration
+scope. It does not decide whether US ESP reporting duties apply to this
+service. Confirm applicability and the reporting procedure with qualified
+counsel/the responsible owner. NCMEC ESP onboarding was requested and its
+response remains outstanding. No assigned public website form is needed.
+Use the secure ESP CyberTipline channel/process supplied by NCMEC when
+applicable; preserve required records securely and restrict staff access.
+Do not email/export suspected abusive child imagery or submit fabricated
+reports for testing. Prepare a benign tabletop escalation exercise.
+https://cf.missingkids.org/theissues/csam
+https://support.google.com/googleplay/android-developer/answer/14747720
+
+Retention and App Check
+Approve/document retention, legal holds, deletion and authorized access
+before public launch; automated moderation cleanup remains disabled.
+Keep existing authorization, App Check providers, token revocation, MFA and
+enforcement unchanged until signed Android/iOS and moderator-web traffic
+coverage is verified. Roll out service enforcement with explicit exceptions
+and read-only reconciliation. Do not enable Auth/Firestore/Storage/RTDB
+enforcement blindly and strand the live clients or moderation console.
+
+Release gates still outside this backend repair
+Real iPhone Apple sign-in and Apple deletion/revocation check; controlled
+device voice send/playback/delete; full installed-build acceptance; confirmed
+moderator coverage; retention/legal escalation approval; first RTDB snapshot,
+RTDB/Storage recovery and inbox delivery checks; dependency rollout validation; Apple seller/
+legal entity and production metadata; reviewer access and the free/paid Coach
+AI launch decision. Do not infer App Store approval from external TestFlight.
+Do not create native builds or submit production releases under this task.

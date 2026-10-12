@@ -1,7 +1,8 @@
+import { getFirestore } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
-import * as functions from 'firebase-functions';
+import { getApp, initializeApp } from 'firebase-admin/app';
+import * as functions from 'firebase-functions/v1';
 
 import {
   CoachAiGatewayError,
@@ -34,7 +35,7 @@ export const coachAiClaudeGateway = gatewayFunctions.https.onRequest(async (requ
     if (process.env.COACH_AI_TESTING_ENABLED !== 'true') {
       throw controlledFailure(correlationId, 503, 'server_testing_disabled');
     }
-    if (!await requireCoachAiRuntimeEnabled(admin.firestore())) {
+    if (!await requireCoachAiRuntimeEnabled(getFirestore())) {
       throw controlledFailure(correlationId, 503, 'coach_ai_disabled');
     }
     const outcome = await executeCoachAiClaudeGateway({

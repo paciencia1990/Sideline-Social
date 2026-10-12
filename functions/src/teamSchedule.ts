@@ -1,8 +1,9 @@
+import { getFirestore } from 'firebase-admin/firestore';
 import { createHash } from 'node:crypto';
 
-import * as admin from 'firebase-admin';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import { permanentAccountFunctions } from './permanentAuth';
 import { sendPushToUser } from './pushNotificationDelivery';
@@ -40,7 +41,7 @@ type NormalizedImportRow = {
 };
 
 function firestore() {
-  return admin.firestore();
+  return getFirestore();
 }
 
 export const saveTeamScheduleEvent = functions.https.onCall(async (data, context) => {

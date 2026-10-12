@@ -1,4 +1,5 @@
-import * as admin from 'firebase-admin';
+
+import { getApp, initializeApp } from 'firebase-admin/app';
 
 export type TeamAnnouncementDeletionStatus = 'deleted' | 'alreadyDeleted';
 
@@ -7,8 +8,8 @@ export function getAnnouncementNotificationId(teamId: string, announcementId: st
 }
 
 export async function deleteTeamAnnouncementData(
-  firestore: admin.firestore.Firestore,
-  announcementRef: admin.firestore.DocumentReference,
+  firestore: FirebaseFirestore.Firestore,
+  announcementRef: FirebaseFirestore.DocumentReference,
   teamMemberUserIds: string[],
 ): Promise<{ notificationCount: number }> {
   // recursiveDelete removes the announcement document and every descendant,

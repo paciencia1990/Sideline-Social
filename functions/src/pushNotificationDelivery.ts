@@ -1,6 +1,8 @@
+import { getFirestore } from 'firebase-admin/firestore';
+import { getMessaging } from 'firebase-admin/messaging';
 import * as https from 'node:https';
 
-import * as admin from 'firebase-admin';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
 import { accountCanUseApp } from './permanentAuth';
@@ -25,7 +27,7 @@ export async function sendPushToUser(
   androidChannelId: 'coach-updates' | 'chat-messages' = 'coach-updates',
 ) {
   if (!await accountCanUseApp(uid)) return;
-  const snapshot = await admin.firestore().collection('notificationTokens').where('uid', '==', uid).limit(20).get();
+  const snapshot = await getFirestore().collection('notificationTokens').where('uid', '==', uid).limit(20).get();
   await sendPushToTokenDocuments(snapshot.docs, data, androidChannelId);
 }
 
@@ -41,7 +43,7 @@ export async function sendPushToTokenDocuments(
     const token = tokenDocument.data()?.token;
     if (typeof token !== 'string' || !token) return;
     try {
-      await admin.messaging().send({
+      await getMessaging().send({
         token,
         notification: { title: SAFE_PUSH_TITLE, body: SAFE_PUSH_BODY },
         data,
@@ -76,7 +78,7 @@ export async function sendPushToTokenDocuments(
         return;
       }
       if (ticket.status === 'ok' && typeof ticket.id === 'string') {
-        await admin.firestore().collection('expoPushTickets').doc(ticket.id).set({
+        await getFirestore().collection('expoPushTickets').doc(ticket.id).set({
           createdAt: FieldValue.serverTimestamp(),
           tokenDocumentId: tokenDocument.id,
         });
@@ -86,7 +88,7 @@ export async function sendPushToTokenDocuments(
 }
 
 export async function processPendingExpoPushReceipts() {
-  const firestore = admin.firestore();
+  const firestore = getFirestore();
   const cutoff = Timestamp.fromMillis(Date.now() - 5 * 60 * 1000);
   const snapshot = await firestore.collection('expoPushTickets')
     .where('createdAt', '<=', cutoff)

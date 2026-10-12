@@ -1,6 +1,7 @@
-import * as admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getApp, initializeApp } from 'firebase-admin/app';
 import { FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
-import * as firebaseFunctions from 'firebase-functions';
+import * as firebaseFunctions from 'firebase-functions/v1';
 
 import {
   getNotificationCleanupReason,
@@ -21,13 +22,13 @@ export const acknowledgeNotificationOpened = notificationFunctions.https.onCall(
   const notificationId = normalizeNotificationId(data?.notificationId);
   if (!notificationId) throw new functions.https.HttpsError('invalid-argument', 'A valid notificationId is required.');
 
-  const ref = admin.firestore()
+  const ref = getFirestore()
     .collection('userNotifications')
     .doc(uid)
     .collection('notifications')
     .doc(notificationId);
 
-  return admin.firestore().runTransaction(async (transaction) => {
+  return getFirestore().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(ref);
     if (!snapshot.exists) return { status: 'notFound' as const };
     const existing = snapshot.data() ?? {};
@@ -46,22 +47,22 @@ export const acknowledgeNotificationOpened = notificationFunctions.https.onCall(
 export const clearUserNotifications = notificationFunctions.https.onCall(async (_data, context) => {
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.');
-  const collection = admin.firestore()
+  const collection = getFirestore()
     .collection('userNotifications')
     .doc(uid)
     .collection('notifications');
 
-  let cursor: admin.firestore.QueryDocumentSnapshot | undefined;
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
   let clearedCount = 0;
   do {
-    let query: admin.firestore.Query = collection.orderBy(FieldPath.documentId()).limit(PAGE_SIZE);
+    let query: FirebaseFirestore.Query = collection.orderBy(FieldPath.documentId()).limit(PAGE_SIZE);
     if (cursor) query = query.startAfter(cursor);
     const page = await query.get();
     if (page.empty) break;
 
     const visible = page.docs.filter((document) => isVisibleStoredNotification(document.data()));
     if (visible.length > 0) {
-      const batch = admin.firestore().batch();
+      const batch = getFirestore().batch();
       visible.forEach((document) => {
         const existing = document.data();
         batch.update(document.ref, {
@@ -87,7 +88,7 @@ export const cleanupExpiredUserNotifications = notificationFunctions.pubsub
   .timeZone('Etc/UTC')
   .onRun(async () => {
     const now = Date.now();
-    const firestore = admin.firestore();
+    const firestore = getFirestore();
     const counts = { dismissed30d: 0, legacyRead30d: 0, unresolved90d: 0 };
 
     await deleteMatchingPages(
@@ -120,13 +121,13 @@ export const cleanupExpiredUserNotifications = notificationFunctions.pubsub
   });
 
 async function deleteMatchingPages(
-  queryFactory: () => admin.firestore.Query,
+  queryFactory: () => FirebaseFirestore.Query,
   orderField: string,
   now: number,
   reason: keyof { dismissed30d: number; legacyRead30d: number; unresolved90d: number },
   counts: { dismissed30d: number; legacyRead30d: number; unresolved90d: number },
 ) {
-  let cursor: admin.firestore.QueryDocumentSnapshot | undefined;
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
   do {
     let query = queryFactory().orderBy(orderField).orderBy(FieldPath.documentId()).limit(PAGE_SIZE);
     if (cursor) query = query.startAfter(cursor);
@@ -137,7 +138,7 @@ async function deleteMatchingPages(
       getNotificationCleanupReason(document.data(), now) === reason
     ));
     if (matches.length > 0) {
-      const batch = admin.firestore().batch();
+      const batch = getFirestore().batch();
       matches.forEach((document) => batch.delete(document.ref));
       await batch.commit();
       counts[reason] += matches.length;

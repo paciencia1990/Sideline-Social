@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "test:launch-hardening": "node scripts/test-mobile-runtime-boundary.cjs && node scripts/test-safe-uri-decoding.cjs && node scripts/test-active-member-projection.cjs && node scripts/test-live-deployment-binding.cjs && node scripts/validate-retained-launch-backend.cjs",
     "test:game-efficiency": "node scripts/test-game-efficiency.cjs",
     "test:app-efficiency": "node scripts/test-app-efficiency.cjs",
     "test:team-translation": "npm --prefix functions run build && node scripts/test-team-translation.cjs",
@@ -253,7 +254,7 @@
     "typescript": "~6.0.3"
   },
   "overrides": {
-    "undici": "6.28.0"
+    "undici": "6.28.1"
   },
   "expo": {
     "doctor": {

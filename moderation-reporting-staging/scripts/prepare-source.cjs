@@ -29,6 +29,13 @@ function replaceSingle(source, search, replacement, label) {
   return source.replace(search, replacement);
 }
 
+function replaceLegacySdkImport(source, search, replacement, label) {
+  if (source.includes(search)) return replaceSingle(source, search, replacement, label);
+  const matches = source.split(replacement).length - 1;
+  if (matches !== 1) throw new Error(`Expected one supported SDK import for ${label}.`);
+  return source;
+}
+
 function replaceSinglePattern(source, pattern, replacement, label) {
   const matches = source.match(pattern) ?? [];
   if (matches.length !== 1) {
@@ -47,6 +54,7 @@ function removeRange(source, startMarker, endMarker, label) {
 }
 
 function replaceAllRequired(source, search, replacement, label) {
+  if (search === "admin.firestore()" && !source.includes(search) && source.includes(replacement)) return source;
   if (!source.includes(search)) throw new Error(`Expected at least one ${label} marker in the tested source.`);
   return source.replaceAll(search, replacement);
 }
@@ -60,13 +68,13 @@ function readApprovedSource(name) {
 mkdirSync(generatedRoot, { recursive: true });
 
 let reportSource = readApprovedSource("moderationReports.ts");
-reportSource = replaceSingle(
+reportSource = replaceLegacySdkImport(
   reportSource,
   'import * as admin from "firebase-admin";',
   'import { getFirestore } from "firebase-admin/firestore";',
   "Firebase Admin modular Firestore import",
 );
-reportSource = replaceSingle(
+reportSource = replaceLegacySdkImport(
   reportSource,
   'import * as firebaseFunctions from "firebase-functions";',
   'import * as firebaseFunctions from "firebase-functions/v1";',
@@ -112,13 +120,13 @@ coreSource = removeRange(
 );
 
 let permanentAuthSource = readApprovedSource("permanentAuth.ts");
-permanentAuthSource = replaceSingle(
+permanentAuthSource = replaceLegacySdkImport(
   permanentAuthSource,
   'import * as admin from "firebase-admin";',
   'import { getFirestore } from "firebase-admin/firestore";',
   "permanent-auth Firebase Admin modular Firestore import",
 );
-permanentAuthSource = replaceSingle(
+permanentAuthSource = replaceLegacySdkImport(
   permanentAuthSource,
   'import * as functions from "firebase-functions";',
   'import * as functions from "firebase-functions/v1";',

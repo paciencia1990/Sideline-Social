@@ -1,5 +1,5 @@
-import * as admin from 'firebase-admin';
-import * as firebaseFunctions from 'firebase-functions';
+import { getFirestore } from 'firebase-admin/firestore';
+import * as firebaseFunctions from 'firebase-functions/v1';
 import { FieldValue } from 'firebase-admin/firestore';
 import { permanentAccountFunctions } from './permanentAuth';
 import { isActiveSquadAdmin, isDurablyActiveSquadMembership } from './squadAdminCore';
@@ -18,7 +18,7 @@ const writers = permanentAccountFunctions(firebaseFunctions, 'communication').re
 export const getSquadWeather = readers.https.onCall(async (data, context) => {
   if (!context.app) throw fail('failed-precondition', 'App verification is required.');
   const squadId = readId(data?.squadId), uid = context.auth!.uid;
-  const db = admin.firestore();
+  const db = getFirestore();
   const snapshot = await db.doc(`squads/${squadId}`).get(), squad = snapshot.data();
   if (!squad || !isActiveSquadRecord(squad)) throw fail('not-found', 'This Squad is unavailable.');
   if (!isPubliclyDiscoverableSquad(squad)) {
@@ -46,7 +46,7 @@ export const updateSquadWeather = writers.https.onCall(async (data, context) => 
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || (data?.link !== null && (!link || data?.confirmedVenue !== true))) {
     throw fail('invalid-argument', 'Confirm a valid public venue link before saving.');
   }
-  const db = admin.firestore(), squadRef = db.doc(`squads/${squadId}`);
+  const db = getFirestore(), squadRef = db.doc(`squads/${squadId}`);
   return db.runTransaction(async transaction => {
     const snapshot = await transaction.get(squadRef), squad = snapshot.data();
     const canonical = await transaction.get(db.doc(`squadMemberships/${squadId}__${uid}`));
