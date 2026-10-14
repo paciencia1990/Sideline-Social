@@ -118,6 +118,12 @@ assert.equal(calendarPayload.notes, "Bring both jerseys");
 assert.equal(calendarPayload.timeZone, "America/New_York");
 assert.equal(calendarPayload.startDate.getTime(), calendarEvent.startAt.getTime());
 assert.notEqual(calendarPayload.startDate, calendarEvent.startAt, "calendar payload dates are defensive copies");
+const importedCalendarPayload = calendar.buildTeamScheduleCalendarPayload({
+  ...calendarEvent,
+  sourceDescription: "Field 4",
+}, "Cancelled");
+assert.equal(importedCalendarPayload.location, calendarPayload.location, "the venue and address remain available");
+assert.equal(importedCalendarPayload.notes, "Field 4\n\nBring both jerseys", "source field details and coach notes both reach the personal calendar");
 
 const calendarAllDay = calendar.buildTeamScheduleCalendarPayload({
   ...calendarEvent,

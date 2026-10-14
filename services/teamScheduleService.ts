@@ -20,6 +20,7 @@ import { httpsCallable } from "firebase/functions";
 
 import { auth, db, functions } from "@/config/firebase";
 import { TEAM_HISTORY_PAGE_SIZES, type TeamHistoryCursor } from "@/constants/teamHistoryPagination";
+import { displayCalendarTimezone } from "@/utils/teamCalendarDisplay";
 import {
   buildScheduleFingerprint,
   type TeamScheduleDraft,
@@ -47,6 +48,7 @@ export type TeamScheduleEvent = {
   teamScore: number | null;
   opponentScore: number | null;
   notes: string | null;
+  sourceDescription: string | null;
   source: "manual" | "csv" | "ics-file" | "ics-feed";
   sourceIntegrationId: string | null;
   externalUid: string | null;
@@ -324,7 +326,8 @@ function normalizeEvent(teamId: string, snapshot: QueryDocumentSnapshot<Document
     startAt: readDate(data.startAt) ?? new Date(0),
     endAt: readDate(data.endAt) ?? readDate(data.startAt) ?? new Date(0),
     arrivalAt: readDate(data.arrivalAt),
-    timezone: readString(data.timezone, "UTC"),
+    timezone: displayCalendarTimezone(readString(data.timezone, "UTC"),
+      data.displayInViewerTimezone === true && data.timezone === "UTC"),
     isAllDay: data.isAllDay === true,
     opponentName: readNullableString(data.opponentName),
     homeAway: data.homeAway === "home" || data.homeAway === "away" || data.homeAway === "neutral" ? data.homeAway : null,
@@ -335,6 +338,7 @@ function normalizeEvent(teamId: string, snapshot: QueryDocumentSnapshot<Document
     teamScore: readScore(data.teamScore),
     opponentScore: readScore(data.opponentScore),
     notes: readNullableString(data.notes),
+    sourceDescription: readNullableString(data.sourceDescription),
     source: data.source === "csv" || data.source === "ics-file" || data.source === "ics-feed" ? data.source : "manual",
     sourceIntegrationId: readNullableString(data.sourceIntegrationId),
     externalUid: readNullableString(data.externalUid),

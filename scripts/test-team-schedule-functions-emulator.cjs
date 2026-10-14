@@ -122,6 +122,14 @@ async function run() {
   assert.equal(icsPreview.events.length, 6);
   const icsImport = await coach.call("importTeamScheduleIcs", { teamId: "team-active", previewId: icsPreview.previewId, selectedKeys: icsPreview.events.map((event) => event.key), notifyTeam: true });
   assert.equal(icsImport.created, 6);
+  const importedGame = await db.collection("teams").doc("team-active").collection("events")
+    .where("externalUid", "==", "game-1@example.invalid").limit(1).get();
+  assert.equal(importedGame.docs[0].data().venueName, "Community Field");
+  assert.equal(importedGame.docs[0].data().sourceDescription, "Bring both jerseys");
+  assert.equal(importedGame.docs[0].data().displayInViewerTimezone, false);
+  const importedUtcEvent = await db.collection("teams").doc("team-active").collection("events")
+    .where("externalUid", "==", "cancelled@example.invalid").limit(1).get();
+  assert.equal(importedUtcEvent.docs[0].data().displayInViewerTimezone, true);
   const icsNotifications = await db.collection("userNotifications").doc(parent.uid).collection("notifications").where("type", "==", "teamScheduleEvent").get();
   assert.equal(icsNotifications.docs.filter((document) => document.data().bodyKey === "notifications.types.teamScheduleImportBody").length, 1, "ICS import sends at most one explicit summary notification");
   const repeatPreview = await coach.call("previewTeamScheduleIcs", { teamId: "team-active", ics: syntheticIcs });

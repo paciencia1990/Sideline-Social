@@ -13,6 +13,7 @@ export type ExternalCalendarEvent = {
   startAtMillis: number;
   endAtMillis: number;
   timezone: string;
+  displayInViewerTimezone: boolean;
   isAllDay: boolean;
   location: string | null;
   description: string | null;
@@ -33,6 +34,7 @@ type Property = { name: string; params: Record<string, string>; value: string };
 type ParsedDate = {
   millis: number;
   timezone: string;
+  utcInstant: boolean;
   allDay: boolean;
   localDate: string;
   localTime: string;
@@ -59,6 +61,7 @@ export function parseTeamCalendarIcs(text: string): ParsedCalendar {
   if (Buffer.byteLength(text, 'utf8') > MAX_ICS_BYTES) throw calendarCoreError('ics_file_too_large');
   if (/\u0000/u.test(text) || !/BEGIN:VCALENDAR/i.test(text)) throw calendarCoreError('ics_invalid_calendar');
   const lines = unfoldLines(text);
+  const calendarTimezone = declaredCalendarTimezone(lines);
   const blocks: Property[][] = [];
   let current: Property[] | null = null;
   for (const line of lines) {
@@ -86,7 +89,7 @@ export function parseTeamCalendarIcs(text: string): ParsedCalendar {
   const raw: RawEvent[] = [];
   for (const block of blocks) {
     try {
-      raw.push(normalizeEventBlock(block));
+      raw.push(normalizeEventBlock(block, calendarTimezone));
     } catch (error) {
       rejectedCount += 1;
       warnings.add(safeReason(error));
@@ -125,7 +128,7 @@ export function parseTeamCalendarIcs(text: string): ParsedCalendar {
 
   const byKey = new Map<string, ExternalCalendarEvent>();
   expanded.forEach((event) => {
-    const normalized = externalEvent(event);
+    const normalized = externalEvent(event, calendarTimezone);
     const existing = byKey.get(normalized.key);
     if (!existing || normalized.sequence > existing.sequence) byKey.set(normalized.key, normalized);
     else rejectedCount += 1;
@@ -265,27 +268,27 @@ export function serializeTeamScheduleIcs(input: {
   return `${lines.map(foldIcsLine).join('\r\n')}\r\n`;
 }
 
-function normalizeEventBlock(properties: Property[]): RawEvent {
+function normalizeEventBlock(properties: Property[], calendarTimezone: string | null): RawEvent {
   const uid = cleanText(first(properties, 'UID')?.value ?? '', 512);
   const startProperty = first(properties, 'DTSTART');
   if (!uid || !startProperty) throw calendarCoreError('ics_event_missing_required');
-  const start = parseIcsDate(startProperty);
+  const start = parseIcsDate(startProperty, calendarTimezone ?? undefined);
   const dtend = first(properties, 'DTEND');
   const duration = first(properties, 'DURATION')?.value;
-  const end = dtend ? parseIcsDate(dtend) : duration
+  const end = dtend ? parseIcsDate(dtend, calendarTimezone ?? undefined) : duration
     ? { ...start, millis: start.millis + parseDuration(duration) }
     : { ...start, millis: start.millis + (start.allDay ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000) };
   if (end.millis <= start.millis) throw calendarCoreError('ics_invalid_date');
   const recurrenceProperty = first(properties, 'RECURRENCE-ID');
-  const recurrence = recurrenceProperty ? parseIcsDate(recurrenceProperty) : null;
+  const recurrence = recurrenceProperty ? parseIcsDate(recurrenceProperty, calendarTimezone ?? undefined) : null;
   const title = cleanText(unescapeIcs(first(properties, 'SUMMARY')?.value ?? ''), 120) || 'Team event';
   const location = cleanText(unescapeIcs(first(properties, 'LOCATION')?.value ?? ''), 480);
   const description = cleanText(unescapeIcs(first(properties, 'DESCRIPTION')?.value ?? ''), 2000);
   const status = first(properties, 'STATUS')?.value.toUpperCase() === 'CANCELLED' ? 'cancelled' : 'scheduled';
   const sequenceValue = Number.parseInt(first(properties, 'SEQUENCE')?.value ?? '0', 10);
   const lastModifiedProperty = first(properties, 'LAST-MODIFIED');
-  const rdates = all(properties, 'RDATE').flatMap((property) => property.value.split(',').map((value) => parseIcsDate({ ...property, value })));
-  const exdates = new Set(all(properties, 'EXDATE').flatMap((property) => property.value.split(',').map((value) => parseIcsDate({ ...property, value }).canonical)));
+  const rdates = all(properties, 'RDATE').flatMap((property) => property.value.split(',').map((value) => parseIcsDate({ ...property, value }, calendarTimezone ?? undefined)));
+  const exdates = new Set(all(properties, 'EXDATE').flatMap((property) => property.value.split(',').map((value) => parseIcsDate({ ...property, value }, calendarTimezone ?? undefined).canonical)));
   return {
     uid,
     recurrenceId: recurrence?.canonical ?? null,
@@ -364,14 +367,17 @@ function expandRecurringEvent(master: RawEvent) {
   return Array.from(occurrences.values());
 }
 
-function externalEvent(event: RawEvent): ExternalCalendarEvent {
+function externalEvent(event: RawEvent, calendarTimezone: string | null): ExternalCalendarEvent {
   const key = `${event.uid}|${event.recurrenceId ?? ''}`;
+  const timezone = event.start.utcInstant && calendarTimezone ? calendarTimezone : event.start.timezone;
+  const displayInViewerTimezone = event.start.utcInstant && !calendarTimezone;
   const canonical = JSON.stringify({
     key,
     title: event.title,
     start: event.start.millis,
     end: event.end.millis,
-    zone: event.start.timezone,
+    zone: timezone,
+    displayInViewerTimezone,
     allDay: event.start.allDay,
     location: event.location,
     description: event.description,
@@ -385,7 +391,8 @@ function externalEvent(event: RawEvent): ExternalCalendarEvent {
     title: event.title,
     startAtMillis: event.start.millis,
     endAtMillis: event.end.millis,
-    timezone: event.start.timezone,
+    timezone,
+    displayInViewerTimezone,
     isAllDay: event.start.allDay,
     location: event.location,
     description: event.description,
@@ -397,12 +404,12 @@ function externalEvent(event: RawEvent): ExternalCalendarEvent {
   };
 }
 
-function parseIcsDate(property: Property): ParsedDate {
+function parseIcsDate(property: Property, defaultTimezone = 'UTC'): ParsedDate {
   const value = property.value.trim();
-  const timezone = property.params.TZID || (value.endsWith('Z') ? 'UTC' : 'UTC');
+  const timezone = property.params.TZID || (value.endsWith('Z') ? 'UTC' : defaultTimezone);
   if (property.params.VALUE === 'DATE' || /^\d{8}$/u.test(value)) {
     const localDate = compactDate(value);
-    return { millis: zonedMillis(localDate, '00:00', timezone), timezone, allDay: true, localDate, localTime: '00:00', canonical: value.slice(0, 8) };
+    return { millis: zonedMillis(localDate, '00:00', timezone), timezone, utcInstant: false, allDay: true, localDate, localTime: '00:00', canonical: value.slice(0, 8) };
   }
   const match = /^(\d{8})T(\d{2})(\d{2})(\d{2})?(Z)?$/u.exec(value);
   if (!match) throw calendarCoreError('ics_invalid_date');
@@ -412,7 +419,7 @@ function parseIcsDate(property: Property): ParsedDate {
     ? Date.UTC(Number(match[1].slice(0, 4)), Number(match[1].slice(4, 6)) - 1, Number(match[1].slice(6, 8)), Number(match[2]), Number(match[3]), Number(match[4] ?? 0))
     : zonedMillis(localDate, localTime, timezone);
   if (!Number.isFinite(millis)) throw calendarCoreError('ics_invalid_date');
-  return { millis, timezone, allDay: false, localDate, localTime, canonical: value.replace(/Z$/u, '') };
+  return { millis, timezone, utcInstant: Boolean(match[5]), allDay: false, localDate, localTime, canonical: value.replace(/Z$/u, '') };
 }
 
 function unfoldLines(text: string) {
@@ -433,6 +440,27 @@ function parseProperty(line: string): Property | null {
     if (equal > 0) params[part.slice(0, equal).toUpperCase()] = part.slice(equal + 1).replace(/^"|"$/gu, '');
   });
   return { name: rawName.toUpperCase(), params, value: line.slice(colon + 1) };
+}
+
+function declaredCalendarTimezone(lines: string[]): string | null {
+  let insideTimezone = false;
+  let insideEvent = false;
+  let preferred: string | null = null;
+  const definedZones = new Set<string>();
+  for (const line of lines) {
+    const boundary = line.toUpperCase();
+    if (boundary === 'BEGIN:VTIMEZONE') { insideTimezone = true; continue; }
+    if (boundary === 'END:VTIMEZONE') { insideTimezone = false; continue; }
+    if (boundary === 'BEGIN:VEVENT') { insideEvent = true; continue; }
+    if (boundary === 'END:VEVENT') { insideEvent = false; continue; }
+    const property = parseProperty(line);
+    if (insideTimezone && property?.name === 'TZID') definedZones.add(property.value.trim());
+    if (!insideTimezone && !insideEvent && property?.name === 'X-WR-TIMEZONE') preferred = property.value.trim();
+  }
+  const candidate = preferred || (definedZones.size === 1 ? [...definedZones][0] : null);
+  if (!candidate) return null;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(0); return candidate; }
+  catch { return null; }
 }
 
 function first(properties: Property[], name: string) { return properties.find((property) => property.name === name); }

@@ -8,6 +8,7 @@ export type TeamCalendarPreviewEvent = {
   startAtMillis: number;
   endAtMillis: number;
   timezone: string;
+  displayInViewerTimezone: boolean;
   isAllDay: boolean;
   location: string | null;
   status: "scheduled" | "cancelled";

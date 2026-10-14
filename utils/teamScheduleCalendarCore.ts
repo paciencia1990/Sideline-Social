@@ -18,6 +18,7 @@ export type TeamScheduleCalendarEventInput = {
   field: string | null;
   address: string | null;
   notes: string | null;
+  sourceDescription?: string | null;
   status: string;
 };
 
@@ -70,7 +71,7 @@ export function buildTeamScheduleCalendarPayload(
   const locationParts = [event.venueName, event.field, event.address]
     .map(cleanText)
     .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index);
-  const notes = cleanText(event.notes);
+  const notes = [...new Set([event.sourceDescription, event.notes].map(cleanText).filter((value): value is string => Boolean(value)))].join("\n\n");
   const cancelledPrefix = cleanText(cancelledTitlePrefix);
 
   return {

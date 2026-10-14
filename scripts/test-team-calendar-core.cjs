@@ -15,6 +15,7 @@ function load(file, overrides = {}) {
 
 const csv = load("utils/teamScheduleCore.ts");
 const calendar = load("functions/src/teamCalendarCore.ts");
+const display = load("utils/teamCalendarDisplay.ts");
 const fetcher = load("functions/src/teamCalendarFetch.ts", { "./teamCalendarCore": calendar });
 const fixture = (...segments) => fs.readFileSync(path.join(process.cwd(), "scripts", "fixtures", ...segments), "utf8");
 const reason = (error) => error instanceof Error ? error.message : "";
@@ -42,6 +43,33 @@ assert.equal(parsed.events.find((event) => event.title === "Rescheduled Practice
 assert.equal(parsed.events.find((event) => event.title === "Team Meeting").isAllDay, true);
 assert.equal(parsed.events.find((event) => event.title === "Cancelled Match").status, "cancelled");
 assert.equal(parsed.events.some((event) => /attendee|organizer/iu.test(JSON.stringify(event))), false);
+
+const utcGame = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:utc-game\r\nDTSTART:20270314T180000Z\r\nDTEND:20270314T200000Z\r\nSUMMARY:UTC Game\r\nLOCATION:Community Park\r\nDESCRIPTION:Field 4\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+const utcParsed = calendar.parseTeamCalendarIcs(utcGame).events[0];
+assert.equal(utcParsed.startAtMillis, Date.parse("2027-03-14T18:00:00Z"));
+assert.equal(utcParsed.timezone, "UTC");
+assert.equal(utcParsed.displayInViewerTimezone, true, "UTC timestamps without a calendar zone display in the viewer's zone");
+assert.equal(utcParsed.location, "Community Park");
+assert.equal(utcParsed.description, "Field 4");
+assert.equal(display.displayCalendarTimezone("UTC", true), Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+assert.equal(display.displayCalendarTimezone("UTC", false), "UTC");
+assert.equal(new Intl.DateTimeFormat("en-US", { timeZone: display.displayCalendarTimezone("UTC", true, "America/New_York"), hour: "numeric", hour12: true }).format(new Date(utcParsed.startAtMillis)), "2 PM");
+const easternGame = utcGame.replace("BEGIN:VEVENT", "X-WR-TIMEZONE:America/New_York\r\nBEGIN:VEVENT");
+const easternParsed = calendar.parseTeamCalendarIcs(easternGame).events[0];
+assert.equal(easternParsed.startAtMillis, utcParsed.startAtMillis, "the source UTC instant must not shift");
+assert.equal(easternParsed.timezone, "America/New_York");
+assert.equal(easternParsed.displayInViewerTimezone, false);
+assert.equal(new Intl.DateTimeFormat("en-US", { timeZone: easternParsed.timezone, hour: "numeric", hour12: true }).format(new Date(easternParsed.startAtMillis)), "2 PM");
+const winterParsed = calendar.parseTeamCalendarIcs(easternGame.replaceAll("20270314T180000Z", "20270114T190000Z").replaceAll("20270314T200000Z", "20270114T210000Z")).events[0];
+assert.equal(new Intl.DateTimeFormat("en-US", { timeZone: winterParsed.timezone, hour: "numeric", hour12: true }).format(new Date(winterParsed.startAtMillis)), "2 PM", "daylight-saving changes must use the event date");
+const vtimezoneGame = utcGame.replace("BEGIN:VEVENT", "BEGIN:VTIMEZONE\r\nTZID:America/New_York\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT");
+assert.equal(calendar.parseTeamCalendarIcs(vtimezoneGame).events[0].timezone, "America/New_York");
+const floatingGame = utcGame.replace("20270314T180000Z", "20270314T140000").replace("20270314T200000Z", "20270314T160000");
+const floatingParsed = calendar.parseTeamCalendarIcs(floatingGame.replace("BEGIN:VEVENT", "X-WR-TIMEZONE:America/New_York\r\nBEGIN:VEVENT")).events[0];
+assert.equal(floatingParsed.startAtMillis, utcParsed.startAtMillis, "calendar timezone anchors floating wall time");
+assert.equal(floatingParsed.timezone, "America/New_York");
+assert.equal(floatingParsed.displayInViewerTimezone, false);
+assert.equal(calendar.parseTeamCalendarIcs(floatingGame).events[0].displayInViewerTimezone, false, "floating time must not be converted again as UTC");
 
 const unsupported = calendar.parseTeamCalendarIcs("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:monthly\r\nDTSTART;TZID=America/New_York:20270115T100000\r\nDTEND;TZID=America/New_York:20270115T110000\r\nRRULE:FREQ=MONTHLY;COUNT=3\r\nSUMMARY:Monthly\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n");
 assert.equal(unsupported.events.length, 0, "unsupported recurrence is not silently reduced to one event");

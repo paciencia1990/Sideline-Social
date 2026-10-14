@@ -181,6 +181,7 @@ export default function TeamScheduleEventDetailScreen() {
               {event.venueName ? <Detail label={t("schedule.form.venue")} value={event.venueName} /> : null}
               {event.field ? <Detail label={t("schedule.form.field")} value={event.field} /> : null}
               {event.address ? <Detail icon={<MapPin color={Colors.communicationLink} size={19} />} label={t("schedule.form.address")} value={event.address} /> : null}
+              {event.sourceDescription && event.sourceDescription !== event.notes ? <Detail label={t("schedule.form.sourceNotes")} value={event.sourceDescription} /> : null}
               {event.notes ? <Detail label={t("schedule.form.notes")} value={event.notes} /> : null}
               {event.source === "ics-feed" ? <Detail label={t("schedule.syncedIndicator")} value={t("schedule.syncedExplanation")} /> : null}
             </Card>
