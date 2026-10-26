@@ -9,7 +9,7 @@ import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
 import { Card } from "@/components/Card";
 import { VenueLightningCard } from "@/components/VenueLightningCard";
 import { ChildProfilePicker } from "@/components/ChildProfilePicker";
-import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
+import { VirtualizedRow, VirtualizedRows } from "@/components/VirtualizedRows";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -196,7 +196,7 @@ export default function ParentTeamHubScreen() {
 
   return (
     <ScreenWrapper>
-      <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <VirtualizedRows keyboardAware contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.headerRow}>
           <TouchableOpacity accessibilityLabel={t("myTeams.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
             <ArrowLeft color={Colors.textHeading} size={22} />
@@ -342,7 +342,7 @@ export default function ParentTeamHubScreen() {
                 <Text style={styles.stateTitle}>{t("teamMessages.parentEmpty")}</Text>
                 <Text style={styles.cardText}>{t("teamMessages.parentEmptyBody")}</Text>
               </Card>
-            ) : summary.privateConversations.map((conversation) => (
+            ) : summary.privateConversations.map((conversation) => (<VirtualizedRow key={conversation.conversationId} render={() => ((
               <TouchableOpacity
                 accessibilityRole="button"
                 key={conversation.conversationId}
@@ -360,7 +360,7 @@ export default function ParentTeamHubScreen() {
                   {conversation.unreadCount > 0 ? <Text style={styles.announcementMeta}>{t("teamMessages.unread", { count: conversation.unreadCount })}</Text> : null}
                 </Card>
               </TouchableOpacity>
-            ))}
+            ))} />))}
 
             <View style={styles.sectionHeader}>
               <View>
@@ -386,7 +386,7 @@ export default function ParentTeamHubScreen() {
                 <Text style={styles.stateTitle}>{t("myTeams.noUpdates")}</Text>
                 <Text style={styles.cardText}>{t("myTeams.noUpdatesBody")}</Text>
               </Card>
-            ) : summary.announcements.map((announcement) => (
+            ) : summary.announcements.map((announcement) => (<VirtualizedRow key={announcement.id} render={() => ((
               <TouchableOpacity
                 accessibilityLabel={t("myTeams.openUpdate")}
                 accessibilityRole="button"
@@ -433,7 +433,7 @@ export default function ParentTeamHubScreen() {
                   ) : !announcement.isDeleted && announcement.contentType === "voice" ? <VoiceMemoUnavailable /> : null}
                 </Card>
               </TouchableOpacity>
-            ))}
+            ))} />))}
             {summary.hasOlderAnnouncements ? (
               <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: loadingOlderAnnouncements }} disabled={loadingOlderAnnouncements} onPress={() => { void loadOlderAnnouncements(); }} style={styles.outlineButton}>
                 {loadingOlderAnnouncements ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.outlineButtonText}>{t("myTeams.loadOlderAnnouncements")}</Text>}
@@ -441,7 +441,7 @@ export default function ParentTeamHubScreen() {
             ) : null}
           </>
         ) : null}
-      </KeyboardAwareScrollView>
+      </VirtualizedRows>
     </ScreenWrapper>
   );
 }

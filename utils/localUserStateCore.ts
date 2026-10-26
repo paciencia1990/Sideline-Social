@@ -22,7 +22,9 @@ export type LocalSignOutDependencies = {
 
 export function getLocalUserStateKeysToRemove(keys: readonly string[]) {
   const retained = new Set<string>(RETAINED_DEVICE_PREFERENCE_KEYS);
-  return Array.from(new Set(keys)).filter((key) => !retained.has(key));
+  // Contains attempt state/plan/time, never receipt or payment details. Retain unresolved
+  // checkout intent across sign-out so the same account cannot buy again blindly.
+  return Array.from(new Set(keys)).filter((key) => !retained.has(key) && !key.startsWith('sidelineSocial.coachAiPurchasePending.v1.'));
 }
 
 export async function clearLocalUserStateWithDependencies(

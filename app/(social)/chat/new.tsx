@@ -27,18 +27,29 @@ export default function NewFriendChatScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [friendsLoadFailed, setFriendsLoadFailed] = useState(false);
+  const [friendsOwner, setFriendsOwner] = useState<string | undefined>();
+  const currentUserId = useRef(user?.uid);
+  currentUserId.current = user?.uid;
   const submissionInFlight = useRef(false);
 
   useEffect(() => {
-    if (!user?.uid) {
+    let active = true;
+    const userId = user?.uid;
+    const isCurrent = () => active && currentUserId.current === userId;
+    setFriends([]); setSelectedIds([]); setGroupName(""); setError(null);
+    setFriendsLoadFailed(false); setFriendsOwner(userId); setLoading(Boolean(userId));
+    if (!userId) {
       setLoading(false);
-      return;
+      return () => { active = false; };
     }
-    void getFriends(user.uid)
-      .then(setFriends)
-      .catch(() => setError(t("chat.temporarilyUnavailable")))
-      .finally(() => setLoading(false));
+    void getFriends(userId)
+      .then((nextFriends) => { if (isCurrent()) setFriends(nextFriends); })
+      .catch(() => { if (isCurrent()) { setFriendsLoadFailed(true); setError(t("chat.temporarilyUnavailable")); } })
+      .finally(() => { if (isCurrent()) setLoading(false); });
+    return () => { active = false; };
   }, [t, user?.uid]);
+  const friendListReady = Boolean(user?.uid) && friendsOwner === user?.uid && !loading && !friendsLoadFailed;
 
   const isGroup = selectedIds.length > 1;
   const maxSelected = MAX_CHAT_PARTICIPANTS - 1;
@@ -57,7 +68,7 @@ export default function NewFriendChatScreen() {
   };
 
   const createChat = async () => {
-    if (selectedIds.length === 0 || submissionInFlight.current) return;
+    if (!friendListReady || selectedIds.length === 0 || submissionInFlight.current) return;
     submissionInFlight.current = true;
     setSubmitting(true);
     setError(null);
@@ -83,11 +94,11 @@ export default function NewFriendChatScreen() {
         </View>
 
         {loading ? <View style={styles.loading}><ActivityIndicator color={Colors.primary} /><Text style={styles.body}>{t("chat.loadingFriends")}</Text></View> : null}
-        {!loading && friends.length === 0 ? (
+        {friendListReady && friends.length === 0 ? (
           <Card style={styles.empty}><Users color={Colors.primary} size={36} /><Text style={styles.emptyTitle}>{t("chat.noAcceptedFriends")}</Text><Text style={styles.body}>{t("chat.addFriendsToChat")}</Text><TouchableOpacity accessibilityRole="button" onPress={() => router.push("/(tabs)/friends")} style={styles.primary}><Text style={styles.primaryText}>{t("friends.title")}</Text></TouchableOpacity></Card>
         ) : null}
 
-        {friends.length > 0 ? (
+        {friendListReady && friends.length > 0 ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{t("chat.selectFriends")}</Text>
             {friends.map((friend) => {
@@ -128,7 +139,7 @@ export default function NewFriendChatScreen() {
         ) : null}
 
         {error ? <Text accessibilityLiveRegion="polite" style={styles.error}>{error}</Text> : null}
-        {friends.length > 0 ? (
+        {friendListReady && friends.length > 0 ? (
           <TouchableOpacity
             accessibilityLabel={submitting ? t("chat.creatingChat") : t("chat.createChat")}
             accessibilityRole="button"

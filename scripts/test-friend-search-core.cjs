@@ -127,9 +127,11 @@ assert.ok(callable.includes("toMinimalPublicUserProfile(profile)"));
 for (const privateField of ["email", "phoneNumber", "location", "children", "notificationToken"]) {
   assert.equal(callable.includes(privateField), false, `${privateField} must not enter search output`);
 }
-assert.ok(screen.includes("searchParentsByName(normalizedSearchText)"));
-assert.ok(screen.includes("setSearchResults([])"));
-assert.ok(screen.includes("searchRequestSequence.current !== requestSequence"));
+const searchHook = fs.readFileSync(path.join(process.cwd(), "hooks", "useParentSearch.ts"), "utf8");
+assert.ok(screen.includes("useParentSearch(user?.uid, normalizedSearchText, searchActive && !authLoading, searchRefreshVersion)"));
+assert.ok(searchHook.includes("searchParentsByName(query)"));
+assert.ok(searchHook.includes("results: []"));
+assert.ok(searchHook.includes("sequence.current === requestSequence"));
 assert.ok(screen.includes("setSuggestedUsers(await searchUsers(searchText))") === false);
 const searchResultReport = screen.slice(
   screen.indexOf("onReport={() => router.push"),

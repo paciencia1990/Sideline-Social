@@ -34,6 +34,7 @@ export type ScheduleEventLike = {
   startAt: Date;
   endAt: Date;
   timezone: string;
+  isAllDay?: boolean;
 };
 
 export type ScheduleDisplayEventLike = ScheduleEventLike & {
@@ -175,10 +176,11 @@ export function scheduleEventsForDisplay<T extends ScheduleDisplayEventLike>(eve
   return events.filter((event) => event.status !== "cancelled" || event.source !== "ics-feed");
 }
 
-export function groupScheduleEvents<T extends ScheduleEventLike>(events: T[]): ScheduleMonthGroup<T>[] {
+export function groupScheduleEvents<T extends ScheduleEventLike>(events: T[], displayTimeZone?: string): ScheduleMonthGroup<T>[] {
   const months = new Map<string, Map<string, T[]>>();
   events.forEach((event) => {
-    const dateKey = formatDateKeyInTimeZone(event.startAt, event.timezone);
+    const timezone = displayTimeZone && !event.isAllDay ? displayTimeZone : event.timezone;
+    const dateKey = formatDateKeyInTimeZone(event.startAt, timezone);
     const monthKey = dateKey.slice(0, 7);
     const days = months.get(monthKey) ?? new Map<string, T[]>();
     days.set(dateKey, [...(days.get(dateKey) ?? []), event]);

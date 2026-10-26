@@ -8,6 +8,8 @@ import { Card } from "@/components/Card";
 import { NestedBackButton } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useDeviceTimeZone } from "@/hooks/useDeviceTimeZone";
+import { formatSchedulePreview } from "@/utils/teamScheduleDisplay";
 import { useAuth } from "@/context/AuthContext";
 import { calendarIntegrationErrorReason, importScheduleIcs, previewScheduleIcs, type TeamCalendarPreviewEvent } from "@/services/teamCalendarIntegrationService";
 import { calendarConnectContextKey, createTeamCalendarConnectRequestGuard } from "@/utils/teamCalendarConnectState";
@@ -18,6 +20,7 @@ type Preview = TeamCalendarPreviewEvent & { selected: boolean };
 
 export default function ImportTeamScheduleIcsScreen() {
   const { i18n, t } = useTranslation();
+  const deviceTimeZone = useDeviceTimeZone();
   const { loading: authLoading, user } = useAuth();
   const params = useLocalSearchParams<{ teamId?: string | string[] }>();
   const teamId = normalizeParam(params.teamId);
@@ -88,7 +91,7 @@ export default function ImportTeamScheduleIcsScreen() {
     {error ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
     {warnings.length > 0 ? <Card style={styles.warning}><Text style={styles.rowTitle}>{t("schedule.ics.warningTitle")}</Text>{Array.from(new Set(warnings)).map((warning) => <Text key={warning} style={styles.body}>{warningFor(warning, t)}</Text>)}</Card> : null}
     {fileName ? <Text style={styles.fileName}>{fileName}</Text> : null}
-    {events.map((event) => <TouchableOpacity accessibilityLabel={event.title} accessibilityRole="checkbox" accessibilityState={{ checked: event.selected }} key={event.key} onPress={() => setEvents((current) => current.map((item) => item.key === event.key ? { ...item, selected: !item.selected } : item))}><Card style={styles.row}>{event.selected ? <Check color={Colors.communicationLink} size={21} /> : <Square color={Colors.textPrimary} size={21} />}<View style={styles.copy}><Text style={styles.rowTitle}>{event.title}</Text><Text style={styles.meta}>{new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: event.isAllDay ? undefined : "short", timeZone: event.timezone }).format(new Date(event.startAtMillis))}</Text><Text style={styles.meta}>{t(`schedule.statuses.${event.status}`)}</Text></View></Card></TouchableOpacity>)}
+    {events.map((event) => <TouchableOpacity accessibilityLabel={event.title} accessibilityRole="checkbox" accessibilityState={{ checked: event.selected }} key={event.key} onPress={() => setEvents((current) => current.map((item) => item.key === event.key ? { ...item, selected: !item.selected } : item))}><Card style={styles.row}>{event.selected ? <Check color={Colors.communicationLink} size={21} /> : <Square color={Colors.textPrimary} size={21} />}<View style={styles.copy}><Text style={styles.rowTitle}>{event.title}</Text><Text style={styles.meta}>{formatSchedulePreview(event, i18n.language, deviceTimeZone)}</Text><Text style={styles.meta}>{t(`schedule.statuses.${event.status}`)}</Text></View></Card></TouchableOpacity>)}
     {events.length > 0 ? <Card style={styles.row}><View style={styles.copy}><Text style={styles.rowTitle}>{t("schedule.form.notifyTeam")}</Text><Text style={styles.meta}>{t("schedule.import.notifyHelp")}</Text></View><Switch accessibilityLabel={t("schedule.form.notifyTeam")} onValueChange={setNotifyTeam} value={notifyTeam} /></Card> : null}
     {events.length > 0 ? <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: busy === "import", disabled: Boolean(busy) || selected.length === 0 }} disabled={Boolean(busy) || selected.length === 0} onPress={() => { void runImport(); }} style={[styles.primary, selected.length === 0 && styles.disabled]}>{busy === "import" ? <ActivityIndicator color={Colors.surface} /> : null}<Text style={styles.primaryText}>{t("schedule.ics.importSelected", { count: selected.length })}</Text></TouchableOpacity> : null}
   </ScrollView></ScreenWrapper>;

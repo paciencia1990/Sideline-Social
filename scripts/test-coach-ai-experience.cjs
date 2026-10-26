@@ -255,6 +255,7 @@ async function run() {
     if (name === "firebase/functions") return { httpsCallable: () => async () => ({ data: null }) };
     if (name === "@/config/featureFlags") return { FEATURE_FLAGS: { coachAiEnabled: false } };
     if (name === "@/config/firebase") return { functions: {} };
+    if (name === './coachAiBillingService') return { COACH_AI_BILLING_ENABLED: false, notifyCoachAiUsageChanged() {} };
     if (name === "@/content/coachResources/checklists") return { COACH_CHECKLISTS: [] };
     if (name === "@/content/coachResources/communicationTemplates") return { COACH_COMMUNICATION_TEMPLATES: [] };
     if (name === "@/content/coachResources/proTips") return { COACH_PRO_TIPS: [] };

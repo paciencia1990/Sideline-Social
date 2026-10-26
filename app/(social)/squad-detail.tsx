@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { MoreVertical, Settings, Users } from 'lucide-react-native';
 
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
+import { SquadWeatherProvider } from "@/components/SquadWeatherProvider";
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { NestedBackButton, navigateBackOrReplace } from '@/components/NestedBackButton';
 import { OutlineButton } from '@/components/OutlineButton';
@@ -250,7 +251,8 @@ export default function SquadDetailScreen() {
   const squadAccessibilityName = [squadDetail.venueName, sportName].filter(Boolean).join(' ');
 
   return (
-    <ScreenWrapper>
+    <SquadWeatherProvider squadId={squadDetail.squadId} venueId={squadDetail.venueId}>
+<ScreenWrapper>
       <SquadDetailHeader
         leaving={leaving}
         onLeave={handleLeave}
@@ -394,6 +396,7 @@ export default function SquadDetailScreen() {
         </View>
       </ScrollView>
     </ScreenWrapper>
+    </SquadWeatherProvider>
   );
 }
 

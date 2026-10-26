@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://identitytoolkit.googleapis.com; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Coach AI cleanup · Review one case</title><link rel="stylesheet" href="style.css"></head>
+<body><main><header><p class="eyebrow">SIDELINE SOCIAL · INTERNAL OPERATIONS</p><h1>Review one cleanup case</h1>
+<p>Select a case, review its evidence and explicitly confirm one action. The system prepares the case information for you.</p>
+<p><a href="/">Back to the read-only daily queue</a></p></header>
+<section aria-labelledby="loginHeading"><h2 id="loginHeading">Private staff sign-in</h2>
+<p id="loginStatus" role="status">Sign-in is disabled until the host is configured and approved.</p>
+<label for="loginEmail">Work email</label><input id="loginEmail" type="email" autocomplete="username">
+<label for="loginPassword">Password</label><input id="loginPassword" type="password" autocomplete="current-password">
+<button id="loginSubmit" disabled>Sign in once</button>
+<div id="totpSection" hidden><label for="totpCode">Authenticator code</label><input id="totpCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code"><button id="totpSubmit" disabled>Verify once</button></div>
+<button id="signOut" disabled>Sign out</button></section>
+<p class="notice">Use your existing staff app login and authenticator privately. This page has its own sign-in. No password, login code or case information needs to be pasted from chat.</p>
+<p id="actionStatus" role="status" aria-live="polite">No case or action has been requested.</p>
+<section aria-labelledby="pickerHeading"><h2 id="pickerHeading">1. Choose the case</h2>
+<button id="loadCases" disabled>Load cases once</button><p id="pickerHealth" role="status"></p><div id="caseChoices"></div></section>
+<section id="selectedSection" hidden aria-labelledby="caseHeading"><h2 id="caseHeading" tabindex="-1">2. Review the case</h2>
+<div id="caseSummary"></div><p id="actionImpact" class="notice"></p><p id="systemEvidence"></p>
+<button id="inspectCase" disabled>Read this case once</button><p id="caseDetail"></p>
+<button id="draftCase" disabled>Begin evidence review once</button></section>
+<section id="factsSection" hidden aria-labelledby="factsHeading"><h2 id="factsHeading">3. Review the supporting evidence</h2>
+<p>The system checks the exact record, dates and holds before preparing it. It rechecks this case and the applicable account/provider/record safeguards when the action is submitted.
+Your answers below are separate human confirmations. Never guess or choose Verified simply to enable a button.</p>
+<fieldset id="actionFacts"><legend>What evidence supports this action?</legend>
+<label for="fact_ordinaryCleanupComplete">The original app account and ordinary data were removed</label><p id="help_ordinaryCleanupComplete" class="small">Use the completed deletion evidence. The server also checks for remaining account/profile data; a marker alone is not full proof.</p><select id="fact_ordinaryCleanupComplete" aria-describedby="help_ordinaryCleanupComplete"><option value="">Choose an answer</option><option value="true">Verified from evidence</option><option value="false">Not verified</option><option value="unknown">I do not know — technical help needed</option></select>
+<label for="fact_aliasesReconciled">All linked billing identities were reviewed</label><p id="help_aliasesReconciled" class="small">Ask the technical operator to verify linked provider identities. A missing original provider record does not prove every linked identity is gone.</p><select id="fact_aliasesReconciled" aria-describedby="help_aliasesReconciled"><option value="">Choose an answer</option><option value="true">Verified from evidence</option><option value="false">Not verified</option><option value="unknown">I do not know — technical help needed</option></select>
+<label for="fact_sdkWorkSettled">Earlier app and billing work has finished</label><p id="help_sdkWorkSettled" class="small">Check that no previous request or billing work remains in progress. Do not rerun that work to clear this check.</p><select id="fact_sdkWorkSettled" aria-describedby="help_sdkWorkSettled"><option value="">Choose an answer</option><option value="true">Verified from evidence</option><option value="false">Not verified</option><option value="unknown">I do not know — technical help needed</option></select>
+<label for="fact_holdsClear">No hold requires these records to be kept</label><p id="help_holdsClear" class="small">Use the approved hold review. An active hold blocks the action.</p><select id="fact_holdsClear" aria-describedby="help_holdsClear"><option value="">Choose an answer</option><option value="true">Verified from evidence</option><option value="false">Not verified</option><option value="unknown">I do not know — technical help needed</option></select>
+<label for="fact_backupsClear">Backup and recovery requirements were reviewed</label><p id="help_backupsClear" class="small">For closure, Not verified is allowed because minimal records are retained. Permanent removal needs verified clearance of applicable backup and retention dependencies.</p><select id="fact_backupsClear" aria-describedby="help_backupsClear"><option value="">Choose an answer</option><option value="true">Verified from evidence</option><option value="false">Not verified</option><option value="unknown">I do not know — technical help needed</option></select>
+<label for="fact_identityReuseBlocked">The deleted identity cannot be reused inappropriately</label><p id="help_identityReuseBlocked" class="small">Ask the technical operator to verify the existing protection against reusing a deleted billing identity.</p><select id="fact_identityReuseBlocked" aria-describedby="help_identityReuseBlocked"><option value="">Choose an answer</option><option value="true">Verified from evidence</option><option value="false">Not verified</option><option value="unknown">I do not know — technical help needed</option></select>
+<label for="fact_relatedWorkClear">All connected cleanup work was reviewed</label><p id="help_relatedWorkClear" class="small">Use the exact case evidence to confirm related records, notifications and cleanup work were reconciled.</p><select id="fact_relatedWorkClear" aria-describedby="help_relatedWorkClear"><option value="">Choose an answer</option><option value="true">Verified from evidence</option><option value="false">Not verified</option><option value="unknown">I do not know — technical help needed</option></select>
+</fieldset><p id="factsHelp" role="status"></p>
+<label><input id="approveConfirm" type="checkbox">I reviewed these answers and the supporting evidence for this exact case.</label>
+<button id="approveCase" disabled>Save this review once</button></section>
+<section id="executionSection" hidden aria-labelledby="executionHeading"><h2 id="executionHeading">4. Confirm the displayed action</h2>
+<p>Review the impact above. Approval alone has not carried out the action.</p>
+<label><input id="executeConfirm" type="checkbox">I authorize the displayed action on this exact case once.</label><button id="execute" disabled>Confirm action once</button></section>
+<section id="reviewExpirySection" hidden aria-labelledby="expiryHeading"><h2 id="expiryHeading">Review removal of this approval record</h2>
+<p id="expiryHelp"></p><label for="reviewBackupsClear">Are applicable backup and retention requirements verified?</label><select id="reviewBackupsClear"><option value="">Choose an answer</option><option value="true">Verified from evidence</option><option value="false">Not verified</option><option value="unknown">I do not know — technical help needed</option></select>
+<label><input id="expiryConfirm" type="checkbox">I authorize permanent removal of this exact eligible approval record once.</label><button id="expireReview" disabled>Remove this approval once</button></section>
+<section aria-labelledby="outcomeHeading"><h2 id="outcomeHeading">Outcome and journal entry</h2>
+<p id="actionReceipt" role="status" aria-live="polite">No cleanup action has been submitted.</p>
+<p id="receiptReference"></p><button id="reconcileCase" disabled>Check the outcome once — no action resubmitted</button>
+<p class="small">If an outcome is unclear, stop. This status-only check does not repeat the action. Any further attempt needs its own reviewed decision.</p>
+<label for="operatorName">Actual operator's name or initials</label><input id="operatorName" maxlength="80" autocomplete="off"><button id="copyJournal" disabled>Copy journal entry</button>
+<label for="journalText">Entry for the existing restricted operations journal</label><textarea id="journalText" readonly rows="6"></textarea><p id="journalStatus" role="status">The journal is not updated automatically.</p></section>
+<p class="small">J Garcia · responsible operator / Joann Pollard · backup. Weekday checks: 9 AM and 4 PM Eastern.</p>
+</main><script src="login-config.js" defer></script><script src="login.js" defer></script><script src="login-page.js" defer></script><script src="staff-view.js" defer></script><script src="action-client.js" defer></script><script src="action-page.js" defer></script></body></html>

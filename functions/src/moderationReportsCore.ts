@@ -119,8 +119,24 @@ export function coachAiModerationIngestionEnabled(
   environment: Record<string, string | undefined>,
 ) {
   const approvedStagingProject = "sideline-social-staging-2026";
-  const actualProject = environment.GCLOUD_PROJECT || environment.GOOGLE_CLOUD_PROJECT;
-  return actualProject === approvedStagingProject &&
+  const providerProjects = [environment.GCLOUD_PROJECT, environment.GOOGLE_CLOUD_PROJECT]
+    .filter((value): value is string => Boolean(value));
+  // Modern runtimes can supply project identity through Firebase's server
+  // configuration without exposing either legacy project variable. Reject
+  // conflicting claims; request data and the expected-project flag are never
+  // accepted as proof of the runtime's project.
+  if (environment.FIREBASE_CONFIG) {
+    try {
+      const config: unknown = JSON.parse(environment.FIREBASE_CONFIG);
+      if (!config || typeof config !== "object" || Array.isArray(config)
+        || !("projectId" in config) || typeof config.projectId !== "string") return false;
+      providerProjects.push(config.projectId);
+    } catch {
+      return false;
+    }
+  }
+  return providerProjects.length > 0 &&
+    providerProjects.every((value) => value === approvedStagingProject) &&
     environment.MODERATION_EXPECTED_PROJECT_ID === approvedStagingProject &&
     environment.MODERATION_SYSTEM_ENABLED === "true" &&
     environment.MODERATION_REPORTING_V2_ENABLED === "true" &&

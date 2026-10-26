@@ -6,14 +6,14 @@ const root = path.resolve(__dirname, "..");
 const read = (...segments) => fs.readFileSync(path.join(root, ...segments), "utf8");
 
 const gameState = read("src", "game", "triviaBlitz", "gameState.ts");
-const scoring = read("src", "game", "triviaBlitz", "scoring.ts");
-const turnManager = read("src", "game", "triviaBlitz", "turnManager.ts");
+
+
 const types = read("src", "game", "triviaBlitz", "types.ts");
 const joinCodeService = read("services", "gameJoinCodeService.ts");
 const gameLobby = read("hooks", "useGameLobby.ts");
 const triviaFunctions = read("functions", "src", "triviaGame.ts");
 
-const mutationModules = [gameState, scoring, turnManager].join("\n");
+const mutationModules = gameState;
 assert.doesNotMatch(
   mutationModules,
   /\b(?:setDoc|addDoc|updateDoc|deleteDoc|writeBatch|runTransaction|serverTimestamp|increment|arrayUnion)\b/,
@@ -90,19 +90,6 @@ assert.doesNotMatch(
   /\bselectedQuestions\b|\bselectionRevealed\b/,
   "The public session must not retain the legacy answer-bearing question array or reveal flag.",
 );
-
-assert.match(
-  scoring,
-  /export \{ submitTriviaAnswer \} from "\.\/gameState"/,
-  "The scoring module must expose only the server-authoritative submission boundary.",
-);
-assert.doesNotMatch(scoring, /firebase\/firestore/, "The scoring module must not import Firestore.");
-assert.match(
-  turnManager,
-  /export \{ advanceTriviaGameSession \} from "\.\/gameState"/,
-  "The turn manager must expose only the server-authoritative advancement boundary.",
-);
-assert.doesNotMatch(turnManager, /firebase\/firestore/, "The turn manager must not import Firestore.");
 
 assert.match(
   joinCodeService,

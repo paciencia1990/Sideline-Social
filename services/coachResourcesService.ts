@@ -19,12 +19,15 @@ import type {
   SavedCoachHelpResult,
 } from "@/types/coachResources";
 import { CoachAiRequestError, classifyCoachAiRequestError } from "@/utils/coachAiErrors";
+import { COACH_AI_BILLING_ENABLED, notifyCoachAiUsageChanged } from './coachAiBillingService';
+import type { CoachAiEntitlementSource } from '@/utils/coachAiAccess';
 
 const CHECKLIST_KEY_PREFIX = "sidelineSocial.coachChecklistProgress.v1";
 const GENERATED_HELP_KEY_PREFIX = "sidelineSocial.coachGeneratedHelp.v1";
 const SAVED_HELP_KEY_PREFIX = "sidelineSocial.coachSavedHelp.v1";
 const PLACEHOLDER_PATTERN = /\{([a-zA-Z][a-zA-Z0-9]*)\}/g;
-const COACH_AI_DISCLOSURE_KEY_PREFIX = "sidelineSocial.coachAiDisclosure.v1";
+// The named-provider disclosure requires a fresh decision from each app account.
+const COACH_AI_DISCLOSURE_KEY_PREFIX = "sidelineSocial.coachAiDisclosure.v2";
 const COACH_HELP_RESULT_TYPES = new Set<CoachHelpResult["resultType"]>([
   "practice_plan", "message", "talking_points", "step_by_step", "checklist",
 ]);
@@ -127,18 +130,20 @@ export function getDailyCoachProTip(date = new Date(), tips = getCoachProTips())
   return tips[getLocalCalendarDayNumber(date) % tips.length];
 }
 
-export async function generateCoachResourceHelp(request: CoachHelpRequest) {
-  if (!FEATURE_FLAGS.coachAiEnabled) throw new CoachAiRequestError("access");
-  const callable = httpsCallable<CoachHelpRequest, CoachHelpResult>(functions, "generateCoachResourceHelp", { timeout: 65_000 });
+export async function generateCoachResourceHelp(request: CoachHelpRequest, source: CoachAiEntitlementSource = 'tester-claim') {
+  if (source === null || (source === 'paid' ? !COACH_AI_BILLING_ENABLED : !FEATURE_FLAGS.coachAiEnabled)) throw new CoachAiRequestError("access");
+  const callable = httpsCallable<CoachHelpRequest, CoachHelpResult>(functions, source === 'paid' ? 'generatePaidCoachResourceHelp' : 'generateCoachResourceHelp', { timeout: 65_000 });
   try {
     return (await callable(request)).data;
   } catch (error) {
     throw classifyCoachAiRequestError(error);
+  } finally {
+    if (source === 'paid') notifyCoachAiUsageChanged();
   }
 }
 
 export async function submitCoachAiFeedback(input: CoachAiFeedbackInput) {
-  if (!FEATURE_FLAGS.coachAiEnabled) throw new CoachAiRequestError("access");
+  if (!FEATURE_FLAGS.coachAiEnabled && !COACH_AI_BILLING_ENABLED) throw new CoachAiRequestError("access");
   const callable = httpsCallable<CoachAiFeedbackInput, {
     moderationReceiptNumber: string | null;
     saved: true;

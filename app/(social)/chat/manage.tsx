@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Check, Shield, Star, UserPlus, Users } from "lucide-react-native";
 import { router, useLocalSearchParams } from "expo-router";
@@ -42,22 +42,36 @@ export default function FriendChatManageScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
+  const scope = JSON.stringify([user?.uid, conversationId]);
+  const currentScope = useRef(scope); currentScope.current = scope;
+  const loadVersion = useRef(0);
+  const [loadedScope, setLoadedScope] = useState("");
 
   const load = useCallback(async () => {
-    if (!conversationId) { setLoading(false); return; }
+    if (currentScope.current !== scope) return;
+    const version = ++loadVersion.current;
+    const isCurrent = () => version === loadVersion.current && currentScope.current === scope;
+    if (!conversationId || !user?.uid) {
+      setAccess(null); setFriends([]); setSelectedInviteIds([]);
+      setErrorKey("chat.noAccess"); setLoadedScope(scope); setLoading(false); return;
+    }
     try {
       const nextAccess = await getFriendConversationAccess(conversationId);
-      if (!nextAccess || nextAccess.member.status !== "active") { setErrorKey("chat.noAccess"); return; }
+      if (!isCurrent()) return;
+      if (!nextAccess || nextAccess.member.status !== "active") { setAccess(null); setFriends([]); setSelectedInviteIds([]); setErrorKey("chat.noAccess"); return; }
       const [nextMembers, nextFriends] = await Promise.all([
         getFriendConversationMembers(conversationId),
         nextAccess.conversation.conversationType === "group" && user?.uid ? getFriends(user.uid) : Promise.resolve([]),
       ]);
+      if (!isCurrent()) return;
       setAccess(nextAccess); setMembers(nextMembers); setFriends(nextFriends);
+      setSelectedInviteIds([]);
       setGroupName(nextAccess.conversation.groupName ?? ""); setErrorKey(null);
-    } catch (error) { setErrorKey(errorTranslationKey(mapFriendChatError(error))); }
-    finally { setLoading(false); }
-  }, [conversationId, user?.uid]);
-  useEffect(() => { void load(); }, [load]);
+    } catch (error) {
+      if (isCurrent()) { setAccess(null); setFriends([]); setSelectedInviteIds([]); setErrorKey(errorTranslationKey(mapFriendChatError(error))); }
+    } finally { if (isCurrent()) { setLoadedScope(scope); setLoading(false); } }
+  }, [conversationId, scope, user?.uid]);
+  useEffect(() => { void load(); return () => { loadVersion.current += 1; }; }, [load]);
 
   const run = async (key: string, action: () => Promise<unknown>, reload = true) => {
     if (busy) return;
@@ -95,7 +109,7 @@ export default function FriendChatManageScreen() {
     { text: t("chat.transfer"), onPress: () => conversationId && void run(`transfer:${member.userId}`, () => transferFriendGroupOwnership(conversationId, member.userId)) },
   ]);
 
-  if (loading) return <ScreenWrapper><View style={styles.center}><ActivityIndicator color={Colors.primary} /><Text style={styles.body}>{t("common.loading")}</Text></View></ScreenWrapper>;
+  if (loading || loadedScope !== scope) return <ScreenWrapper><View style={styles.center}><ActivityIndicator color={Colors.primary} /><Text style={styles.body}>{t("common.loading")}</Text></View></ScreenWrapper>;
   if (!access) return <ScreenWrapper><View style={styles.center}><Text style={styles.title}>{t("chat.cannotOpenTitle")}</Text><Text style={styles.body}>{t(errorKey ?? "chat.noAccess")}</Text></View></ScreenWrapper>;
 
   const directFriendId = isGroup ? null : access.conversation.activeParticipantIds.find((id) => id !== user?.uid) ?? null;

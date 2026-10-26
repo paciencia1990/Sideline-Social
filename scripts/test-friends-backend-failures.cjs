@@ -130,7 +130,9 @@ assert.equal(finalCatch.includes("return emptyFriendRequestGroups()"), false);
 const friendsScreen = read("app", "(tabs)", "friends.tsx");
 assert.ok(friendsScreen.includes("setLoadError(t(\"friends.errorBody\"))"));
 assert.ok(friendsScreen.includes("onPress={onRefresh}"));
-assert.ok(friendsScreen.includes("}, 350);"), "parent search remains debounced");
-assert.ok(friendsScreen.includes("searchRequestSequence.current !== requestSequence"));
+const parentSearchHook = read("hooks", "useParentSearch.ts");
+assert.ok(parentSearchHook.includes("PARENT_SEARCH_DEBOUNCE_MS = 600"), "parent search remains debounced");
+assert.ok(parentSearchHook.includes("}, PARENT_SEARCH_DEBOUNCE_MS);"));
+assert.ok(parentSearchHook.includes("sequence.current === requestSequence"));
 
 console.log("Friends backend index, callable error normalization, safe diagnostics, explicit region, retry propagation, debounce, and stale-response tests passed.");

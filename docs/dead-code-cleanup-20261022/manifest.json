@@ -1,0 +1,1862 @@
+{
+  "date": "2026-10-22",
+  "scope": "Confirmed dead client code and stale test/config references; compatibility routes preserved",
+  "removedFiles": [
+    "src/game/bombLogic.ts",
+    "src/game/triviaBlitz/questionHistory.ts",
+    "src/game/triviaBlitz/questionSelection.ts",
+    "src/game/triviaBlitz/scoring.ts",
+    "src/game/triviaBlitz/turnManager.ts",
+    "services/contentModerationService.ts",
+    "services/homeFeedService.ts",
+    "hooks/useActiveSquadGameSession.ts",
+    "utils/activeSessionLoadState.ts",
+    "utils/teamAnnouncementCore.ts",
+    "components/Header.tsx",
+    "components/SectionHeader.tsx",
+    "components/SquadPermissionCard.tsx",
+    "hooks/useColorScheme.ts",
+    "components/GluestackInitializer.tsx",
+    "components/ui/accordion/index.tsx",
+    "components/ui/actionsheet/index.tsx",
+    "components/ui/alert/index.tsx",
+    "components/ui/alert-dialog/index.tsx",
+    "components/ui/avatar/index.tsx",
+    "components/ui/badge/index.tsx",
+    "components/ui/box/index.tsx",
+    "components/ui/box/index.web.tsx",
+    "components/ui/box/styles.tsx",
+    "components/ui/button/index.tsx",
+    "components/ui/card/index.tsx",
+    "components/ui/card/index.web.tsx",
+    "components/ui/card/styles.tsx",
+    "components/ui/center/index.tsx",
+    "components/ui/center/index.web.tsx",
+    "components/ui/center/styles.tsx",
+    "components/ui/checkbox/index.tsx",
+    "components/ui/divider/index.tsx",
+    "components/ui/drawer/index.tsx",
+    "components/ui/fab/index.tsx",
+    "components/ui/flat-list/index.tsx",
+    "components/ui/form-control/index.tsx",
+    "components/ui/gluestack-ui-provider/config.ts",
+    "components/ui/gluestack-ui-provider/index.tsx",
+    "components/ui/gluestack-ui-provider/index.web.tsx",
+    "components/ui/gluestack-ui-provider/script.ts",
+    "components/ui/grid/index.tsx",
+    "components/ui/grid/index.web.tsx",
+    "components/ui/grid/styles.tsx",
+    "components/ui/heading/index.tsx",
+    "components/ui/heading/index.web.tsx",
+    "components/ui/heading/styles.tsx",
+    "components/ui/hstack/index.tsx",
+    "components/ui/hstack/index.web.tsx",
+    "components/ui/hstack/styles.tsx",
+    "components/ui/icon/index.tsx",
+    "components/ui/icon/index.web.tsx",
+    "components/ui/image/index.tsx",
+    "components/ui/image-background/index.tsx",
+    "components/ui/input/index.tsx",
+    "components/ui/input-accessory-view/index.tsx",
+    "components/ui/keyboard-avoiding-view/index.tsx",
+    "components/ui/link/index.tsx",
+    "components/ui/menu/index.tsx",
+    "components/ui/modal/index.tsx",
+    "components/ui/popover/index.tsx",
+    "components/ui/portal/index.tsx",
+    "components/ui/pressable/index.tsx",
+    "components/ui/progress/index.tsx",
+    "components/ui/radio/index.tsx",
+    "components/ui/refresh-control/index.tsx",
+    "components/ui/safe-area-view/index.tsx",
+    "components/ui/scroll-view/index.tsx",
+    "components/ui/section-list/index.tsx",
+    "components/ui/select/index.tsx",
+    "components/ui/select/select-actionsheet.tsx",
+    "components/ui/skeleton/index.tsx",
+    "components/ui/skeleton/index.web.tsx",
+    "components/ui/skeleton/styles.tsx",
+    "components/ui/slider/index.tsx",
+    "components/ui/spinner/index.tsx",
+    "components/ui/status-bar/index.tsx",
+    "components/ui/switch/index.tsx",
+    "components/ui/table/index.tsx",
+    "components/ui/table/index.web.tsx",
+    "components/ui/table/styles.tsx",
+    "components/ui/text/index.tsx",
+    "components/ui/text/index.web.tsx",
+    "components/ui/text/styles.tsx",
+    "components/ui/textarea/index.tsx",
+    "components/ui/toast/index.tsx",
+    "components/ui/tooltip/index.tsx",
+    "components/ui/utils/use-break-point-value.ts",
+    "components/ui/view/index.tsx",
+    "components/ui/virtualized-list/index.tsx",
+    "components/ui/vstack/index.tsx",
+    "components/ui/vstack/index.web.tsx",
+    "components/ui/vstack/styles.tsx",
+    "components/colors/dark.ts",
+    "components/colors/light.ts"
+  ],
+  "removedSourceBytes": 376821,
+  "retainedFiles": [
+    {
+      "path": "app/(auth)/.gitignore",
+      "sha256": "ec1781512dc05b1564791e2914734df16ef951c122a6caa1cc9c77f9a458d0b7"
+    },
+    {
+      "path": "app/(auth)/choose-start-mode.tsx",
+      "sha256": "a35963aee34b8d5d637b3e308c0d70f4fac26ef5606e9535dc99914c596e5b8c"
+    },
+    {
+      "path": "app/(auth)/complete-account.tsx",
+      "sha256": "27e1f1943fc71fc41791cda0d10a924804e9781495020367befcbe40fd13fef8"
+    },
+    {
+      "path": "app/(auth)/email-login.tsx",
+      "sha256": "a32b78882e23fc23e33e54a443c668dea1f636c0299415615af7a380b8e8b4ed"
+    },
+    {
+      "path": "app/(auth)/forgot-password-success.tsx",
+      "sha256": "0ac15de6d27ac6eccdeb4be4c34517a998d2a57d24b1a2522fccd16d90b55ee7"
+    },
+    {
+      "path": "app/(auth)/forgot-password.tsx",
+      "sha256": "4d975970baec93f8df8a2d55e19d12644a261aac31ad0188ff654a17790fbc5a"
+    },
+    {
+      "path": "app/(auth)/onboarding.tsx",
+      "sha256": "65dd10700ce60d322bcb5f09b683d5f8ad872482d196e7d3dd8623e1acc2d42f"
+    },
+    {
+      "path": "app/(auth)/sign-in.tsx",
+      "sha256": "0eb2efdd1a6db0aaa266fc285918d0c5de6793c2dca0e9d990a5ebee1e8b3e3d"
+    },
+    {
+      "path": "app/(auth)/sign-up.tsx",
+      "sha256": "9860c33cc65f73bcd240aafd2b4dad06f29a346cb7cf71a81a22470a255fb612"
+    },
+    {
+      "path": "app/(auth)/_layout.tsx",
+      "sha256": "ea2228e355c45d6b063faafb4caf4a666b62f519825c4e2158d63f7ad66a8e42"
+    },
+    {
+      "path": "app/(games)/bomb-defusal/Lobby.tsx",
+      "sha256": "0e6c18299fd82956d35a782a6a37c670083b62bf55c618d9451154cd7f2986ef"
+    },
+    {
+      "path": "app/(games)/bomb-defusal.tsx",
+      "sha256": "445512e168a0c13778d4921630ca38d37bb03d2cb07a9360f6e6a0f24d87c01b"
+    },
+    {
+      "path": "app/(games)/lobbies.tsx",
+      "sha256": "6ac162edec6b2b0573ea62d0f06f0216408cf3fa0e79c03ef2994aef01daef44"
+    },
+    {
+      "path": "app/(games)/lobby.tsx",
+      "sha256": "27d8079c88cbf0958320f0fb03aedc2083f4b313ed6349517b2deb82937380df"
+    },
+    {
+      "path": "app/(games)/results.tsx",
+      "sha256": "1560617b62209dadcecb76fddbdbe8ff1713aee6eb9c8eb0f4a7700f9c574a1e"
+    },
+    {
+      "path": "app/(games)/spot-difference.tsx",
+      "sha256": "ca13d08f522cf8c8726f87c95f9514845eddcf1a382e79f8bf7144160a5a23d1"
+    },
+    {
+      "path": "app/(games)/spot-the-difference/Lobby.tsx",
+      "sha256": "d97eb253911bb7c3f997566130f1795e3c8ca0d6931c93e588316d687bdea203"
+    },
+    {
+      "path": "app/(games)/trivia-blitz/Lobby.tsx",
+      "sha256": "1ab54b901d964e4fa64207c34b326097f173ba159e4245bf81dfefadff7863fb"
+    },
+    {
+      "path": "app/(games)/trivia-blitz.tsx",
+      "sha256": "09a2f3b41936c90cb0ce9222d39cea42f21bf83afd891677941e7a63db27e1b4"
+    },
+    {
+      "path": "app/(games)/_layout.tsx",
+      "sha256": "54ebedeb8a90a1943827398a6a0ea5b0395a42041a7a0105fab31acf83e22f86"
+    },
+    {
+      "path": "app/(social)/chat/index.tsx",
+      "sha256": "7eb42f62dd911346ecf528e551f24dc85b539c565c9008888cdb0fd71b958956"
+    },
+    {
+      "path": "app/(social)/chat/invitation/[conversationId].tsx",
+      "sha256": "3322b3f138c91b9fbfcd6e5da630f01541a25d960196405a479218d75eb3c2d4"
+    },
+    {
+      "path": "app/(social)/chat/manage.tsx",
+      "sha256": "6281c3c4eec05c7c595988022b78c22a43a64f32ee1db67d7e2791339c04af7b"
+    },
+    {
+      "path": "app/(social)/chat/new.tsx",
+      "sha256": "b993ab58ef9a18ee2cd3e4cae188e6e21a5b14f7cb25c821904103fedba27747"
+    },
+    {
+      "path": "app/(social)/chat/starred.tsx",
+      "sha256": "76c5458a6e5b4b87b06087f3335fdb9e6814991d6729e746a0446760d728de5d"
+    },
+    {
+      "path": "app/(social)/chat/[chatId].tsx",
+      "sha256": "2e0875118d1062f5f1ddce4b96589eb3dc6fd910530c996aea8a213f098a8f90"
+    },
+    {
+      "path": "app/(social)/squad-detail.tsx",
+      "sha256": "3900010d070bd8c45d49f0ec7893d281338a3aed43c0a2d401968d7c5600fb88"
+    },
+    {
+      "path": "app/(social)/_layout.tsx",
+      "sha256": "692e4e3bf2bfd45343a1eb46870801a88a39e013eb360298474cb8e575c710a1"
+    },
+    {
+      "path": "app/(tabs)/friends.tsx",
+      "sha256": "e9fec1880460a98b489f5f242d2c4fdc42b3b6fd3b1ed388d71ebb6a39645375"
+    },
+    {
+      "path": "app/(tabs)/games.tsx",
+      "sha256": "403738c8b8bc62be156ecc959cd0e0c9558a03928fcc945c0b4505e576441397"
+    },
+    {
+      "path": "app/(tabs)/index.tsx",
+      "sha256": "f79e7b3098048e392a0e9871fe7ffaa32b787ddd46474b73411f1b8118127ccd"
+    },
+    {
+      "path": "app/(tabs)/profile.tsx",
+      "sha256": "dacdb9a0de7d1befabd4207a455474a158df13cd552a12592418d613efbc170e"
+    },
+    {
+      "path": "app/(tabs)/squad.tsx",
+      "sha256": "f26681689d4317e5f92bc00d15a5879edcfaa494d654f81453656b2c4d3fd254"
+    },
+    {
+      "path": "app/(tabs)/_layout.tsx",
+      "sha256": "c3ad06537bf889bfb0f3f7a3246796739c870afa20d64c00a31c7ec362977d23"
+    },
+    {
+      "path": "app/+not-found.tsx",
+      "sha256": "a248a7ad7d11028ea426af6b4bfd1c9375d19f7f4b4f00043240f97641db06df"
+    },
+    {
+      "path": "app/coach/create-team.tsx",
+      "sha256": "35ac35ea4baa8dce4419ffd9b8ddbc11f2136587da51ff76d20ace0fb925a51f"
+    },
+    {
+      "path": "app/coach/index.tsx",
+      "sha256": "9e1003695d260b04302496cfec20e40a718ea7a4fe195300c847529f39fade2b"
+    },
+    {
+      "path": "app/coach/messages/[announcementId].tsx",
+      "sha256": "fd8749136b590a337662315e137f51988c825303affa3aa6aa24e3300a31bda1"
+    },
+    {
+      "path": "app/coach/messages.tsx",
+      "sha256": "8aeb4ab39150206c70d526f6344faff1849042e85ecc6d346414518c709b6ef8"
+    },
+    {
+      "path": "app/coach/resources/checklists/index.tsx",
+      "sha256": "6910c6592d3c8e694ea7e53a31a23a6c0dc3936e33c1157c843c655e8d378832"
+    },
+    {
+      "path": "app/coach/resources/checklists/[checklistId].tsx",
+      "sha256": "02cb48d4178ff6d3d3b7b08e454cd4f6f5f95ab5ff9f3733b01a84f3cfa7a3b9"
+    },
+    {
+      "path": "app/coach/resources/communication/index.tsx",
+      "sha256": "d4401ba37e314ba6066ccd745a6630194fba7fd8bbb35ac658a64917f149e2da"
+    },
+    {
+      "path": "app/coach/resources/communication/[templateId].tsx",
+      "sha256": "c4aeaddff77cce890a99b91d1c52d149513cb238ab7b91856d36c68e49274cdf"
+    },
+    {
+      "path": "app/coach/resources/help/index.tsx",
+      "sha256": "e1c59cda5dc9e3021e19943894e5373b03b2b7329ecac88d1b87ab23cae1d594"
+    },
+    {
+      "path": "app/coach/resources/help/result.tsx",
+      "sha256": "6d5427217aab6698f848f47cb6226263f3100860e26ef4ff59280b940adf6c86"
+    },
+    {
+      "path": "app/coach/resources/index.tsx",
+      "sha256": "b4f25be84c3dfb16e96bbcaa04e7c86793a74193328080a80ed55b21defdd4d3"
+    },
+    {
+      "path": "app/coach/resources/message-parent/[templateId].tsx",
+      "sha256": "a69f59f44dd1aad0ad21778c5e6b9827bf9be5b6b6349aacac7acb07ec28f1d6"
+    },
+    {
+      "path": "app/coach/resources/subscription.tsx",
+      "sha256": "2ab409242bed442a636f1c4c457e7f90416cd1d86f8ea91a0fdff399adcac0d3"
+    },
+    {
+      "path": "app/coach/resources/tips/index.tsx",
+      "sha256": "f1ec877626fcea14a21169b2715c3e7404ae75270ad7cdee65e9f446e66782c6"
+    },
+    {
+      "path": "app/coach/resources/_layout.tsx",
+      "sha256": "917b09ef5ffc5a0b68b328a525d501387cf5741d6475cff7c179800ed3cdc529"
+    },
+    {
+      "path": "app/coach/team-messages/index.tsx",
+      "sha256": "95ae3179cadab41c72899bd63e419661f40a273033ebb534fbae1c3ae1bb17ba"
+    },
+    {
+      "path": "app/coach/team-messages/[conversationId].tsx",
+      "sha256": "1e6590613e0958510301089b791d1edbead3cbd588a22aa3d640a6ac20b54f94"
+    },
+    {
+      "path": "app/coach/team.tsx",
+      "sha256": "d9a46c183384feeb1e16468ff6501052d702cf3df96007608e57fb3002f181b7"
+    },
+    {
+      "path": "app/coach/_layout.tsx",
+      "sha256": "f2c067abb1e25ad90a66d6a3dea732d85b20e68a7b2a90b2c593a82185295c7d"
+    },
+    {
+      "path": "app/games/bomb-defusal/play.tsx",
+      "sha256": "4b669da700407a635f39c23f2abcd4364ffc2c3fbe36bba709f85be74d5949a7"
+    },
+    {
+      "path": "app/games/spot-the-difference/play.tsx",
+      "sha256": "5b32a078004462d452f76c2316a16bda93d790c2c246118958a767003f176519"
+    },
+    {
+      "path": "app/games/trivia-blitz/play.tsx",
+      "sha256": "09a2f3b41936c90cb0ce9222d39cea42f21bf83afd891677941e7a63db27e1b4"
+    },
+    {
+      "path": "app/games/_layout.tsx",
+      "sha256": "324e2491b146a7644786e62fb316a142187b863c86f24ff9c931cd74aada820f"
+    },
+    {
+      "path": "app/index.tsx",
+      "sha256": "170e704e9b75077545f908dc37fe938a6202e58bd3063d3499601b007cec2c48"
+    },
+    {
+      "path": "app/leaderboard.tsx",
+      "sha256": "a7745de408e19c33b81823933abff06155ad6dcef875e4b9608999ff265df034"
+    },
+    {
+      "path": "app/notifications.tsx",
+      "sha256": "c16a1c460ef3982aa59563b83cfba60ea262f84925acf7ef5e98e610226cc1e0"
+    },
+    {
+      "path": "app/settings/blocked-users.tsx",
+      "sha256": "074873a3808d27d29c2b850bd57e74d16fa7c03ae9970e96c72c3be1b383b6fe"
+    },
+    {
+      "path": "app/settings/delete-account.tsx",
+      "sha256": "82b076060d6384f0cd4bba1776d416a264e62280f6988db21b47363dc397e497"
+    },
+    {
+      "path": "app/settings/index.tsx",
+      "sha256": "95656a886a5ce0d38f7e7eb0a2d6a517edb78d60f0182111dbd0a4781bc42f69"
+    },
+    {
+      "path": "app/settings/legal.tsx",
+      "sha256": "a6770e2f7f29a0491208034f361d350643ed6a0b687554fc17b3d154d9ba6932"
+    },
+    {
+      "path": "app/settings/notices.tsx",
+      "sha256": "1e3c3459f9f92655d4ebde2d40bd7d2d36f88d953ba81f37475ccfde70ab742e"
+    },
+    {
+      "path": "app/settings/safety.tsx",
+      "sha256": "59eb413df70df967873dd7ed46389b572e215c9862b102748230a273eedd0124"
+    },
+    {
+      "path": "app/settings/sign-in-methods.tsx",
+      "sha256": "7db1e85bcca5049068d1accf66d6a8245cdee06df00a504eaa4e84e448f6a934"
+    },
+    {
+      "path": "app/splash.tsx",
+      "sha256": "d95f2ad37599b252a15a7dbb02c0e277e02336d97259c21ca33483a4592c71fb"
+    },
+    {
+      "path": "app/teams/index.tsx",
+      "sha256": "b001003c90a55ccf1c2a76c80301013224226e0288a639c464a98052bb06a6ba"
+    },
+    {
+      "path": "app/teams/join.tsx",
+      "sha256": "58a6a67c256f2b8023d3a6af674adc488892efd5233e0f8e3743c969b82a0c2f"
+    },
+    {
+      "path": "app/teams/[teamId]/announcements/[announcementId].tsx",
+      "sha256": "0b979b71fb668161f6195fbf51af9a04d3c796b439318cba4cef54637a7a6291"
+    },
+    {
+      "path": "app/teams/[teamId]/children.tsx",
+      "sha256": "465ca2892ceafe1a12c7910c726b37f04c1e7f88432dbc81219538231b87adc0"
+    },
+    {
+      "path": "app/teams/[teamId]/index.tsx",
+      "sha256": "7ee8f35209b880ec40df6b52da307061d6473995c459b23aa5cf28c4bb3b1ddb"
+    },
+    {
+      "path": "app/teams/[teamId]/messages/[conversationId].tsx",
+      "sha256": "a30193361589620b02bd4f8f5eca9fa6cce38073998e4d54a376386a6e93eea7"
+    },
+    {
+      "path": "app/teams/[teamId]/schedule/add.tsx",
+      "sha256": "8d5bbf813125c90cf341718445bdc248592618ff0174088f558d74e294dcb8b1"
+    },
+    {
+      "path": "app/teams/[teamId]/schedule/connect.tsx",
+      "sha256": "4016b3393078b72d0fc4e6cfd0c59c7aebe5b75e1293dd480f1dfa1e42a1ad01"
+    },
+    {
+      "path": "app/teams/[teamId]/schedule/edit.tsx",
+      "sha256": "76c8f7257d580ad09d75cfe8f1fb8447771347dd2fc4a2004aa7208d2ec05b6b"
+    },
+    {
+      "path": "app/teams/[teamId]/schedule/import-ics.tsx",
+      "sha256": "0e4712918a273ff0137a317b934c09fddf1497f3afa5f2e7373115e4555b1e4a"
+    },
+    {
+      "path": "app/teams/[teamId]/schedule/import.tsx",
+      "sha256": "f2a5d9eec54a6f0643dd8fc215d57d661fd8cdfbc54e570770ca6ab3b92888f2"
+    },
+    {
+      "path": "app/teams/[teamId]/schedule/index.tsx",
+      "sha256": "fdb15443835b5c5e731b8a6968c23dc5a698b58d9c78113a4078b66d78da0a29"
+    },
+    {
+      "path": "app/teams/[teamId]/schedule/subscribe.tsx",
+      "sha256": "758e73b3d174e25b7e6977caad7cdf44cc35b315f61f3526c3e3cc850f3746ea"
+    },
+    {
+      "path": "app/teams/[teamId]/schedule/upload.tsx",
+      "sha256": "6defa0c4a6fa537532fe8d73edee641f4ebcdc8bf51e62af0d3b56ae1b493ed1"
+    },
+    {
+      "path": "app/teams/[teamId]/schedule/[eventId].tsx",
+      "sha256": "cb1c7b5f8660d1a2c2451486a142ed8ed703210930991b678675802907d64b49"
+    },
+    {
+      "path": "app/teams/_layout.tsx",
+      "sha256": "4ded46c98fefa4899cf4912d7697eb082453649cd948460bf50f9cfe3422dd16"
+    },
+    {
+      "path": "app/_layout.tsx",
+      "sha256": "790de869af507764214d0592b68e5c5307fdbd917c02900e4f68fcfbe0df0126"
+    },
+    {
+      "path": "components/AccountStandingBoundary.tsx",
+      "sha256": "25287cc865cd6486c799f90ab5251a9f1d28998ed46a08edde355c84f3e26df7"
+    },
+    {
+      "path": "components/AnnouncementBody.tsx",
+      "sha256": "1098b76248140e31a7a8831f6c3235d5be69351b44d7d04977aa0c416e41ce52"
+    },
+    {
+      "path": "components/AuthenticatedRouteGate.tsx",
+      "sha256": "b71f50ac8857a9ca6af5ea7f02c68245c7bf1a7ea97d0d4195faa12f275e888d"
+    },
+    {
+      "path": "components/Button.tsx",
+      "sha256": "33a2e0fb378dd66dc5e21e8b3acf45482381387eed7b41762d82c6db2cf289ee"
+    },
+    {
+      "path": "components/Card.tsx",
+      "sha256": "cfa8cef2722e7c8bf55ce5b5f71e785de5ad22fcb769b1954dfb956ee5652128"
+    },
+    {
+      "path": "components/ChildProfilePicker.tsx",
+      "sha256": "76be213313997ae292212856ac998c0c65abfa0581f5a8f18e271813d71cb9d6"
+    },
+    {
+      "path": "components/CoachAiBillingSummary.tsx",
+      "sha256": "6c71813c2bc3c88aa50b48bfb4e4f38a5985810789c592263df737a6fb453060"
+    },
+    {
+      "path": "components/CoachAiKeyboardAwareScrollView.tsx",
+      "sha256": "bd46dddced37c7050e1e3402b88e8bff75758d93ef68cd2912f1c83e6182c44f"
+    },
+    {
+      "path": "components/CoachResourceHeader.tsx",
+      "sha256": "8cb4ce4b0f9c06970a536b096d68fa1acf3d3ba06b2656367eb1d5890ef7f67b"
+    },
+    {
+      "path": "components/CoachResourceRow.tsx",
+      "sha256": "155e74974246aeae019909f9e42f0709f4c952f64dae3e793e76d6defd21d107"
+    },
+    {
+      "path": "components/CountdownOverlay.tsx",
+      "sha256": "4d888015dcb62ac54b13060f78130c5b8e356542de8bc1c98923701ec283ba1c"
+    },
+    {
+      "path": "components/CreateSquadSheet.tsx",
+      "sha256": "2f04f50a32604da3aeaaa1646e46d8579e48851f8be327029031dbdafdba32d3"
+    },
+    {
+      "path": "components/ErrorBoundary.tsx",
+      "sha256": "2c2f129e373062481715d339bd2578db9210f8d5688e538b06a1473efed52a4f"
+    },
+    {
+      "path": "components/FederatedAuthButtons.tsx",
+      "sha256": "d32cb9d2b8cb41331e965d3ff55ec52a495181f79f38d8d72cecbb687ccd31aa"
+    },
+    {
+      "path": "components/FriendChatExpandedReactionPicker.tsx",
+      "sha256": "5503ad4b01cf8fb4f7424aca4d93b2fd94ad34397dec0446d171928a3a13df3f"
+    },
+    {
+      "path": "components/FriendChatImageMessage.tsx",
+      "sha256": "756b05b6286ae9606287d711823042c6f7416b1226dc88e5dd004e02ef054573"
+    },
+    {
+      "path": "components/FriendChatImageViewer.tsx",
+      "sha256": "8f22351e83d6e7b6fda1d3da35ffa3c6e677cfc92e428a1bef3e29f45826d8d1"
+    },
+    {
+      "path": "components/FriendChatReactionTray.tsx",
+      "sha256": "767e345b59aae9116598d0e90e970fe265369ff1a486377af71c1289d8ee170e"
+    },
+    {
+      "path": "components/FriendChatSelectionOverflowMenu.tsx",
+      "sha256": "496ccdc620c02f6a607b49dedd4cb4361a8d96547f0a738fdd03d58bd95bce61"
+    },
+    {
+      "path": "components/GameEndActions.tsx",
+      "sha256": "e8c85845d7924bb019441ab072c597828976b32d88a77a97e2a68d23bde2b23e"
+    },
+    {
+      "path": "components/GameRewardSummary.tsx",
+      "sha256": "3a8d557a4c5d61ea90c09916421f7665f1af172e4c049dd35374f3ca975e6b0e"
+    },
+    {
+      "path": "components/IcebreakerCard.tsx",
+      "sha256": "a3ab866daaec476d1f1e910bf609d859bfba44d95c65a91a014db86a1b71699f"
+    },
+    {
+      "path": "components/KeyboardAwareScrollView.tsx",
+      "sha256": "9ac31e7a92dcb73f6172d6c63a45a3b44256cfaa9e8608e0f9c78c9f453cb837"
+    },
+    {
+      "path": "components/LegalAssentControls.tsx",
+      "sha256": "ecf935206a0be197c8f937b968b1e309c3b45850358cb8cfda6616facc104dc6"
+    },
+    {
+      "path": "components/LobbyBase.tsx",
+      "sha256": "e134edb5a7067cc94ec6a5b3ee2779c72ee05dadab3645209b957ce5dab11f9f"
+    },
+    {
+      "path": "components/LocalPerkAdCard.tsx",
+      "sha256": "8de977caecb2141a10bb97cd58bfa323addd14dc4c12996aedc546327ffd56c7"
+    },
+    {
+      "path": "components/MessageActionsModal.tsx",
+      "sha256": "dc139eefb2114002185e0e9426d5a904935a82ba9990f92942f9e6d3c4155d48"
+    },
+    {
+      "path": "components/MessageKeyboardAwareScrollView.tsx",
+      "sha256": "9837892215c0a2520bac22dfbfb39a4881fd9171a82b1d59e335bc237b474d15"
+    },
+    {
+      "path": "components/MessageTranslation.tsx",
+      "sha256": "dbcdb651c26ef9be326047801fd2e5de36abae19dc444957d611c244ee276ca8"
+    },
+    {
+      "path": "components/NestedBackButton.tsx",
+      "sha256": "ea16cb61a9e91c0c023ff3f278508d9747761e710b922c4db622a01a98ead004"
+    },
+    {
+      "path": "components/NotificationCoordinator.tsx",
+      "sha256": "cedd3cbebe865c048270334b8fb87c5e728093057d6331da17bf78398dab79e5"
+    },
+    {
+      "path": "components/OutlineButton.tsx",
+      "sha256": "894077abd6d2186467fdd7726ee024c72fb36e994a7fb46b78c550395b75209a"
+    },
+    {
+      "path": "components/ParentNavigationBar.tsx",
+      "sha256": "b76ecd6ca15b21053ced29b41a8636080397b56284f1f5b230e6bee2b74727d0"
+    },
+    {
+      "path": "components/ParentNavigationShell.tsx",
+      "sha256": "99ea3b69b93054c2ce1aae4abdcf77bd19c1042190f8cd243a7821ef4763e347"
+    },
+    {
+      "path": "components/PasswordInput.tsx",
+      "sha256": "5cb6b6ae2b1e4c0bdabdf9fa8351d90776a678773c6ad2246c7a3da86722aa79"
+    },
+    {
+      "path": "components/PrimaryButton.tsx",
+      "sha256": "ac57b6ea2b2ac68b1a2cb02f05f905aa7e73b00c3d35f95a4cfc67e487723256"
+    },
+    {
+      "path": "components/PrivateTeamMessageThread.tsx",
+      "sha256": "4c78659cacc1dde982452b80d026d2a83f630f7244023096d1490d0200c0c353"
+    },
+    {
+      "path": "components/ScreenWrapper.tsx",
+      "sha256": "8030a6bbf221e467bfdd6cc0a8afc77edb05a4375c0eea79663c3212e74b4071"
+    },
+    {
+      "path": "components/SettingsBackButton.tsx",
+      "sha256": "489113e65b5bacb8fc95787089cc15b4fa0ca000e281c69e01a067c42015ba5b"
+    },
+    {
+      "path": "components/SquadAdministrationCard.tsx",
+      "sha256": "1b1b9932245aac5b844815105b69f51fadd82ddcb021d1adc835a3e40d496d8d"
+    },
+    {
+      "path": "components/SquadCard.tsx",
+      "sha256": "87ea033d8c5fbb4d1af0560ccc42f40e72620fb6b74fe962295756b589709e1d"
+    },
+    {
+      "path": "components/SquadIdentity.tsx",
+      "sha256": "8a557ab287717900af6c050a03a47a33a4745dddc456e48117611e8ef3293025"
+    },
+    {
+      "path": "components/SquadMarker.tsx",
+      "sha256": "e3649cbb63dc97425fa1f28db026342320c2e286835f0d8b73595b3b65713cfe"
+    },
+    {
+      "path": "components/SquadSeasonManager.tsx",
+      "sha256": "64bd7ae371058badb52d4c3e4cc646bd3e740d5a4cea8b2f7b6de7fbc4765144"
+    },
+    {
+      "path": "components/SquadSelector.tsx",
+      "sha256": "ae5bc09ac3cc10aa7bf5402ad3263007317e5fad7b66b246075e903b184c65c8"
+    },
+    {
+      "path": "components/SquadSportPicker.tsx",
+      "sha256": "6a3c37b1e3aa23331a6b0f226b47e98073b247e03cd3920f439cce2ee6b7ed37"
+    },
+    {
+      "path": "components/SquadSportsEditor.tsx",
+      "sha256": "5c6c07929189aaa8bef04f8e98c0085f9d6a3312d1084e6eda64f59135421819"
+    },
+    {
+      "path": "components/SquadWeatherEditor.tsx",
+      "sha256": "6b124f22bf2f8544dc4abf053c63b24d953b44765c29477261b1e2dedb745961"
+    },
+    {
+      "path": "components/SynchronizedGameStartGate.tsx",
+      "sha256": "bc40193f0fc8d1bdae24567493f688ae2e228b165cd35b9788663c10870a59fe"
+    },
+    {
+      "path": "components/TabIcon.tsx",
+      "sha256": "20f30150685525a42cf05651c31850359c3fe4b1edc7f2fe50718cd96a439e64"
+    },
+    {
+      "path": "components/TeamScheduleEventCard.tsx",
+      "sha256": "c40b09aa0ad111828921987299d64e3b782a871b17e3f759761de980e3a5fcc8"
+    },
+    {
+      "path": "components/TeamScheduleEventForm.tsx",
+      "sha256": "9b604892009af98d24b43f8383cc96b2f8bb61a568c853ad04dbbd2587a46033"
+    },
+    {
+      "path": "components/VenueLightningCard.tsx",
+      "sha256": "1d724d7f7575922235060b12307e5cf0ddbd1b6fae2b285c08c84d9ad2d87a10"
+    },
+    {
+      "path": "components/VoiceMemoComposer.tsx",
+      "sha256": "7d6990e78f157c1a7b1a66a344d48d3c49eb7059f7e08b03869d35c3113db959"
+    },
+    {
+      "path": "components/VoiceMemoPlayer.tsx",
+      "sha256": "4d41fd7377716ab900e31261c9f95dbae90810b3fd12cc237898ef32151d50c3"
+    },
+    {
+      "path": "components/WeatherDelayLightningOption.tsx",
+      "sha256": "ee0e5225941fad16b6bd616eef52dc8827415f4d5dfaf8ca2babfc4a3d9bc22f"
+    },
+    {
+      "path": "config/authProviders.ts",
+      "sha256": "0131079d0de1759dc3a35854998cabf8e6857319416d8473a853aede1ba69ca4"
+    },
+    {
+      "path": "config/featureFlags.ts",
+      "sha256": "9be4b3092b3cc90a9d46392f8849eec0504f3502738f61f29bd7ecb77312cb52"
+    },
+    {
+      "path": "config/firebase.ts",
+      "sha256": "5a69ed4172145875cd78a5a813e315c74b0b0a09596f2bda24a0df4ad8c146d1"
+    },
+    {
+      "path": "config/firebaseAppCheck.ts",
+      "sha256": "60be2beb12c6d69830f350d5b7c563c9ab41f754158f57481eb11712010899f9"
+    },
+    {
+      "path": "config/firebaseAppCheckCore.ts",
+      "sha256": "84f29d2358afe1d2e619d0983f141ff5cb69a0fdcdb949444eae574be2a23131"
+    },
+    {
+      "path": "config/firebaseEmulatorPolicy.ts",
+      "sha256": "4622eb780c0ce0bc17db316333c68085a2fd89c49a08ab9c9abe83c9d360a52c"
+    },
+    {
+      "path": "config/firebaseEnvironment.ts",
+      "sha256": "322ef8a9917fc4ec2124249024b7b6429abc1d60b409dd835c8a590c14320231"
+    },
+    {
+      "path": "config/firebaseNativeConfig.js",
+      "sha256": "aec78167d2e510a879b488e068566b5115e6ee05341578bc21d0ae735d43ddaf"
+    },
+    {
+      "path": "config/legal.ts",
+      "sha256": "26026dcc39be53bc897ddc70816fdf7fff543ce711b8099e68cfb53180fb98be"
+    },
+    {
+      "path": "config/legalConfig.d.ts",
+      "sha256": "294010f21ad204362c3682702ad1d9acfc88a4fd51fe15f190c9b2e078b828c0"
+    },
+    {
+      "path": "config/legalConfig.js",
+      "sha256": "3c113f2c182f134cd8f4c741308b02d73d94278e067b1a472a903836439011bd"
+    },
+    {
+      "path": "config/locales/en.json",
+      "sha256": "da662d4c1f64bf9239684904dd255e3d35885584dc11f1dd288a37dbc25b3029"
+    },
+    {
+      "path": "config/locales/es.json",
+      "sha256": "06993fe507cae8ae361673b83b11715ff2de0c9dfd654c48f50222a094da46e1"
+    },
+    {
+      "path": "config/safeUriDecoder.cjs",
+      "sha256": "3dfb4791ec5d4ca07d72df12490b542c5bf8597f98164d186eeb9917ce3612ad"
+    },
+    {
+      "path": "config/thirdPartyNotices.json",
+      "sha256": "4362039dcc1c58e8adc5b022d403311fa1e5878a7a32bb6ba146e34251dc2a04"
+    },
+    {
+      "path": "constants/friendChatImageProfile.ts",
+      "sha256": "2c64e875066fdceaaee51cf9edf47b535fbcc077f07ae80b914bdd84766c9f40"
+    },
+    {
+      "path": "constants/icebreakerQuestions.ts",
+      "sha256": "4f44cc8e58077dd819db823c052f1434e480eff9a6a271260926cc3dba5fa37b"
+    },
+    {
+      "path": "constants/legalAssent.ts",
+      "sha256": "99c943205649c50e3cb152bf8f4938ff8bfdad458715ea73aabe93d03d97c4d1"
+    },
+    {
+      "path": "constants/localPerkPreview.ts",
+      "sha256": "ef03fcb0cb65c71024c43ef42d6f1ca4ba28b741bf045e41fbd3f80f4a1ebf26"
+    },
+    {
+      "path": "constants/mapStyle.ts",
+      "sha256": "fda06d033aba722ac50127be2c39f54eb630c8a36f4cc0b1cc7e7336a22fdf4d"
+    },
+    {
+      "path": "constants/routes.ts",
+      "sha256": "7e38fe014a42968e49939f40261e781cb28524778d447adb0780d36281338e9e"
+    },
+    {
+      "path": "constants/sidelineStars.ts",
+      "sha256": "25f94d866fe046f257f1e376eed89b8cd89039f040d705b5b2ab913b51c266cc"
+    },
+    {
+      "path": "constants/sports.ts",
+      "sha256": "61efe95abcb6155b8296dc090c60834e74de253a765d3969a2d21efd8ece4f67"
+    },
+    {
+      "path": "constants/teamHistoryPagination.ts",
+      "sha256": "083f425009634c4b68be2144a5924e05b1da64faefb14ae56a13b1beade83c6d"
+    },
+    {
+      "path": "constants/teamReplies.ts",
+      "sha256": "e13baff736ff9efa19a1fb0438faa4c2b6bfafbdefb589192a5864ca35202777"
+    },
+    {
+      "path": "constants/teamSchedulePreview.ts",
+      "sha256": "bd7b3038a82c18d5310beba5f32289b926cb80cf05bda551aab0d79ea634e845"
+    },
+    {
+      "path": "constants/theme.ts",
+      "sha256": "6d94c206a89fae42dc8fcfb2cca74973d2ce0f5e352949811a8978398e40537b"
+    },
+    {
+      "path": "constants/venueLightning.ts",
+      "sha256": "7c00416e7aa72ff19b35c2a5b49d147cefa3cdf6578b1d8f589371ad11f89cbd"
+    },
+    {
+      "path": "context/AccountStandingContext.tsx",
+      "sha256": "abbe44e6f9fbc1dc2e16c51221a1b888b82d7b64b6aa0175babba8f37dd64541"
+    },
+    {
+      "path": "context/accountStandingGate.ts",
+      "sha256": "9add3734eadc676a9789d621ffc96a5ce18278e41a7d750dbe949dc6b578dafd"
+    },
+    {
+      "path": "context/accountStandingRefreshCore.ts",
+      "sha256": "669e42a7c0b0d4dbbbcbd2c81770709782ea3e2b140d4bde60d42ffcff7858e6"
+    },
+    {
+      "path": "context/AppContext.tsx",
+      "sha256": "73a8c88d3deef0d7812a1530b154b1d8e9172e84fa48a3ca6cc31170e5d008fa"
+    },
+    {
+      "path": "context/AuthContext.tsx",
+      "sha256": "9b1fcc018270455ccb22b0334b03428bb7cb72dbd82937a33b2e16dfaf2443f8"
+    },
+    {
+      "path": "context/ParentNavigationContext.tsx",
+      "sha256": "06ce3a17b1f5ee6942ebe5a7d777f2048e3beaa9af0bd1ac5719339578676a9d"
+    },
+    {
+      "path": "context/SquadContext.tsx",
+      "sha256": "80f58e92f1513d886aca7b83f92e4107eca09db861b0a8b9d9e43fc4fb8bc8ce"
+    },
+    {
+      "path": "game/BombDefusalScreen.ts",
+      "sha256": "0b7313cfcf40e4433c1af4b8118e991582fedcbcd46c7b2fddb2557ef19d1d65"
+    },
+    {
+      "path": "hooks/useAuthProviderAvailability.ts",
+      "sha256": "e6cf32152c5c6e8c206621194e7e7ffaf93474f0b2b335c619d0dadcf2082302"
+    },
+    {
+      "path": "hooks/useCoachAiAccess.ts",
+      "sha256": "547636704c9421a46065e3edc9c5b241843b486f9b693f5db9ea0799fa52c372"
+    },
+    {
+      "path": "hooks/useCoachAiBilling.ts",
+      "sha256": "bf75376c3daf8a1882202fc16028279c1f262315e6853476ba389951f91caa1c"
+    },
+    {
+      "path": "hooks/useCoachBackNavigation.ts",
+      "sha256": "5b02827eb396699cf06da328e8999c8b9e67215d42d7c0c745c165ebcbf9ae66"
+    },
+    {
+      "path": "hooks/useCoachResourcesAccess.ts",
+      "sha256": "ea6f5ba9dfc9dcb4eb7ce42c430459aca7ae68479e40479df8c9efc091b2289f"
+    },
+    {
+      "path": "hooks/useCoalescedRefresh.ts",
+      "sha256": "14ff4b89819f20fcf9710178f72861959601affab2c2cd88876e0280216474f7"
+    },
+    {
+      "path": "hooks/useFirebaseServerClock.ts",
+      "sha256": "879bddb838da42cc461a52285aac27ed826b9388be446b7ad1cb307f416ec702"
+    },
+    {
+      "path": "hooks/useFocusedGameRefresh.ts",
+      "sha256": "3a78ea10142c064fd6abf452b4624f3ad893e39c6e590fa2f8a974fb6b209cc3"
+    },
+    {
+      "path": "hooks/useGameLobby.ts",
+      "sha256": "db6b08b9d86d350d3d14337fd80a464f4c163fda032aa5cb2fa036652fb36e52"
+    },
+    {
+      "path": "hooks/useGameRoomDeparture.ts",
+      "sha256": "8aca9251a6176a09f692868cc861ec5df59c99f4a8f88ea962a9d63ad15a505c"
+    },
+    {
+      "path": "hooks/useModerationReportReadiness.ts",
+      "sha256": "0a2645de89bfe57604b8437b3b78b237e19742d444b2fe50f8e43ba9ad3ba36e"
+    },
+    {
+      "path": "hooks/useNavigationKeyboardVisible.ts",
+      "sha256": "ec8536192792de5e2ad8e08da1cd5cd17a6390c4515e584578a7d2c487310bcf"
+    },
+    {
+      "path": "hooks/usePrivateTeamReadAcknowledgement.ts",
+      "sha256": "e0038a1f143f1f1f574cba84f5d69b5e73a697ff15f019bbe4910c4f57e9b54e"
+    },
+    {
+      "path": "hooks/useSquadGameLobbies.ts",
+      "sha256": "027e9dc0462b93c712b42bf630f934f80b1c86f0f220465036bfdde5706cf3b2"
+    },
+    {
+      "path": "hooks/useSquadWeather.ts",
+      "sha256": "0a12504d136da1f18e7213fb01b14ba0cfb4b2bf61626e4174873ce42d8280c6"
+    },
+    {
+      "path": "i18n/index.ts",
+      "sha256": "d73c371edd59cf13113f23432fe88b9acfd1739b5aa9cf74bfb6a2738d60f56a"
+    },
+    {
+      "path": "i18n/polyfills.ts",
+      "sha256": "e1c741bb91fd708fc1f5e338dad981668ccdb7d00f9a97774795d5870fbc6812"
+    },
+    {
+      "path": "services/accountService.ts",
+      "sha256": "3ddc75da8cef31d145f74947c8e3d795b844863120a739a0b31610a1f9fd3717"
+    },
+    {
+      "path": "services/accountStandingService.ts",
+      "sha256": "f0d87df33b1e342f7dc1286322652f755b447f6d4eb482d8f044418edd4403f2"
+    },
+    {
+      "path": "services/authProfileService.ts",
+      "sha256": "795afc442b8c1ab5a050a3ef0d15ac1d46cd3033e666b06a731d5fcfe72d09e6"
+    },
+    {
+      "path": "services/chatService.ts",
+      "sha256": "eb4a12adb8d2fdb5f75bbea7e7062b95569f331b3e63bf4bafbf2eac83524a6c"
+    },
+    {
+      "path": "services/childService.ts",
+      "sha256": "b8344e03ee2e9b77eb8dabdafffb730082a502e65811c740b6a5a0ef5332c5a7"
+    },
+    {
+      "path": "services/coachAiBillingService.ts",
+      "sha256": "59f124e35ca8c822d2a13eef818abf87091e89c69dc54552ca3ecf1977c11e03"
+    },
+    {
+      "path": "services/coachResourcesService.ts",
+      "sha256": "67018440728e434750e2f001c0cedf108246b75a0b2961c60adb994e6422b856"
+    },
+    {
+      "path": "services/federatedAuthService.ts",
+      "sha256": "dff6c4b12c8467687f9a0b4ff38c1fcc6ebe976ed985b13c6b5426b35f0d7192"
+    },
+    {
+      "path": "services/friendChatImageCacheService.ts",
+      "sha256": "e9d4ea6950f7ce946028907f9a98955f741f7a3ad841ba1d4f31055ffbcc6d3b"
+    },
+    {
+      "path": "services/friendChatImageService.ts",
+      "sha256": "8a7c637f5c43abc5cc9fbf75c1c1c5186c9214d8518b8c116ac47979119bc37b"
+    },
+    {
+      "path": "services/friendChatPhotoSaveService.ts",
+      "sha256": "b497b84de2cde4d61f0d7c4a219af08e7690aa95db1337c37ccf9259e700824f"
+    },
+    {
+      "path": "services/friendsService.ts",
+      "sha256": "2cf6840cf4c4f348f14460a5f5ee1c0f28d1c8bdd0241ae52093473dd9f7c3bd"
+    },
+    {
+      "path": "services/gameJoinCodeService.ts",
+      "sha256": "11e64fb1d919d6cfb1bb31f27386eaa92ecf93ae516be5409f54b3f6843995f7"
+    },
+    {
+      "path": "services/gameService.ts",
+      "sha256": "13594faba5427fd0b7d549cafb63d254e3af4fdfac087e9ddbba6e69bfc93516"
+    },
+    {
+      "path": "services/gameStartSynchronizationService.ts",
+      "sha256": "cb746b7f20e73cd4f1eef7e70bd621a09fe1d11636b8cb00a7da87c15a609fc6"
+    },
+    {
+      "path": "services/leaderboardService.ts",
+      "sha256": "c82d1685c95da9b066af1483d25746259bf28b62b468fd0db977c34144d39559"
+    },
+    {
+      "path": "services/localUserStateService.ts",
+      "sha256": "5b84e9e9020038c2a2898e6d06578bb0e547c8b33e0fe312dfa015915d1df557"
+    },
+    {
+      "path": "services/moderationReportService.ts",
+      "sha256": "178c91ed674f01c24234ad250c81a3fee18101522bc22480430a720c26a181ae"
+    },
+    {
+      "path": "services/notificationService.ts",
+      "sha256": "f99988ef9a3d0bb4b65f6ef7a8c7b88eb48dc7e8ee3b084d8f9056a390c4ddad"
+    },
+    {
+      "path": "services/onboardingModeService.ts",
+      "sha256": "8bba844560b6b981a28d540ae7ca2978ac272cb1578aa53b3b6385c359af9030"
+    },
+    {
+      "path": "services/parentTeamService.ts",
+      "sha256": "423b26f81c56101bc8dfa74709d54f713760a257ef247653f4ad08b2836ca7d8"
+    },
+    {
+      "path": "services/publicProfileService.ts",
+      "sha256": "b844831718724c666b60045b5d1838050bed987b62117ff10bca01a868e7627e"
+    },
+    {
+      "path": "services/seasonDatePickerCapability.ts",
+      "sha256": "c67c2fcaa0928b2c0f1c8ccaec1c0e5f48c25f59e5e4bbb6e7d7dc1f46201e31"
+    },
+    {
+      "path": "services/sidelineStarsService.ts",
+      "sha256": "4963bc9509f9bd1756b22b2e95b593c895dfb362170e7f5acc4edd9935709b1f"
+    },
+    {
+      "path": "services/squadService.ts",
+      "sha256": "0ce7a25e03e884f0848b696b39da0a2743347c429cda660706f8a485c56e7b84"
+    },
+    {
+      "path": "services/squadWeatherService.ts",
+      "sha256": "16197231a887aa276b6ee11614b46444802713b9b78bda951a9746357aabcea7"
+    },
+    {
+      "path": "services/systemRouteResumeService.ts",
+      "sha256": "cc8236aca470f62e70afbadd2631658a469f17d5ace827a53c360bdc28975d30"
+    },
+    {
+      "path": "services/teamCalendarIntegrationService.ts",
+      "sha256": "aa79ffd9115bbc17e68281fb529a470ef43521b639169a23dc4c2b851c851847"
+    },
+    {
+      "path": "services/teamMessageService.ts",
+      "sha256": "43d63d0f99c1804f048bde1160d19a08f336f6c0254853ee9aa998e9bf569c08"
+    },
+    {
+      "path": "services/teamPrivateMessageService.ts",
+      "sha256": "f0e698a609d57f529734645c4ab80842e9e70e56105b02bc60b79c5839e36998"
+    },
+    {
+      "path": "services/teamRosterService.ts",
+      "sha256": "642187ebd04d797f4605a64297dadb6e5db244402e35bc5529f97107df07e0e0"
+    },
+    {
+      "path": "services/teamScheduleCalendarService.ts",
+      "sha256": "99ed74b2ca236bc885356af636a1d76c59d65d10d83c579b0eb35674f5e5236d"
+    },
+    {
+      "path": "services/teamScheduleService.ts",
+      "sha256": "6a439725553a0af4dde0119a94d2df1ed9c3656793715e289188f22f9c14da5a"
+    },
+    {
+      "path": "services/teamService.ts",
+      "sha256": "c7885071c09bfe2c81477e2cc8d88fdcb469ec92c96929efab031b4f8baa7b12"
+    },
+    {
+      "path": "services/teamTranslationService.ts",
+      "sha256": "eccc66f62487bd48c886dffd00fbac6cdce8aaf623d30557fc6f315058da5ca6"
+    },
+    {
+      "path": "services/teamVoiceAudioCapability.ts",
+      "sha256": "4cfb05cd7d2e7840561802d8449816a4bd6437660b53aa324014b2c435dccff7"
+    },
+    {
+      "path": "services/venueLightningService.ts",
+      "sha256": "845f383b22434f4ff0261803465c320d7b30e696e4991a4a5004e1f9cb1d1767"
+    },
+    {
+      "path": "services/voiceMemoAudioService.ts",
+      "sha256": "65fe1cec5e38d998320e3b289102d9eea6ced29be0a7527fbad1881909e23f41"
+    },
+    {
+      "path": "services/voiceMemoFileService.ts",
+      "sha256": "25542879b368f738c64ba87fb31e225b05f60bcf13bfe157cb3c71f753564309"
+    },
+    {
+      "path": "services/voiceMemoPermissionService.ts",
+      "sha256": "e6b8417349b758bb7db6de75b9f884683aaad275b6965aa1507bf8bd9a409053"
+    },
+    {
+      "path": "services/voiceMemoRecorderService.ts",
+      "sha256": "6aa442b2c70e775482a14860d1900736bb77c1e955c9f7dc425f42a8bea1c222"
+    },
+    {
+      "path": "services/voicePlaybackCleanupService.ts",
+      "sha256": "3254224e6c0b36ac8cdc39e51bdbaf99498ad974211d34530b018d4720c2d301"
+    },
+    {
+      "path": "services/weeklyChallengeLocalization.ts",
+      "sha256": "0aad6ab04e260423fa8150718f2ff02052bfca8ca3415a20defa01546c428777"
+    },
+    {
+      "path": "services/weeklyChallengeService.ts",
+      "sha256": "276ef2713ebd77e6677caf4909c0b062549775625e7d55a34792857a1cd892b1"
+    },
+    {
+      "path": "src/game/bombDefusalChoiceText.ts",
+      "sha256": "067b029449ce73278a675ec58a03d54e01112885673a54480a9a1e1af72d395e"
+    },
+    {
+      "path": "src/game/BombDefusalScreen.tsx",
+      "sha256": "77d119d34755428e3682828a2b14c2d947dfba346739771461e514220cab7178"
+    },
+    {
+      "path": "src/game/spotDifference/geometry.ts",
+      "sha256": "71b031f7848955b266b6f7656b3f3ea1d4a5732a8cc0f85ad03a95b3af2a9745"
+    },
+    {
+      "path": "src/game/spotDifference/spotDifferenceScenes.ts",
+      "sha256": "1182158a5ac12a2918f38e684b12b6e0f98710e5b87e9bb790e3c4784338dedd"
+    },
+    {
+      "path": "src/game/spotDifference/SpotDifferenceScreen.tsx",
+      "sha256": "381bda17678d135eaece6517fefddf65565f38aca277972d533ee8212221548e"
+    },
+    {
+      "path": "src/game/triviaBlitz/answerFeedback.ts",
+      "sha256": "34b2c8132d33b70fe8d9dad6b921ff533347271cf032c59e3e55b191975e6b67"
+    },
+    {
+      "path": "src/game/triviaBlitz/firebaseUtils.ts",
+      "sha256": "78c42d179b4137acebe0b0212267bdd2aea2101c2d329945786fbaaa2694b7bd"
+    },
+    {
+      "path": "src/game/triviaBlitz/gameState.ts",
+      "sha256": "3068e3125eaa8067d4374f7b0af6974fee966fd84a6efbf7a4d830f62bd48353"
+    },
+    {
+      "path": "src/game/triviaBlitz/TriviaBlitzScreen.tsx",
+      "sha256": "1f05239a54c8ac93d528ec6de56b7cd38d0d3fc9d93d1d8739d442f1338e7614"
+    },
+    {
+      "path": "src/game/triviaBlitz/types.ts",
+      "sha256": "ce166cc3467f80bb7fb29a0d02923fb98ef1ad5b03f5412136dc4bb55569855d"
+    },
+    {
+      "path": "types/accountStanding.ts",
+      "sha256": "8709229e0754032870076bf1fd7b4a862dccbd151ce07e2f019ddd7ec3ea6e59"
+    },
+    {
+      "path": "types/coachAiBilling.ts",
+      "sha256": "d6b9f59810e6b7b0d633bbb796026c601e02a5415b16015fbb9942567b0c8c49"
+    },
+    {
+      "path": "types/coachResources.ts",
+      "sha256": "3a2fede0fe08f027d9af91076a32362658eb71caccb8e925989fbcf0ba9c8ff2"
+    },
+    {
+      "path": "types/teamVoiceMessaging.ts",
+      "sha256": "5a709758fb541cb400af451cc86e93a1473aeafd84fadeeebefa389a9d6386b7"
+    },
+    {
+      "path": "utils/accountProfileCore.ts",
+      "sha256": "9dab0ea0cc6e81d7a65bd599291b14fd05d36c7acf966824a027ebd21d7860ec"
+    },
+    {
+      "path": "utils/authIdentity.ts",
+      "sha256": "00e80bec0a0b3de03401dd5277e2aaf75aec4f378c7200da0bb829abca62b859"
+    },
+    {
+      "path": "utils/authProviderAvailability.ts",
+      "sha256": "f1358bced971baf8f716f506ca349339fbf0a7e75843a2b07ce5e1774f9d5dd7"
+    },
+    {
+      "path": "utils/authProviderRuntimeConfig.ts",
+      "sha256": "7c161510fcfb14d2427d062a80b04ba30b5f25f21302cd4b7264c0e72e9c9cda"
+    },
+    {
+      "path": "utils/authSessionProfileCore.ts",
+      "sha256": "fcb405520d0d36a9e5ded310d871981cce2432ead4679bb2244fe9208378239e"
+    },
+    {
+      "path": "utils/coachAiAccess.ts",
+      "sha256": "bbd233c3f04457c0d85a8d233d78191f4e4f02183b2f4ca539af0215ce65568e"
+    },
+    {
+      "path": "utils/coachAiBillingAvailability.ts",
+      "sha256": "c1b11c18b7ca53746c355919a4f58e675cd4a31ba5df395a6f3ffafffd69719c"
+    },
+    {
+      "path": "utils/coachAiBillingDiagnostics.ts",
+      "sha256": "6e00befe33c5293db08b306a409af88e5b4929390ddd0b14087d3207d13a0593"
+    },
+    {
+      "path": "utils/coachAiErrors.ts",
+      "sha256": "314ed85b554fae0da768d1a639f38273cda20d4fe22c6aa2fc618c3edae3512e"
+    },
+    {
+      "path": "utils/coachAiExperienceCore.ts",
+      "sha256": "3bb8605e408ec0a3bfebc2e994b646882fb7c7285bdfe67c3a21bfbfbe057a1b"
+    },
+    {
+      "path": "utils/coachAiPurchaseCore.ts",
+      "sha256": "4da504429f10c32352f2f0aeb4544a8e6792b478cb8b42eb2482c2f3576c973f"
+    },
+    {
+      "path": "utils/coachCommunicationCore.ts",
+      "sha256": "0ab49f5c5a5e623963f80edac643dca76b1bddddb237a71b3610eb85278988e8"
+    },
+    {
+      "path": "utils/coachCommunicationDraftCore.ts",
+      "sha256": "83ba454fef67b407854eaed6c4775209810ef084a5ddc19b33fdc022a831d352"
+    },
+    {
+      "path": "utils/coachHomeRecovery.ts",
+      "sha256": "b640d5f62e2a4bcc9e041ad5e7a6b0f078402f4fd263a9f98662e5900aee575e"
+    },
+    {
+      "path": "utils/coachHomeTeamCards.ts",
+      "sha256": "ba3899d6c62becad5ad215a80247518701b025ff7eb8857c861b4fb7952f8448"
+    },
+    {
+      "path": "utils/coachResourcesAccess.ts",
+      "sha256": "639dbc39e176d3dfb8004fb3beffc20d6f88ebe390bbea9deb3a70cd3d787fca"
+    },
+    {
+      "path": "utils/coalescedRefresh.ts",
+      "sha256": "453bed9136861562e488a02e495a352bdb987040eb988f3a93accff5090efd6f"
+    },
+    {
+      "path": "utils/federatedAuthCore.ts",
+      "sha256": "a17978e30e6b45f3d4d36ce930a747eb7c20d7abc80ad0ee53bba4a1d0cec8b1"
+    },
+    {
+      "path": "utils/firebaseAuthPersistence.ts",
+      "sha256": "6804dc610c4c9bf569c08fb62adc7287f9dc3b40499b63766ffcc9fb087bf538"
+    },
+    {
+      "path": "utils/flatten-style.ts",
+      "sha256": "898752f35db9ded9fb722e6ad2993708084a6c1e92d1576f3aed67a9615089d5"
+    },
+    {
+      "path": "utils/friendChatCopyCore.ts",
+      "sha256": "42812671bb8bfb5ab92f3e9efae426cb10725ff66480920c8e9671c13927b10a"
+    },
+    {
+      "path": "utils/friendChatDateSeparatorCore.ts",
+      "sha256": "865bb98d9f4b0b8b9cef633912d5c4d9583d7214f05fd656ac7eb3a9de693bef"
+    },
+    {
+      "path": "utils/friendChatDeletionCore.ts",
+      "sha256": "cf208d07cb6db08302eeb2f585ff582290f31897ad9105e6a93f281f6b172196"
+    },
+    {
+      "path": "utils/friendChatDeletionExecution.ts",
+      "sha256": "ebf847c58b2c6eb2e28d3da5844d84e6e61790be6cf8ad0a96d3ea657d3e7f3c"
+    },
+    {
+      "path": "utils/friendChatError.ts",
+      "sha256": "6ea80665b4275af1c363ecc7e96b5e588faefe0c516e58b12b19a8efa6b56b96"
+    },
+    {
+      "path": "utils/friendChatImageCacheCore.ts",
+      "sha256": "2a1309b6e3a2c043836c92896b3c4407fac1ced50e04424f9e01fd9aed71288c"
+    },
+    {
+      "path": "utils/friendChatImagePickerResumeCore.ts",
+      "sha256": "e40b5fbfafd151d9237490c53ead3b5baf6fa6b175aaa2d584fcdeb10c679573"
+    },
+    {
+      "path": "utils/friendChatPhotoSaveCore.ts",
+      "sha256": "06c07cb88f983b809e8b0daa5f8ecb2deb488eead9a3c1e71f015dfe25da603f"
+    },
+    {
+      "path": "utils/friendChatPhotoUploadAuth.ts",
+      "sha256": "860c72659303f8c439a7959904ce53405c194c291f69e7f7fb615b007aabfc92"
+    },
+    {
+      "path": "utils/friendChatPhotoUploadDiagnostic.ts",
+      "sha256": "4846074b65d77428043e2bba83b90a31480ec105915addb1381d7912f81ec42a"
+    },
+    {
+      "path": "utils/friendChatPhotoUploadTransfer.ts",
+      "sha256": "cf565310b00beff4c637997e92c8101ac3cc23945262fd5a68c9b7d1c663d18c"
+    },
+    {
+      "path": "utils/friendChatSendStatusCore.ts",
+      "sha256": "8f5885415e29907d92345fbc21e5d81ce398d0604b6abea83dff8bbbdcf37837"
+    },
+    {
+      "path": "utils/friendChatUploadCancellation.ts",
+      "sha256": "b045518ede1873fcc9c624a2dd1509117330666883075997b7ed1c2b92865e28"
+    },
+    {
+      "path": "utils/friendPrivacy.ts",
+      "sha256": "c702ac96fd8835f7d3c63f4dfa096f99f7f1a3184094f53aabc6258b30de63bc"
+    },
+    {
+      "path": "utils/friendRequestMapping.ts",
+      "sha256": "a9db62741b79c291305997c2bf5e8d8ff21bb36bbbe86f6410bc973cd253146c"
+    },
+    {
+      "path": "utils/friendRequestState.ts",
+      "sha256": "cd3baccbb677a4c2841ba90ff74c74324455ce8c0ba898c45a0510cd67adb1d9"
+    },
+    {
+      "path": "utils/gameInteraction.ts",
+      "sha256": "840144386fe0f59ad9bde3db8f9e3588f3ab356af6edaf800cd545cce567307b"
+    },
+    {
+      "path": "utils/gameJoinCode.ts",
+      "sha256": "9af804daec4c52af8723ff957fb8dfdc07e275b7a6779c54844e33bc02b29a20"
+    },
+    {
+      "path": "utils/gameLobbyDirectoryState.ts",
+      "sha256": "310d91b6d2e2e0e2593f3fa8799b9ac5b92166c42e0cdc939e33810d125959ba"
+    },
+    {
+      "path": "utils/gameRoomDeparture.ts",
+      "sha256": "752149612065310f6736e312e60d9688f7e81b4f47a0d27e658ddd7b13d4a809"
+    },
+    {
+      "path": "utils/gameStartSynchronization.ts",
+      "sha256": "432cc16ff369a58b6e29d75a6bf9ca24413db8b3f0b24a0472bc0554cb5d13b7"
+    },
+    {
+      "path": "utils/localUserStateCore.ts",
+      "sha256": "9bce9a725a46d7cdf140b3e5f47dd22a7ef24d5bcee8630649df038b410941ac"
+    },
+    {
+      "path": "utils/modeSwitch.ts",
+      "sha256": "c7852e04da7337bec0848fcd9acbed2322bd2f11ae8a7bf743d6369572b6b98e"
+    },
+    {
+      "path": "utils/nativeUploadBlob.ts",
+      "sha256": "016d4f4ad58a3f71e3a95f9804ac55d92f917c25722ca84c3d5f2cccf03e9ff7"
+    },
+    {
+      "path": "utils/notificationCore.ts",
+      "sha256": "9c283601b88f42613d8dedd9df7b19c7d3680700e14a13b289dbd26e421b7117"
+    },
+    {
+      "path": "utils/onboardingMode.ts",
+      "sha256": "bbf54683a413d44bc4a35c32f9323a5332ea90f9623a543cffa59bd59a5226fd"
+    },
+    {
+      "path": "utils/parentNavigation.ts",
+      "sha256": "469e71480021cca85cfd49f13b24287bdb2cf9e09dfe1d327f48038c80533396"
+    },
+    {
+      "path": "utils/parentTeamCore.ts",
+      "sha256": "0508e4e1c594d4e14acd10e4979bf403f335b8d2369344fa6315a3e1e59a534a"
+    },
+    {
+      "path": "utils/parentTeamInboxCore.ts",
+      "sha256": "cbcf5cb39e9ffa8d32893e2a7f2fb6484b3a046720c5c42374eb51b7f2c5e95a"
+    },
+    {
+      "path": "utils/performanceDiagnostics.ts",
+      "sha256": "1b1b9fe1b23db1467d9769f977b9f4cf27be89b887460869a44ab7cef6877ee1"
+    },
+    {
+      "path": "utils/profileName.ts",
+      "sha256": "acb5644a8371fe494692fd3dab20a8f8eb5ed7c8dcbc41e45fe8b334aac3e4d2"
+    },
+    {
+      "path": "utils/safeAreaLayout.ts",
+      "sha256": "b083fbc4c9401f66d2f56987d0b12a1552f45876469965ea588f9d770f972f1d"
+    },
+    {
+      "path": "utils/squadAdminMemberSearch.ts",
+      "sha256": "a0283ee94b64489d431e9ec4832b4e44b43441ba5a88708f66f5d8a205f05f0b"
+    },
+    {
+      "path": "utils/squadCallableError.ts",
+      "sha256": "936ac6cd8a584aaf3e307fb975fbe212aaba23acf54fc652fb203345feccd1f9"
+    },
+    {
+      "path": "utils/squadSeasonDate.ts",
+      "sha256": "513224dbefcded95e205cacfcf4d04a9ca0e9456ee554ab55df75f7f75ea8d6e"
+    },
+    {
+      "path": "utils/teamCalendarConnectState.ts",
+      "sha256": "0ac744b46d2aa992afe0c889f5244155604b38f1762f190b216e7e4108cd2b57"
+    },
+    {
+      "path": "utils/teamLifecycleRequest.ts",
+      "sha256": "aac7fd5716c6f7f5565ad2f316d9b553af45021387be0fc2e85acd49cabaefd1"
+    },
+    {
+      "path": "utils/teamMessageDeletionExecution.ts",
+      "sha256": "ea9327cfc06946190ffedf39f5504aa4bc687e25cd3579332cdc535af3e4fddb"
+    },
+    {
+      "path": "utils/teamScheduleCalendarCore.ts",
+      "sha256": "21f0d98af996adbe04e7ab1a0e96a47171b75e78a5ddebc70fa4ee87c7e42ce8"
+    },
+    {
+      "path": "utils/teamScheduleCore.ts",
+      "sha256": "1e7f40db4776d7413e59bfc2bfe016b3e63c313b85556ecb1e6a42ca58a892b2"
+    },
+    {
+      "path": "utils/teamTranslation.ts",
+      "sha256": "c86af6c57c1835d7c9a06e3d255e967c9a8c5e299057bef9597d57fd1434e766"
+    },
+    {
+      "path": "utils/venueLightning.ts",
+      "sha256": "f587b2a5e1b745c1131424480cea10547d5b65ed4104aabe817e1cbecfbec80f"
+    },
+    {
+      "path": "utils/voiceMessageNormalizer.ts",
+      "sha256": "72d31ac8d013ebb8a59ee6ed712ebc4a25d8f9b8c9ea1510ed95f674c4540834"
+    },
+    {
+      "path": "utils/voicePlaybackCore.ts",
+      "sha256": "0767ad0fa589fa96711fe20028512a2a02dad18328e7692e7b82f7abd0b0040b"
+    },
+    {
+      "path": "utils/voicePlaybackMediaCache.ts",
+      "sha256": "11fb65a08ae331709f7066882d155c0c8165f0c43401a5f53ffad025986f4cb7"
+    },
+    {
+      "path": "utils/weatherDelayLightning.ts",
+      "sha256": "e92d477d0cc48aa0fccc624935527fba8aade648d7dda04b057bc594193015de"
+    },
+    {
+      "path": "content/coachAiBillingTranslations.ts",
+      "sha256": "52b335074e0de630e54f258079d9c3406ca205d83c1894cea082be8e95a40787"
+    },
+    {
+      "path": "content/coachResources/checklists.ts",
+      "sha256": "4f37bbfc6c316dab9fe959f06cefd0ba72f115a4a76232d028edd67e70f3df0b"
+    },
+    {
+      "path": "content/coachResources/communicationTemplates.ts",
+      "sha256": "91b96f78750bb25832bbfafd16b9824c3a9f4e8e4fbda5ef93e8699b9b0df81e"
+    },
+    {
+      "path": "content/coachResources/proTips.ts",
+      "sha256": "52cb30bdf124a5e2322d27f813746785f85477b7176a38f81c40bdc2fdba8a6e"
+    },
+    {
+      "path": "content/weeklyChallenges.ts",
+      "sha256": "d1e4417109a834bf10712a7f076c01f3547992a2fe80c07ece3395f32ea70e15"
+    },
+    {
+      "path": "functions/src/accountDeletion.ts",
+      "sha256": "f3d3efa212881d6c3dbc768a0c14ff89c153295458d443d9297ac9bfcc4f7896"
+    },
+    {
+      "path": "functions/src/accountStanding.ts",
+      "sha256": "c1bfe53fddeca6cc81e9e5b85c77a074a643983be669cde56dafb514466813d7"
+    },
+    {
+      "path": "functions/src/accountStandingAppeal.ts",
+      "sha256": "59e6e2e4825f78c65f98291a34f4ad01e248230654f34c088a5286ab8e3b39b8"
+    },
+    {
+      "path": "functions/src/appleAuthorizationRevocation.ts",
+      "sha256": "a122bec0624b5ff714b778c1136b2c8cf13443efe882744063175f8fe68fabe9"
+    },
+    {
+      "path": "functions/src/bombDefusalContent.ts",
+      "sha256": "4578f7bfd712a45605a3e8fde6885677eb152cb8c7862011c0d26a5d57f2ecf4"
+    },
+    {
+      "path": "functions/src/bombDefusalCore.ts",
+      "sha256": "cee927ab4dd59bf8ba0a32c0006402a70e574d13446cf036cc0d5c99b4f12ed9"
+    },
+    {
+      "path": "functions/src/bombDefusalGenerator.ts",
+      "sha256": "4fb6c6c35404c3734df7d1534e89170a273205b6b83e7b6c01d69e6060ea2bec"
+    },
+    {
+      "path": "functions/src/bombDefusalTypes.ts",
+      "sha256": "e1e1c8641c0a9d0f293fe8979c152723d2764e51249a98be564b48e11f90a0d0"
+    },
+    {
+      "path": "functions/src/bombDefusalValidation.ts",
+      "sha256": "fdc23f750a65aea3f76e848d389ec011e650b8a6531f6ff687f172429595e7db"
+    },
+    {
+      "path": "functions/src/coachAiBilling.ts",
+      "sha256": "8879d50ed03b91e67a26094bcae7c1460ad1a0a66ca5976dcc4042e0675a35ba"
+    },
+    {
+      "path": "functions/src/coachAiBillingCore.ts",
+      "sha256": "3d97e554c7fa581ce43f319df8c0b688b67619902611e270475bf9cb64c0ef52"
+    },
+    {
+      "path": "functions/src/coachAiBillingDeletion.ts",
+      "sha256": "bb92abc6e644d7efa3f3492b8b05802060e731ddc1931eb724e6011cf25a2d89"
+    },
+    {
+      "path": "functions/src/coachAiBillingEnrollment.ts",
+      "sha256": "6e7cd7255586603b5a19d03c45e4055c6e70a144eec65e3b1dea0a95c51b01dc"
+    },
+    {
+      "path": "functions/src/coachAiBillingMaintenance.ts",
+      "sha256": "890be29247abbf68dcd9f6676ef797b01d32451d327301b56d0981ee109a6598"
+    },
+    {
+      "path": "functions/src/coachAiClaudeGateway.ts",
+      "sha256": "1dcccd950afdac35ec733877968eda421414aa2da618ebcec31469d4f9ef5770"
+    },
+    {
+      "path": "functions/src/coachAiClaudeGatewayCore.ts",
+      "sha256": "5cc90e0cf4a6d8af2ee18c03e8e0601cef7563c1eafb6da98893492f58e2e96f"
+    },
+    {
+      "path": "functions/src/coachAiCleanupInterface.ts",
+      "sha256": "a4def54ebf2a977fc77bb29a8fbcaf4aebe0c3ef0daaddbb5ccfc43d8806bfcb"
+    },
+    {
+      "path": "functions/src/coachAiCleanupOperatorWorkflow.ts",
+      "sha256": "633cffc3877dc76950c6c1ed24aca704ed83491b86e159772de1742c9eca3160"
+    },
+    {
+      "path": "functions/src/coachAiCleanupQueueMonitor.ts",
+      "sha256": "cce4d9962e9aeeea303a77be20f723784072c93959f1b59807e29bc5fc8923d3"
+    },
+    {
+      "path": "functions/src/coachAiFeedback.ts",
+      "sha256": "f0c23036b94640b70dfb5f343ccb20bc78ac8c84496fc3cf4557da35d9aa0740"
+    },
+    {
+      "path": "functions/src/coachAiFeedbackCore.ts",
+      "sha256": "56bb837b39417ab8c0e17c61a1520c9babccb89b19a4001ff279e666a83b0934"
+    },
+    {
+      "path": "functions/src/coachAiPaidGeneration.ts",
+      "sha256": "3af56929fbdc27836be7a96ed2d77039d3076ecb0a77ba1a995aa68655bcc86b"
+    },
+    {
+      "path": "functions/src/coachAiRevenueCatV2.ts",
+      "sha256": "79750f6b80624e1e1d2dc38429aaa350fe19a43a5afa7d58c3f40b4fb6bfde4c"
+    },
+    {
+      "path": "functions/src/coachAiReviewSandbox.ts",
+      "sha256": "4057f1a48205d1a873d8d07add8fc0d07cdbd6d4c24af0ce962cc0e898f47dcc"
+    },
+    {
+      "path": "functions/src/coachAiRuntime.ts",
+      "sha256": "d71c0e575e01cd590dea7c50b8bbbdc0b61cb1b640f1ff7865c9756f0eebf01c"
+    },
+    {
+      "path": "functions/src/coachAiSubscriptionCore.ts",
+      "sha256": "2edcde332dbf2a1cd3a6d1dc19de2e255337ce067f8f32720376ca882cd7cb0f"
+    },
+    {
+      "path": "functions/src/coachAiWebhookCore.ts",
+      "sha256": "18fec4ebdb87117712ca5042cd03ae100daf79ca0033f12b2ccc0cc8f3722ee3"
+    },
+    {
+      "path": "functions/src/coachResourceHelp.ts",
+      "sha256": "d86c1c6210c1208209d3dbf5919050feb62f99765f1de176cf685adb11c5ce14"
+    },
+    {
+      "path": "functions/src/coachResourceHelpCore.ts",
+      "sha256": "176c81562f9857f917d3f4b1c0f55484a9c9ffbb005266f555947a61ec5dea6b"
+    },
+    {
+      "path": "functions/src/contentModeration.ts",
+      "sha256": "38231112ac1cb83ca9ad22facff31576751824382649547c9041b8747661caaa"
+    },
+    {
+      "path": "functions/src/contentSafety.ts",
+      "sha256": "768808b2cf71485dc7fb3ee329a1321eb95bcd17930bedddcc3c3eb6dce6db14"
+    },
+    {
+      "path": "functions/src/friendChat.ts",
+      "sha256": "682d718db1a47eeeda01c7816dfab0aac4ae89e9d46f49a574bbf96269644436"
+    },
+    {
+      "path": "functions/src/friendChatCore.ts",
+      "sha256": "13bc37afde646125e914367de567216a3d7bf1f5fa29bbf82f230ef2a4243c59"
+    },
+    {
+      "path": "functions/src/friendRequestCore.ts",
+      "sha256": "4919e4e67ab97de0ff8ae2e769b145dfda07467dba1ee2bc3f3971f6923dae16"
+    },
+    {
+      "path": "functions/src/friendRequestNotifications.ts",
+      "sha256": "b6273dcb128f0fc268479a05ac48bbc654cb2983f7cd587979b948616d45aca8"
+    },
+    {
+      "path": "functions/src/friendsCallableErrorCore.ts",
+      "sha256": "b6ae9fdaa7c53cf82eed8ba4a30481a5ede4793e7a1682225bdb6622d80bca0a"
+    },
+    {
+      "path": "functions/src/friendSuggestionCore.ts",
+      "sha256": "6478139752545957332fed2b59e6fe336d1dc8c993f3a78095b89f2903562f94"
+    },
+    {
+      "path": "functions/src/gameJoinCodeCore.ts",
+      "sha256": "5a188fa77ff77516e5ca4a4dd67130ba5bd794b8907a5fd563a6e56da06dfacd"
+    },
+    {
+      "path": "functions/src/gameJoinCodes.ts",
+      "sha256": "f120af3aeb0f1ecb3d68af87333955b63ad9306665402c7e92fc9500658ba4f2"
+    },
+    {
+      "path": "functions/src/gameJoinSessionState.ts",
+      "sha256": "ac57a176b7fbd33141c536da78a0222791519853a24dc5494ae62073f5a663dc"
+    },
+    {
+      "path": "functions/src/gameLobbyCore.ts",
+      "sha256": "a1d4c37700dddbd5ae5e04fda39d3f2b73e48db1b283c5cc369d3d971249b873"
+    },
+    {
+      "path": "functions/src/gameLobbyStore.ts",
+      "sha256": "09be1dc2b22a0ebca1281727f4da3d9a6ed93fe44052e66a3e970d91b6397672"
+    },
+    {
+      "path": "functions/src/gameStartSynchronizationCore.ts",
+      "sha256": "b0c6874515c34bd084d3527e988cd48c1228f0d10949bbd891f8fe2058240961"
+    },
+    {
+      "path": "functions/src/index.ts",
+      "sha256": "b7ce4b6735f80688f4cdad52c72d045f33a2b79f3a83d5c275ee04aeaaa5a218"
+    },
+    {
+      "path": "functions/src/moderationReports.ts",
+      "sha256": "c9055f5892331b58d29735bd92c5625e7da48f5798cbc3ecdf281ba2534c7be5"
+    },
+    {
+      "path": "functions/src/moderationReportsCore.ts",
+      "sha256": "b46d234f97ebb1233f001a88b78a1aeb38c3b99b6464a172b5b63eec58c06928"
+    },
+    {
+      "path": "functions/src/moderationRetentionCore.ts",
+      "sha256": "d08224ebc23b83e7a90406770019c0ad0e9f371228ec34f128b374ecdbb08f04"
+    },
+    {
+      "path": "functions/src/moderationRetentionDeletion.ts",
+      "sha256": "038149a46d07dd22e2b9ba9209b3daccd369ddce0bea5afe067703e7cd0d0f85"
+    },
+    {
+      "path": "functions/src/notificationDismissalCore.ts",
+      "sha256": "b9732933a3fe9192586e73726391af2dfb1264e12f2d9df45a2d8b2f782ee582"
+    },
+    {
+      "path": "functions/src/parallelReads.ts",
+      "sha256": "c9ecfe1bb15eccb37bd68e8ed274247e85417c14dc9d346c998665befdc8c638"
+    },
+    {
+      "path": "functions/src/permanentAuth.ts",
+      "sha256": "d543bd3b6f189319f15feb5e64ce78f10a174458725b06eddce02c2d92be5d0b"
+    },
+    {
+      "path": "functions/src/publicUserProfileCore.ts",
+      "sha256": "1a06707f93d5bc99107c885df266d3565cdc7cfe787e18e93ae13cde3f7496d6"
+    },
+    {
+      "path": "functions/src/publicUserSearchCore.ts",
+      "sha256": "6d7d1ae4df63084da1575c7f3d3fb25e19d7f4d1f45be9c8ca1ef2a3c9c70dc6"
+    },
+    {
+      "path": "functions/src/pushNotificationDelivery.ts",
+      "sha256": "a893622de90bec97ba5360963345423b0837b455b52d0a3260326e23f1705ce0"
+    },
+    {
+      "path": "functions/src/sidelineStarsCore.ts",
+      "sha256": "afde4f57ce964421d2a11a3231e6288a4197ba1e2427fe4ba7afa3ba6bbac614"
+    },
+    {
+      "path": "functions/src/spotDifferenceCore.ts",
+      "sha256": "9bc8b914225d5c296ea40ffeab11e8550468ee26440eebaf71b2a87178b03ac4"
+    },
+    {
+      "path": "functions/src/spotDifferenceSceneData.ts",
+      "sha256": "3812cc8b6ffe6e4d992add3f1e3a32290b76322384b96837606061d8aa06627c"
+    },
+    {
+      "path": "functions/src/squadAdmin.ts",
+      "sha256": "4381728e55673fe423458e2bdb616dae0e94343145225dcc9ff2d2664194db2b"
+    },
+    {
+      "path": "functions/src/squadAdminCore.ts",
+      "sha256": "8eb9d83ff6ffcc13b98b268eac02035f0f306bd6d669fda56df1532574a8eb23"
+    },
+    {
+      "path": "functions/src/squadCore.ts",
+      "sha256": "3b854c7da466b6b0db10c3f6244552d51803a83f8f519cf60b00cb3fad7d0666"
+    },
+    {
+      "path": "functions/src/squadSeason.ts",
+      "sha256": "8d1ff0496b516a9aa810c30340cf71b4e9107850e38e8906748155218c351a1e"
+    },
+    {
+      "path": "functions/src/squadSeasonCore.ts",
+      "sha256": "a5db536c373c95e0cbdd025cf1ca0c72cac14da67cb47382e8f9497a773ab1c0"
+    },
+    {
+      "path": "functions/src/squadSportsCore.ts",
+      "sha256": "a478446be98a63fc19f325abd00ef4f7cdb7f3703e256649c0db6061d179e89e"
+    },
+    {
+      "path": "functions/src/squadWeather.ts",
+      "sha256": "4f8c73e314a3f9f6b019728323e20780f5953754a646ac273bcea22658ad96a8"
+    },
+    {
+      "path": "functions/src/squadWeatherCore.ts",
+      "sha256": "1e7f4b10c8a657e930ba67508b5138593aec042d0d1970c2496b9c11ca53d283"
+    },
+    {
+      "path": "functions/src/standingObservation.ts",
+      "sha256": "49a39a25a6c8c77daa7246386f5ec15c5fb58d596c0d1332647898f557363715"
+    },
+    {
+      "path": "functions/src/standingProjection.test.ts",
+      "sha256": "4f8ba7e6ebcb55274114eb241f18d43cb3f08deebda0517c6b2447d3eb59df24"
+    },
+    {
+      "path": "functions/src/standingProjection.ts",
+      "sha256": "6eb8ee1a3e5e3509a656a4a18093612582795b290ad7b2c96f69f877995da9ca"
+    },
+    {
+      "path": "functions/src/teamAnnouncementDeletionCore.ts",
+      "sha256": "634487886c885e3e122127d59274c729ada7ab27edcc4ba4f482f7ccdce7bd98"
+    },
+    {
+      "path": "functions/src/teamCalendar.ts",
+      "sha256": "a0551e76bada702c0bdece867cc389b5839593d4bdab43e5393e565b45dd46ed"
+    },
+    {
+      "path": "functions/src/teamCalendarCore.ts",
+      "sha256": "67b9c7212c389f780424b374b6b35e55c3563ad682c71f4be8c9b9ab7bfca84f"
+    },
+    {
+      "path": "functions/src/teamCalendarFetch.ts",
+      "sha256": "e843db2d61b31af2b8ede1e6cad161d38f362c7281fff9d6827e972d0fbfc5b5"
+    },
+    {
+      "path": "functions/src/teamMembershipCore.ts",
+      "sha256": "4b1f3fadefd2aec5f04fe394677af2f43a98324480817ae81746b46fae18d2a1"
+    },
+    {
+      "path": "functions/src/teamMessagingReliabilityCore.ts",
+      "sha256": "24a30fca29615c18abd9f0051b4baa9d346e7a1816822032122d92f8650128de"
+    },
+    {
+      "path": "functions/src/teamSchedule.ts",
+      "sha256": "5b6cb33cfab90c439b87b298a47bd95a35d6a935499d3e402342481be600288e"
+    },
+    {
+      "path": "functions/src/teamScheduleCore.ts",
+      "sha256": "91d4f8153537e15d818a20f7e02303332befcaa7dc39bc8dc09d47dd54d2ed58"
+    },
+    {
+      "path": "functions/src/teamTranslation.ts",
+      "sha256": "5e570e3080f2397a82b87b7764c7366c7cfe402dd217fa5c29bee0b0ce597d7b"
+    },
+    {
+      "path": "functions/src/teamTranslationCore.ts",
+      "sha256": "0affaa44f358de510f2468ad80e519dbffac65815a5a0a8b3e1852a197400650"
+    },
+    {
+      "path": "functions/src/teamTranslationLanguages.json",
+      "sha256": "b3162996f47f3f65601677d5dfdb90b6391f405ce450fac109fc3171392feefc"
+    },
+    {
+      "path": "functions/src/teamVoiceMessagingCore.ts",
+      "sha256": "41757dd03bb6f38306f9bab823eb1e8e59b08c59bf2f4557bbb7e8d5413efb71"
+    },
+    {
+      "path": "functions/src/triviaGame.ts",
+      "sha256": "23ddc85ca509540d723a2a0e15f8ef15837396e7c034ef7e0de0e936148bbcb7"
+    },
+    {
+      "path": "functions/src/triviaQuestions.json",
+      "sha256": "0bfcba1fa436f79612f7b3fc36be38d75dbe2a05aa14475f9b83db43634a8807"
+    },
+    {
+      "path": "functions/src/userNotificationDismissal.ts",
+      "sha256": "5306f393b76f044d4c6bf0702693a76adb7ef567e86b66d6a3cf7cfcfd89fa88"
+    },
+    {
+      "path": "functions/src/venueSquad.ts",
+      "sha256": "fdf4ab047803b14ac4d900137ddd27dde9297451f818a18f44935cffa8e24dbb"
+    },
+    {
+      "path": "functions/src/weeklyChallengeCore.ts",
+      "sha256": "e5d16cb4a9b8a6181252502c754379cfa361215a8d4985fe236dcb597b768db0"
+    },
+    {
+      "path": "index.js",
+      "sha256": "b2f89922d1d7ea02c37e23a9a5c6b4fcea4a92da1d65d9589dfaf32b7a15a261"
+    },
+    {
+      "path": "app.config.js",
+      "sha256": "bcf5c268afeea3ed14768149c60c9f45a5f91cd140fcdaeb7fd2a9a32503a380"
+    },
+    {
+      "path": "metro.config.js",
+      "sha256": "7ef1f63930ae2ef49e84dd06a99851666485e80c93b8b4fd43fce763892691a6"
+    },
+    {
+      "path": "babel.config.js",
+      "sha256": "3f86e0ae70edf3ec5a23c3bfbff735de0134d5c9c2143812063809741adfec4c"
+    },
+    {
+      "path": "tailwind.config.js",
+      "sha256": "98fd4c95df830fa05db1d03609a97bfb55fdc3e199a389e2d42db0554c26a98f"
+    },
+    {
+      "path": "tailwind.constants.js",
+      "sha256": "8b815d0f767fb6f13ddaa069dce6a566820e13158aff81309b2bafd0416b965f"
+    },
+    {
+      "path": ".eslintrc.js",
+      "sha256": "cfb800a948c34ac01d06cb1610c5a37a7d1f5fc2083a69fc193448f262742a76"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "ac1f392933c327a83eb350deacfece48e622f4f6b34078e3509f0ab28a952d9c"
+    },
+    {
+      "path": "package.json",
+      "sha256": "fdd8a4942b011fab98731b798ceebfe163f37769bc65713b6f323518ffde3a76"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "4650f1b7424f51ed8bec1f658960635e3fda2304c08522635ba3ed2807330bd6"
+    }
+  ],
+  "compatibilityFiles": [
+    {
+      "path": "app/(games)/bomb-defusal/Lobby.tsx",
+      "sha256": "0e6c18299fd82956d35a782a6a37c670083b62bf55c618d9451154cd7f2986ef"
+    },
+    {
+      "path": "app/(games)/bomb-defusal.tsx",
+      "sha256": "445512e168a0c13778d4921630ca38d37bb03d2cb07a9360f6e6a0f24d87c01b"
+    },
+    {
+      "path": "app/(games)/lobbies.tsx",
+      "sha256": "6ac162edec6b2b0573ea62d0f06f0216408cf3fa0e79c03ef2994aef01daef44"
+    },
+    {
+      "path": "app/(games)/lobby.tsx",
+      "sha256": "27d8079c88cbf0958320f0fb03aedc2083f4b313ed6349517b2deb82937380df"
+    },
+    {
+      "path": "app/(games)/results.tsx",
+      "sha256": "1560617b62209dadcecb76fddbdbe8ff1713aee6eb9c8eb0f4a7700f9c574a1e"
+    },
+    {
+      "path": "app/(games)/spot-difference.tsx",
+      "sha256": "ca13d08f522cf8c8726f87c95f9514845eddcf1a382e79f8bf7144160a5a23d1"
+    },
+    {
+      "path": "app/(games)/spot-the-difference/Lobby.tsx",
+      "sha256": "d97eb253911bb7c3f997566130f1795e3c8ca0d6931c93e588316d687bdea203"
+    },
+    {
+      "path": "app/(games)/trivia-blitz/Lobby.tsx",
+      "sha256": "1ab54b901d964e4fa64207c34b326097f173ba159e4245bf81dfefadff7863fb"
+    },
+    {
+      "path": "app/(games)/trivia-blitz.tsx",
+      "sha256": "09a2f3b41936c90cb0ce9222d39cea42f21bf83afd891677941e7a63db27e1b4"
+    },
+    {
+      "path": "app/(games)/_layout.tsx",
+      "sha256": "54ebedeb8a90a1943827398a6a0ea5b0395a42041a7a0105fab31acf83e22f86"
+    },
+    {
+      "path": "app/games/bomb-defusal/play.tsx",
+      "sha256": "4b669da700407a635f39c23f2abcd4364ffc2c3fbe36bba709f85be74d5949a7"
+    },
+    {
+      "path": "app/games/spot-the-difference/play.tsx",
+      "sha256": "5b32a078004462d452f76c2316a16bda93d790c2c246118958a767003f176519"
+    },
+    {
+      "path": "app/games/trivia-blitz/play.tsx",
+      "sha256": "09a2f3b41936c90cb0ce9222d39cea42f21bf83afd891677941e7a63db27e1b4"
+    },
+    {
+      "path": "app/games/_layout.tsx",
+      "sha256": "324e2491b146a7644786e62fb316a142187b863c86f24ff9c931cd74aada820f"
+    },
+    {
+      "path": "game/BombDefusalScreen.ts",
+      "sha256": "0b7313cfcf40e4433c1af4b8118e991582fedcbcd46c7b2fddb2557ef19d1d65"
+    }
+  ],
+  "allowedEdits": {
+    "tsconfig.json": "b07eea624e07cb7e1cfa146ee079f6b843880a2ac9c51f4184b4044c34f9e369",
+    ".eslintrc.js": "1ea8d9d02e6ec80b0e5d5a34f85e132e190d95f4a88173d3bb916faf20418bca",
+    "services/parentTeamService.ts": "fe062d0481a49ce5a066af7179788bc75d73f91ecedc41a76b2bced146536135"
+  },
+  "allowedEditReasons": {
+    "tsconfig.json": "Remove exclusions for deleted scaffold files only",
+    ".eslintrc.js": "Remove ignores for deleted files only",
+    "services/parentTeamService.ts": "Remove unused isParentHomeTeamAvailable export only"
+  },
+  "initialRuntimeConsumers": [],
+  "preparationCorrection": {
+    "ownerApproved": true,
+    "reason": "Disambiguated the complete Home-summary test block; original preparation wrote no files"
+  },
+  "liveRequests": 0,
+  "builds": 0,
+  "deployments": 0,
+  "submissions": 0,
+  "releases": 0
+}

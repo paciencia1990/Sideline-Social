@@ -8,6 +8,8 @@ import { Card } from "@/components/Card";
 import { NestedBackButton } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useDeviceTimeZone } from "@/hooks/useDeviceTimeZone";
+import { formatSchedulePreview } from "@/utils/teamScheduleDisplay";
 import { useAuth } from "@/context/AuthContext";
 import {
   calendarIntegrationErrorReason,
@@ -30,6 +32,7 @@ type Selectable = TeamCalendarPreviewEvent & { selected: boolean };
 
 export default function ConnectTeamCalendarScreen() {
   const { i18n, t } = useTranslation();
+  const deviceTimeZone = useDeviceTimeZone();
   const { loading: authLoading, user } = useAuth();
   const params = useLocalSearchParams<{ teamId?: string | string[] }>();
   const teamId = normalizeParam(params.teamId);
@@ -158,7 +161,7 @@ export default function ConnectTeamCalendarScreen() {
     {warnings.length > 0 ? <Card style={styles.form}><Text style={styles.cardTitle}>{t("schedule.connect.warningTitle")}</Text>{Array.from(new Set(warnings)).map((warning) => <Text key={warning} style={styles.body}>{warningFor(warning, t)}</Text>)}</Card> : null}
     {events.length > 0 ? <>
       <Text accessibilityRole="header" style={styles.sectionTitle}>{t("schedule.connect.previewTitle", { hostname })}</Text>
-      {events.map((event) => <TouchableOpacity accessibilityLabel={event.title} accessibilityRole="checkbox" accessibilityState={{ checked: event.selected }} key={event.key} onPress={() => setEvents((current) => current.map((item) => item.key === event.key ? { ...item, selected: !item.selected } : item))}><Card style={styles.event}>{event.selected ? <Check color={Colors.communicationLink} size={21} /> : <Square color={Colors.textPrimary} size={21} />}<View style={styles.copy}><Text style={styles.eventTitle}>{event.title}</Text><Text style={styles.meta}>{new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: event.isAllDay ? undefined : "short", timeZone: event.timezone }).format(new Date(event.startAtMillis))}</Text></View></Card></TouchableOpacity>)}
+      {events.map((event) => <TouchableOpacity accessibilityLabel={event.title} accessibilityRole="checkbox" accessibilityState={{ checked: event.selected }} key={event.key} onPress={() => setEvents((current) => current.map((item) => item.key === event.key ? { ...item, selected: !item.selected } : item))}><Card style={styles.event}>{event.selected ? <Check color={Colors.communicationLink} size={21} /> : <Square color={Colors.textPrimary} size={21} />}<View style={styles.copy}><Text style={styles.eventTitle}>{event.title}</Text><Text style={styles.meta}>{formatSchedulePreview(event, i18n.language, deviceTimeZone)}</Text></View></Card></TouchableOpacity>)}
       <Card style={styles.toggle}><View style={styles.copy}><Text style={styles.cardTitle}>{t("schedule.connect.automatic")}</Text><Text style={styles.body}>{t(automaticAvailable ? "schedule.connect.automaticBody" : "schedule.connect.automaticUnavailable")}</Text></View><Switch accessibilityLabel={t("schedule.connect.automatic")} disabled={!automaticAvailable} onValueChange={setAutomatic} value={automatic && automaticAvailable} /></Card>
       <Card style={styles.toggle}><View style={styles.copy}><Text style={styles.cardTitle}>{t("schedule.form.notifyTeam")}</Text><Text style={styles.body}>{t("schedule.import.notifyHelp")}</Text></View><Switch accessibilityLabel={t("schedule.form.notifyTeam")} onValueChange={setNotifyTeam} value={notifyTeam} /></Card>
       <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: busy === "confirm", disabled: Boolean(busy) || selected.length === 0 }} disabled={Boolean(busy) || selected.length === 0} onPress={() => { void confirm(); }} style={styles.primary}>{busy === "confirm" ? <ActivityIndicator color={Colors.surface} /> : null}<Text style={styles.primaryText}>{t("schedule.connect.importSelected", { count: selected.length })}</Text></TouchableOpacity>

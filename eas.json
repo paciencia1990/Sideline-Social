@@ -96,6 +96,13 @@
         "gradleCommand": ":app:bundleProductionRelease"
       }
     },
+    "coach-ai-billing-beta": {
+      "extends": "external-testing",
+      "env": {
+        "EXPO_PUBLIC_COACH_AI_BILLING_ENABLED": "true",
+        "EXPO_PUBLIC_COACH_AI_BILLING_INFO_LOGGING": "true"
+      }
+    },
     "coach-ai-production-beta": {
       "autoIncrement": true,
       "developmentClient": false,

@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const read = (file) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
-const core = require(path.join(process.cwd(), "functions", "lib", "coachResourceHelpCore.js"));
+const core = require('./coach-ai-test-loader.cjs').createSourceLoader()('functions/src/coachResourceHelpCore.ts');
 const checklists = read("content/coachResources/checklists.ts");
 const templates = read("content/coachResources/communicationTemplates.ts");
 const tips = read("content/coachResources/proTips.ts");
@@ -117,7 +117,7 @@ assert.equal(eas.build.production.env.EXPO_PUBLIC_AI_COACH_TESTING_ENABLED, unde
 assert.equal(eas.build.production.env.EXPO_PUBLIC_AI_COACH_BETA_BUILD, undefined);
 assert.equal(eas.build.production.env.EXPO_PUBLIC_AI_COACH_PRODUCTION_BETA_BUILD, undefined);
 assert.match(accessCore, /signedIn && adultEligible && activeMode === "coach" && accountStanding === "active"/, "AI Coach access must require signed-in adult Coach Mode with active standing");
-assert.match(accessHook, /paidEntitled: false/, "the future paid entitlement must remain disabled and separate from the development override");
+assert.match(accessHook, /paidEntitled: billing\.status\?\.entitled === true/, "paid access must derive from authenticated server status, separate from tester claims");
 assert.match(accessHook, /getIdTokenResult[\s\S]*aiCoachTester === true/, "client access must fail closed on the Firebase tester claim");
 assert.match(hub, /\{coachAiAccess\.canView \? \(/, "Coach AI entry point must be hidden unless the full access boundary allows it");
 assert.doesNotMatch(hub, /coachAiComingSoon/, "Coach Resources must not ship a visible coming-soon control");
@@ -128,7 +128,8 @@ assert.match(help, /generationInFlight\.current[\s\S]*setRetryRequest\(request\)
 assert.match(help, /cancelGeneration[\s\S]*generationToken\.current \+= 1[\s\S]*cancelGeneration/, "cancellation must invalidate late responses and remain user-accessible while loading");
 assert.match(help, /helpErrors\.\$\{kind\}/, "recoverable failures must use localized categorized error messages");
 assert.match(helpResult, /result\.sections[\s\S]*result\.canSendAsAnnouncement/, "structured results must render natively and gate announcements");
-assert.ok(service.indexOf("if (!FEATURE_FLAGS.coachAiEnabled)") < service.indexOf("httpsCallable<CoachHelpRequest"), "client service must stop before constructing a callable");
+const gate = service.indexOf("if (source === null");
+assert.ok(gate >= 0 && gate < service.indexOf("httpsCallable<CoachHelpRequest"), "client service must check the beta/paid feature gate before constructing a callable");
 assert.match(functionsSource, /COACH_AI_TESTING_ENABLED === 'true'/, "backend testing must require the exact server flag outside the emulator");
 assert.match(functionsSource, /aiCoachTester[\s\S]*adultEligibilityConfirmed[\s\S]*activeMode !== 'coach'/, "backend testing must require tester claim, adult eligibility, and Coach Mode");
 assert.match(functionsSource, /permanentAccountFunctions\(firebaseFunctions, 'communication'\)/, "restricted, suspended, and banned accounts must be rejected by the permanent account boundary");

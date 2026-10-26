@@ -7,9 +7,10 @@ import { Card } from "@/components/Card";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import type { TeamScheduleEvent } from "@/services/teamScheduleService";
 
-export function TeamScheduleEventCard({ event, locale, onPress }: {
+export function TeamScheduleEventCard({ event, locale, displayTimeZone, onPress }: {
   event: TeamScheduleEvent;
   locale: string;
+  displayTimeZone: string;
   onPress: () => void;
 }) {
   const { t } = useTranslation();
@@ -37,7 +38,7 @@ export function TeamScheduleEventCard({ event, locale, onPress }: {
             <Text style={styles.statusText}>{t(`schedule.statuses.${event.status}`)}</Text>
           </View>
         </View>
-        <Text style={styles.time}>{formatEventTime(event, locale, t)}</Text>
+        <Text style={styles.time}>{formatEventTime(event, locale, displayTimeZone, t)}</Text>
         {event.source === "ics-feed" ? <Text accessibilityLabel={t("schedule.syncedIndicator")} style={styles.synced}>{t("schedule.syncedIndicator")}</Text> : null}
         {event.opponentName ? (
           <Text style={styles.detail}>
@@ -59,18 +60,19 @@ export function TeamScheduleEventCard({ event, locale, onPress }: {
 function formatEventTime(
   event: TeamScheduleEvent,
   locale: string,
+  displayTimeZone: string,
   t: (key: string, options?: Record<string, unknown>) => string,
 ) {
   if (event.isAllDay) return t("schedule.allDay");
   const formatter = new Intl.DateTimeFormat(locale, {
-    timeZone: event.timezone,
+    timeZone: displayTimeZone,
     hour: "numeric",
     minute: "2-digit",
   });
   return t("schedule.timeRange", {
     start: formatter.format(event.startAt),
     end: formatter.format(event.endAt),
-    timezone: shortTimeZone(event.startAt, event.timezone, locale),
+    timezone: shortTimeZone(event.startAt, displayTimeZone, locale),
   });
 }
 

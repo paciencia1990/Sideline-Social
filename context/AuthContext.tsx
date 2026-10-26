@@ -150,6 +150,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [providerRevision, setProviderRevision] = useState(0);
   const profileLoadVersion = useRef(0);
+  const resolvedProfileUserId = useRef<string | null>(null);
   const authOperationInFlight = useRef(false);
   const authOperationGuard = useRef(createAuthOperationGuard());
 
@@ -157,6 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let disposed = false;
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
       const loadVersion = ++profileLoadVersion.current;
+      resolvedProfileUserId.current = null;
       setUser(null);
 
       if (!nextUser) {
@@ -191,6 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       )
         .then(({ exists, profile }) => {
           if (disposed || loadVersion !== profileLoadVersion.current || auth.currentUser?.uid !== nextUser.uid) return;
+          resolvedProfileUserId.current = nextUser.uid;
           setUser(mapUser(nextUser, exists, profile));
           setLoading(false);
         });
@@ -206,13 +209,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hydrateAuthenticatedProfile = useCallback(async (allowUnavailable: boolean) => {
     const currentUser = auth.currentUser;
     if (!currentUser || resolveFirebaseIdentityKind(currentUser) !== "permanent") {
+      resolvedProfileUserId.current = null;
       setFirebaseUser(null);
       setUser(null);
       setLoading(false);
       return;
     }
     const loadVersion = ++profileLoadVersion.current;
-    setLoading(true);
+    // A strict refresh of an already resolved session updates the profile in
+    // place. Initial sign-in and account changes still use the auth boundary.
+    const refreshInPlace = !allowUnavailable && resolvedProfileUserId.current === currentUser.uid;
+    if (!refreshInPlace) setLoading(true);
     try {
       const { exists, profile } = await loadAuthSessionProfile({
         allowUnavailable,
@@ -224,10 +231,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       });
       if (loadVersion !== profileLoadVersion.current || auth.currentUser?.uid !== currentUser.uid) return;
+      if (refreshInPlace && resolvedProfileUserId.current !== currentUser.uid) return;
+      resolvedProfileUserId.current = currentUser.uid;
       setFirebaseUser(currentUser);
       setUser(mapUser(currentUser, exists, profile));
     } finally {
-      if (loadVersion === profileLoadVersion.current && auth.currentUser?.uid === currentUser.uid) setLoading(false);
+      if (!refreshInPlace && loadVersion === profileLoadVersion.current && auth.currentUser?.uid === currentUser.uid) setLoading(false);
     }
   }, []);
 
@@ -263,6 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resetLocalAuthContext: () => {
         setVoicePlaybackAuthorizationContext(null);
         profileLoadVersion.current += 1;
+        resolvedProfileUserId.current = null;
         setFirebaseUser(null);
         setUser(null);
         setLoading(false);
@@ -278,6 +288,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInFederated = useCallback(async (provider: FederatedAuthProvider) => {
     await runExclusiveAuthOperation(async (operationId) => {
+      resolvedProfileUserId.current = null;
       setUser(null);
       setLoading(true);
       try {
@@ -329,6 +340,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(async (email: string, password: string) => {
     await runExclusiveAuthOperation(async () => {
+      resolvedProfileUserId.current = null;
       setUser(null);
       setLoading(true);
       try {

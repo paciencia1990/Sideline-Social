@@ -8,8 +8,10 @@ import { useAccountStanding } from "@/context/AccountStandingContext";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { resolveCoachAiAccess } from "@/utils/coachAiAccess";
+import { useCoachAiBilling } from './useCoachAiBilling';
 
 export function useCoachAiAccess() {
+  const billing = useCoachAiBilling();
   const { standing } = useAccountStanding();
   const { activeMode } = useApp();
   const { firebaseUser, user } = useAuth();
@@ -44,15 +46,16 @@ export function useCoachAiAccess() {
     };
   }, [firebaseUser, loadClaim]);
 
-  return resolveCoachAiAccess({
+  return { ...resolveCoachAiAccess({
     buildAvailable: FEATURE_FLAGS.coachAiEnabled,
     claimLoaded: claimState.loaded && claimState.uid === (firebaseUser?.uid ?? null),
     testerClaimEntitled: claimState.entitled,
-    // Reserved for a future server-validated StoreKit / Play entitlement.
-    paidEntitled: false,
+    paidEntitled: billing.availability === 'ready' && billing.status?.entitled === true,
+    paidRemaining: billing.availability === 'ready' ? billing.status?.remaining ?? 0 : 0,
+    billingAvailable: billing.enabled,
     signedIn: Boolean(user?.uid),
     adultEligible: user?.adultEligibilityConfirmed === true,
     activeMode,
     accountStanding: standing?.status ?? null,
-  });
+  }), billing };
 }

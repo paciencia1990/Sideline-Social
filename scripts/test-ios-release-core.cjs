@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const read = (...segments) => fs.readFileSync(path.join(process.cwd(), ...segments), "utf8");
-const IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION = "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.";
+const IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION = "Sideline Social uses your location when you choose Find Nearby. Creating a Squad saves the captured location as a fixed venue pin visible to other users. The pin does not track your movements.";
 const IOS_MICROPHONE_USAGE_DESCRIPTION = "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.";
 const IOS_MOTION_USAGE_DESCRIPTION = "Sideline Social may use motion activity to support location features when you choose Find Nearby. Motion data is not displayed to other users.";
 const IOS_MOTION_USAGE_DESCRIPTION_ES = "Sideline Social puede usar la actividad de movimiento para admitir las funciones de ubicación cuando eliges Buscar cerca. Los datos de movimiento no se muestran a otros usuarios.";

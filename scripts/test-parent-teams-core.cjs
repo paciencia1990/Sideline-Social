@@ -348,12 +348,19 @@ let membershipReads = 0;
 let childReads = 0;
 let inboxReads = 0;
 let childLinkReads = 0;
+const emptyAccountSession = { uid: "empty-parent-fixture" };
 const emptyAccountParentTeamService = loadTypeScriptWithDependencies("services/parentTeamService.ts", {
   "firebase/firestore": {
     getDocs: async () => { childLinkReads += 1; return { docs: [] }; },
   },
   "firebase/functions": {},
-  "@/config/firebase": {},
+  "@/config/firebase": { auth: { currentUser: emptyAccountSession } },
+  "@/services/teamReadReadiness": {
+    requireTeamReadReady: async (expectedUserId) => {
+      assert.equal(expectedUserId, emptyAccountSession.uid);
+      return emptyAccountSession;
+    },
+  },
   "@/constants/teamHistoryPagination": { TEAM_HISTORY_PAGE_SIZES: {} },
   "@/utils/parentTeamCore": {},
   "@/services/childService": {
@@ -458,6 +465,7 @@ void (async () => {
   assert.deepEqual(await emptyAccountParentTeamService.getParentHomeTeamsSummary(), {
     rows: [],
     totalTeams: 0,
+    childDetailsAvailable: true,
   });
   assert.deepEqual(await emptyAccountParentTeamService.getParentTeamsOverview(), {
     teams: [],

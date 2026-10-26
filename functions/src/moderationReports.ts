@@ -146,6 +146,7 @@ export const submitModerationReportV2 = moderationFunctions.https.onCall(async (
 
     if (resolved.retentionReference) {
       transaction.set(firestore.doc(resolved.retentionReference), {
+        moderationRetainedReportIds: FieldValue.arrayUnion(reportReference.id),
         moderationEvidenceRetained: true,
         moderationEvidenceRetainedAt: FieldValue.serverTimestamp(),
       }, { merge: true });

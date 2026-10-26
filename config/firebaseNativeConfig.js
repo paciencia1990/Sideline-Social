@@ -41,7 +41,8 @@ function resolveStagingNativeFirebaseTarget({
     throw new Error("Staging build platform context is incomplete.");
   }
   const expectedProfile = stagingAcceptanceBuild ? "staging-acceptance" : "external-testing";
-  if (profile !== expectedProfile) {
+  const isBillingBeta = externalTestingBuild && profile === "coach-ai-billing-beta";
+  if (profile !== expectedProfile && !isBillingBeta) {
     throw new Error("Staging build profile context is conflicting.");
   }
   if (stagingAcceptanceBuild && platform !== "android") {

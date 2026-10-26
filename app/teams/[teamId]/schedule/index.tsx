@@ -9,6 +9,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { TeamScheduleEventCard } from "@/components/TeamScheduleEventCard";
 import { getSyntheticTeamSchedule } from "@/constants/teamSchedulePreview";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useDeviceTimeZone } from "@/hooks/useDeviceTimeZone";
 import {
   getMoreUpcomingTeamSchedule,
   getPastTeamSchedulePage,
@@ -22,6 +23,7 @@ import { groupScheduleEvents, scheduleEventsForDisplay, splitScheduleEvents, typ
 
 export default function TeamScheduleScreen() {
   const { i18n, t } = useTranslation();
+  const displayTimeZone = useDeviceTimeZone();
   const params = useLocalSearchParams<{ teamId?: string | string[] }>();
   const teamId = normalizeParam(params.teamId);
   const [access, setAccess] = useState<TeamScheduleAccess | null>(null);
@@ -85,8 +87,8 @@ export default function TeamScheduleScreen() {
 
   const visibleUpcomingEvents = useMemo(() => scheduleEventsForDisplay(upcomingEvents), [upcomingEvents]);
   const visiblePastEvents = useMemo(() => scheduleEventsForDisplay(pastEvents), [pastEvents]);
-  const upcomingGroups = useMemo(() => groupScheduleEvents(visibleUpcomingEvents), [visibleUpcomingEvents]);
-  const pastGroups = useMemo(() => groupScheduleEvents(visiblePastEvents), [visiblePastEvents]);
+  const upcomingGroups = useMemo(() => groupScheduleEvents(visibleUpcomingEvents, displayTimeZone), [displayTimeZone, visibleUpcomingEvents]);
+  const pastGroups = useMemo(() => groupScheduleEvents(visiblePastEvents, displayTimeZone), [displayTimeZone, visiblePastEvents]);
   const canManage = access?.canManage === true && access.teamStatus === "active";
   const refresh = useCallback(() => {
     setPastEvents([]);
@@ -215,7 +217,7 @@ export default function TeamScheduleScreen() {
         {!loading && !error && upcomingGroups.length > 0 ? (
           <View style={styles.section}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>{t("schedule.upcoming")}</Text>
-            <ScheduleGroups groups={upcomingGroups} locale={i18n.language} teamId={teamId} />
+            <ScheduleGroups groups={upcomingGroups} locale={i18n.language} displayTimeZone={displayTimeZone} teamId={teamId} />
             {hasMoreUpcoming ? (
               <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: loadingMoreUpcoming }} disabled={loadingMoreUpcoming} onPress={() => { void loadMoreUpcoming(); }} style={styles.retryButton}>
                 {loadingMoreUpcoming ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.retryText}>{t("schedule.loadMoreUpcoming")}</Text>}
@@ -232,7 +234,7 @@ export default function TeamScheduleScreen() {
             </TouchableOpacity>
             {pastExpanded ? (
               <View style={styles.section}>
-                <ScheduleGroups groups={pastGroups} locale={i18n.language} teamId={teamId} />
+                <ScheduleGroups groups={pastGroups} locale={i18n.language} displayTimeZone={displayTimeZone} teamId={teamId} />
                 {pastLoading ? <ActivityIndicator accessibilityLabel={t("schedule.loading")} color={Colors.primary} /> : null}
                 {pastError ? <Text accessibilityLiveRegion="polite" style={styles.stateText}>{pastError}</Text> : null}
                 {!pastLoading && !pastError && hasMorePast ? (
@@ -249,9 +251,10 @@ export default function TeamScheduleScreen() {
   );
 }
 
-function ScheduleGroups({ groups, locale, teamId }: {
+function ScheduleGroups({ groups, locale, displayTimeZone, teamId }: {
   groups: ScheduleMonthGroup<TeamScheduleEvent>[];
   locale: string;
+  displayTimeZone: string;
   teamId: string;
 }) {
   return <>{groups.map((month) => (
@@ -265,6 +268,7 @@ function ScheduleGroups({ groups, locale, teamId }: {
               key={event.id}
               event={event}
               locale={locale}
+              displayTimeZone={displayTimeZone}
               onPress={() => router.push({ pathname: "/teams/[teamId]/schedule/[eventId]", params: { teamId, eventId: event.id } } as never)}
             />
           ))}

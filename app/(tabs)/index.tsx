@@ -34,10 +34,10 @@ import {
 import { formatUnreadBadgeCount } from "@/utils/notificationCore";
 import { subscribeToUnreadFriendConversationCount } from "@/services/chatService";
 import { measureDevelopmentPerformance } from "@/utils/performanceDiagnostics";
+import { getSafeTeamReadErrorCode, isTransientTeamReadError } from "@/services/teamReadReadiness";
 import type { GameJoinCodeType } from "@/services/gameJoinCodeService";
 import {
   getParentHomeTeamsSummary,
-  isParentHomeTeamAvailable,
   type ParentHomeTeamsSummary,
 } from "@/services/parentTeamService";
 import {
@@ -111,7 +111,14 @@ export default function HomeScreen() {
     merge: () => true,
     onStart: () => { setMyTeamsLoading(true); setMyTeamsError(null); },
     onSuccess: (summary) => { setMyTeamsOwner(user?.uid); setMyTeamsSummary(summary); },
-    onError: () => setMyTeamsError(t("myTeams.loadError")),
+    onError: (error) => {
+      console.warn("[Home] team summary unconfirmed", { code: getSafeTeamReadErrorCode(error) });
+      if (!isTransientTeamReadError(error)) {
+        setMyTeamsSummary(null);
+        setMyTeamsOwner(undefined);
+      }
+      setMyTeamsError(t("myTeams.loadError"));
+    },
     onSettled: () => setMyTeamsLoading(false),
   });
   const loadMyTeams = useCallback(() => refreshMyTeams(true), [refreshMyTeams]);
@@ -120,26 +127,22 @@ export default function HomeScreen() {
     setMyTeamsError(null);
     setMyTeamsLoading(Boolean(user?.uid));
   }, [user?.uid]);
-  const openParentTeam = useCallback(async (teamId: string) => {
+  const openParentTeam = useCallback((teamId: string) => {
     if (teamNavigationInFlight.current) return;
     teamNavigationInFlight.current = teamId;
     setOpeningTeamId(teamId);
     setMyTeamsError(null);
     let didNavigate = false;
     try {
-      if (!await isParentHomeTeamAvailable(teamId)) {
-        await loadMyTeams();
-        setMyTeamsError(t("myTeams.teamLoadError"));
-        return;
-      }
+      // The destination owns the fresh membership check. Transition to its
+      // loading shell without a second access read on the previous screen.
       router.push({
         pathname: "/teams/[teamId]",
         params: { teamId },
       } as never);
       didNavigate = true;
     } catch (nextError) {
-      console.warn("[HomeScreen] My Teams navigation validation error:", nextError);
-      await loadMyTeams();
+      console.warn("[HomeScreen] My Teams navigation error:", nextError);
       setMyTeamsError(t("myTeams.teamLoadError"));
     } finally {
       if (!didNavigate) {
@@ -147,7 +150,7 @@ export default function HomeScreen() {
         setOpeningTeamId(null);
       }
     }
-  }, [loadMyTeams, t]);
+  }, [t]);
   const loadHome = useCallback(async () => {
     setError(null);
     setChallengeError(null);
@@ -453,13 +456,17 @@ function MyTeamsCard({
 
       {summary?.rows.map((row) => (
         <ParentHomeTeamRowButton
-          disabled={openingTeamId !== null}
+          disabled={openingTeamId !== null || loading || Boolean(error)}
           key={row.key}
           onPress={() => onOpenTeam(row.teamId)}
           opening={openingTeamId === row.teamId}
           row={row}
         />
       ))}
+
+      {summary?.childDetailsAvailable === false ? (
+        <Text accessibilityLiveRegion="polite" style={styles.cardText}>{t("myTeams.childDetailsUnavailable")}</Text>
+      ) : null}
 
       {!loading && summary?.totalTeams === 0 ? (
         <View style={styles.myTeamsEmptyState}>

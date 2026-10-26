@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { router } from "expo-router";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { router, useFocusEffect } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
@@ -12,9 +12,11 @@ import { COACH_MODE_ROUTE, PARENT_PROFILE_ROUTE, SIGN_IN_ROUTE } from "@/constan
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
+import { auth } from "@/config/firebase";
 import { getCurrentUserTeamMemberships, hasCoachAccess, switchActiveMode } from "@/services/teamService";
 import { getPublicUserProfiles, updatePublicUserProfile } from "@/services/publicProfileService";
 import { flattenStyle } from "@/utils/flatten-style";
+import { switchModeImmediately } from "@/utils/modeSwitch";
 
 const LANGUAGE_OPTIONS = [
   { code: "en", shortLabel: "EN", labelKey: "profile.english" },
@@ -28,6 +30,7 @@ export default function ProfileScreen() {
   const [hasCoachRole, setHasCoachRole] = useState(false);
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
+  const modeSwitchInFlight = useRef(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [firstName, setFirstName] = useState("");
@@ -35,6 +38,10 @@ export default function ProfileScreen() {
   const [isSavingName, setIsSavingName] = useState(false);
   const [nameStatus, setNameStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const isParentMode = activeMode === "parent";
+  useFocusEffect(useCallback(() => {
+    modeSwitchInFlight.current = false;
+    setIsSwitchingMode(false);
+  }, [user?.uid]));
 
   useEffect(() => {
     let isMounted = true;
@@ -107,7 +114,7 @@ export default function ProfileScreen() {
     }
   }, [isSigningOut, signOut, t]);
   const handleCoachPress = useCallback(async () => {
-    if (activeMode !== "parent") return;
+    if (activeMode !== "parent" || modeSwitchInFlight.current || !user?.uid) return;
 
     const targetRoute = COACH_MODE_ROUTE;
     setIsSwitchingMode(true);
@@ -123,16 +130,22 @@ export default function ProfileScreen() {
         });
       }
 
-      await switchActiveMode("coach");
-      setActiveMode("coach");
-      replaceAfterOptionalDismiss(targetRoute);
+      const userId = user.uid;
+      await switchModeImmediately({
+        inFlight: modeSwitchInFlight,
+        mode: "coach",
+        isCurrentAccount: () => auth.currentUser?.uid === userId,
+        setMode: setActiveMode,
+        navigate: () => replaceAfterOptionalDismiss(targetRoute),
+        persist: switchActiveMode,
+        onPersistenceError: () => Alert.alert(t("mode.preferenceUnavailableTitle"), t("mode.preferenceUnavailableBody")),
+      });
     } catch (nextError) {
       console.warn("[Profile] switch to coach error:", nextError);
       setModeError(t("coach.home.error"));
-    } finally {
       setIsSwitchingMode(false);
     }
-  }, [activeMode, setActiveMode, t]);
+  }, [activeMode, setActiveMode, t, user?.uid]);
 
   if (authLoading || !user || !modeHydrated || !isParentMode) {
     return (

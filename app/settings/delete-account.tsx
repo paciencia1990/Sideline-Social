@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { Alert, StyleSheet, Text, TextInput } from "react-native";
+import { Alert, Linking, StyleSheet, Text, TextInput, TouchableOpacity } from "react-native";
 import { router } from "expo-router";
 import { useTranslation } from "react-i18next";
 
@@ -17,6 +17,7 @@ import { useAuthProviderAvailability } from "@/hooks/useAuthProviderAvailability
 import { deleteOwnAccount } from "@/services/accountService";
 import { revokeGoogleAccessIfAvailable } from "@/services/federatedAuthService";
 import type { FederatedAuthProvider } from "@/utils/federatedAuthCore";
+import { COACH_AI_BILLING_ENABLED, coachAiManagementUrl } from '@/services/coachAiBillingService';
 
 export default function DeleteAccountScreen() {
   const { t } = useTranslation();
@@ -106,6 +107,12 @@ export default function DeleteAccountScreen() {
         <Card style={styles.card}>
           <Text style={styles.warning}>{t("settings.deleteWarning")}</Text>
           <Text style={styles.body}>{t("settings.deleteDetails")}</Text>
+          {COACH_AI_BILLING_ENABLED ? <>
+            <Text style={styles.body}>{t('coachAiBilling.deletionNotice')}</Text>
+            {(['app_store', 'play_store'] as const).map((store) => <TouchableOpacity key={store} accessibilityRole="link" style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => void Linking.openURL(coachAiManagementUrl(store)!).catch(() => setError(t('coachAiBilling.linkError')))}>
+              <Text style={styles.label}>{t(store === 'app_store' ? 'coachAiBilling.appleManage' : 'coachAiBilling.googleManage')}</Text>
+            </TouchableOpacity>)}
+          </> : null}
           <Text style={styles.label}>{t("settings.typeDelete")}</Text>
           <TextInput
             accessibilityLabel={t("settings.typeDelete")}

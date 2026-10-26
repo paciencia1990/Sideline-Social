@@ -5,6 +5,7 @@ import { ClipboardList, Lightbulb, MessageSquareText, Sparkles, type LucideIcon 
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { CoachAiBillingSummary } from '@/components/CoachAiBillingSummary';
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
@@ -49,7 +50,9 @@ export default function CoachResourcesScreen() {
 
         {coachAiAccess.canView ? (
           <View style={styles.helpArea}>
-            <Text accessibilityRole="text" style={styles.previewLabel}>{t("coach.resources.coachAiTestingPreview")}</Text>
+            {coachAiAccess.entitlementSource === 'tester-claim' ? <Text accessibilityRole="text" style={styles.previewLabel}>{t("coach.resources.coachAiTestingPreview")}</Text> : null}
+            <CoachAiBillingSummary access={coachAiAccess} />
+            {coachAiAccess.canCreate ? <>
             <Text style={styles.helpPrompt}>{t("coach.resources.notFinding")}</Text>
             <TouchableOpacity
               accessibilityHint={t("coach.resources.helpHint")}
@@ -61,6 +64,16 @@ export default function CoachResourcesScreen() {
               <Sparkles color={Colors.surface} size={20} />
               <Text style={styles.helpButtonText}>{t("coach.resources.needHelp")}</Text>
             </TouchableOpacity>
+            </> : <TouchableOpacity
+              accessibilityHint={t("coach.resources.savedExpandHint")}
+              accessibilityRole="button"
+              activeOpacity={0.86}
+              onPress={() => router.push("/coach/resources/help" as never)}
+              style={styles.helpButton}
+            >
+              <ClipboardList color={Colors.surface} size={20} />
+              <Text style={styles.helpButtonText}>{t("coach.resources.savedHelpEntry")}</Text>
+            </TouchableOpacity>}
           </View>
         ) : null}
       </ScrollView>

@@ -16,13 +16,7 @@ require.extensions[".ts"] = (module, filename) => {
 
 const root = process.cwd();
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), "utf8");
-const questionBank = JSON.parse(read("assets", "triviaBlitz", "questions.json"));
-const {
-  RECENT_TRIVIA_QUESTION_LIMIT,
-  createStableQuestionId,
-  normalizeQuestionBank,
-  selectTriviaQuestions,
-} = require(path.join(root, "src", "game", "triviaBlitz", "questionSelection.ts"));
+require("./test-trivia-selection.cjs");
 const {
   clampSpotDifferenceTranslation,
   screenPointToSourcePoint,
@@ -42,84 +36,6 @@ const {
   clampSpotDifferenceTranslation: transformedClampSpotDifferenceTranslation,
   screenPointToSourcePoint: transformedScreenPointToSourcePoint,
 } = transformedGeometryModule.exports;
-
-function seededRandom(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
-    return state / 0x100000000;
-  };
-}
-
-const normalizedQuestions = normalizeQuestionBank(questionBank);
-assert.equal(normalizedQuestions.length, questionBank.length, "Every shipped Trivia question must be well formed.");
-assert.equal(new Set(normalizedQuestions.map(({ id }) => id)).size, normalizedQuestions.length, "Question IDs must be unique.");
-assert.equal(
-  normalizedQuestions[0].id,
-  createStableQuestionId(questionBank[0]),
-  "Generated IDs must be deterministic and language independent.",
-);
-
-const firstGame = selectTriviaQuestions({
-  count: 10,
-  questions: questionBank,
-  random: seededRandom(1),
-});
-assert.equal(firstGame.selectedQuestions.length, 10);
-assert.equal(new Set(firstGame.selectedQuestions.map(({ id }) => id)).size, 10, "A game must not repeat a question ID.");
-
-const secondGame = selectTriviaQuestions({
-  count: 10,
-  questions: questionBank,
-  random: seededRandom(2),
-  recentQuestionIds: firstGame.nextRecentQuestionIds,
-});
-assert.equal(
-  secondGame.selectedQuestions.some(({ id }) => firstGame.nextRecentQuestionIds.includes(id)),
-  false,
-  "Recent questions must be excluded while enough unused questions exist.",
-);
-assert.notDeepEqual(
-  secondGame.selectedQuestions.map(({ id }) => id),
-  firstGame.selectedQuestions.map(({ id }) => id),
-  "A newly created game must perform a fresh shuffle.",
-);
-
-const sportsOnly = selectTriviaQuestions({
-  category: "Sports",
-  count: 10,
-  questions: questionBank,
-  random: seededRandom(3),
-});
-assert.ok(sportsOnly.selectedQuestions.every(({ category }) => category === "Sports"), "Category filtering must use the eligible pool.");
-
-const fullyRecentPool = normalizedQuestions.slice(0, 12);
-const leastRecentlyUsed = selectTriviaQuestions({
-  count: 5,
-  questions: fullyRecentPool,
-  random: seededRandom(4),
-  recentQuestionIds: fullyRecentPool.map(({ id }) => id),
-});
-assert.deepEqual(
-  leastRecentlyUsed.selectedQuestions.map(({ id }) => id),
-  fullyRecentPool.slice(0, 5).map(({ id }) => id),
-  "When history covers the pool, least-recently-used questions must return first.",
-);
-
-const boundedHistory = selectTriviaQuestions({
-  count: 10,
-  questions: questionBank,
-  random: seededRandom(5),
-  recentQuestionIds: normalizedQuestions.map(({ id }) => id),
-});
-assert.equal(boundedHistory.nextRecentQuestionIds.length, RECENT_TRIVIA_QUESTION_LIMIT, "Trivia history must stay bounded.");
-
-for (const selected of firstGame.selectedQuestions) {
-  const original = questionBank.find((question) => createStableQuestionId(question) === selected.id);
-  assert.ok(original, `Question ${selected.id} must resolve in both languages.`);
-  assert.equal(selected.options_en[selected.answer], original.options_en[original.answer]);
-  assert.equal(selected.options_es[selected.answer], original.options_es[original.answer]);
-}
 
 const gameState = read("src", "game", "triviaBlitz", "gameState.ts");
 assert.doesNotMatch(gameState, /sort\(\(\)\s*=>\s*Math\.random\(\)\s*-\s*0\.5\)/, "Production Trivia must not use random comparator sorting.");

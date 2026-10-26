@@ -11,6 +11,7 @@ import { announcementTranslationText } from "@/utils/teamTranslation";
 import { MessageActionsModal, type MessageModalAction, type MessageReportReason } from "@/components/MessageActionsModal";
 import { MessageKeyboardAwareScrollView } from "@/components/MessageKeyboardAwareScrollView";
 import { VoiceMemoPlayer, VoiceMemoUnavailable } from "@/components/VoiceMemoPlayer";
+import { SquadWeatherProvider } from "@/components/SquadWeatherProvider";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { auth } from "@/config/firebase";
 import { QUICK_REPLY_IDS, QUICK_REPLY_TRANSLATION_KEYS, type QuickReplyId } from "@/constants/teamReplies";
@@ -303,7 +304,8 @@ export default function ParentAnnouncementScreen() {
       : t("myTeams.childrenCount", { count: childNames.length });
 
   return (
-    <ScreenWrapper>
+    <SquadWeatherProvider squadId={summary?.team.squadId} teamId={teamId}>
+<ScreenWrapper>
       <MessageKeyboardAwareScrollView contentContainerStyle={styles.content}>
         <View style={styles.headerRow}>
           <TouchableOpacity accessibilityLabel={t("myTeams.back")} accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
@@ -500,6 +502,7 @@ export default function ParentAnnouncementScreen() {
         visible={Boolean(actionTarget)}
       />
     </ScreenWrapper>
+    </SquadWeatherProvider>
   );
 }
 

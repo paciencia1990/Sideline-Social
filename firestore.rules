@@ -777,6 +777,27 @@ service cloud.firestore {
     match /coachAiInternalConfig/{documentId} {
       allow read, create, update, delete: if false;
     }
+    match /coachAiBillingAccounts/{accountId}/{document=**} {
+      allow read, write: if false;
+    }
+    match /coachAiBillingEnrollments/{accountId} {
+      allow read, write: if false;
+    }
+    match /coachAiPaidRequests/{requestId} {
+      allow read, write: if false;
+    }
+    match /coachAiBillingRateLimits/{rateId} {
+      allow read, write: if false;
+    }
+    match /coachAiBillingVerificationRates/{rateId} {
+      allow read, write: if false;
+    }
+    match /coachAiBillingEvents/{eventId} {
+      allow read, write: if false;
+    }
+    match /coachAiBillingDeletionQueue/{requestId} {
+      allow read, write: if false;
+    }
 
     // Canonical standing and moderation records are server-only. The separate
     // self-readable projection contains no moderator identity, evidence, notes,
@@ -837,6 +858,10 @@ service cloud.firestore {
     }
 
     match /moderationEvidenceCaptureQueue/{reportId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /moderationImageDerivativeQueue/{jobId} {
       allow read, create, update, delete: if false;
     }
 

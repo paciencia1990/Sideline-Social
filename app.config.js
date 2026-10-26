@@ -95,7 +95,7 @@ const APP_NAME = STAGING_DEVELOPMENT_BUILD ? "Sideline Social Staging Dev" : STA
     ? "Sideline Social Dev"
     : "Sideline Social";
 const APP_SCHEME = IS_DEVELOPMENT ? "sidelinesquad-dev" : "sidelinesquad";
-const IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION = "Sideline Social uses your location when you choose Find Nearby to discover sports communities near your current venue. Your precise location is not shown to other users.";
+const IOS_LOCATION_WHEN_IN_USE_USAGE_DESCRIPTION = "Sideline Social uses your location when you choose Find Nearby. Creating a Squad saves the captured location as a fixed venue pin visible to other users. The pin does not track your movements.";
 const IOS_MICROPHONE_USAGE_DESCRIPTION = "Sideline Social uses your microphone only when you choose to record a voice message in a chat or team conversation.";
 const IOS_MOTION_USAGE_DESCRIPTION = "Sideline Social may use motion activity to support location features when you choose Find Nearby. Motion data is not displayed to other users.";
 const IOS_PHOTO_LIBRARY_USAGE_DESCRIPTION = "Sideline Social lets you choose a photo when you send an image message in a private friend chat. Photo metadata is stripped before upload.";

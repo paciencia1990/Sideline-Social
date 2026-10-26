@@ -106,12 +106,14 @@ assert.match(
 assert.match(functionSource, /resolveRealtimeJoinState\(initialSession, joinCodeStatus, uid, Date\.now\(\)\)/);
 
 const serviceSource = read("services", "gameService.ts");
-const hookSource = read("hooks", "useActiveSquadGameSession.ts");
+const directorySource = read("hooks", "useSquadGameLobbies.ts");
+const focusedSource = read("hooks", "useFocusedGameRefresh.ts");
 assert.match(serviceSource, /expiresAtLocalMs: Date\.now\(\) \+ Math\.max\(0, endsAtMs - serverNowMs\)/);
-assert.match(hookSource, /useFocusEffect/);
-assert.match(hookSource, /AppState\.addEventListener/);
-assert.match(hookSource, /setTimeout\(\(\) => clearAndRefresh\(session\), delay\)/);
-assert.match(hookSource, /subscribeToSession\(session\.sessionId/);
-assert.doesNotMatch(hookSource, /setInterval/, "Active Now uses one expiration timer, not polling");
+assert.match(directorySource, /useCoalescedRefresh\(scope/);
+assert.match(directorySource, /useFocusedGameRefresh\(active, focusedRefresh\)/);
+assert.match(focusedSource, /useFocusEffect/);
+assert.match(focusedSource, /AppState\.addEventListener/);
+assert.match(focusedSource, /next !== "active"\) stop\(\)/);
+assert.match(focusedSource, /stop\(\); subscription\.remove\(\)/);
 
-console.log("Canonical active/joinable status, zero-second expiry, server clock, idempotent finalization path, subscription, focus, and foreground contracts passed.");
+console.log("Canonical expiry, server clock, trusted lifecycle, current directory and focus/foreground contracts passed.");

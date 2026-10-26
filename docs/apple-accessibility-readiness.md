@@ -1,6 +1,24 @@
 # Apple Accessibility Readiness
 
-Status: **Repository audit complete; physical VoiceOver and Dynamic Type verification remains required.** Do not claim full accessibility support in App Store Connect yet.
+Status, October 20, 2026: **Accessibility-label preparation complete; support claims await evidence.** A separate physical accessibility audit is not a mandatory launch gate established by this plan. The existing repository observations below do not certify device behavior.
+
+## Store-label decision and scope
+
+[Apple's current overview](https://developer.apple.com/help/app-store-connect/manage-app-accessibility/overview-of-accessibility-nutrition-labels/) describes Accessibility Nutrition Labels as voluntary initially and says future mandatory reporting will receive notice. Support claims require evaluation of the app's common tasks.
+
+Prepared approach: make no new unverified accessibility claim in the ordinary
+metadata handoff. This does not select “no features supported”; unverified and
+unsupported are different. No current live label state was inspected or changed
+in this preparation. The app's existing labels/roles are not proof of complete
+VoiceOver, Larger Text, contrast or motion support.
+
+No separate test campaign, new build, accessibility website or badge publication
+is proposed. Actual usability defects found during the existing device acceptance
+still need appropriate fixes. If the owner later chooses a support claim, use
+the targeted criteria below on the actual candidate and retain that evidence.
+Recheck Apple's applicable submission requirements at the normal release handoff,
+without scheduling recurring checks or making claims now.
+
 
 ## Repository findings
 
@@ -11,7 +29,7 @@ Status: **Repository audit complete; physical VoiceOver and Dynamic Type verific
 - English and Spanish strings are provided for the new settings, deletion, notification, and moderation paths.
 - Some screens use fixed font sizes, dense horizontal rows, icon-only controls, custom games, maps, and gesture surfaces that require device verification.
 
-## Required manual audit
+## Targeted evaluation before a support claim
 
 - VoiceOver reading order and focus after navigation, alerts, deletion confirmation, loading, and errors.
 - Every icon-only button’s spoken label, including back, notifications, message actions, password visibility, game controls, and report actions.
@@ -24,5 +42,5 @@ Status: **Repository audit complete; physical VoiceOver and Dynamic Type verific
 
 ## App Store Connect recommendation
 
-Until the physical audit passes, do not select broad claims such as VoiceOver, Larger Text, Sufficient Contrast, or Reduced Motion as fully supported. After testing, select only the individual features that work throughout all core account, team, communication, and safety flows, and preserve test evidence for each claim.
+Use the existing candidate/device handoff to evaluate any support claim the owner elects to make. Preserve the retained checks below as guidance, not an added mandatory audit. Publish only claims supported by the actual device evidence; no label save or publication is authorized by this document.
 

@@ -24,15 +24,11 @@ export async function getCurrentUserChildren(): Promise<ParentChildProfile[]> {
   if (!user) return [];
 
   const snapshot = await getDocs(collection(db, "users", user.uid, "children"));
-  const legacyNameIndexes = snapshot.docs.filter((childDocument) =>
-    Object.prototype.hasOwnProperty.call(childDocument.data(), "normalizedName"),
-  );
-  if (legacyNameIndexes.length > 0) {
-    await Promise.all(legacyNameIndexes.map((childDocument) => updateDoc(childDocument.ref, {
-      normalizedName: deleteField(),
-      updatedAt: serverTimestamp(),
-    })));
+  if (auth.currentUser !== user || auth.currentUser?.uid !== user.uid) {
+    throw Object.assign(new Error("Child profile session changed"), { code: "auth/user-mismatch" });
   }
+  // Ignore legacy indexes when reading. Explicit profile edits still remove
+  // them; merely opening a team must never perform a migration write.
   return snapshot.docs
     .map((childDocument) => normalizeChildProfile(user.uid, childDocument.id, childDocument.data()))
     .filter((child) => child.displayName)

@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "selectedAt": "2026-10-16T13:47:56.831Z",
+  "publisher": "Docker Official Images / library/node",
+  "requestedTag": "22-bookworm-slim",
+  "nodeMajor": 22,
+  "os": "linux",
+  "architecture": "amd64",
+  "platform": "linux/amd64",
+  "indexDigest": "sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392",
+  "manifestDigest": "sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562",
+  "configurationDigest": "sha256:d0a16be756b6ec6658aecb8b7bcf87fa6c7d0d7fcc6ca53ad14bb49a4c90bdd7",
+  "reference": "docker.io/library/node:22-bookworm-slim@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562",
+  "byteDigestsVerified": true,
+  "metadataOnly": true,
+  "imageLayersDownloaded": 0,
+  "automaticRetries": 0,
+  "requestCount": 3,
+  "baseImageExecuted": false,
+  "provenance": {
+    "indexUrl": "https://registry-1.docker.io/v2/library/node/manifests/22-bookworm-slim",
+    "platformManifestUrl": "https://registry-1.docker.io/v2/library/node/manifests/sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562"
+  }
+}

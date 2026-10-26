@@ -16,45 +16,35 @@ type BombChoiceDescriptionInput = {
   markerLabel: string;
 };
 
-const INTRINSIC_MARKER_PATTERNS: Record<BombChoiceLocale, Record<BombChoiceMarker, RegExp>> = {
+// Also simplify labels received from the existing generator. Each choice keeps
+// its number and opaque answer ID; a second decorative identifier is unnecessary.
+const PRIMARY_LABELS: Record<BombChoiceLocale, Record<string, string>> = {
   en: {
-    solid: /\bsolid\b/iu,
-    striped: /\bstriped\b/iu,
-    dashed: /\bdashed\b/iu,
-    dotted: /\bdotted\b/iu,
-    circle: /\bcircle\b/iu,
-    square: /\bsquare\b/iu,
-    triangle: /\btriangle\b/iu,
-    diamond: /\bdiamond\b/iu,
+    'Red wire with a solid pattern': 'Red',
+    'Blue wire with a striped pattern': 'Blue',
+    'Yellow wire with a dashed pattern': 'Yellow',
+    'Green wire with a dotted pattern': 'Green',
+    'Solid panel': 'Solid',
+    'Striped panel': 'Striped',
+    'Dashed panel': 'Dashed',
+    'Dotted panel': 'Dotted',
   },
   es: {
-    solid: /\bs[oó]lid[oa]s?\b/iu,
-    striped: /\brayas?\b/iu,
-    dashed: /\bguiones?\b/iu,
-    dotted: /\bpuntos?\b/iu,
-    circle: /\b(c[ií]rculo|circular(?:es)?)\b/iu,
-    square: /\bcuadrad[oa]s?\b/iu,
-    triangle: /\b(tri[aá]ngulo|triangular(?:es)?)\b/iu,
-    diamond: /\brombos?\b/iu,
+    'Cable rojo con patrón sólido': 'Rojo',
+    'Cable azul con patrón de rayas': 'Azul',
+    'Cable amarillo con patrón de guiones': 'Amarillo',
+    'Cable verde con patrón de puntos': 'Verde',
+    'Panel sólido': 'Sólido',
+    'Panel de rayas': 'Rayas',
+    'Panel de guiones': 'Guiones',
+    'Panel de puntos': 'Puntos',
   },
 };
 
 export function buildBombChoiceDescription({
   label,
   locale,
-  marker,
-  markerLabel,
 }: BombChoiceDescriptionInput) {
   const conciseLabel = label.trim();
-  const conciseMarker = markerLabel.trim();
-  if (!conciseLabel || !conciseMarker) return conciseLabel;
-  if (INTRINSIC_MARKER_PATTERNS[locale][marker].test(conciseLabel)) return conciseLabel;
-
-  const alreadyCompound = locale === "es"
-    ? /\scon\s/iu.test(conciseLabel)
-    : /\swith\s/iu.test(conciseLabel);
-  const connector = locale === "es"
-    ? alreadyCompound ? "y" : "con"
-    : alreadyCompound ? "and" : "with";
-  return `${conciseLabel} ${connector} ${conciseMarker}`;
+  return PRIMARY_LABELS[locale][conciseLabel] ?? conciseLabel;
 }

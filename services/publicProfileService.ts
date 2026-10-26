@@ -7,6 +7,7 @@ import {
   type PublicFriendProfileRecord,
 } from "@/utils/friendRequestMapping";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
+import { createPublicUserSearchRequests } from "@/utils/publicUserSearchRequests";
 
 export type PublicUserProfile = PublicFriendProfileRecord;
 
@@ -91,7 +92,16 @@ export async function getSuggestedConnections(queryText: string) {
   return response.data.suggestions;
 }
 
-export async function searchPublicUserProfiles(
+export const searchPublicUserProfiles = createPublicUserSearchRequests({
+  currentSession: () => auth.currentUser,
+  load: loadPublicUserSearchResults,
+});
+
+export function invalidatePublicUserSearchRequests() {
+  searchPublicUserProfiles.invalidatePending();
+}
+
+async function loadPublicUserSearchResults(
   query: string,
   limit = 20,
 ): Promise<PublicUserSearchResult[]> {

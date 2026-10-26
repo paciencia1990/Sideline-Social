@@ -178,6 +178,9 @@ export {
   clearUserNotifications,
 } from './userNotificationDismissal';
 export { generateCoachResourceHelp } from './coachResourceHelp';
+export { generatePaidCoachResourceHelp } from './coachAiPaidGeneration';
+export { prepareCoachAiBilling, getCoachAiBillingStatus, coachAiRevenueCatWebhook } from './coachAiBilling';
+export { getCoachAiPurchaseRecoveryDecision } from './coachAiPurchaseRecovery';
 export { coachAiClaudeGateway } from './coachAiClaudeGateway';
 export { submitCoachAiFeedback } from './coachAiFeedback';
 export { deleteOwnAccount } from './accountDeletion';

@@ -1,3 +1,4 @@
+import { lifecyclePatch } from './moderationRetentionCore';
 import { getAuth } from "firebase-admin/auth";
 import { getDatabase } from "firebase-admin/database";
 import { getFirestore } from "firebase-admin/firestore";
@@ -250,6 +251,7 @@ export const submitMyModerationAppeal = safetyFunctions.https.onCall(
         createdAt: now,
       });
       transaction.update(caseSnapshot.ref, {
+        ...lifecyclePatch(currentCase.data()!, 'open', now.toMillis(), appealReference.path),
         status: "appealed",
         appealState: "submitted",
         caseVersion: currentCaseVersion + 1,
@@ -293,6 +295,12 @@ export const onAccountStandingChanged = firebaseFunctions
     const snapshot = await firestore.runTransaction(async transaction => {
       const current = await transaction.get(firestore.collection('accountStanding').doc(uid));
       const publicSnapshot = await transaction.get(publicReference);
+      const deletionFence = await transaction.get(firestore.collection('moderationAccountDeletionFences').doc(uid));
+      if (deletionFence.exists) {
+        if (publicSnapshot.exists) transaction.delete(publicReference);
+        if (!deletionFence.updateTime) throw new Error('deletion_fence_version_missing');
+        return { deleted: true as const, version: `${deletionFence.updateTime.seconds}:${deletionFence.updateTime.nanoseconds}` };
+      }
       if (!current.exists) {
         if (publicSnapshot.exists) transaction.delete(publicReference);
         return null;
@@ -320,6 +328,13 @@ export const onAccountStandingChanged = firebaseFunctions
           current => deleteStandingProjection(current, beforeRevision, deletedVersion), undefined, false,
         );
       }
+      return;
+    }
+    if ('deleted' in snapshot) {
+      await getDatabase().ref(`accountStanding/${uid}`).transaction(current => orderedStandingProjection(current, {
+        status: 'deleted', deleted: true, messagingRestricted: false, expiresAt: null, revision: 1,
+        version: snapshot.version, updatedAt: Date.now(),
+      }), undefined, false);
       return;
     }
     const { standing } = snapshot;

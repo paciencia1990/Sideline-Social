@@ -1,9 +1,10 @@
 import React, { useCallback, useState } from "react";
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { BellRing, MessageCircle, MessagesSquare, Plus, Users } from "lucide-react-native";
 import { router, useFocusEffect } from "expo-router";
 import { useTranslation } from "react-i18next";
 
+import { VirtualizedRow, VirtualizedRows } from "@/components/VirtualizedRows";
 import { Card } from "@/components/Card";
 import { NestedBackButton } from "@/components/NestedBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -79,7 +80,7 @@ export default function ChatListScreen() {
 
   return (
     <ScreenWrapper>
-      <ScrollView
+      <VirtualizedRows
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={Colors.primary} />}
       >
@@ -111,11 +112,11 @@ export default function ChatListScreen() {
         ) : null}
 
         {invitations.length > 0 ? (
-          <View style={styles.section}>
+          <>
             <View style={styles.sectionHeader}><BellRing color={Colors.primary} size={20} /><Text style={styles.sectionTitle}>{t("chat.invitations")}</Text></View>
             {invitations.map((conversation) => {
               const title = getConversationDisplayTitle(conversation, user?.uid ?? "", t("chat.unnamedGroup"), t("common.formerMember"), t("common.sidelineSocialMember"));
-              return (
+              return (<VirtualizedRow key={conversation.conversationId} render={() => ((
                 <TouchableOpacity
                   key={conversation.conversationId}
                   accessibilityLabel={t("chat.invitationAccessibility", { name: title, count: conversation.activeParticipantCount })}
@@ -124,9 +125,9 @@ export default function ChatListScreen() {
                 >
                   <Card style={styles.row}><View style={styles.groupIcon}><Users color={Colors.surface} size={20} /></View><View style={styles.rowCopy}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowMeta}>{t("chat.participants", { count: conversation.activeParticipantCount })}</Text></View></Card>
                 </TouchableOpacity>
-              );
+              ))} />);
             })}
-          </View>
+          </>
         ) : null}
 
         {conversations.length === 0 && invitations.length === 0 && !errorKey ? (
@@ -141,15 +142,15 @@ export default function ChatListScreen() {
         ) : null}
 
         {conversations.length > 0 ? (
-          <View style={styles.section}>
+          <>
             <Text style={styles.sectionTitle}>{t("chat.conversations")}</Text>
-            {conversations.map((conversation) => (
+            {conversations.map((conversation) => (<VirtualizedRow key={conversation.conversationId} render={() => ((
               <ConversationRow key={conversation.conversationId} conversation={conversation} locale={i18n.language} />
-            ))}
+            ))} />))}
             {conversations.length >= conversationLimit && conversationLimit < CHAT_LIST_MAX ? <TouchableOpacity accessibilityRole="button" onPress={() => setConversationLimit((value) => Math.min(CHAT_LIST_MAX, value + CHAT_LIST_LIMIT))} style={styles.outlineButton}><Text style={styles.outlineText}>{t("chat.loadMoreConversations")}</Text></TouchableOpacity> : null}
-          </View>
+          </>
         ) : null}
-      </ScrollView>
+      </VirtualizedRows>
     </ScreenWrapper>
   );
 }
@@ -211,7 +212,6 @@ const styles = StyleSheet.create({
   errorTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 17 },
   outlineButton: { alignItems: "center", borderColor: Colors.primary, borderRadius: Radius.button, borderWidth: 1, minHeight: 44, justifyContent: "center" },
   outlineText: { color: Colors.primary, fontFamily: Typography.bodySemiBold },
-  section: { gap: Spacing.sm },
   sectionHeader: { alignItems: "center", flexDirection: "row", gap: Spacing.sm },
   sectionTitle: { color: Colors.textHeading, fontFamily: Typography.bodyBold, fontSize: 18 },
   row: { alignItems: "center", flexDirection: "row", gap: Spacing.sm, minHeight: 82 },

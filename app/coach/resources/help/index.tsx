@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, ShieldAlert } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
+import { CoachAiBillingSummary } from '@/components/CoachAiBillingSummary';
 import { CoachResourceHeader } from "@/components/CoachResourceHeader";
 import {
   KeyboardAwareScrollView,
@@ -53,14 +54,21 @@ export default function CoachResourceHelpScreen() {
   const [saved, setSaved] = useState<SavedCoachHelpResult[]>([]);
   const [savedOwnerId, setSavedOwnerId] = useState<string | null>(null);
   const [savedExpanded, setSavedExpanded] = useState(false);
-  const [disclosureAccepted, setDisclosureAccepted] = useState<boolean | null>(null);
+  const [disclosure, setDisclosure] = useState<{ userId: string; accepted: boolean } | null>(null);
+  const disclosureAccepted = disclosure?.userId === user?.uid ? disclosure?.accepted ?? null : null;
   const [disclosureError, setDisclosureError] = useState(false);
+  const [acceptingDisclosure, setAcceptingDisclosure] = useState(false);
+  const disclosureAcceptanceToken = useRef<number | null>(null);
   const generationToken = useRef(0);
   const generationInFlight = useRef(false);
 
   useLayoutEffect(() => {
     generationToken.current += 1;
     generationInFlight.current = false;
+    disclosureAcceptanceToken.current = null;
+    setDisclosure(null);
+    setDisclosureError(false);
+    setAcceptingDisclosure(false);
     setCategory(null);
     setSport("");
     setAgeGroup("");
@@ -80,8 +88,6 @@ export default function CoachResourceHelpScreen() {
   }, [user?.uid]);
 
   useEffect(() => {
-    setDisclosureAccepted(null);
-    setDisclosureError(false);
     setSaved([]);
     setSavedOwnerId(null);
     setSavedExpanded(false);
@@ -90,6 +96,10 @@ export default function CoachResourceHelpScreen() {
   useFocusEffect(useCallback(() => {
     const userId = user?.uid;
     let active = true;
+    disclosureAcceptanceToken.current = null;
+    setAcceptingDisclosure(false);
+    setDisclosure(null);
+    setDisclosureError(false);
     generationInFlight.current = false;
     setGenerating(false);
     setSaved([]);
@@ -111,9 +121,9 @@ export default function CoachResourceHelpScreen() {
       }
     });
     void hasAcceptedCoachAiDisclosure(userId).then((accepted) => {
-      if (active) setDisclosureAccepted(accepted);
+      if (active) setDisclosure({ userId, accepted });
     }).catch(() => {
-      if (active) setDisclosureAccepted(false);
+      if (active) setDisclosure({ userId, accepted: false });
     });
     return () => {
       active = false;
@@ -123,19 +133,27 @@ export default function CoachResourceHelpScreen() {
   }, [user?.uid]));
 
   const acceptDisclosure = useCallback(async () => {
-    if (!user?.uid) return;
+    if (!user?.uid || disclosureAccepted !== false || disclosureAcceptanceToken.current !== null) return;
+    const userId = user.uid;
+    const operationToken = generationToken.current;
+    disclosureAcceptanceToken.current = operationToken;
+    setAcceptingDisclosure(true);
     setDisclosureError(false);
     try {
-      await acceptCoachAiDisclosure(user.uid);
-      setDisclosureAccepted(true);
+      await acceptCoachAiDisclosure(userId);
+      if (operationToken !== generationToken.current) return;
+      setDisclosure({ userId, accepted: true });
       AccessibilityInfo.announceForAccessibility(t("coach.resources.aiDisclosureAccepted"));
     } catch {
-      setDisclosureError(true);
+      if (operationToken === generationToken.current) setDisclosureError(true);
+    } finally {
+      if (disclosureAcceptanceToken.current === operationToken) disclosureAcceptanceToken.current = null;
+      if (operationToken === generationToken.current) setAcceptingDisclosure(false);
     }
-  }, [t, user?.uid]);
+  }, [disclosureAccepted, t, user?.uid]);
 
   const generate = useCallback(async (requestToRetry?: CoachHelpRequest) => {
-    if (!user?.uid || !category || generationInFlight.current || !coachAiAccess.canRequest) return;
+    if (!user?.uid || disclosureAccepted !== true || !category || generationInFlight.current || (!coachAiAccess.canRequest && !(requestToRetry && coachAiAccess.entitlementSource === 'paid' && coachAiAccess.billing.status?.entitled))) return;
     let request = requestToRetry;
     if (!request) {
       const trimmedSituation = situation.trim();
@@ -164,7 +182,7 @@ export default function CoachResourceHelpScreen() {
     setError(null);
     setRetryRequest(request);
     try {
-      const result = await generateCoachResourceHelp(request);
+      const result = await generateCoachResourceHelp(request, coachAiAccess.entitlementSource);
       if (operationToken !== generationToken.current) return;
       await cacheGeneratedCoachHelpResult(user.uid, request.clientRequestId, result);
       if (operationToken !== generationToken.current) return;
@@ -173,22 +191,25 @@ export default function CoachResourceHelpScreen() {
     } catch (requestError) {
       if (operationToken !== generationToken.current) return;
       const kind = requestError instanceof CoachAiRequestError ? requestError.kind : "unknown";
-      setError(t(`coach.resources.helpErrors.${kind}`));
+      const paidKey = coachAiAccess.entitlementSource === 'paid'
+        ? kind === 'rate_limit' ? 'coachAiBilling.rateError' : kind === 'access' ? 'coachAiBilling.accessError' : kind === 'configuration' ? 'coachAiBilling.errors.unavailable' : null
+        : null;
+      setError(t(paidKey ?? `coach.resources.helpErrors.${kind}`));
     } finally {
       if (operationToken === generationToken.current) {
         generationInFlight.current = false;
         setGenerating(false);
       }
     }
-  }, [ageGroup, category, coachAiAccess.canRequest, desiredOutcome, equipment, locale, playerCount, practiceMinutes, situation, sport, t, tone, user?.uid]);
+  }, [ageGroup, category, coachAiAccess.canRequest, coachAiAccess.entitlementSource, coachAiAccess.billing.status?.entitled, desiredOutcome, disclosureAccepted, equipment, locale, playerCount, practiceMinutes, situation, sport, t, tone, user?.uid]);
 
   const cancelGeneration = useCallback(() => {
     if (!generationInFlight.current) return;
     generationToken.current += 1;
     generationInFlight.current = false;
     setGenerating(false);
-    setError(t("coach.resources.helpCanceled"));
-  }, [t]);
+    setError(t(coachAiAccess.entitlementSource === 'paid' ? 'coachAiBilling.stoppedWaiting' : "coach.resources.helpCanceled"));
+  }, [coachAiAccess.entitlementSource, t]);
 
   if (!coachAiAccess.canView) {
     return (
@@ -203,7 +224,7 @@ export default function CoachResourceHelpScreen() {
     );
   }
 
-  if (disclosureAccepted !== true) {
+  if (coachAiAccess.canCreate && disclosureAccepted !== true) {
     return (
       <ScreenWrapper>
         <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -214,8 +235,8 @@ export default function CoachResourceHelpScreen() {
             <Text style={styles.reminderText}>{t("coach.resources.aiDisclosureStorage")}</Text>
           </Card>
           {disclosureError ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{t("coach.resources.aiDisclosureError")}</Text> : null}
-          <TouchableOpacity accessibilityRole="button" disabled={disclosureAccepted === null} onPress={() => void acceptDisclosure()} style={[styles.generateButton, disclosureAccepted === null && styles.disabled]}>
-            {disclosureAccepted === null ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.generateText}>{t("coach.resources.aiDisclosureContinue")}</Text>}
+          <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: acceptingDisclosure, disabled: disclosureAccepted === null || acceptingDisclosure }} disabled={disclosureAccepted === null || acceptingDisclosure} onPress={() => void acceptDisclosure()} style={[styles.generateButton, (disclosureAccepted === null || acceptingDisclosure) && styles.disabled]}>
+            {disclosureAccepted === null || acceptingDisclosure ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.generateText}>{t("coach.resources.aiDisclosureContinue")}</Text>}
           </TouchableOpacity>
           <TouchableOpacity accessibilityRole="button" onPress={() => router.replace("/coach/resources" as never)} style={styles.backStepButton}>
             <Text style={styles.backStepText}>{t("coach.resources.backToResources")}</Text>
@@ -228,11 +249,16 @@ export default function CoachResourceHelpScreen() {
   return (
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <CoachResourceHeader subtitle={t("coach.resources.helpSubtitle")} title={t("coach.resources.needHelp")} />
-        <Text style={styles.previewLabel}>{t("coach.resources.coachAiTestingPreview")}</Text>
+        <CoachResourceHeader
+          subtitle={t(coachAiAccess.canCreate ? "coach.resources.helpSubtitle" : "coachAiBilling.savedGuides")}
+          title={t(coachAiAccess.canCreate ? "coach.resources.needHelp" : "coach.resources.savedHelpEntry")}
+        />
+        {coachAiAccess.entitlementSource === 'tester-claim' ? <Text style={styles.previewLabel}>{t("coach.resources.coachAiTestingPreview")}</Text> : null}
+        <CoachAiBillingSummary access={coachAiAccess} />
 
-        {!category ? (
+        {!category || !coachAiAccess.canCreate ? (
           <>
+            {coachAiAccess.canCreate ? <>
             <Text accessibilityRole="header" style={styles.sectionTitle}>{t("coach.resources.helpQuestion")}</Text>
             <View style={styles.categoryList}>
               {CATEGORIES.map((entry) => (
@@ -242,6 +268,7 @@ export default function CoachResourceHelpScreen() {
                 </TouchableOpacity>
               ))}
             </View>
+            </> : null}
             <View style={styles.savedSection}>
               <TouchableOpacity
                 accessibilityHint={t(savedExpanded ? "coach.resources.savedCollapseHint" : "coach.resources.savedExpandHint")}
@@ -310,9 +337,9 @@ export default function CoachResourceHelpScreen() {
                 <Text style={styles.retryText}>{t("coach.resources.retryHelp")}</Text>
               </TouchableOpacity>
             ) : null}
-            <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: generating, disabled: generating }} disabled={generating} onPress={() => void generate()} style={[styles.generateButton, generating && styles.disabled]}>
+            {!(coachAiAccess.entitlementSource === 'paid' && retryRequest && error) ? <TouchableOpacity accessibilityRole="button" accessibilityState={{ busy: generating, disabled: generating || !coachAiAccess.canRequest }} disabled={generating || !coachAiAccess.canRequest} onPress={() => void generate()} style={[styles.generateButton, (generating || !coachAiAccess.canRequest) && styles.disabled]}>
               {generating ? <ActivityIndicator color={Colors.surface} /> : <Text style={styles.generateText}>{t("coach.resources.generateHelp")}</Text>}
-            </TouchableOpacity>
+            </TouchableOpacity> : null}
             {generating ? <Text accessibilityLiveRegion="polite" style={styles.loadingText}>{t("coach.resources.generating")}</Text> : null}
             {generating ? (
               <TouchableOpacity accessibilityRole="button" onPress={cancelGeneration} style={styles.backStepButton}>

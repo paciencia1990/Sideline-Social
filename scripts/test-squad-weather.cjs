@@ -13,6 +13,7 @@ function harness(factory) {
   const slots = []; let cursor = 0, effects = [], mounted = true, late = 0;
   const changed = (slot, deps) => !slot || !deps || deps.some((v, i) => v !== slot.deps[i]);
   const React = {
+    createContext: value => ({ value }), useContext: context => context.value,
     createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
     useState(initial) { const i = cursor++; if (!slots[i]) slots[i] = { value: typeof initial === 'function' ? initial() : initial }; return [slots[i].value, value => { if (!mounted) late++; slots[i].value = typeof value === 'function' ? value(slots[i].value) : value; }]; },
     useRef(initial) { const i = cursor++; if (!slots[i]) slots[i] = { current: initial }; return slots[i]; },
@@ -76,13 +77,13 @@ const view = { squadId: 'a', venueId: 'venue-a', mode: 'custom', revision: 1, li
     '@/services/squadWeatherService': { getSquadWeather: () => read.promise, resolveSquadWeatherSource: service.resolveSquadWeatherSource, subscribeSquadWeather: callback => { subscriber = callback; return () => { subscriber = null; }; } },
   }).useSquadWeather);
   hook.render({ squadId: 'a' }); read.resolve(view); await flush(); assert.ok(hook.render({ squadId: 'a' }).source);
-  read = deferred(); appChange('active'); hook.render({ squadId: 'a' });
+  read = deferred(); appChange('background'); appChange('active'); hook.render({ squadId: 'a' });
   subscriber(uid, { ...view, revision: 2, mode: 'disabled', link: null }); read.resolve(view); await flush();
   assert.equal(hook.render({ squadId: 'a' }).source, null, 'A stale in-flight read cannot revive a removed link');
   read = deferred(); hook.render({ squadId: 'b' }); read.resolve(view); await flush(); assert.equal(hook.render({ squadId: 'b' }).source, null);
   read = deferred(); uid = 'parent'; hook.render({ squadId: 'a' }); read.reject(new Error('private raw error')); await flush();
   assert.equal(hook.render({ squadId: 'a' }).failed, true); assert.equal(hook.render({ squadId: 'a' }).source, null);
-  read = deferred(); appChange('active'); hook.unmount(); read.resolve(view); await flush(); assert.equal(hook.late(), 0);
+  read = deferred(); appChange('background'); appChange('active'); hook.unmount(); read.resolve(view); await flush(); assert.equal(hook.late(), 0);
 
   // Execute the editor: no write until preview and fresh confirmation, dedup, conflict reload.
   uid = 'admin-a'; let weatherView = { ...fallback, squadId: 'a', venueId: 'venue-a' }, reloads = 0, previews = [], writes = [], mutation = deferred();

@@ -1,0 +1,58 @@
+# Prepared only: no build or deployment has been authorized.
+# Linux amd64 digest is byte-verified in base-image.json. Use only the sealed isolated context.
+FROM docker.io/library/node:22-bookworm-slim@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562 AS compile
+WORKDIR /work/functions
+ENV npm_config_fetch_retries=0 npm_config_fetch_timeout=25000 npm_config_audit=false npm_config_fund=false npm_config_update_notifier=false
+COPY ["functions/package.json","./package.json"]
+COPY ["functions/package-lock.json","./package-lock.json"]
+RUN npm ci --ignore-scripts --no-audit --no-fund --fetch-retries=0 --fetch-timeout=25000
+COPY ["functions/tsconfig.container.json","./tsconfig.container.json"]
+COPY ["functions/src/coachAiBillingCore.ts","./src/coachAiBillingCore.ts"]
+COPY ["functions/src/coachAiBillingMaintenance.ts","./src/coachAiBillingMaintenance.ts"]
+COPY ["functions/src/coachAiCleanupInterface.ts","./src/coachAiCleanupInterface.ts"]
+COPY ["functions/src/coachAiCleanupOperatorWorkflow.ts","./src/coachAiCleanupOperatorWorkflow.ts"]
+COPY ["functions/src/coachAiCleanupQueueMonitor.ts","./src/coachAiCleanupQueueMonitor.ts"]
+COPY ["functions/src/coachAiRevenueCatV2.ts","./src/coachAiRevenueCatV2.ts"]
+COPY ["functions/src/coachAiSubscriptionCore.ts","./src/coachAiSubscriptionCore.ts"]
+RUN node node_modules/typescript/bin/tsc -p tsconfig.container.json
+FROM docker.io/library/node:22-bookworm-slim@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562 AS production_dependencies
+WORKDIR /work/functions
+ENV npm_config_fetch_retries=0 npm_config_fetch_timeout=25000 npm_config_audit=false npm_config_fund=false npm_config_update_notifier=false
+COPY ["functions/package.json","./package.json"]
+COPY ["functions/package-lock.json","./package-lock.json"]
+RUN npm ci --ignore-scripts --no-audit --no-fund --fetch-retries=0 --fetch-timeout=25000 --omit=dev
+FROM docker.io/library/node:22-bookworm-slim@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562 AS runtime
+WORKDIR /app
+ENV NODE_ENV=production CLEANUP_PROJECT_ID=sideline-social-staging-2026 CLEANUP_LOGIN_ENABLED=false CLEANUP_READS_ENABLED=false CLEANUP_MUTATIONS_ENABLED=false CLEANUP_OBSERVER_ENABLED=false
+ENV CLEANUP_ORIGIN=https://coach-ai-cleanup-console-3090643405.us-central1.run.app
+COPY --from=production_dependencies ["/work/functions/package.json","./functions/package.json"]
+COPY --from=production_dependencies ["/work/functions/node_modules","./functions/node_modules"]
+COPY --from=compile ["/work/functions/compiled/coachAiBillingMaintenance.js","./functions/lib/coachAiBillingMaintenance.js"]
+COPY --from=compile ["/work/functions/compiled/coachAiCleanupInterface.js","./functions/lib/coachAiCleanupInterface.js"]
+COPY --from=compile ["/work/functions/compiled/coachAiCleanupOperatorWorkflow.js","./functions/lib/coachAiCleanupOperatorWorkflow.js"]
+COPY --from=compile ["/work/functions/compiled/coachAiCleanupQueueMonitor.js","./functions/lib/coachAiCleanupQueueMonitor.js"]
+COPY --from=compile ["/work/functions/compiled/coachAiRevenueCatV2.js","./functions/lib/coachAiRevenueCatV2.js"]
+COPY --from=compile ["/work/functions/compiled/coachAiSubscriptionCore.js","./functions/lib/coachAiSubscriptionCore.js"]
+COPY ["internal/coach-ai-cleanup/host/application.cjs","./internal/coach-ai-cleanup/host/application.cjs"]
+COPY ["internal/coach-ai-cleanup/host/auth.cjs","./internal/coach-ai-cleanup/host/auth.cjs"]
+COPY ["internal/coach-ai-cleanup/host/bootstrap.cjs","./internal/coach-ai-cleanup/host/bootstrap.cjs"]
+COPY ["internal/coach-ai-cleanup/host/config.cjs","./internal/coach-ai-cleanup/host/config.cjs"]
+COPY ["internal/coach-ai-cleanup/host/firestore.cjs","./internal/coach-ai-cleanup/host/firestore.cjs"]
+COPY ["internal/coach-ai-cleanup/host/runtime.cjs","./internal/coach-ai-cleanup/host/runtime.cjs"]
+COPY ["internal/coach-ai-cleanup/host/server.cjs","./internal/coach-ai-cleanup/host/server.cjs"]
+COPY ["internal/coach-ai-cleanup/host/transport.cjs","./internal/coach-ai-cleanup/host/transport.cjs"]
+COPY ["internal/coach-ai-cleanup/observer/auth.cjs","./internal/coach-ai-cleanup/observer/auth.cjs"]
+COPY ["internal/coach-ai-cleanup/observer/firestore.cjs","./internal/coach-ai-cleanup/observer/firestore.cjs"]
+COPY ["internal/coach-ai-cleanup/observer/runtime.cjs","./internal/coach-ai-cleanup/observer/runtime.cjs"]
+COPY ["internal/coach-ai-cleanup/observer/server.cjs","./internal/coach-ai-cleanup/observer/server.cjs"]
+COPY ["internal/coach-ai-cleanup/index.html","./internal/coach-ai-cleanup/index.html"]
+COPY ["internal/coach-ai-cleanup/style.css","./internal/coach-ai-cleanup/style.css"]
+COPY ["internal/coach-ai-cleanup/client.js","./internal/coach-ai-cleanup/client.js"]
+COPY ["internal/coach-ai-cleanup/page.js","./internal/coach-ai-cleanup/page.js"]
+COPY ["internal/coach-ai-cleanup/login.js","./internal/coach-ai-cleanup/login.js"]
+COPY ["internal/coach-ai-cleanup/login-page.js","./internal/coach-ai-cleanup/login-page.js"]
+RUN chmod -R a-w /app
+USER 1000:1000
+EXPOSE 8080
+ENTRYPOINT ["node","internal/coach-ai-cleanup/host/bootstrap.cjs"]
+CMD ["console"]

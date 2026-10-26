@@ -1,4 +1,4 @@
-export type CoachAiRequestErrorKind = "access" | "configuration" | "offline" | "provider" | "rate_limit" | "timeout" | "unknown";
+export type CoachAiRequestErrorKind = "access" | "configuration" | "offline" | "provider" | "rate_limit" | "timeout" | "unknown" | "allowance" | "confirmation_pending";
 
 const COACH_AI_CONFIGURATION_REASONS = new Set([
   "coach_ai_disabled",
@@ -20,6 +20,8 @@ export function classifyCoachAiRequestError(error: unknown) {
   const code = readErrorField(error, "code");
   const reason = readErrorReason(error);
   const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (reason === 'coach_ai_allowance_exhausted') return new CoachAiRequestError('allowance');
+  if (['billing_confirmation_pending', 'request_in_progress', 'request_outcome_unknown', 'response_no_longer_cached'].includes(reason)) return new CoachAiRequestError('confirmation_pending');
 
   if (code.includes("unauthenticated") || code.includes("permission-denied")) return new CoachAiRequestError("access");
   if (code.includes("resource-exhausted") || reason === "rate_limited") return new CoachAiRequestError("rate_limit");

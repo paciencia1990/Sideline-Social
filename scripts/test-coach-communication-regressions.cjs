@@ -40,17 +40,22 @@ assert.deepEqual(acceptedParentActions, {
   showSendPrivateMessage: true,
 });
 
-const announcementCore = loadTypeScript("utils/teamAnnouncementCore.ts");
+const announcementCore = loadTypeScript("utils/voiceMessageNormalizer.ts");
 const validVoice = {
   storagePath: "teamVoiceMemos/team/announcements/message/reservation/memo.m4a",
   durationMilliseconds: 20_000,
   sizeBytes: 120_000,
   mimeType: "audio/mp4",
 };
-assert.equal(announcementCore.resolveAnnouncementContentType(undefined, undefined), "text");
-assert.equal(announcementCore.resolveAnnouncementContentType("text", undefined), "text");
-assert.equal(announcementCore.resolveAnnouncementContentType("voice", validVoice), "voice");
-assert.equal(announcementCore.resolveAnnouncementContentType("voice", { ...validVoice, storagePath: "public/message.m4a" }), "text");
+assert.equal(announcementCore.normalizeVoiceMessageFields({}).contentType, "text");
+assert.equal(announcementCore.normalizeVoiceMessageFields({ contentType: "text" }).contentType, "text");
+assert.equal(announcementCore.normalizeVoiceMessageFields({ contentType: "voice", voiceMemo: validVoice }).voiceMemo.storagePath, validVoice.storagePath);
+assert.equal(announcementCore.normalizeVoiceMessageFields({ contentType: "voice", voiceMemo: { ...validVoice, storagePath: "public/message.m4a" } }).voiceMemo, null);
+
+if (process.argv.includes("--voice-only")) {
+  console.log("Canonical voice metadata normalization and invalid-path rejection passed.");
+  return;
+}
 
 const coachHome = read("app", "coach", "index.tsx");
 const viewTeamIndex = coachHome.indexOf('label={t("coach.home.viewTeam")}');

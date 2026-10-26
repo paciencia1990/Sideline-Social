@@ -1,0 +1,91 @@
+{
+  "status": "apple_drafts_created_and_mapped_google_blocked",
+  "lastVerifiedDate": "2026-10-15",
+  "preparedDate": "2026-10-14",
+  "sellerIntended": "Finding Fun, LLC",
+  "country": "US",
+  "currency": "USD",
+  "entitlement": "coach_ai",
+  "offering": "coach_ai_launch",
+  "includedResponsesPerAccountPerMonth": 30,
+  "trials": false,
+  "introductoryOffers": false,
+  "seasonalPlan": false,
+  "overageCharges": false,
+  "apple": {
+    "bundleId": "com.sidelinesocial.app",
+    "revenueCatAppId": "appaaf211582f",
+    "subscriptionGroup": "Coach AI",
+    "subscriptionGroupId": "22482113",
+    "storeStatus": "Prepare for Submission; no review submitted",
+    "remainingReviewFields": ["Review screenshot", "Review notes", "Inherited tax category verification"],
+    "revenueCatStoreStatus": "Could not check; native identifiers manually mapped, no broad management key added",
+    "serviceLevel": 1,
+    "purchaseChannel": "App Store only",
+    "familySharing": "do_not_enable",
+    "multiseatPurchases": "do_not_enable_for_this_account_subscription",
+    "products": [
+      {
+        "productId": "com.sidelinesocial.coachai.monthly",
+        "referenceName": "Coach AI Monthly",
+        "period": "P1M",
+        "priceMinorUnits": 299,
+        "revenueCatPackage": "$rc_monthly",
+        "revenueCatProductId": "prodb1950e01b8",
+        "appleProductId": "6823263818",
+        "entitlementVerified": "coach_ai",
+        "offeringMappingVerified": true,
+        "localizations": {
+          "en-US": { "displayName": "Coach AI Monthly", "description": "30 Coach AI responses each month." },
+          "es-MX": { "displayName": "Coach IA Mensual", "description": "30 respuestas de IA cada mes." }
+        }
+      },
+      {
+        "productId": "com.sidelinesocial.coachai.yearly",
+        "referenceName": "Coach AI Yearly",
+        "period": "P1Y",
+        "priceMinorUnits": 2499,
+        "revenueCatPackage": "$rc_annual",
+        "revenueCatProductId": "prod82cfa4c93b",
+        "appleProductId": "6823266909",
+        "entitlementVerified": "coach_ai",
+        "offeringMappingVerified": true,
+        "localizations": {
+          "en-US": { "displayName": "Coach AI Yearly", "description": "30 Coach AI responses each month." },
+          "es-MX": { "displayName": "Coach IA Anual", "description": "30 respuestas de IA cada mes." }
+        }
+      }
+    ]
+  },
+  "google": {
+    "status": "not_created_billing_artifact_gate",
+    "identifierDecision": "Resolved locally October 15: subscription coach_ai; base plans monthly/yearly. Supersedes the invalid coach-ai proposal. Client allowlist, server catalog and provider fixtures use coach_ai:monthly and coach_ai:yearly. No live config or Google product created.",
+    "observedBlocker": "Play Subscriptions displays no subscriptions and Upload a new APK, with no Create control. No upload or build authorized.",
+    "packageName": "com.sidelinesquad.app",
+    "revenueCatAppId": "app25fb78e667",
+    "subscriptionId": "coach_ai",
+    "localizations": {
+      "en-US": { "name": "Coach AI", "description": "Practice plans, message drafts and coaching advice; 30 AI responses per month." },
+      "es-US": { "name": "Coach con IA", "description": "Planes de práctica, mensajes y consejos; 30 respuestas de IA cada mes." }
+    },
+    "benefits": {
+      "en-US": ["30 AI responses each month", "Practice plans and message drafts", "Shared across your devices"],
+      "es-US": ["30 respuestas de IA cada mes", "Planes de práctica y mensajes", "Uso compartido entre dispositivos"]
+    },
+    "basePlans": [
+      { "basePlanId": "monthly", "type": "auto_renewing", "period": "P1M", "priceMinorUnits": 299, "revenueCatIdentifier": "coach_ai:monthly", "revenueCatPackage": "$rc_monthly", "revenueCatProductId": null },
+      { "basePlanId": "yearly", "type": "auto_renewing", "period": "P1Y", "priceMinorUnits": 2499, "revenueCatIdentifier": "coach_ai:yearly", "revenueCatPackage": "$rc_annual", "revenueCatProductId": null }
+    ]
+  },
+  "releaseGates": [
+    "Apple LLC identity and active paid agreement, tax and banking verified",
+    "Google merchant verification and payout hold resolved",
+    "Google credential validation and notification receipt verified",
+    "Billing-enabled beta artifact separately authorized and verified",
+    "Store forms, price points, tax category and purchase options verified before saving",
+    "Four real native products mapped to the entitlement and offering",
+    "Sandbox backend and real purchase, restore and lifecycle acceptance passed",
+    "Privacy, Terms, store declarations and customer support aligned",
+    "Owner approves production release and paid activation separately"
+  ]
+}

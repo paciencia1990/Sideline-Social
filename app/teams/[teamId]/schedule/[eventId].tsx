@@ -18,6 +18,8 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/Card";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { useDeviceTimeZone } from "@/hooks/useDeviceTimeZone";
+import { scheduleDisplayTimeZone } from "@/utils/teamScheduleDisplay";
 import { acknowledgeNotificationAfterOpen } from "@/services/notificationService";
 import { addTeamEventToPersonalCalendar, openCalendarSettings } from "@/services/teamScheduleCalendarService";
 import {
@@ -36,6 +38,7 @@ import {
 
 export default function TeamScheduleEventDetailScreen() {
   const { i18n, t } = useTranslation();
+  const deviceTimeZone = useDeviceTimeZone();
   const params = useLocalSearchParams<{ teamId?: string | string[]; eventId?: string | string[]; notificationId?: string | string[] }>();
   const teamId = normalizeParam(params.teamId);
   const eventId = normalizeParam(params.eventId);
@@ -173,9 +176,9 @@ export default function TeamScheduleEventDetailScreen() {
             </Card>
 
             <Card style={styles.detailCard}>
-              <Detail icon={<Clock3 color={Colors.communicationLink} size={19} />} label={t("schedule.form.date")} value={formatEventDate(event, i18n.language, t("schedule.allDay"))} />
-              <Detail label={t("schedule.form.timezone")} value={event.timezone} />
-              {event.arrivalAt ? <Detail label={t("schedule.form.arrivalTime")} value={formatTime(event.arrivalAt, event, i18n.language)} /> : null}
+              <Detail icon={<Clock3 color={Colors.communicationLink} size={19} />} label={t("schedule.form.date")} value={formatEventDate(event, i18n.language, t("schedule.allDay"), deviceTimeZone)} />
+              <Detail label={t("schedule.form.timezone")} value={scheduleDisplayTimeZone(event, deviceTimeZone)} />
+              {event.arrivalAt ? <Detail label={t("schedule.form.arrivalTime")} value={formatTime(event.arrivalAt, event, i18n.language, deviceTimeZone)} /> : null}
               {event.type === "game" && event.opponentName ? <Detail label={t("schedule.form.opponent")} value={event.opponentName} /> : null}
               {event.type === "game" && event.homeAway ? <Detail label={t("schedule.form.homeAway")} value={t(`schedule.homeAway.${event.homeAway}`)} /> : null}
               {event.venueName ? <Detail label={t("schedule.form.venue")} value={event.venueName} /> : null}
@@ -229,14 +232,14 @@ function Action({ accessibilityHint, buttonRef, busy, disabled, Icon, label, onP
   return <TouchableOpacity ref={buttonRef} accessibilityHint={accessibilityHint} accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ busy, disabled: disabled || busy }} disabled={disabled || busy} onPress={onPress} style={styles.action}>{busy ? <ActivityIndicator color={Colors.communicationLink} /> : <Icon color={Colors.communicationLink} size={20} />}<Text style={styles.actionText}>{label}</Text></TouchableOpacity>;
 }
 
-function formatEventDate(event: TeamScheduleEvent, locale: string, allDayLabel: string) {
-  const date = new Intl.DateTimeFormat(locale, { dateStyle: "full", timeZone: event.timezone }).format(event.startAt);
+function formatEventDate(event: TeamScheduleEvent, locale: string, allDayLabel: string, deviceTimeZone: string) {
+  const date = new Intl.DateTimeFormat(locale, { dateStyle: "full", timeZone: scheduleDisplayTimeZone(event, deviceTimeZone) }).format(event.startAt);
   if (event.isAllDay) return `${date} | ${allDayLabel}`;
-  return `${date} | ${formatTime(event.startAt, event, locale)} - ${formatTime(event.endAt, event, locale)}`;
+  return `${date} | ${formatTime(event.startAt, event, locale, deviceTimeZone)} - ${formatTime(event.endAt, event, locale, deviceTimeZone)}`;
 }
 
-function formatTime(date: Date, event: TeamScheduleEvent, locale: string) {
-  return new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", timeZone: event.timezone }).format(date);
+function formatTime(date: Date, event: TeamScheduleEvent, locale: string, deviceTimeZone: string) {
+  return new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", timeZone: scheduleDisplayTimeZone(event, deviceTimeZone) }).format(date);
 }
 
 function normalizeParam(value?: string | string[]) {

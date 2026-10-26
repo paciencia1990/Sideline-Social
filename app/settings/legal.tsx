@@ -1,3 +1,4 @@
+import { router } from "expo-router";
 import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useTranslation } from "react-i18next";
 
@@ -36,6 +37,17 @@ export default function LegalScreen() {
           </TouchableOpacity>
           <TouchableOpacity accessibilityRole="link" onPress={() => { void openTranslationInformation().catch(() => Alert.alert(t('settings.linkErrorTitle'), t('settings.linkErrorBody'))); }} style={styles.linkButton}>
             <Text style={styles.linkText}>{t('messageTranslation.info')}</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>{t("settings.noticesTitle")}</Text>
+          <Text style={styles.body}>{t("settings.noticesBody")}</Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={() => router.push("/settings/notices" as never)}
+            style={styles.linkButton}
+          >
+            <Text style={styles.linkText}>{t("settings.openNotices")}</Text>
           </TouchableOpacity>
         </View>
         <View style={styles.section}>

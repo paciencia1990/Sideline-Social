@@ -33,7 +33,7 @@ function harness(factory) {
   return { render(props = {}) { cursor = 0; effects = []; const tree = component(props); effects.forEach((run) => run()); return tree; },
     unmount() { hooks.forEach((hook) => hook?.cleanup?.()); mounted = false; }, lateWrites: () => lateWrites };
 }
-function all(tree, predicate) { if (!tree || typeof tree !== 'object') return []; if (Array.isArray(tree)) return tree.flatMap((node) => all(node, predicate)); return [...(predicate(tree) ? [tree] : []), ...all(tree.props?.children, predicate)]; }
+function all(tree, predicate) { if (!tree || typeof tree !== 'object') return []; if (Array.isArray(tree)) return tree.flatMap((node) => all(node, predicate)); return [...(predicate(tree) ? [tree] : []), ...all(tree.type === 'VirtualizedRow' ? tree.props.render() : tree.props?.children, predicate)]; }
 const find = (tree, predicate) => all(tree, predicate)[0];
 function button(tree, label) { return find(tree, (node) => node.type === 'TouchableOpacity' && all(node, (child) => child.type === 'Text' && child.props.children.includes(label)).length); }
 const hasText = (tree, text) => Boolean(find(tree, (node) => node.type === 'Text' && node.props.children.includes(text)));
@@ -193,7 +193,7 @@ async function friendsScreenTests() {
         StyleSheet:{create:s=>s},Alert:{alert(){}},AppState:{addEventListener:(_event,cb)=>{appListeners.add(cb);return {remove:()=>appListeners.delete(cb)};}}},
       'expo-router':{router:{push(){}},useLocalSearchParams:()=>({}),useFocusEffect:cb=>useHarnessFocusEffect(React, focused, cb)},
       'lucide-react-native':{},'react-i18next':{useTranslation:()=>({t})},
-      '@/components/Card':{Card:'Card'},'@/components/KeyboardAwareScrollView':{KeyboardAwareScrollView:'ScrollView'},'@/components/ScreenWrapper':{ScreenWrapper:'ScreenWrapper'},
+      '@/components/Card':{Card:'Card'},'@/components/KeyboardAwareScrollView':{KeyboardAwareScrollView:'ScrollView'},'@/components/VirtualizedRows':{VirtualizedRows:'VirtualizedRows',VirtualizedRow:'VirtualizedRow'},'@/components/ScreenWrapper':{ScreenWrapper:'ScreenWrapper'},
       '@/context/AuthContext':{useAuth:()=>({user,loading:false})},'@/hooks/useCoalescedRefresh':hooks,
       '@/constants/theme':{Colors:{},Radius:{},Shadow:{},Spacing:{},Typography:{}},'@/services/friendsService':api,
       '@/services/chatService':{},'@/services/notificationService':{},'@/utils/friendPrivacy':privacy,
@@ -247,7 +247,7 @@ async function homeScreenTests() {
     '@/hooks/useSquadGameLobbies':{useSquadGameLobbies:()=>({lobbies:[],refresh:async()=>{}})},
     '@/services/notificationService':{subscribeToUnreadNotificationCount:()=>()=>{},retryPendingNotificationAcknowledgements:async()=>{}},
     '@/utils/notificationCore':{formatUnreadBadgeCount:()=>''},'@/services/chatService':{subscribeToUnreadFriendConversationCount:()=>()=>{}},'@/utils/performanceDiagnostics':measure,
-    '@/services/parentTeamService':{getParentHomeTeamsSummary:()=>{reads++;return task.promise;},isParentHomeTeamAvailable:async()=>false},
+    '@/services/parentTeamService':{getParentHomeTeamsSummary:()=>{reads++;return task.promise;}},
     '@/services/weeklyChallengeService':{getCurrentWeeklyChallenge:async()=>null},'@/services/weeklyChallengeLocalization':{},'@/assets/branding/sideline-social-logo.png':'logo',
   }).default);
   function reloadSquads(){return Promise.resolve();}

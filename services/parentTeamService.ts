@@ -45,7 +45,8 @@ import { getTeamPrivateMessageInbox } from "@/services/teamPrivateMessageService
 import { getPublicUserProfiles } from "@/services/publicProfileService";
 import type { TeamPrivateConversation } from "@/types/teamVoiceMessaging";
 import { normalizeVoiceMessageFields } from "@/utils/voiceMessageNormalizer";
-import { loadSupplementaryTeamInbox } from "@/utils/parentTeamInboxCore";
+import { isAuthorizationFailure, loadSupplementaryTeamInbox } from "@/utils/parentTeamInboxCore";
+import { requireTeamReadReady } from "@/services/teamReadReadiness";
 
 export type ParentTeamAnnouncement = TeamAnnouncement & {
   createdAtDate: Date | null;
@@ -89,6 +90,7 @@ export type ParentTeamsOverview = {
 export type ParentHomeTeamsSummary = {
   rows: ParentHomeTeamRow[];
   totalTeams: number;
+  childDetailsAvailable: boolean;
 };
 
 export type ParentTeamAnnouncementsPage = {
@@ -123,15 +125,36 @@ export type ChildTeamGroup = {
 };
 
 export async function getParentHomeTeamsSummary(): Promise<ParentHomeTeamsSummary> {
-  const memberships = await getParentTeams({ throwOnError: true });
+  const expectedUserId = auth.currentUser?.uid ?? "";
+  const session = await requireTeamReadReady(expectedUserId);
+  const assertSession = () => {
+    if (auth.currentUser !== session || auth.currentUser?.uid !== expectedUserId) {
+      throw Object.assign(new Error("Parent team session changed"), { code: "auth/user-mismatch" });
+    }
+  };
+  const memberships = await getParentTeams({ requireComplete: true, throwOnError: true });
+  assertSession();
   if (memberships.length === 0) {
-    return { rows: [], totalTeams: 0 };
+    return { rows: [], totalTeams: 0, childDetailsAvailable: true };
   }
 
-  const [childProfiles, childLinkRecords] = await Promise.all([
-    getCurrentUserChildren(),
-    loadActiveTeamChildLinkRecords(),
+  // Membership establishes which teams may be displayed. Optional child labels
+  // must not turn those confirmed teams into an error or block indefinitely.
+  const boundedChildRead = <T,>(read: () => Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(Object.assign(new Error("Child details timed out"), { code: "deadline-exceeded" })), 5000);
+    Promise.resolve().then(read).then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+  const childDetails = await Promise.allSettled([
+    boundedChildRead(getCurrentUserChildren),
+    boundedChildRead(loadActiveTeamChildLinkRecords),
   ]);
+  assertSession();
+  for (const result of childDetails) {
+    if (result.status === "rejected" && isAuthorizationFailure(result.reason)) throw result.reason;
+  }
+  const childDetailsAvailable = childDetails.every((result) => result.status === "fulfilled");
+  const childProfiles = childDetails[0].status === "fulfilled" ? childDetails[0].value : [];
+  const childLinkRecords = childDetails[1].status === "fulfilled" ? childDetails[1].value : [];
   const childLinksByTeam = resolveChildLinksByTeam(childProfiles, childLinkRecords);
   const teams = memberships.flatMap((membership) => {
     if (!membership.team) return [];
@@ -147,13 +170,8 @@ export async function getParentHomeTeamsSummary(): Promise<ParentHomeTeamsSummar
   return {
     rows: buildParentHomeTeamRows(teams),
     totalTeams: new Set(teams.map((team) => team.teamId)).size,
+    childDetailsAvailable,
   };
-}
-
-export async function isParentHomeTeamAvailable(teamId: string): Promise<boolean> {
-  if (!teamId) return false;
-  const membership = await getCurrentUserTeamMembershipById(teamId);
-  return Boolean(membership && hasTeamRole(membership, "parent") && isTeamActive(membership.team));
 }
 
 export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
@@ -204,23 +222,22 @@ export async function getParentTeamsOverview(): Promise<ParentTeamsOverview> {
 }
 
 export async function getParentTeamSummary(teamId: string): Promise<ParentTeamSummary> {
-  const [memberships, childProfiles] = await Promise.all([
-    getParentTeams({ throwOnError: true }),
-    getCurrentUserChildren(),
-  ]);
-  const membership = memberships.find((item) => item.teamId === teamId && item.team)
-    ?? await getCurrentUserTeamMembershipById(teamId);
-  if (!membership || !membership.roles.parent) {
+  const userId = auth.currentUser?.uid;
+  const membership = await getCurrentUserTeamMembershipById(teamId);
+  if (!userId || auth.currentUser?.uid !== userId || !membership || !hasTeamRole(membership, "parent") || !isTeamActive(membership.team)) {
     const error = new Error("Parent team membership is missing or inactive.");
     (error as { code?: string }).code = "membership-missing";
     throw error;
   }
+  const childProfiles = await getCurrentUserChildren();
+  if (auth.currentUser?.uid !== userId) throw new Error("Account changed while loading team.");
   const [childLinksByTeam, privateInbox, summaryStates] = await Promise.all([
     loadChildLinksByTeam(childProfiles),
     loadParentPrivateInbox(teamId),
     getTeamAnnouncementSummaryStates([teamId]),
   ]);
-  return loadParentTeamSummary(
+  if (auth.currentUser?.uid !== userId) throw new Error("Account changed while loading team.");
+  const summary = await loadParentTeamSummary(
     membership,
     resolveMembershipChildren(membership, childProfiles, childLinksByTeam),
     privateInbox.items,
@@ -228,6 +245,8 @@ export async function getParentTeamSummary(teamId: string): Promise<ParentTeamSu
     summaryStates.get(teamId),
     TEAM_HISTORY_PAGE_SIZES.announcements,
   );
+  if (auth.currentUser?.uid !== userId) throw new Error("Account changed while loading team.");
+  return summary;
 }
 
 export async function getParentPastTeamCount(): Promise<number> {

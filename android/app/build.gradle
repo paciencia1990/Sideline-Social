@@ -41,7 +41,8 @@ if (isStagingDevelopmentAndroidBuild) {
     }
 }
 def stagingAcceptanceRequested = easBuildProfile == "staging-acceptance" || stagingAcceptanceMarker == "true"
-def externalTestingRequested = easBuildProfile == "external-testing" || externalTestingMarker == "true"
+def externalTestingRequested =
+    easBuildProfile == "external-testing" || easBuildProfile == "coach-ai-billing-beta" || externalTestingMarker == "true"
 def isStagingAcceptanceAndroidBuild =
     easBuildProfile == "staging-acceptance" &&
     easBuildPlatform == "android" &&
@@ -49,7 +50,8 @@ def isStagingAcceptanceAndroidBuild =
     System.getenv("APP_VARIANT") == "development" &&
     System.getenv("EXPO_PUBLIC_FIREBASE_ENVIRONMENT") == "staging"
 def isExternalTestingAndroidBuild =
-    easBuildProfile == "external-testing" &&
+    (easBuildProfile == "external-testing" ||
+        (easBuildProfile == "coach-ai-billing-beta" && System.getenv("EXPO_PUBLIC_COACH_AI_BILLING_ENABLED") == "true")) &&
     easBuildPlatform == "android" &&
     externalTestingMarker == "true" &&
     stagingAcceptanceMarker != "true" &&

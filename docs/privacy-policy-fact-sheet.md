@@ -1,5 +1,19 @@
 # Sideline Social privacy-policy fact sheet
 
+> **Current review — October 20, 2026:** Older baseline/setup statements below are historical. Use the [full-app review](full-app-privacy-review-20261020/review.txt), [Google mapping](google-play-data-safety-mapping.md) and [Apple worksheet](apple-app-privacy-mapping.md). Active photos, calendar/files, social contacts, billing and SDK diagnostics are covered. Google draft inspected without edits; the signed iOS archive and live Apple label remain unverified.
+
+
+## Paid Coach AI addendum (October 12, 2026)
+
+Purchase/restore, server verification and the monthly allowance are locally
+implemented with RevenueCat; paid rollout remains disabled and undeployed.
+No real store transaction or connection was made. UID access checks can begin
+before Subscribe; billing summaries and paid receipts survive monthly resets.
+The earlier nonbilling findings below are historical, not newly verified here.
+Use [subscription disclosures](coach-ai-subscription-disclosures-20261012.txt)
+and [the store privacy/retention mapping](coach-ai-store-disclosure-mapping-20261012.txt)
+before publishing future paid-launch policies or preparing final store answers.
+
 ## Optional Team/Coach translation (October 10, 2026)
 
 The backend and Google Cloud configuration are delivered. The public privacy notice and Apple message identity disclosure are updated; Google's existing optional functionality disclosure covers the service-provider path. The current installed beta clients still await the translation interface in the next builds. Native authenticated/App Check acceptance remains pending compatible delivery.
@@ -17,8 +31,8 @@ Status: **verified engineering facts plus conspicuous decision placeholders. Thi
 
 - Product: Sideline Social
 - Platforms: iOS and Android
-- Operator legal name: **[OWNER REQUIRED]**
-- Privacy contact: **[MONITORED EMAIL/FORM REQUIRED]**
+- Operator legal name: **Finding Fun, LLC** — owner-confirmed.
+- Privacy contact: **info@joinsidelinesocial.com** — owner-approved public inbox.
 - Mailing address: **[COUNSEL/OWNER DECISION IF REQUIRED]**
 - Effective date / last updated: **[REQUIRED]**
 - Jurisdiction, governing law, legal bases, consumer-rights regions and representative/DPO: **[COUNSEL REQUIRED]**
@@ -32,7 +46,7 @@ Status: **verified engineering facts plus conspicuous decision placeholders. Thi
 - Team/Squad membership, roles, invite/join actions, team-child links, venue/sport information and selections.
 - Friend requests, blocks, announcements, replies, private/group messages, reports and other free-form content.
 - Optional voice recordings plus duration/size/MIME metadata.
-- No active phone-number, camera/photo-library upload, payment or subscription flow was found. A profile `photoURL` schema/HTTPS URL path exists and must be re-audited if enabled.
+- The earlier baseline found no phone/photo-upload/payment flow. Subsequent media changes need their existing evidence; the October 12 billing addendum supersedes the payment negative. Gated subscription source is now prepared but not active.
 
 Do not say Sideline Social stores raw passwords. The app passes credentials to Firebase Authentication.
 
@@ -61,7 +75,7 @@ Do not say Sideline Social stores raw passwords. The app passes credentials to F
 - Friends, messaging, announcements, voice communication and notifications.
 - Games, leaderboards, Sideline Stars, Weekly Challenge and app personalization.
 - Authorization, abuse prevention, reporting, moderation evidence, security and support.
-- No active advertising, cross-app tracking, billing or analytics purpose was found.
+- No advertising/cross-app tracking was found in the earlier baseline. Future RevenueCat access verification and subscription analytics add billing and Analytics purposes; see the October 12 mapping.
 
 ### Service providers
 
@@ -84,8 +98,9 @@ Describe providers as processors/service providers only after contracts and sett
 
 - Foreground only; Android approximate and precise permissions, iOS when-in-use.
 - Requested contextually for nearby discovery; manual venue-name search remains available after denial.
-- No background location, live sharing or IP-derived application location logic found.
-- Current coordinates are application-ephemeral; venue coordinates persist with Squad data.
+- No background or continuous movement tracking or IP-derived application location logic found.
+- Nearby-search coordinates are not intentionally stored as a user-location history. When a user creates a Squad, the coordinates captured for that search are saved as its venue pin and visible to other users through authenticated discovery/map surfaces. This one-time pin stays fixed rather than following the creator's movements; it is not a claim that precise location is never shared.
+- Local English/Spanish discovery, Squad-creation and iOS permission wording now explains this distinction and tells creators to be at the sports venue. This copy correction has not been built, deployed or published.
 
 ### Notifications
 
@@ -128,8 +143,8 @@ Describe providers as processors/service providers only after contracts and sett
 
 ### Advertising, tracking, analytics and purchases
 
-- No ad SDK, attribution SDK, IDFA/ATT, Android Advertising ID use, cross-app tracking, Firebase Analytics initialization, Crashlytics, Performance, Play Billing, IAP, RevenueCat or purchase/entitlement record was found.
-- Re-audit the signed binaries and provider dashboards before stating this publicly.
+- The historical scan's advertising/tracking/diagnostics negatives need final-candidate confirmation. RevenueCat is now installed with gated purchase/restore and private billing records; its subscription reporting adds Analytics. Do not reuse the earlier no-billing assertion.
+- Re-audit signed binaries/provider settings and apply the October 12 billing disclosures before public claims. Current beta binaries remain unchanged by local implementation.
 
 ### Coach AI
 

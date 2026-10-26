@@ -1,0 +1,84 @@
+{
+  "reviewOnly": true,
+  "executionApproved": false,
+  "providerRetriesApproved": false,
+  "notDirectlySubmittable": true,
+  "role": "observer",
+  "submitUrl": "https://cloudbuild.googleapis.com/v1/projects/sideline-social-staging-2026/locations/us-central1/builds?projectId=sideline-social-staging-2026",
+  "sourceStorageBinding": {
+    "bucket": "sideline-cleanup-build-src-3090643405",
+    "object": "observer/3253e31ac3a4a40781957ea4d99f880ce412f65d2090439b94c4c1e77f922a48.tgz",
+    "generation": null,
+    "archiveSha256": null,
+    "archiveBytes": null,
+    "uploadPrecondition": "ifGenerationMatch=0",
+    "bindingRequiredBeforeSubmission": true
+  },
+  "buildSpec": {
+    "serviceAccount": "projects/sideline-social-staging-2026/serviceAccounts/coach-ai-cleanup-builder@sideline-social-staging-2026.iam.gserviceaccount.com",
+    "timeout": "900s",
+    "queueTtl": "1800s",
+    "tags": [
+      "coach-ai-cleanup",
+      "cleanup-plan-20261016",
+      "observer"
+    ],
+    "options": {
+      "logging": "CLOUD_LOGGING_ONLY",
+      "env": [
+        "DOCKER_BUILDKIT=1"
+      ]
+    },
+    "steps": [
+      {
+        "id": "build-observer",
+        "name": "gcr.io/cloud-builders/docker@sha256:f772ab459889c67835bd959c2b9e9351f2c0752c4f989710ecda20c229f0733e",
+        "args": [
+          "build",
+          "--platform=linux/amd64",
+          "--pull=false",
+          "--no-cache",
+          "--tag",
+          "us-central1-docker.pkg.dev/sideline-social-staging-2026/sideline-coach-cleanup/observer:review-20261016-3253e31ac3a4",
+          "context"
+        ],
+        "timeout": "600s"
+      },
+      {
+        "id": "inspect-observer",
+        "name": "gcr.io/cloud-builders/docker@sha256:f772ab459889c67835bd959c2b9e9351f2c0752c4f989710ecda20c229f0733e",
+        "entrypoint": "bash",
+        "args": [
+          "-ceu",
+          "docker image inspect \"$1\" > /workspace/checks/image.inspect.json",
+          "--",
+          "us-central1-docker.pkg.dev/sideline-social-staging-2026/sideline-coach-cleanup/observer:review-20261016-3253e31ac3a4"
+        ],
+        "timeout": "30s"
+      },
+      {
+        "id": "accept-observer",
+        "name": "gcr.io/cloud-builders/docker@sha256:f772ab459889c67835bd959c2b9e9351f2c0752c4f989710ecda20c229f0733e",
+        "args": [
+          "run",
+          "--rm",
+          "--pull=never",
+          "--network=none",
+          "--read-only",
+          "--cap-drop=ALL",
+          "--security-opt=no-new-privileges",
+          "--tmpfs=/tmp:rw,noexec,nosuid,size=16m",
+          "--mount=type=bind,source=/workspace/checks,target=/checks,readonly",
+          "--entrypoint=node",
+          "us-central1-docker.pkg.dev/sideline-social-staging-2026/sideline-coach-cleanup/observer:review-20261016-3253e31ac3a4",
+          "/checks/accept-image.cjs",
+          "observer"
+        ],
+        "timeout": "120s"
+      }
+    ],
+    "images": [
+      "us-central1-docker.pkg.dev/sideline-social-staging-2026/sideline-coach-cleanup/observer:review-20261016-3253e31ac3a4"
+    ]
+  }
+}

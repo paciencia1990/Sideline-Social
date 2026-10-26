@@ -1,58 +1,41 @@
 # Apple App Privacy mapping
 
-Status: **PRELIMINARY — REQUIRES OWNER/PRIVACY-COUNSEL REVIEW AND FINAL IPA VERIFICATION.** Do not submit these answers from this document alone. The normal production binary hides Coach AI; any distributed staging or production-connected beta that enables Coach AI must include the conditional disclosures below.
+Updated **October 20, 2026**. The existing iOS **1.0.0 (21)** IPA is downloaded, matched to Apple metadata and inspected. The prior archive/SDK hold is closed. **No privacy label was changed or published.** The exact current-iOS 19-type correction is ready for separate owner publication approval. See the [final publication review](apple-privacy-label-publication-review-20261020.txt) and [matched archive evidence](apple-privacy-ios-reconciliation-20261020/ios-build-21-native-evidence.json).
 
-Apple treats data as collected when the app or a third-party partner transmits it off device and retains it beyond real-time servicing; data is generally linked when tied to an account/device. Apple specifically directs apps with private messaging to declare Emails or Text Messages, game logic to declare Gameplay Content, and free-form text/voice to declare Other User Content and Audio Data. Source: <https://developer.apple.com/app-store/app-privacy-details/>.
+## Exact current-iOS set
 
-## Recommended collected data types
+All rows are collected. Tracking is No. Linkage and purpose combine app-owned records with the shipped SDK declarations; an SDK's unlinked collection does not override a separate linked app flow.
 
-| Apple category / data type | Collect? | Purposes | Linked to user | Tracking | SDK/provider and evidence | Recommended App Store Connect answer / caveat |
-|---|---:|---|---:|---:|---|---|
-| Contact Info — Name | Yes | App Functionality; Product Personalization | Yes | No | Firebase Auth/Firestore; adult profile, public first + last initial, adult-entered child name; `AuthContext.tsx`, `childService.ts`, `publicUserProfileCore.ts` | Select collected, linked, not tracking. Explain child names are entered by adults and team-restricted |
-| Contact Info — Email Address | Yes | App Functionality | Yes | No | Firebase Authentication and private user profile | Select collected, linked, not tracking |
-| Contact Info — Phone Number | No current active flow | — | — | No | Optional schema/type only; no collection UI found | Do not select unless final build/account backend actually accepts it |
-| Contact Info — Physical Address | No | — | — | No | No address collection found; ZIP is optional and needs purpose confirmation | Do not select. Reassess ZIP if used as location/address |
-| Location — Precise Location | Yes, optional | App Functionality | Yes in authenticated request; persisted venue coordinate is Squad-linked | No | Expo Location → nearby callable; Firebase; native maps | Select Precise Location, App Functionality, linked, not tracking. Current GPS is application-ephemeral but transmitted; venue coordinates persist |
-| Location — Coarse Location | Possibly | App Functionality | Yes | No | User may grant reduced accuracy; optional ZIP exists | Owner should confirm whether to select Coarse Location in addition to Precise based on final iOS behavior and ZIP use |
-| Identifiers — User ID | Yes | App Functionality | Yes | No | Firebase UID across Auth/Firestore/RTDB | Select collected, linked, not tracking |
-| Identifiers — Device ID | Yes | App Functionality | Yes | No | Expo push token/APNs delivery identifier associated with UID | Select Device ID, linked, not tracking; confirm Expo/Apple provider treatment |
-| User Content — Emails or Text Messages | Yes, optional | App Functionality | Yes | No | Friend chat, team/private messages, announcements/replies in Firestore | Select; these are not end-to-end encrypted and are readable by authorized backend/operator access |
-| User Content — Other User Content | Yes, optional | App Functionality; Safety | Yes | No | Team/Squad/child data, reports, free-form content and RSVP-style replies; beta Coach AI guided fields and optional feedback comment are processed by Firebase/Anthropic | Select collected, linked, not tracking. For a beta build, describe AI processing and prohibit child-identifying, confidential, medical, legal, emergency and safeguarding information |
-| Other Data — generated Coach AI guide and model/request metadata | Conditional beta | App Functionality; Safety | Yes | No | Validated guide/request metadata retained about 24h; rating/reason/model metadata about 30d; content-free provider/token diagnostics | Include for any beta binary after counsel maps the generated guide to the current App Store Connect taxonomy; TTL/provider retention must be verified |
-| User Content — Audio Data | Yes, optional | App Functionality | Yes | No | Expo Audio; Firebase Storage voice memo | Select collected, linked, not tracking |
-| User Content — Photos or Videos | No current active upload | — | — | No | `photoURL` schema/HTTPS URL support exists, but no camera/photo picker/upload flow found | Do not select unless final binary enables profile-photo collection or upload |
-| Usage Data — Gameplay Content | Yes, optional | App Functionality | Yes | No | RTDB/Firestore sessions, answers/state, scores, reward records | Select collected, linked, not tracking |
-| Usage Data — Product Interaction | Yes | App Functionality; Product Personalization | Yes | No | Notification read/dismiss/open state, memberships, selected Squad, challenge completion, social actions | Select collected, linked, not tracking. Do not label as Analytics; no analytics use was found |
-| Diagnostics — Crash Data | No app-directed collection found | — | — | No | No Crashlytics/Sentry/Expo error reporting SDK | Do not select after final archive confirms absence |
-| Diagnostics — Performance Data | No app-directed collection found | — | — | No | No Firebase Performance or equivalent | Do not select after final archive confirms absence |
-| Diagnostics — Other Diagnostic Data | Requires provider confirmation | App Functionality/security if applicable | Potentially | No | Firebase service data/Cloud Functions logs may include IP, request metadata and resource IDs; application logs avoid content/tokens and deletion logs hash UID | Do not select solely from server operational logs without counsel/provider review; resolve before submission |
-| Search History | Nearby venue search query is transmitted but not intentionally stored | App Functionality | Yes in request | No | `searchVenueSportSquads` callable | Likely real-time service request; confirm optional-disclosure/ephemeral treatment with counsel |
-| Sensitive Info, Health & Fitness, Financial Info, Purchases, Contacts, Browsing History, Advertising Data | No current collection found | — | — | No | No active fields/SDKs/features | Do not select after final binary confirmation |
+| Data type | Purposes | Linked |
+|---|---|---|
+| Name | App Functionality | Yes |
+| Email Address | App Functionality | Yes |
+| Phone Number | App Functionality | Yes |
+| Coarse Location | App Functionality | Yes |
+| Precise Location | App Functionality | Yes |
+| Contacts | App Functionality | Yes |
+| Emails or Text Messages | App Functionality | Yes |
+| Photos or Videos | App Functionality | Yes |
+| Audio Data | App Functionality | Yes |
+| Gameplay Content | App Functionality | Yes |
+| Other User Content | App Functionality | Yes |
+| Customer Support | App Functionality | Yes |
+| User ID | App Functionality, Analytics | Yes |
+| Device ID | App Functionality, Analytics | Yes |
+| Product Interaction | App Functionality, Analytics | Yes |
+| Other Usage Data | Analytics | Yes |
+| Crash Data | Analytics | No |
+| Performance Data | Analytics | No |
+| Other Data Types | App Functionality, Analytics | Yes |
 
-## Tracking and advertising recommendation
+The nine additions are Phone Number, Coarse Location, Contacts, Device ID, Product Interaction, Other Usage Data, Crash Data, Performance Data, Other Data Types. User ID keeps App Functionality and adds Analytics. Preserve the other existing types and answers. Phone Number/Other Usage Data/Other Data Types include the actual Google Sign-In manifest declarations; they are not claims of new app-entry screens. Crash and Performance data come from native Google Maps declarations, not an inferred Firebase Crashlytics/Performance integration.
 
-Recommended preliminary answers:
+The binary contains Firebase Core 12.18.0, Google Sign-In 9.2.0, Google Maps resources 9.4.0 and the React Native Maps 1.27.2 privacy wrapper. Default MapKit JSX does not establish that Google SDKs are absent. Device ID is linked because Expo tokens are stored with UID. Coarse Location covers retained ZIP/reduced-accuracy venue data; Precise Location remains for captured venue pins. The source location-copy correction is local and has not changed the installed build.
 
-- Data used to track: **No**.
-- App Tracking Transparency prompt: **No**; no `NSUserTrackingUsageDescription`, IDFA, advertising SDK, data broker, retargeting or cross-app advertising behavior was found.
-- Third-party advertising, developer advertising/marketing: **No current use found**.
+## Billing-enabled iOS addendum
 
-This requires a final archive/dependency scan and confirmation that Firebase, Expo Push and map-provider settings do not enable undisclosed analytics/advertising use.
+Build 21 predates native RevenueCat purchase support. For the planned billing-enabled candidate add **Purchase History: App Functionality, Analytics; Linked Yes; Tracking No**. This produces 20 types if other behaviors/SDKs are unchanged. Current source's purchases 10.12.2 / PurchasesHybridCommon 19.10.0 input is not a claim about the old archive. Compare actual changes at the normal release handoff; no new build or repeated audit/test suite is requested now.
 
-## Optional-disclosure exemptions
+The optional privacy-choices URL remains blank; preserve the existing policy URL. No blanket advertising, Product Personalization, no-telemetry, or immediate-erasure assertion is made. No card/bank fields or every possible free-form-text data category is added. The review uses source, native manifests and vendor-default evidence, not runtime traffic capture. Publication still requires separate owner authorization and the final accuracy acknowledgement.
 
-Do not rely broadly on Apple's infrequent/optional user-provided-data exemption. Messaging, voice, teams, location discovery and gameplay are normal app features, not rare edge cases. Current GPS used only to answer nearby discovery may be real-time application processing, but because it is transmitted through an authenticated Firebase callable and provider request metadata may exist, the conservative recommendation is to disclose Precise Location.
-
-## Platform/provider decisions still blocking submission
-
-1. Confirm the exact `GoogleService-Info.plist` and Firebase iOS registration embedded in the archive; two iOS registrations exist in the project.
-2. Confirm APNs/Expo Push credentials, provider contracts, delivery and ticket retention.
-3. Confirm whether iOS maps use Apple Maps or Google Maps in the final binary and review that provider's data practices.
-4. Inspect final IPA entitlements, privacy manifests, required-reason APIs and linked SDKs.
-5. Approve treatment of Firebase operational IP/request metadata and logs.
-6. Deploy and verify the local account-deletion and public-name minimization corrections, then repair existing public projections.
-7. Approve operator identity, retention, child-data, UGC operations and public policy/support URLs.
-
-## Evidence boundary
-
-The Firebase project contains a deployed callable set, but function-name presence does not prove deployed source parity. These recommendations reflect current local source plus deployed architecture inventory, not a signed IPA or a version-hash comparison.
+[Apple definitions](https://developer.apple.com/app-store/app-privacy-details/), [Google Maps iOS disclosures](https://developers.google.com/maps/documentation/ios-sdk/apple-privacy-policy), [RevenueCat guidance](https://www.revenuecat.com/docs/platform-resources/apple-platform-resources/apple-app-privacy).

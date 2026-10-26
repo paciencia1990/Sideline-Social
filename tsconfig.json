@@ -27,9 +27,6 @@
     "src/**/*.tsx"
   ],
   "exclude": [
-    "components/GluestackInitializer.tsx",
-    "components/ui/**/*",
-    "components/colors/**/*",
     "functions/**/*",
     "node_modules/**/*",
     ".npm-cache/**/*",

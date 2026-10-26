@@ -12,6 +12,7 @@ import {
   type CoachAiGatewayTelemetry,
 } from './coachAiClaudeGatewayCore';
 import { requireCoachAiRuntimeEnabled } from './coachAiRuntime';
+import { readCoachAiBillingConfig } from './coachAiBilling';
 
 const gatewayFunctions = functions.region('us-central1').runWith({
   secrets: ['ANTHROPIC_API_KEY', 'COACH_AI_API_KEY'],
@@ -32,7 +33,7 @@ export const coachAiClaudeGateway = gatewayFunctions.https.onRequest(async (requ
       declaredContentLength: request.get('content-length') ?? undefined,
       rawBody: request.rawBody ?? Buffer.from(JSON.stringify(request.body ?? null), 'utf8'),
     }, process.env.COACH_AI_API_KEY ?? '', correlationId);
-    if (process.env.COACH_AI_TESTING_ENABLED !== 'true') {
+    if (process.env.COACH_AI_TESTING_ENABLED !== 'true' && !await readCoachAiBillingConfig()) {
       throw controlledFailure(correlationId, 503, 'server_testing_disabled');
     }
     if (!await requireCoachAiRuntimeEnabled(getFirestore())) {

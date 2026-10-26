@@ -229,11 +229,17 @@ export async function searchParentsByName(queryText: string): Promise<FriendSear
 
 export async function getFriends(userId: string): Promise<FriendProfile[]> {
   try {
-    if (auth.currentUser?.uid !== userId) return [];
+    const requireSameAccount = () => {
+      if (auth.currentUser?.uid !== userId) throw createFriendsError("friends/account-changed");
+    };
+    requireSameAccount();
     const profile = await getPrivateUserProfile(userId);
+    requireSameAccount();
+    if (!profile) throw createFriendsError("friends/profile-unavailable");
     const friendIds = profile?.friendIds ?? [];
     if (friendIds.length === 0) return [];
     const publicProfiles = await getPublicUserProfiles(friendIds);
+    requireSameAccount();
     return publicProfiles.map((friendProfile) => ({
       id: friendProfile.userId,
       displayName: formatPublicUserName(friendProfile.displayName) ?? "",
@@ -242,7 +248,7 @@ export async function getFriends(userId: string): Promise<FriendProfile[]> {
     }));
   } catch (error) {
     logFriendsIssue("getFriends", error);
-    return [];
+    throw error;
   }
 }
 
@@ -596,6 +602,10 @@ function createFriendRequestError(code: string) {
   const error = new Error("Friend request is unavailable.") as Error & { code: string };
   error.code = code;
   return error;
+}
+
+function createFriendsError(code: string) {
+  return Object.assign(new Error("Friend list is unavailable."), { code });
 }
 
 function getErrorCode(error: unknown) {

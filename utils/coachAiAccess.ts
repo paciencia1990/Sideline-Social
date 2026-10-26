@@ -4,6 +4,7 @@ export type CoachAiAccess = Readonly<{
   buildAvailable: boolean;
   entitlementSource: CoachAiEntitlementSource;
   canView: boolean;
+  canCreate: boolean;
   canRequest: boolean;
 }>;
 
@@ -12,6 +13,8 @@ export function resolveCoachAiAccess({
   claimLoaded,
   testerClaimEntitled,
   paidEntitled,
+  paidRemaining = 30,
+  billingAvailable = false,
   signedIn,
   adultEligible,
   activeMode,
@@ -21,23 +24,24 @@ export function resolveCoachAiAccess({
   claimLoaded: boolean;
   testerClaimEntitled: boolean;
   paidEntitled: boolean;
+  paidRemaining?: number;
+  billingAvailable?: boolean;
   signedIn: boolean;
   adultEligible: boolean;
   activeMode: "parent" | "coach" | null;
   accountStanding: "active" | "messagingRestricted" | "suspended" | "banned" | null;
 }): CoachAiAccess {
-  const entitlementSource: CoachAiEntitlementSource = paidEntitled
-    ? "paid"
-    : claimLoaded && testerClaimEntitled
-      ? "tester-claim"
-      : null;
+  const entitlementSource: CoachAiEntitlementSource = buildAvailable && claimLoaded && testerClaimEntitled
+    ? "tester-claim" : paidEntitled ? "paid" : null;
   const authorizedContext = signedIn && adultEligible && activeMode === "coach" && accountStanding === "active";
-  const canUse = buildAvailable && entitlementSource !== null && authorizedContext;
+  const available = buildAvailable || billingAvailable;
+  const canUse = available && entitlementSource !== null && authorizedContext;
 
   return Object.freeze({
-    buildAvailable,
+    buildAvailable: available,
     entitlementSource,
-    canView: canUse,
-    canRequest: canUse,
+    canView: canUse || billingAvailable && authorizedContext,
+    canCreate: canUse,
+    canRequest: canUse && (entitlementSource !== 'paid' || paidRemaining > 0),
   });
 }

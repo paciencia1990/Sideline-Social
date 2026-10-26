@@ -316,7 +316,7 @@ export default function CoachHelpResultScreen() {
     <ScreenWrapper>
       <KeyboardAwareScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <CoachResourceHeader subtitle={t("coach.resources.resultSubtitle")} title={result.title} titleRef={resultHeadingRef} />
-        <Text style={styles.previewLabel}>{t("coach.resources.coachAiTestingPreview")}</Text>
+        {coachAiAccess.entitlementSource === 'tester-claim' ? <Text style={styles.previewLabel}>{t("coach.resources.coachAiTestingPreview")}</Text> : null}
 
         {editing ? (
           <Card style={styles.cardGap}>

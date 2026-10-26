@@ -1,0 +1,25 @@
+'use strict';
+const assert = require('node:assert/strict');
+const { createHmac } = require('node:crypto');
+const { createSourceLoader } = require('./coach-ai-test-loader.cjs');
+const load = createSourceLoader();
+const core = load('functions/src/coachAiBillingCore.ts');
+
+const now = Date.parse('2026-10-12T16:00:00Z');
+const january = Date.parse('2028-01-31T09:05:00Z');
+assert.equal(core.coachAiMonthlyWindow(january, Date.parse('2028-02-29T09:04:59Z')).resetsAtMs, Date.parse('2028-02-29T09:05:00Z'));
+assert.equal(core.coachAiMonthlyWindow(january, Date.parse('2028-02-29T09:05:00Z')).resetsAtMs, Date.parse('2028-03-31T09:05:00Z'));
+assert.equal(core.coachAiMonthlyWindow(Date.parse('2027-01-31T09:05:00Z'), Date.parse('2027-02-28T09:05:00Z')).resetsAtMs, Date.parse('2027-03-31T09:05:00Z'));
+assert.throws(() => core.coachAiMonthlyWindow(january, january - 1));
+const raw = Buffer.from('{"event":{"id":"fixture"}}'), secret = 'fixture-not-a-real-secret-'.repeat(2), timestamp = String(now / 1000);
+const signature = `t=${timestamp},v1=${createHmac('sha256', secret).update(`${timestamp}.`).update(raw).digest('hex')}`;
+assert.equal(core.verifyRevenueCatWebhook(raw, signature, secret, now), true);
+assert.equal(core.verifyRevenueCatWebhook(Buffer.from('{}'), signature, secret, now), false);
+assert.equal(core.verifyRevenueCatWebhook(raw, signature, secret, now + 300001), false);
+assert.equal(core.verifyRevenueCatWebhook(raw, signature, 'short', now), false);
+const event = { event: { id: 'fixture_event', type: 'RENEWAL', app_user_id: 'coach_fixture', environment: 'PRODUCTION', app_id: 'appfixture' } };
+assert.deepEqual(core.parseBillingWebhook(event, 'production', ['appfixture']).uids, ['coach_fixture']);
+assert.throws(() => core.parseBillingWebhook(event, 'sandbox', ['appfixture']));
+assert.throws(() => core.parseBillingWebhook(event, 'production', ['appanother']));
+assert.notEqual(core.billingRequestId('production', 'coach_fixture', 'request_fixture'), core.billingRequestId('sandbox', 'coach_fixture', 'request_fixture'));
+console.log('Billing core: UTC reset boundaries, signed webhooks, environment/app/UID binding and request isolation passed. V2 lifecycle checks are in the dedicated adapter suite.');

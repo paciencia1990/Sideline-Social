@@ -40,16 +40,6 @@ type MaterializedOptions = {
 };
 
 const MARKERS: readonly BombMarker[] = ['solid', 'striped', 'dashed', 'dotted', 'circle', 'square', 'triangle', 'diamond'];
-const MARKER_TEXT: Record<BombMarker, BombLocalizedText> = {
-  solid: bombText('solid pattern', 'patrón sólido'),
-  striped: bombText('striped pattern', 'patrón de rayas'),
-  dashed: bombText('dashed pattern', 'patrón de guiones'),
-  dotted: bombText('dotted pattern', 'patrón de puntos'),
-  circle: bombText('circle marker', 'marca circular'),
-  square: bombText('square marker', 'marca cuadrada'),
-  triangle: bombText('triangle marker', 'marca triangular'),
-  diamond: bombText('diamond marker', 'marca de rombo'),
-};
 const SHAPE_OPTIONS: readonly SemanticOption[] = [
   { conceptId: 'shape-circle', label: bombText('Circle', 'Círculo') },
   { conceptId: 'shape-square', label: bombText('Square', 'Cuadrado') },
@@ -57,16 +47,16 @@ const SHAPE_OPTIONS: readonly SemanticOption[] = [
   { conceptId: 'shape-diamond', label: bombText('Diamond', 'Rombo') },
 ];
 const WIRE_OPTIONS: readonly SemanticOption[] = [
-  { conceptId: 'wire-red-solid', label: bombText('Red wire with a solid pattern', 'Cable rojo con patrón sólido') },
-  { conceptId: 'wire-blue-striped', label: bombText('Blue wire with a striped pattern', 'Cable azul con patrón de rayas') },
-  { conceptId: 'wire-yellow-dashed', label: bombText('Yellow wire with a dashed pattern', 'Cable amarillo con patrón de guiones') },
-  { conceptId: 'wire-green-dotted', label: bombText('Green wire with a dotted pattern', 'Cable verde con patrón de puntos') },
+  { conceptId: 'wire-red-solid', label: bombText('Red', 'Rojo') },
+  { conceptId: 'wire-blue-striped', label: bombText('Blue', 'Azul') },
+  { conceptId: 'wire-yellow-dashed', label: bombText('Yellow', 'Amarillo') },
+  { conceptId: 'wire-green-dotted', label: bombText('Green', 'Verde') },
 ];
 const PATTERN_OPTIONS: readonly SemanticOption[] = [
-  { conceptId: 'panel-solid', label: bombText('Solid panel', 'Panel sólido') },
-  { conceptId: 'panel-striped', label: bombText('Striped panel', 'Panel de rayas') },
-  { conceptId: 'panel-dashed', label: bombText('Dashed panel', 'Panel de guiones') },
-  { conceptId: 'panel-dotted', label: bombText('Dotted panel', 'Panel de puntos') },
+  { conceptId: 'panel-solid', label: bombText('Solid', 'Sólido') },
+  { conceptId: 'panel-striped', label: bombText('Striped', 'Rayas') },
+  { conceptId: 'panel-dashed', label: bombText('Dashed', 'Guiones') },
+  { conceptId: 'panel-dotted', label: bombText('Dotted', 'Puntos') },
 ];
 
 export function createBombGeneratedRound(seed: string, recentHistory: string[] = []): BombGeneratedRound {
@@ -139,19 +129,18 @@ function generateDirect(random: BombSeededRandom, context: string): BombPrivateC
   const materialized = materializeOptions(semantic, random, context);
   const correctOptionId = requiredOptionId(materialized, target.conceptId);
   const correct = requiredOption(materialized.options, correctOptionId);
-  const marker = MARKER_TEXT[correct.marker];
   return command({
     context,
     stage: 'direct',
     category: 'direct',
     controlKind: template === 'wire' ? 'wire' : template === 'symbol' || template === 'pattern' ? 'symbol' : template === 'number' ? 'number' : 'word',
     prompt: bombText(
-      `Select option ${correct.number}: ${correct.label.en}, identified by the ${marker.en}.`,
-      `Selecciona la opción ${correct.number}: ${correct.label.es}, identificada por ${marker.es}.`,
+      `Select option ${correct.number}: ${correct.label.en}.`,
+      `Selecciona la opción ${correct.number}: ${correct.label.es}.`,
     ),
     explanation: bombText(
-      `The direct command names option ${correct.number}, ${correct.label.en}, and its ${marker.en}.`,
-      `El comando directo nombra la opción ${correct.number}, ${correct.label.es}, y ${marker.es}.`,
+      `The direct command names option ${correct.number}, ${correct.label.en}.`,
+      `El comando directo nombra la opción ${correct.number}, ${correct.label.es}.`,
     ),
     options: materialized.options,
     correctOptionId,
@@ -281,13 +270,12 @@ function generateCombinedMath(recipe: 'math-marker' | 'math-symbol', random: Bom
   const right = answer - left;
   const math = { operation: 'addition' as const, operands: [left, right], answer };
   const correct = materialized.options[answer - 1];
-  const marker = MARKER_TEXT[correct.marker];
-  const markerClauseEn = recipe === 'math-marker' ? ` Confirm it has the ${marker.en}.` : ` Confirm the symbol is ${correct.label.en}.`;
-  const markerClauseEs = recipe === 'math-marker' ? ` Confirma que tenga ${marker.es}.` : ` Confirma que el símbolo sea ${correct.label.es}.`;
+  const symbolClauseEn = ` Confirm the symbol is ${correct.label.en}.`;
+  const symbolClauseEs = ` Confirma que el símbolo sea ${correct.label.es}.`;
   return command({
     context, stage: 'combined', category: 'combined', controlKind: 'symbol',
-    prompt: bombText(`Add ${left} and ${right}. Use the result as the option number.${markerClauseEn}`, `Suma ${left} y ${right}. Usa el resultado como número de opción.${markerClauseEs}`),
-    explanation: bombText(`${left} + ${right} = ${answer}. Option ${answer} is ${correct.label.en} with the ${marker.en}.`, `${left} + ${right} = ${answer}. La opción ${answer} es ${correct.label.es} con ${marker.es}.`),
+    prompt: bombText(`Add ${left} and ${right}. Use the result as the option number.${symbolClauseEn}`, `Suma ${left} y ${right}. Usa el resultado como número de opción.${symbolClauseEs}`),
+    explanation: bombText(`${left} + ${right} = ${answer}. Option ${answer} is ${correct.label.en}.`, `${left} + ${right} = ${answer}. La opción ${answer} es ${correct.label.es}.`),
     options: materialized.options, correctOptionId: correct.id,
     validation: { kind: 'combined', recipe, mechanics: ['math', recipe === 'math-marker' ? 'marker' : 'symbol'], math, ...(recipe === 'math-marker' ? { targetMarker: correct.marker } : {}) },
   });
@@ -297,11 +285,10 @@ function generateCombinedWord(random: BombSeededRandom, context: string) {
   const concept = random.pick(BOMB_WORD_CONCEPTS);
   const materialized = materializeConceptOptions(concept, random, context);
   const correct = requiredOption(materialized.options, requiredOptionId(materialized, concept.id));
-  const marker = MARKER_TEXT[correct.marker];
   return command({
     context, stage: 'combined', category: 'combined', controlKind: 'mixed',
-    prompt: bombText(`Unscramble ${concept.scramble.en}, then select that object with the ${marker.en}.`, `Ordena las letras ${concept.scramble.es} y selecciona ese objeto con ${marker.es}.`),
-    explanation: bombText(`${concept.scramble.en} forms ${concept.answer.en}; it is option ${correct.number} with the ${marker.en}.`, `${concept.scramble.es} forma ${concept.answer.es}; es la opción ${correct.number} con ${marker.es}.`),
+    prompt: bombText(`Unscramble ${concept.scramble.en}, then select that object.`, `Ordena las letras ${concept.scramble.es} y selecciona ese objeto.`),
+    explanation: bombText(`${concept.scramble.en} forms ${concept.answer.en}; it is option ${correct.number}, ${correct.label.en}.`, `${concept.scramble.es} forma ${concept.answer.es}; es la opción ${correct.number}, ${correct.label.es}.`),
     options: materialized.options, correctOptionId: correct.id,
     validation: { kind: 'combined', recipe: 'word-marker', mechanics: ['word', 'marker'], targetMarker: correct.marker, word: { conceptId: concept.id, answer: concept.answer, scramble: concept.scramble } },
   });
@@ -345,11 +332,10 @@ function generateCombinedPositionPattern(random: BombSeededRandom, context: stri
   const anchor = random.pick(materialized.options);
   const offset = chooseValidOffset(anchor.number, random);
   const correct = materialized.options[anchor.number + offset - 1];
-  const marker = MARKER_TEXT[correct.marker];
   return command({
     context, stage: 'combined', category: 'combined', controlKind: 'mixed',
-    prompt: bombText(`Select the option immediately ${offset > 0 ? 'after' : 'before'} ${anchor.label.en} (option ${anchor.number}), and confirm it has the ${marker.en}.`, `Selecciona la opción inmediatamente ${offset > 0 ? 'después' : 'antes'} de ${anchor.label.es} (opción ${anchor.number}) y confirma que tenga ${marker.es}.`),
-    explanation: bombText(`The requested neighbor is option ${correct.number}, ${correct.label.en}, with the ${marker.en}.`, `La opción vecina solicitada es ${correct.number}, ${correct.label.es}, con ${marker.es}.`),
+    prompt: bombText(`Select the option immediately ${offset > 0 ? 'after' : 'before'} ${anchor.label.en} (option ${anchor.number}).`, `Selecciona la opción inmediatamente ${offset > 0 ? 'después' : 'antes'} de ${anchor.label.es} (opción ${anchor.number}).`),
+    explanation: bombText(`The requested neighbor is option ${correct.number}, ${correct.label.en}.`, `La opción vecina solicitada es ${correct.number}, ${correct.label.es}.`),
     options: materialized.options, correctOptionId: correct.id,
     validation: { kind: 'combined', recipe: 'position-pattern', mechanics: ['position', 'pattern'], anchorOptionId: anchor.id, anchorConceptId: requiredConcept(materialized, anchor.id), offset, targetMarker: correct.marker },
   });

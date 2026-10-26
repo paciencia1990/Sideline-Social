@@ -16,9 +16,11 @@ import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/Card";
-import { KeyboardAwareScrollView } from "@/components/KeyboardAwareScrollView";
+import { VirtualizedRow, VirtualizedRows } from "@/components/VirtualizedRows";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
+import { useParentSearch } from "@/hooks/useParentSearch";
+import { isPublicUserSearchQueryReady, normalizePublicUserSearchQuery } from "@/utils/publicUserSearchRequests";
 import { useAuth } from "@/context/AuthContext";
 import { Colors, Radius, Shadow, Spacing, Typography } from "@/constants/theme";
 import {
@@ -28,7 +30,6 @@ import {
   getCurrentUserProfile,
   getFriends,
   getFriendRequestGroups,
-  searchParentsByName,
   searchUsers,
   sendFriendRequest,
   subscribeToFriendRequestChanges,
@@ -387,20 +388,16 @@ export default function FriendsScreen() {
   const [suggestionsLoading, setSuggestionsLoading] = useState(true);
   const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
-  const [searchResults, setSearchResults] = useState<FriendSearchResult[]>([]);
-  const [searchCompleted, setSearchCompleted] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
   const [searchRefreshVersion, setSearchRefreshVersion] = useState(0);
+  const [searchActive, setSearchActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [displayUserId, setDisplayUserId] = useState(user?.uid);
   const [refreshing, setRefreshing] = useState(false);
-  const [searching, setSearching] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<{ actionId: string; message: string } | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const actionsInFlight = useRef(new Set<string>());
   const friendsLoadSequence = useRef(0);
-  const searchRequestSequence = useRef(0);
   const acknowledgedNotificationIds = useRef(new Set<string>());
   const incomingExpansionInitialized = useRef(false);
   const previousIncomingCount = useRef(0);
@@ -414,14 +411,15 @@ export default function FriendsScreen() {
     [outgoingRequests]
   );
   const normalizedSearchText = useMemo(
-    () => searchText.trim().replace(/\s+/gu, " "),
+    () => normalizePublicUserSearchQuery(searchText),
     [searchText],
   );
   const searchIsReady = useMemo(
-    () => normalizedSearchText.length >= 2 &&
-      (normalizedSearchText.match(/\p{L}/gu)?.length ?? 0) >= 2,
+    () => isPublicUserSearchQueryReady(normalizedSearchText),
     [normalizedSearchText],
   );
+  const { results: searchResults, completed: searchCompleted, error: searchError, searching, canRetry } =
+    useParentSearch(user?.uid, normalizedSearchText, searchActive && !authLoading, searchRefreshVersion);
 
   useEffect(() => {
     setDisplayUserId(user?.uid);
@@ -484,16 +482,18 @@ export default function FriendsScreen() {
 
   useFocusEffect(useCallback(() => {
     focused.current = true;
-    if (authLoading) return () => { focused.current = false; };
+    setSearchActive(!authLoading && AppState.currentState === "active");
+    if (authLoading) return () => { focused.current = false; setSearchActive(false); };
     void loadFriends(false);
     const unsubscribe = user?.uid ? subscribeToFriendRequestChanges(user.uid, (section) => {
       if (section === "requests") void refreshFriendSections(REQUESTS_SECTION);
       else void loadFriends();
     }) : () => {};
     const subscription = AppState.addEventListener("change", (nextState) => {
+      setSearchActive(nextState === "active");
       if (nextState === "active") void loadFriends(false);
     });
-    return () => { focused.current = false; unsubscribe(); subscription.remove(); };
+    return () => { focused.current = false; setSearchActive(false); unsubscribe(); subscription.remove(); };
   }, [authLoading, loadFriends, refreshFriendSections, user?.uid]));
 
   useEffect(() => {
@@ -526,40 +526,6 @@ export default function FriendsScreen() {
     const timeout = setTimeout(() => { if (focused.current) void refreshFriendSections(REQUESTS_SECTION); }, delay);
     return () => clearTimeout(timeout);
   }, [incomingRequests, refreshFriendSections, outgoingRequests]);
-
-  useEffect(() => {
-    const requestSequence = ++searchRequestSequence.current;
-    setSearchResults([]);
-    setSearchCompleted(false);
-    setSearchError(null);
-    setSearching(false);
-    if (!user || !searchIsReady) return;
-
-    const timeout = setTimeout(async () => {
-      if (searchRequestSequence.current !== requestSequence) return;
-      setSearching(true);
-      try {
-        const results = await searchParentsByName(normalizedSearchText);
-        if (searchRequestSequence.current !== requestSequence) return;
-        setSearchResults(results);
-        setSearchCompleted(true);
-      } catch (nextError) {
-        if (searchRequestSequence.current !== requestSequence) return;
-        logFriendsScreenIssue("searchParentsByName", nextError);
-        setSearchError(t("friends.searchUnavailableBody"));
-        setSearchCompleted(true);
-      } finally {
-        if (searchRequestSequence.current === requestSequence) setSearching(false);
-      }
-    }, 350);
-
-    return () => {
-      clearTimeout(timeout);
-      if (searchRequestSequence.current === requestSequence) {
-        searchRequestSequence.current += 1;
-      }
-    };
-  }, [normalizedSearchText, searchIsReady, searchRefreshVersion, t, user]);
 
   const runAction = useCallback(
     async (actionId: string, action: () => Promise<void>, failureMessage = t("friends.errorBody")) => {
@@ -714,7 +680,7 @@ export default function FriendsScreen() {
 
   return (
     <ScreenWrapper>
-      <KeyboardAwareScrollView
+      <VirtualizedRows keyboardAware
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} tintColor={Colors.primary} onRefresh={onRefresh} />}
@@ -776,7 +742,7 @@ export default function FriendsScreen() {
           onPress={() => setIncomingExpanded((current) => !current)}
         />
         {incomingExpanded && incomingRequests.length > 0 ? (
-          incomingRequests.map((request) => (
+          incomingRequests.map((request) => (<VirtualizedRow key={request.id} render={() => ((
             <RequestRow
               key={request.id}
               request={request}
@@ -798,7 +764,7 @@ export default function FriendsScreen() {
                 t("friends.declineRequestError"),
               )}
             />
-          ))
+          ))} />))
         ) : null}
 
         <AccordionHeader
@@ -815,7 +781,7 @@ export default function FriendsScreen() {
                 : request.recipientDisplayName || t(request.recipientProfileState === "deleted"
                   ? "common.formerMember"
                   : "common.sidelineSocialMember");
-              return (
+              return (<VirtualizedRow key={request.id} render={() => ((
                 <Card key={request.id} style={styles.personCard}>
                   <Avatar name={recipientName} photoURL={request.recipientPhotoURL} />
                   <View style={styles.personText}>
@@ -837,7 +803,7 @@ export default function FriendsScreen() {
                     ) : <Text style={styles.cancelRequestText}>{t("friends.cancelRequest")}</Text>}
                   </TouchableOpacity>
                 </Card>
-              );
+              ))} />);
             })}
           </>
         ) : null}
@@ -848,6 +814,7 @@ export default function FriendsScreen() {
           <TextInput
             autoCapitalize="none"
             autoCorrect={false}
+            maxLength={80}
             onChangeText={setSearchText}
             placeholder={t("friends.searchPlaceholder")}
             placeholderTextColor={Colors.textPrimary}
@@ -866,7 +833,7 @@ export default function FriendsScreen() {
         {searchIsReady && searchResults.length > 0 ? (
           <>
             <SectionTitle title={t("friends.searchResults")} count={searchResults.length} />
-            {searchResults.map((profile) => (
+            {searchResults.map((profile) => (<VirtualizedRow key={profile.id} render={() => ((
               <SearchResultRow
                 key={profile.id}
                 profile={profile}
@@ -904,7 +871,7 @@ export default function FriendsScreen() {
                 })}
                 onRespond={() => respondToSearchResult(profile)}
               />
-            ))}
+            ))} />))}
           </>
         ) : null}
 
@@ -917,21 +884,29 @@ export default function FriendsScreen() {
 
         {searchIsReady && searchCompleted && searchError ? (
           <Card style={styles.errorCard}>
-            <Text style={styles.errorTitle}>{t("friends.searchUnavailableTitle")}</Text>
-            <Text style={styles.errorBody}>{searchError}</Text>
+            <Text style={styles.errorTitle}>{t(searchError === "rate_limited" ? "friends.searchRateLimitedTitle" : "friends.searchUnavailableTitle")}</Text>
+            <Text accessibilityLiveRegion="polite" style={styles.errorBody}>
+              {t(searchError === "rate_limited"
+                ? canRetry ? "friends.searchRateLimitReadyBody" : "friends.searchRateLimitedBody"
+                : "friends.searchUnavailableBody")}
+            </Text>
             <TouchableOpacity
               accessibilityRole="button"
+              accessibilityState={{ disabled: !canRetry }}
               activeOpacity={0.82}
-              onPress={() => setSearchRefreshVersion((current) => current + 1)}
-              style={styles.retryButton}
+              disabled={!canRetry}
+              onPress={() => { if (canRetry) setSearchRefreshVersion((current) => current + 1); }}
+              style={[styles.retryButton, !canRetry && styles.disabledButton]}
             >
-              <Text style={styles.retryText}>{t("friends.retrySearch")}</Text>
+              <Text style={styles.retryText}>{t(searchError === "rate_limited"
+                ? canRetry ? "friends.searchAgain" : "friends.searchWait"
+                : "friends.retrySearch")}</Text>
             </TouchableOpacity>
           </Card>
         ) : null}
 
         <SectionTitle title={t("friends.myFriends")} count={friends.length} />
-        {friends.length > 0 ? (
+        {loadError ? null : friends.length > 0 ? (
           friends.map((friend) => {
             const visibleFriend = {
               ...friend,
@@ -939,7 +914,7 @@ export default function FriendsScreen() {
                 ? "common.formerMember"
                 : "common.sidelineSocialMember"),
             };
-            return (
+            return (<VirtualizedRow key={visibleFriend.id} render={() => ((
               <FriendRow
                 key={visibleFriend.id}
                 profile={visibleFriend}
@@ -953,7 +928,7 @@ export default function FriendsScreen() {
                 secondaryBusy={busyAction === `chat:${visibleFriend.id}`}
                 onSecondaryAction={() => void openDirectChat(visibleFriend)}
               />
-            );
+            ))} />);
           })
         ) : (
           <EmptyState title={t("friends.emptyTitle")} body={t("friends.emptyBody")} />
@@ -972,7 +947,7 @@ export default function FriendsScreen() {
         {suggestedUsers.length > 0 ? (
           suggestedUsers.map((profile) => {
             const pending = outgoingUserIds.has(profile.id);
-            return (
+            return (<VirtualizedRow key={profile.id} render={() => ((
               <SuggestedConnectionRow
                 key={profile.id}
                 profile={profile}
@@ -990,12 +965,12 @@ export default function FriendsScreen() {
                   t("friends.friendRequestError"),
                 )}
               />
-            );
+            ))} />);
           })
         ) : (
           !suggestionsLoading && !suggestionsError ? <EmptyState title={t("friends.noSuggestionsTitle")} body={t("friends.noSuggestionsBody")} /> : null
         )}
-      </KeyboardAwareScrollView>
+      </VirtualizedRows>
     </ScreenWrapper>
   );
 }

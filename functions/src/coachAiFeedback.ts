@@ -10,9 +10,14 @@ import { requireCoachAiRuntimeEnabled } from './coachAiRuntime';
 import { coachAiModerationIngestionEnabled } from './moderationReportsCore';
 import { createCoachAiUnsafeModerationReport } from './moderationReports';
 import { permanentAccountFunctions } from './permanentAuth';
+import { billingRequestId } from './coachAiBillingCore';
+import { billingEnrollmentRef } from './coachAiBillingEnrollment';
 
 const functions = permanentAccountFunctions(firebaseFunctions, 'communication');
-const feedbackFunctions = functions.region('us-central1').runWith({ timeoutSeconds: 30, memory: '256MB' });
+const feedbackFunctions = functions.region('us-central1').runWith({
+  timeoutSeconds: 30, memory: '256MB',
+  serviceAccount: 'coach-ai-feedback@sideline-social-staging-2026.iam.gserviceaccount.com',
+});
 const FEEDBACK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RATE_LIMIT_RETENTION_MS = 48 * 60 * 60 * 1000;
@@ -22,16 +27,9 @@ export const submitCoachAiFeedback = feedbackFunctions.https.onCall(async (data,
   const correlationId = randomUUID();
   const uid = context.auth?.uid;
   if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in is required.', { reason: 'auth_required' });
-  if (!serverTestingEnabled()) {
-    throw new functions.https.HttpsError('failed-precondition', 'AI Coach testing is disabled.', { reason: 'server_testing_disabled' });
-  }
   const firestore = getFirestore();
-  if (!await requireCoachAiRuntimeEnabled(firestore)) {
-    throw new functions.https.HttpsError('failed-precondition', 'AI Coach is temporarily unavailable.', { reason: 'coach_ai_disabled' });
-  }
-  if (context.auth?.token.aiCoachTester !== true) {
-    throw new functions.https.HttpsError('permission-denied', 'This account is not an authorized AI Coach tester.', { reason: 'tester_entitlement_required' });
-  }
+  const testerAllowed = serverTestingEnabled() && context.auth?.token.aiCoachTester === true
+    && await requireCoachAiRuntimeEnabled(firestore);
   const profile = await firestore.collection('users').doc(uid).get();
   if (profile.data()?.adultEligibilityConfirmed !== true || profile.data()?.activeMode !== 'coach') {
     throw new functions.https.HttpsError('permission-denied', 'Adult Coach Mode is required.', { reason: 'adult_coach_mode_required' });
@@ -53,14 +51,46 @@ export const submitCoachAiFeedback = feedbackFunctions.https.onCall(async (data,
   let unsafeReportData: FirebaseFirestore.DocumentData | null = null;
   try {
     const metadata = await firestore.runTransaction(async (transaction) => {
-      const [requestSnapshot, existingFeedback, rateSnapshot] = await Promise.all([
+      const [requestSnapshot, existingFeedback, rateSnapshot, currentProfile, enrollment] = await Promise.all([
         transaction.get(requestRef),
         transaction.get(feedbackRef),
         transaction.get(rateRef),
+        transaction.get(profile.ref),
+        transaction.get(billingEnrollmentRef(uid)),
       ]);
-      const requestData = requestSnapshot.data();
-      if (!requestSnapshot.exists || requestData?.status !== 'completed' || requestData?.userId !== uid) {
+      if (!currentProfile.exists || currentProfile.data()?.adultEligibilityConfirmed !== true
+        || currentProfile.data()?.activeMode !== 'coach' || enrollment.data()?.state === 'deleting') {
+        throw new functions.https.HttpsError('permission-denied', 'Account is unavailable.', { reason: 'account_deleting' });
+      }
+      let requestData = requestSnapshot.data();
+      if (!requestSnapshot.exists) {
+        // Completed paid ownership receipts outlive the short-lived text cache.
+        // These exact server-only lookups never recreate the response or trust
+        // client-supplied ownership, environment, category or generated text.
+        const receipts = await Promise.all((['sandbox', 'production'] as const).map(async environment => ({
+          environment,
+          snapshot: await transaction.get(firestore.doc(`coachAiPaidRequests/${billingRequestId(environment, uid, feedback.requestId)}`)),
+        })));
+        const present = receipts.filter(entry => entry.snapshot.exists);
+        if (present.length !== 1) throw new Error('request_not_found');
+        const { environment, snapshot } = present[0];
+        const receipt = snapshot.data();
+        if (receipt?.status !== 'completed' || receipt.userId !== uid
+          || receipt.environment !== environment || receipt.clientRequestId !== feedback.requestId
+          || typeof receipt.billable !== 'boolean' || typeof receipt.fingerprint !== 'string'
+          || !/^[a-f0-9]{64}$/.test(receipt.fingerprint)) throw new Error('request_not_found');
+        requestData = {
+          userId: uid, status: 'completed', paid: true,
+          // Older receipts intentionally contain no content/category metadata.
+          category: 'unknown', locale: 'unknown', modelIdentifier: 'unknown',
+        };
+      } else if (requestData?.status !== 'completed' || requestData?.userId !== uid) {
         throw new Error('request_not_found');
+      }
+      // An expired subscription never prevents reporting its own saved output.
+      // Paid records are server-owned; a client cannot assert this exemption.
+      if (!testerAllowed && !(context.app && requestData.paid === true)) {
+        throw new functions.https.HttpsError('permission-denied', 'Coach AI feedback access is unavailable.', { reason: 'tester_entitlement_required' });
       }
       const requestTimes = readRollingTimes(rateSnapshot.data(), now);
       if (!existingFeedback.exists && requestTimes.length >= RATE_LIMIT_MAX) throw new Error('feedback_rate_limited');
@@ -85,6 +115,8 @@ export const submitCoachAiFeedback = feedbackFunctions.https.onCall(async (data,
         modelIdentifier: typeof requestData.modelIdentifier === 'string'
           ? requestData.modelIdentifier.slice(0, 80)
           : 'unknown',
+        sourceRecordType: requestSnapshot.exists ? 'response_cache' : 'paid_receipt',
+        responseCacheAvailable: requestSnapshot.exists,
         reviewStatus: feedback.reason === 'unsafe' ? 'needs_review' : 'received',
         updatedAt: FieldValue.serverTimestamp(),
         expiresAt: Timestamp.fromMillis(now + FEEDBACK_RETENTION_MS),
@@ -93,7 +125,7 @@ export const submitCoachAiFeedback = feedbackFunctions.https.onCall(async (data,
       transaction.set(feedbackRef, record, { merge: true });
       if (feedback.reason === 'unsafe') unsafeReportData = requestData;
       return { category: requestData.category, locale: requestData.locale, reviewStatus: record.reviewStatus };
-    });
+    }, { maxAttempts: 1 });
     const moderationReceipt = unsafeReportData && coachAiModerationIngestionEnabled(process.env)
       ? await createCoachAiUnsafeModerationReport({
           comment: feedback.comment ?? null,

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://identitytoolkit.googleapis.com; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Coach AI cleanup · Daily staff check</title><link rel="stylesheet" href="style.css"></head>
+<body><main><header><p class="eyebrow">SIDELINE SOCIAL · INTERNAL OPERATIONS</p><h1>Daily Coach AI cleanup check</h1>
+<p>See what needs attention, what is waiting, and what needs no action yet.</p>
+<p class="small">J Garcia · primary / Joann Pollard · backup. Weekdays at 9 AM and 4 PM Eastern.</p></header>
+<section aria-labelledby="loginHeading"><h2 id="loginHeading">Private staff sign-in</h2>
+<p id="loginStatus" role="status">Sign-in is disabled until the host is configured and approved.</p>
+<label for="loginEmail">Work email</label><input id="loginEmail" type="email" autocomplete="username">
+<label for="loginPassword">Password</label><input id="loginPassword" type="password" autocomplete="current-password">
+<button id="loginSubmit" disabled>Sign in once</button>
+<div id="totpSection" hidden><label for="totpCode">Authenticator code</label><input id="totpCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code"><button id="totpSubmit" disabled>Verify once</button></div>
+<button id="signOut" disabled>Sign out</button></section>
+<p id="connection" class="notice">Sign in privately to read the queue. Loading it does not perform cleanup.</p>
+<p id="status" role="status" aria-live="polite">No queue check has been made.</p>
+<section aria-labelledby="queueHeading"><h2 id="queueHeading">Your daily check</h2>
+<button id="refresh" disabled>Load queue once</button><p id="health" role="status"></p>
+<p>Every listed case is explained below. A retained receipt is not necessarily a problem.
+New issues should be reviewed within one business day; unresolved work after five business days needs a named technical resolution plan.</p>
+<label for="search">Find a case by its explanation or restricted reference</label><input id="search" type="search" autocomplete="off">
+<div id="records"></div>
+<p><a href="/action.html">Open the separate guided action page</a>. Sign in there privately and select the same case. No code or session is transferred.</p></section>
+<section aria-labelledby="journalHeading"><h2 id="journalHeading">Record this check</h2>
+<label for="operatorName">Actual operator's name or initials</label><input id="operatorName" maxlength="80" autocomplete="off">
+<button id="copyJournal" disabled>Copy journal entry</button>
+<label for="journalText">Entry for the existing restricted operations journal</label><textarea id="journalText" readonly rows="6"></textarea>
+<p id="journalStatus" role="status">The journal is not updated automatically. Keep its sharing Restricted.</p></section>
+</main><script src="login-config.js"></script><script src="login.js"></script><script src="login-page.js"></script><script src="client.js"></script><script src="staff-view.js"></script><script src="page.js"></script></body></html>

@@ -1,3 +1,4 @@
+import { prepareModerationDeletion, minimizeDeletedSubjectCases, completeModerationDeletion } from './moderationRetentionDeletion';
 import { getAuth } from 'firebase-admin/auth';
 import { getDatabase } from 'firebase-admin/database';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -13,6 +14,8 @@ import { hasCoachAccess, isTeamActive } from './teamMembershipCore';
 import { deleteTeamAnnouncementData } from './teamAnnouncementDeletionCore';
 import { moderationEvidenceMustBeRetained, moderationHash } from './moderationReportsCore';
 import { permanentAccountFunctions } from './permanentAuth';
+import { deleteCoachAiBillingData, recordCoachAiLocalDeletionComplete } from './coachAiBillingDeletion';
+import { REVENUECAT_ERASURE_SECRET, coachAiErasureRuntimeIdentity } from './coachAiRevenueCatV2';
 import {
   APPLE_REVOCATION_SECRET_NAMES,
   AppleDeletionAuthorizationError,
@@ -35,7 +38,8 @@ const deletionFunctions = functions
   .runWith({
     timeoutSeconds: 540,
     memory: '1GB',
-    secrets: [...APPLE_REVOCATION_SECRET_NAMES],
+    secrets: [...APPLE_REVOCATION_SECRET_NAMES, REVENUECAT_ERASURE_SECRET],
+    serviceAccount: coachAiErasureRuntimeIdentity(),
   });
 
 /**
@@ -43,8 +47,8 @@ const deletionFunctions = functions
  *
  * Authentication is deleted last. Every preceding operation is idempotent so
  * an interrupted caller can safely reauthenticate and retry. Moderation
- * reports are retained without user identifiers; the final retention policy
- * still requires privacy/legal approval before release.
+ * records may remain pseudonymous pending scoped preservation/delivery review.
+ * moderation-retention-v1 does not make the ordinary periods a deletion exemption.
  */
 export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
@@ -80,6 +84,8 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, cont
     deletedDocuments: 0,
     deletedStorageObjects: 0,
   };
+  await prepareModerationDeletion(firestore, uid);
+  await deleteCoachAiBillingData(uid);
 
   await deleteAuthoredMessagesAndAudio(firestore, uid, summary);
   await deleteAuthoredAnnouncements(firestore, uid, summary);
@@ -145,6 +151,7 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, cont
 
   await deleteSquadAdministrationRequests(firestore, uid, summary);
   await deleteUserBlocks(firestore, uid, summary);
+  const moderationReviewRequired = await minimizeDeletedSubjectCases(firestore, uid);
   await anonymizeModerationReports(firestore, uid, summary);
   await anonymizeNotificationReferences(firestore, uid, summary);
   await deleteRealtimeGameParticipation(uid);
@@ -162,6 +169,12 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, cont
   // Deleting Auth last ensures a partial Firestore/Storage failure can be
   // retried by the same authenticated user without privileged support.
   await getAuth().deleteUser(uid);
+  await completeModerationDeletion(firestore, uid);
+  // Failure leaves the protective fence for explicit review. The account has
+  // already gone; do not falsely invite a signed-out user to retry deletion.
+  await recordCoachAiLocalDeletionComplete(uid).catch(() => {
+    functions.logger.error('billing_cleanup_completion_marker_needs_review');
+  });
   if (appleRevocationRef) {
     await appleRevocationRef.delete().catch((error: unknown) => {
       functions.logger.warn('apple_revocation_marker_cleanup_failed', {
@@ -171,7 +184,7 @@ export const deleteOwnAccount = deletionFunctions.https.onCall(async (data, cont
     });
   }
   functions.logger.info('account_deletion_completed', { uidHash: hashForLog(uid), ...summary });
-  return { deleted: true, ...summary };
+  return { deleted: true, moderationDispositionReviewRequired: moderationReviewRequired > 0, ...summary };
 });
 
 async function ensureAppleAuthorizationRevoked(

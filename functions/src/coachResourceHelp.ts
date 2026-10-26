@@ -49,14 +49,14 @@ export const generateCoachResourceHelp = coachHelpFunctions.https.onCall(async (
   }
 
   if (!serverTestingEnabled()) {
-    throw new functions.https.HttpsError('failed-precondition', 'AI Coach testing is disabled.', { reason: 'server_testing_disabled' });
+    throw new functions.https.HttpsError('failed-precondition', 'Coach AI testing is disabled.', { reason: 'server_testing_disabled' });
   }
   const firestore = getFirestore();
   if (!await requireCoachAiRuntimeEnabled(firestore)) {
-    throw new functions.https.HttpsError('failed-precondition', 'AI Coach is temporarily unavailable.', { reason: 'coach_ai_disabled' });
+    throw new functions.https.HttpsError('failed-precondition', 'Coach AI is temporarily unavailable.', { reason: 'coach_ai_disabled' });
   }
   if (context.auth?.token.aiCoachTester !== true) {
-    throw new functions.https.HttpsError('permission-denied', 'This account is not an authorized AI Coach tester.', { reason: 'tester_entitlement_required' });
+    throw new functions.https.HttpsError('permission-denied', 'This account is not an authorized Coach AI tester.', { reason: 'tester_entitlement_required' });
   }
 
   const profile = await firestore.collection('users').doc(uid).get();
@@ -198,14 +198,14 @@ async function reserveRequest(
   }
 }
 
-async function requestProviderResult(request: ValidatedCoachHelpRequest) {
+export async function requestProviderResult(request: ValidatedCoachHelpRequest, maximumAttempts: 1 | 2 = PROVIDER_MAX_ATTEMPTS) {
   const endpoint = process.env.COACH_AI_ENDPOINT?.trim();
   const apiKey = normalizeCoachAiSharedSecret(process.env.COACH_AI_API_KEY ?? '');
   if (!endpoint || !apiKey || !endpoint.startsWith('https://')) {
     throw new functions.https.HttpsError('failed-precondition', 'Coach assistance is not configured.', { reason: 'provider_unavailable' });
   }
 
-  for (let attempt = 1; attempt <= PROVIDER_MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), PROVIDER_ATTEMPT_TIMEOUT_MS);
     try {
@@ -225,7 +225,7 @@ async function requestProviderResult(request: ValidatedCoachHelpRequest) {
       return validateCoachHelpResult(candidate, request.category);
     } catch (error) {
       const reason = error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'provider_error';
-      if (attempt < PROVIDER_MAX_ATTEMPTS && isTransientProviderError(error)) {
+      if (attempt < maximumAttempts && isTransientProviderError(error)) {
         const delayMs = error instanceof GatewayProviderError ? error.retryAfterSeconds * 1000 : 0;
         if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
         continue;

@@ -12,11 +12,13 @@ import { TEAM_HISTORY_PAGE_SIZES } from "@/constants/teamHistoryPagination";
 import { Colors, Radius, Shadow, Spacing, TeamCodeTypography, Typography } from "@/constants/theme";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
+import { auth } from "@/config/firebase";
+import { switchModeImmediately } from "@/utils/modeSwitch";
 import {
   canManageTeamRoles,
-  getArchivedCoachTeamCount,
   getArchivedCoachTeamMembershipsPage,
-  getCurrentUserTeamMemberships,
+  getConfirmedCoachHomeTeams,
+  getCoachHomeLookupDiagnostic,
   hasCoachAccess,
   hasTeamRole,
   isTeamActive,
@@ -29,6 +31,7 @@ import { shouldShowPrivateMessagesCard, type PrivateInboxLoadState } from "@/uti
 import { createCoachHomeTeamCards } from "@/utils/coachHomeTeamCards";
 import { resolveCoachResourcesAccess } from "@/utils/coachResourcesAccess";
 import { loadCoachHomeData } from "@/utils/coachHomeRecovery";
+import { isTransientTeamReadError, requireTeamReadReady } from "@/services/teamReadReadiness";
 
 export default function CoachHomeScreen() {
   const { t } = useTranslation();
@@ -37,10 +40,13 @@ export default function CoachHomeScreen() {
   const currentUserId = useRef(user?.uid);
   currentUserId.current = user?.uid;
   const [memberships, setMemberships] = useState<TeamMembership[]>([]);
+  const [teamDataOwner, setTeamDataOwner] = useState<string | null>(null);
+  const confirmedTeamOwner = useRef<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const isSwitchingMode = useRef(false);
   const loadVersion = useRef(0);
+  const loadAbort = useRef<AbortController | null>(null);
   const [archiveCountUnavailable, setArchiveCountUnavailable] = useState(false);
   const [restoringTeamId, setRestoringTeamId] = useState<string | null>(null);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
@@ -56,31 +62,75 @@ export default function CoachHomeScreen() {
     loadState: PrivateInboxLoadState;
     unreadCount: number;
   }>({ conversationCount: 0, loadState: "loading", unreadCount: 0 });
+  const teamReadConfirmed = Boolean(user?.uid) && teamDataOwner === user?.uid;
 
   const loadTeams = useCallback(async () => {
+    loadAbort.current?.abort();
+    const controller = new AbortController();
+    loadAbort.current = controller;
     const version = ++loadVersion.current;
     const requestUserId = user?.uid;
-    const isCurrentLoad = () => version === loadVersion.current && requestUserId === currentUserId.current;
+    const isCurrentLoad = () => !controller.signal.aborted && version === loadVersion.current && requestUserId === currentUserId.current;
     setLoading(true);
-    setMemberships([]);
+    if (!requestUserId || confirmedTeamOwner.current !== requestUserId) {
+      confirmedTeamOwner.current = null;
+      setTeamDataOwner(null);
+      setMemberships([]);
+    }
     setError(null);
     setLifecycleError(null);
+    setArchivedTeams([]);
+    setArchivedExpanded(false);
+    setArchivedCount(0);
+    setArchivedLoading(false);
+    setArchivedError(null);
+    setArchivedHasMore(false);
+    setArchivedNextOffset(0);
+    setArchiveCountUnavailable(false);
     try {
+      // Security startup has its own bound; the team-data deadline begins only
+      // after readiness, rather than consuming the read budget during startup.
+      await requireTeamReadReady(requestUserId ?? "");
+      if (!isCurrentLoad()) return;
+      const confirmedTeams = getConfirmedCoachHomeTeams(requestUserId ?? "", { signal: controller.signal });
       const next = await loadCoachHomeData({
-        memberships: () => getCurrentUserTeamMemberships({ throwOnError: true, requireComplete: true }),
-        archivedCount: getArchivedCoachTeamCount,
+        memberships: async () => (await confirmedTeams).memberships,
+        archivedCount: async () => {
+          const count = (await confirmedTeams).archivedCount;
+          if (count === null) throw new Error("Archive count unconfirmed");
+          return count;
+        },
       });
       if (!isCurrentLoad()) return;
+      if (!requestUserId || auth.currentUser?.uid !== requestUserId) {
+        throw new Error("Coach session changed");
+      }
       setMemberships(next.memberships);
       setArchivedCount(next.archivedCount);
       setArchiveCountUnavailable(next.archiveCountUnavailable);
+      confirmedTeamOwner.current = requestUserId;
+      setTeamDataOwner(requestUserId);
+      if (next.memberships.length === 0) {
+        console.info("[CoachHome] team lookup confirmed", { reason: "verified_empty", serverConfirmed: true, sessionCurrent: true });
+      }
     } catch (nextError) {
       if (!isCurrentLoad()) return;
-      console.warn("[CoachHome] load unavailable:", getErrorCode(nextError));
-      setError(t("coach.home.error"));
-      setMemberships([]);
+      const diagnostic = !requestUserId || auth.currentUser?.uid !== requestUserId
+        ? { reason: "session_unconfirmed" as const, serverConfirmed: false, code: "team-read/session-unconfirmed" }
+        : getCoachHomeLookupDiagnostic(nextError);
+      console.warn("[CoachHome] team lookup unconfirmed", {
+        ...diagnostic, sessionCurrent: Boolean(requestUserId && auth.currentUser?.uid === requestUserId),
+      });
+      setError(t(diagnostic.reason === "session_unconfirmed" ? "coach.home.sessionUnconfirmed" : "coach.home.teamLoadUnconfirmed"));
+      if (confirmedTeamOwner.current !== requestUserId || !isTransientTeamReadError({ code: diagnostic.code })) {
+        confirmedTeamOwner.current = null;
+        setTeamDataOwner(null);
+        setMemberships([]);
+      }
     } finally {
       if (isCurrentLoad()) setLoading(false);
+      if (loadAbort.current === controller) loadAbort.current = null;
+      controller.abort();
     }
   }, [t, user?.uid]);
 
@@ -88,7 +138,7 @@ export default function CoachHomeScreen() {
     useCallback(() => {
       isSwitchingMode.current = false;
       void loadTeams();
-      return () => { loadVersion.current += 1; };
+      return () => { loadVersion.current += 1; loadAbort.current?.abort(); loadAbort.current = null; };
     }, [loadTeams]),
   );
 
@@ -98,22 +148,27 @@ export default function CoachHomeScreen() {
   );
 
   const loadArchivedTeams = useCallback(async (reset = false) => {
-    if (archivedLoading) return;
+    if (archivedLoading || !teamReadConfirmed) return;
+    const requestUserId = user?.uid;
+    const version = loadVersion.current;
+    const isCurrent = () => version === loadVersion.current && requestUserId === currentUserId.current && auth.currentUser?.uid === requestUserId;
     setArchivedLoading(true);
     setArchivedError(null);
     try {
       const page = await getArchivedCoachTeamMembershipsPage(reset ? 0 : archivedNextOffset, TEAM_HISTORY_PAGE_SIZES.archivedTeams, { throwOnError: true });
+      if (!isCurrent()) return;
       setArchivedTeams((current) => reset ? page.memberships : [...current, ...page.memberships]);
       setArchivedCount(page.totalCount);
       setArchivedHasMore(page.hasMore);
       setArchivedNextOffset(page.nextOffset);
     } catch (nextError) {
+      if (!isCurrent()) return;
       console.warn("[CoachHome] archived teams load error:", getErrorCode(nextError));
       setArchivedError(t("coach.team.archivedTeamsLoadError"));
     } finally {
-      setArchivedLoading(false);
+      if (isCurrent()) setArchivedLoading(false);
     }
-  }, [archivedLoading, archivedNextOffset, t]);
+  }, [archivedLoading, archivedNextOffset, t, teamReadConfirmed, user?.uid]);
 
   const toggleArchivedTeams = useCallback(() => {
     setArchivedExpanded((current) => {
@@ -159,7 +214,7 @@ export default function CoachHomeScreen() {
   const showCoachResources = resolveCoachResourcesAccess({
     activeMode: modeHydrated ? activeMode : null,
     authenticatedUserId: user?.uid,
-    loadState: loading ? "loading" : error ? "error" : "loaded",
+    loadState: loading ? "loading" : error || !teamReadConfirmed ? "error" : "loaded",
     memberships,
   }) === "allowed";
 
@@ -175,29 +230,22 @@ export default function CoachHomeScreen() {
   }, [activeMode, coachTeams.length, hasTeams, loading]);
 
   const switchToParent = useCallback(async () => {
-    if (isSwitchingMode.current) return;
-    isSwitchingMode.current = true;
-    loadVersion.current += 1;
-    const targetRoute = PARENT_PROFILE_ROUTE;
-    setActiveMode("parent");
-    replaceAfterOptionalDismiss(targetRoute);
-    // Mode is a navigation preference. Unavailable persistence must not strand
-    // the user; server-owned standing and team permissions still govern access.
+    if (!user?.uid) return;
+    const userId = user.uid;
     try {
-      if (__DEV__) {
-        console.log("[ModeSwitch:toParent]", {
-          previousMode: activeMode,
-          nextMode: "parent",
-          currentRoute: "/coach",
-          targetRoute,
-        });
-      }
-
-      await switchActiveMode("parent");
+      await switchModeImmediately({
+        inFlight: isSwitchingMode,
+        mode: "parent",
+        isCurrentAccount: () => auth.currentUser?.uid === userId,
+        setMode: (mode) => { loadVersion.current += 1; setActiveMode(mode); },
+        navigate: () => replaceAfterOptionalDismiss(PARENT_PROFILE_ROUTE),
+        persist: switchActiveMode,
+        onPersistenceError: () => Alert.alert(t("mode.preferenceUnavailableTitle"), t("mode.preferenceUnavailableBody")),
+      });
     } catch (nextError) {
       console.warn("[CoachHome] mode preference unavailable:", getErrorCode(nextError));
     }
-  }, [activeMode, setActiveMode]);
+  }, [setActiveMode, t, user?.uid]);
 
   const restoreTeam = useCallback(async (membership: TeamMembership) => {
     if (!membership.team || restoringTeamId) return;
@@ -261,7 +309,7 @@ export default function CoachHomeScreen() {
 
         {!loading && error ? (
           <Card style={styles.centerCard}>
-            <Text accessibilityLiveRegion="polite" style={styles.cardTitle}>{t("coach.home.errorTitle")}</Text>
+            <Text accessibilityLiveRegion="polite" style={styles.cardTitle}>{t("coach.home.teamLoadUnconfirmedTitle")}</Text>
             <Text style={styles.cardText}>{error}</Text>
             <TouchableOpacity accessibilityRole="button" onPress={() => { void loadTeams(); }} style={styles.primaryButton}>
               <Text style={styles.primaryButtonText}>{t("common.retry")}</Text>
@@ -269,9 +317,16 @@ export default function CoachHomeScreen() {
           </Card>
         ) : null}
 
+        {(loading || error) && teamReadConfirmed && coachTeams.length > 0 ? (
+          <Card style={styles.centerCard}>
+            <Text accessibilityLiveRegion="polite" style={styles.cardText}>{t("coach.home.lastConfirmedTeams")}</Text>
+            {teamCards.map((teamCard) => <Text key={teamCard.teamId} style={styles.cardTitle}>{teamCard.name}</Text>)}
+          </Card>
+        ) : null}
+
         <Card style={styles.modeCard}>
-          <Text style={styles.cardTitle}>{loading || error ? t("mode.coach") : hasTeams ? t("mode.viewingCoach") : t("startMode.coachWelcome")}</Text>
-          <Text style={styles.cardText}>{loading || error ? t("coach.home.recoveryHelp") : hasTeams ? t("coach.home.modeHelp") : t("startMode.coachWelcomeBody")}</Text>
+          <Text style={styles.cardTitle}>{loading || error || !teamReadConfirmed ? t("mode.coach") : hasTeams ? t("mode.viewingCoach") : t("startMode.coachWelcome")}</Text>
+          <Text style={styles.cardText}>{loading || error || !teamReadConfirmed ? t("coach.home.recoveryHelp") : hasTeams ? t("coach.home.modeHelp") : t("startMode.coachWelcomeBody")}</Text>
           <View style={styles.buttonRow}>
             <TouchableOpacity
               activeOpacity={0.86}
@@ -284,7 +339,7 @@ export default function CoachHomeScreen() {
           </View>
         </Card>
 
-        {!loading && !error ? (
+        {teamReadConfirmed && !loading && !error ? (
           <>
             {archiveCountUnavailable ? (
               <Card style={styles.centerCard}>

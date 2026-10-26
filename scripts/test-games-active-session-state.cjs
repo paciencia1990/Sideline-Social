@@ -1,144 +1,64 @@
+'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
-
-function loadCoordinator() {
-  const source = fs.readFileSync(path.join(process.cwd(), 'utils', 'activeSessionLoadState.ts'), 'utf8');
-  const output = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const module = { exports: {} };
-  new Function('module', 'exports', output)(module, module.exports);
-  return module.exports.createActiveSessionLoadCoordinator;
-}
-
-function deferred() {
-  let resolve;
-  const promise = new Promise((next) => { resolve = next; });
-  return { promise, resolve };
-}
+const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+const loaded = { exports: {} };
+const code = ts.transpileModule(read('utils/coalescedRefresh.ts'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+new Function('module', 'exports', code)(loaded, loaded.exports);
+const { createCoalescedRefresh } = loaded.exports;
+const tick = () => new Promise(resolve => setImmediate(resolve));
+function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 
 async function run() {
-  const createCoordinator = loadCoordinator();
-  const states = [];
-  const diagnostics = [];
-  let calls = 0;
-  const permissionCoordinator = createCoordinator({
-    fetchSession: async () => {
-      calls += 1;
-      return { status: 'permission-error' };
-    },
-    onDiagnostic: (status) => diagnostics.push(status),
-    onStateChange: (state) => states.push(state),
+  const gate = deferred(), failures = []; let calls = 0;
+  const controller = createCoalescedRefresh({
+    load: () => { calls++; return gate.promise; },
+    merge: (a, b) => a && b, onSuccess() {}, onError: error => failures.push(error),
   });
-  await permissionCoordinator.setContext({ enabled: false, squadId: 'squad-a', userId: 'user-a' });
-  assert.equal(calls, 0, 'authentication and membership resolution gate the request');
-  await permissionCoordinator.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
-  assert.equal(calls, 1);
-  assert.equal(permissionCoordinator.getState().status, 'permission-error');
-  assert.equal(diagnostics.length, 1, 'one denied request writes one bounded diagnostic');
-  await permissionCoordinator.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
-  assert.equal(calls, 1, 'render/context repetition does not retry a denied request');
-  assert.equal(states.filter((state) => state.status === 'loading').length, 1);
-  await permissionCoordinator.retry();
-  assert.equal(calls, 2, 'Retry issues exactly one new request');
-  assert.equal(permissionCoordinator.getState().status, 'permission-error');
+  const first = controller.refresh(false, false);
+  assert.equal(controller.refresh(false, false), first, 'Concurrent focus reads share one request');
+  await tick(); assert.equal(calls, 1);
+  gate.reject(Object.assign(Error('denied'), { code: 'not_authorized' }));
+  await first; await tick();
+  assert.equal(calls, 1, 'A denied read is not automatically repeated');
+  assert.equal(failures.length, 1);
+  controller.dispose();
 
-  const pending = deferred();
-  let concurrentCalls = 0;
-  const concurrent = createCoordinator({
-    fetchSession: () => {
-      concurrentCalls += 1;
-      return pending.promise;
-    },
-    onStateChange() {},
+  const stale = deferred(), fresh = deferred(), results = []; let requests = 0;
+  const scoped = createCoalescedRefresh({
+    load: () => ++requests === 1 ? stale.promise : fresh.promise,
+    merge: (a, b) => a && b, onSuccess: result => results.push(result), onError() {},
   });
-  const first = concurrent.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
-  const duplicate = concurrent.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
-  assert.equal(concurrentCalls, 1, 'route refocus cannot overlap the same meaningful request');
-  pending.resolve({ status: 'ready', session: null });
-  await Promise.all([first, duplicate]);
+  const old = scoped.refresh(false, false); await tick(); scoped.dispose();
+  stale.resolve('old-account'); await old;
+  assert.deepEqual(results, [], 'Disposed scope cannot publish a stale result');
+  scoped.activate(); const next = scoped.refresh(false, false); await tick();
+  fresh.resolve('current-account'); await next;
+  assert.deepEqual(results, ['current-account']); scoped.dispose();
 
-  const squadA = deferred();
-  const squadB = deferred();
-  const selectedStates = [];
-  const selected = createCoordinator({
-    fetchSession: (squadId) => squadId === 'squad-a' ? squadA.promise : squadB.promise,
-    onStateChange: (state) => selectedStates.push(state),
-  });
-  const oldRequest = selected.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
-  const newRequest = selected.setContext({ enabled: true, squadId: 'squad-b', userId: 'user-a' });
-  squadB.resolve({ status: 'ready', session: { sessionId: 'new-session' } });
-  await newRequest;
-  squadA.resolve({ status: 'ready', session: { sessionId: 'stale-session' } });
-  await oldRequest;
-  assert.equal(selected.getState().session.sessionId, 'new-session', 'a stale response cannot replace the selected Squad result');
-
-  const unmountPending = deferred();
-  const afterUnmount = [];
-  const unmounted = createCoordinator({
-    fetchSession: () => unmountPending.promise,
-    onStateChange: (state) => afterUnmount.push(state),
-  });
-  const unmountRequest = unmounted.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
-  const stateCountAtUnmount = afterUnmount.length;
-  unmounted.dispose();
-  unmountPending.resolve({ status: 'ready', session: { sessionId: 'ignored' } });
-  await unmountRequest;
-  assert.equal(afterUnmount.length, stateCountAtUnmount, 'unmount ignores stale responses');
-
-  const staleAfterClear = deferred();
-  const cleared = createCoordinator({
-    fetchSession: () => staleAfterClear.promise,
-    onStateChange() {},
-  });
-  const staleRequest = cleared.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
-  assert.equal(cleared.clearSession(), true);
-  staleAfterClear.resolve({ status: 'ready', session: { sessionId: 'must-not-return' } });
-  await staleRequest;
-  assert.equal(cleared.getState().session, null, 'a response invalidated by local expiration cannot restore Active Now');
-
-  const beforeExpiration = deferred();
-  const afterExpiration = deferred();
-  let expirationCalls = 0;
-  const expirationRefresh = createCoordinator({
-    fetchSession: () => {
-      expirationCalls += 1;
-      return expirationCalls === 1 ? beforeExpiration.promise : afterExpiration.promise;
-    },
-    onStateChange() {},
-  });
-  const beforeExpirationRequest = expirationRefresh.setContext({ enabled: true, squadId: 'squad-a', userId: 'user-a' });
-  expirationRefresh.clearSession();
-  const afterExpirationRequest = expirationRefresh.retry();
-  beforeExpiration.resolve({ status: 'ready', session: { sessionId: 'stale-session' } });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(expirationCalls, 2, 'expiration waits out invalidated deduplication before one trusted refresh');
-  afterExpiration.resolve({ status: 'ready', session: { sessionId: 'new-session' } });
-  await Promise.all([beforeExpirationRequest, afterExpirationRequest]);
-  assert.equal(expirationRefresh.getState().session.sessionId, 'new-session', 'a genuinely new active session can appear after stale state clears');
-
-  const gamesSource = fs.readFileSync(path.join(process.cwd(), 'app', '(tabs)', 'games.tsx'), 'utf8');
-  const serviceSource = fs.readFileSync(path.join(process.cwd(), 'services', 'gameService.ts'), 'utf8');
-  const activeHookSource = fs.readFileSync(path.join(process.cwd(), 'hooks', 'useActiveSquadGameSession.ts'), 'utf8');
-  assert.match(gamesSource, /servicesUnavailable/);
-  assert.match(gamesSource, /retryActiveSession/);
-  assert.match(gamesSource, /!authLoading && !membershipLoading/);
-  assert.match(gamesSource, /GAME_CARDS\.map/, 'game cards stay rendered during service errors');
-  assert.match(gamesSource, /joinInput/, 'Join Code input stays available');
-  assert.doesNotMatch(gamesSource, /active session error:/);
-  assert.doesNotMatch(serviceSource, /orderByChild\("squadId"\)|equalTo\(squadId\)/, 'the client no longer queries all RTDB sessions by Squad');
-  assert.match(serviceSource, /getActiveSquadGameSession/);
-  assert.match(activeHookSource, /useFocusEffect/);
-  assert.match(activeHookSource, /AppState\.addEventListener/);
-  assert.match(activeHookSource, /clearSession\(expectedSession\)/);
-  assert.doesNotMatch(activeHookSource, /setInterval/);
-
-  console.log('Games active-session permission stability, deduplication, retry, stale-response, UI, and trusted-callable tests passed.');
+  const directory = read('hooks/useSquadGameLobbies.ts');
+  const focused = read('hooks/useFocusedGameRefresh.ts');
+  const games = read('app/(tabs)/games.tsx');
+  assert.match(directory, /Boolean\(enabled && uid && squadId\)/);
+  assert.match(directory, /JSON\.stringify\(\[active, uid, squadId/);
+  assert.match(directory, /useCoalescedRefresh\(scope/);
+  assert.match(directory, /listGameLobbies\(\{ squadId/);
+  assert.match(directory, /reason === "not_authorized"\) setResult\(null\)/);
+  assert.match(directory, /useFocusedGameRefresh\(active, focusedRefresh\)/);
+  assert.match(focused, /useFocusEffect/);
+  assert.match(focused, /if \(!enabled\) return/);
+  assert.match(focused, /AppState\.addEventListener/);
+  assert.match(focused, /next !== "active"\) stop\(\)/);
+  assert.match(focused, /stop\(\); subscription\.remove\(\)/);
+  assert.match(games, /useSquadGameLobbies/);
+  assert.doesNotMatch(games, /useActiveSquadGameSession/);
+  assert.match(games, /!authLoading && !membershipLoading/);
+  assert.match(games, /GAME_CARDS\.map/);
+  assert.match(games, /joinInput/);
+  console.log('Current game-directory coalescing, denial, scope disposal, membership gating and focus cleanup passed.');
 }
-
-run().catch((error) => {
-  console.error(error?.stack ?? error);
-  process.exit(1);
-});
+run().catch(error => { console.error(error); process.exitCode = 1; });

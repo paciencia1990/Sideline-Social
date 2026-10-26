@@ -7,7 +7,7 @@ const home = read("app/(tabs)/index.tsx");
 const selector = read("components/SquadSelector.tsx");
 const context = read("context/SquadContext.tsx");
 const service = read("services/squadService.ts");
-const homeFeedService = read("services/homeFeedService.ts");
+
 const parentTeamService = read("services/parentTeamService.ts");
 const parentTeamsScreen = read("app/teams/index.tsx");
 const translations = read("i18n/index.ts");
@@ -16,18 +16,19 @@ const myTeamsCard = home.slice(home.indexOf("function MyTeamsCard"), home.indexO
 const openParentTeam = home.slice(home.indexOf("const openParentTeam"), home.indexOf("const loadHome"));
 const homeSummaryLoader = parentTeamService.slice(
   parentTeamService.indexOf("export async function getParentHomeTeamsSummary"),
-  parentTeamService.indexOf("export async function isParentHomeTeamAvailable"),
-);
-const homeTeamAvailability = parentTeamService.slice(
-  parentTeamService.indexOf("export async function isParentHomeTeamAvailable"),
   parentTeamService.indexOf("export async function getParentTeamsOverview"),
 );
+const teamSummaryLoader = parentTeamService.slice(
+  parentTeamService.indexOf("export async function getParentTeamSummary"),
+  parentTeamService.indexOf("export async function getParentPastTeamCount"),
+);
+const teamDestination = read("app/teams/[teamId]/index.tsx");
 
 assert.match(home, /function YourSquadCard\(/, "Home must have one canonical Your Squad card");
 assert.equal((home.match(/function YourSquadCard\(/g) ?? []).length, 1, "Your Squad card must not be duplicated");
 assert.doesNotMatch(home, /HomeProximityCard|LiveSquadCard|SquadSummaryCard|SectionTitle/, "redundant Squad cards must be removed");
 assert.doesNotMatch(home, /fetchNearbySquads|getCurrentLocation|getLocationPermissionStatus|requestLocationPermission|subscribeLiveSquadCard|fetchUserSquadsDetail/, "Home must not request location or run redundant Squad reads");
-assert.doesNotMatch(homeFeedService, /fetchUserSquadsDetail|subscribeLiveSquadCard|activeMemberCount|memberAvatars/, "obsolete Home-only Squad reads and listeners must be removed");
+
 
 const myTeamsIndex = layout.indexOf("<MyTeamsCard");
 const actionsIndex = layout.indexOf("<SecondaryActions");
@@ -47,9 +48,11 @@ assert.match(home, /home\.chat[\s\S]*home\.leaderboard/, "Chat must precede Lead
 
 assert.match(home, /getParentHomeTeamsSummary/, "Home must use the lightweight parent-team association summary");
 assert.doesNotMatch(home, /getParentTeamsOverview/, "Home must not restore the full message-hydrating My Teams overview");
-assert.match(homeSummaryLoader, /Promise\.all\(/, "Home team membership, child, and link reads must begin in parallel");
+assert.match(homeSummaryLoader, /Promise\.allSettled\(/, "Optional child and link reads must settle independently after confirmed membership");
 assert.doesNotMatch(homeSummaryLoader, /Announcement|announcement|getTeamPrivateMessageInbox|privateConversation|resolveCoachName/, "Home summary loading must not hydrate announcements, messages, or coach profiles");
-assert.match(homeTeamAvailability, /getCurrentUserTeamMembershipById\(teamId\)[\s\S]*hasTeamRole\(membership, "parent"\)[\s\S]*isTeamActive\(membership\.team\)/, "Home row validation must reject removed, unauthorized, and archived teams");
+assert.match(teamSummaryLoader, /getCurrentUserTeamMembershipById\(teamId\)[\s\S]*hasTeamRole\(membership, "parent"\)[\s\S]*isTeamActive\(membership\.team\)/, "The destination must reject missing, unauthorized and archived teams");
+assert.doesNotMatch(teamSummaryLoader, /getParentTeams\(/, "A single-team destination must not enumerate other memberships");
+assert.match(teamDestination, /getParentTeamSummary\(teamId\)/, "The team loading shell owns its access validation");
 assert.match(parentTeamsScreen, /getParentTeamsOverview/, "The full My Teams page must preserve its established team cards and messaging data");
 
 assert.match(myTeamsCard, /summary\?\.rows\.map/, "Home must render every child/team association row");
@@ -60,9 +63,9 @@ assert.match(home, /myTeamsTeamRow:[\s\S]*minHeight: 48/, "Team rows must exceed
 assert.match(home, /myTeamsTeamRowPressed[\s\S]*myTeamsTeamRowFocused/, "Team rows must expose visible pressed and focus states");
 assert.match(home, /myTeamsTeamRowText:[\s\S]*flexShrink: 1[\s\S]*lineHeight: 21/, "Team labels must wrap safely at large text sizes");
 
-assert.match(openParentTeam, /teamNavigationInFlight\.current[\s\S]*isParentHomeTeamAvailable\(teamId\)/, "Rapid team taps must be locked before availability validation");
+assert.match(openParentTeam, /teamNavigationInFlight\.current[\s\S]*router\.push/, "Rapid team taps must be locked before navigation");
 assert.match(openParentTeam, /let didNavigate = false[\s\S]*didNavigate = true[\s\S]*if \(!didNavigate\)/, "The tap lock must remain active throughout a successful navigation transition");
-assert.match(openParentTeam, /if \(!await isParentHomeTeamAvailable\(teamId\)\)[\s\S]*await loadMyTeams\(\)[\s\S]*myTeams\.teamLoadError[\s\S]*return/, "Inactive or unauthorized teams must refresh the bounded summary and recover without navigation");
+assert.doesNotMatch(openParentTeam, /\bawait\b|isParentHomeTeamAvailable/, "Home must transition without an obsolete pre-navigation read");
 assert.match(openParentTeam, /pathname: "\/teams\/\[teamId\]"[\s\S]*params: \{ teamId \}/, "Team rows must navigate directly with the canonical ID as a route parameter");
 assert.doesNotMatch(openParentTeam, /teamName|row\.teamName/, "Navigation must never infer a team route from its display name");
 assert.match(home, /onViewTeams=\{\(\) => router\.push\("\/teams" as never\)\}/, "View Teams must open the existing My Teams list");

@@ -5,17 +5,23 @@ import {
   type DocumentData,
   type DocumentSnapshot,
   getDoc,
+  getDocFromServer,
   getDocs,
+  onSnapshot,
+  type DocumentReference,
   serverTimestamp,
   setDoc,
   writeBatch,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
+import { onAuthStateChanged } from "firebase/auth";
 
 import { auth, db, functions } from "@/config/firebase";
 import { TEAM_HISTORY_PAGE_SIZES } from "@/constants/teamHistoryPagination";
 import { formatPublicUserName } from "@/utils/friendPrivacy";
 import { executeTeamLifecycleRequest } from "@/utils/teamLifecycleRequest";
+import { getSafeTeamReadErrorCode, requireTeamReadReady } from "@/services/teamReadReadiness";
+import { waitForConfirmedProfile } from "@/utils/confirmedProfileRead";
 
 export type TeamRole = "parent" | "coach" | "assistantCoach" | "teamParent";
 export type TeamMemberStatus = "active" | "pending" | "inactive" | "removed";
@@ -159,6 +165,161 @@ export function isEligibleStaffRoleTarget(
 
 const membershipRequests = new Map<string, Promise<TeamMembership[]>>();
 
+type CoachHomeLookupReason =
+  | "session_unconfirmed"
+  | "profile_unconfirmed"
+  | "index_unconfirmed"
+  | "membership_unconfirmed"
+  | "team_unconfirmed"
+  | "read_unavailable";
+
+export class CoachHomeLookupError extends Error {
+  readonly code = "coach-team-unconfirmed";
+  constructor(
+    readonly reason: CoachHomeLookupReason,
+    readonly serverConfirmed = false,
+    readonly safeCode = "unknown",
+    readonly snapshotMetadata?: { fromCache: boolean; hasPendingWrites: boolean },
+  ) {
+    super("Coach team access could not be confirmed");
+    this.name = "CoachHomeLookupError";
+  }
+}
+
+export function getCoachHomeLookupDiagnostic(error: unknown) {
+  return error instanceof CoachHomeLookupError
+    ? { reason: error.reason, serverConfirmed: error.serverConfirmed, code: getSafeTeamReadErrorCode(error), ...error.snapshotMetadata }
+    : { reason: "read_unavailable" as const, serverConfirmed: false, code: getSafeTeamReadErrorCode(error) };
+}
+
+export type ConfirmedCoachHomeTeams = {
+  outcome: "verified_empty" | "verified_memberships";
+  memberships: TeamMembership[];
+  archivedCount: number | null;
+};
+
+const confirmedCoachHomeRequests = new Map<string, {
+  session: NonNullable<typeof auth.currentUser>;
+  promise: Promise<ConfirmedCoachHomeTeams>;
+}>();
+
+// Coach home must confirm absence before offering first-team setup. Other callers
+// retain their existing lookup behavior, including offline/permissive callers.
+export function getConfirmedCoachHomeTeams(expectedUserId: string, options?: { signal: AbortSignal }): Promise<ConfirmedCoachHomeTeams> {
+  const session = auth.currentUser;
+  if (!expectedUserId || !session || session.uid !== expectedUserId) {
+    return Promise.reject(new CoachHomeLookupError("session_unconfirmed"));
+  }
+  // Screen-owned observations have independent cancellation. A departing
+  // screen must not cancel a different caller's signal-less shared lookup.
+  if (options?.signal) return loadConfirmedCoachHomeTeams(expectedUserId, session, options.signal);
+  const existing = confirmedCoachHomeRequests.get(expectedUserId);
+  if (existing?.session === session) return existing.promise;
+  const request = loadConfirmedCoachHomeTeams(expectedUserId, session);
+  const tracked = request.finally(() => {
+    if (confirmedCoachHomeRequests.get(expectedUserId)?.promise === tracked) {
+      confirmedCoachHomeRequests.delete(expectedUserId);
+    }
+  });
+  confirmedCoachHomeRequests.set(expectedUserId, { session, promise: tracked });
+  return tracked;
+}
+
+async function loadConfirmedCoachHomeTeams(
+  userId: string,
+  session: NonNullable<typeof auth.currentUser>,
+  signal?: AbortSignal,
+): Promise<ConfirmedCoachHomeTeams> {
+  const assertSession = () => {
+    if (auth.currentUser !== session || auth.currentUser?.uid !== userId) {
+      throw new CoachHomeLookupError("session_unconfirmed");
+    }
+    if (signal?.aborted) throw Object.assign(new Error("Coach team read cancelled"), { code: "cancelled" });
+  };
+  const read = async (reference: DocumentReference<DocumentData>, reason: CoachHomeLookupReason) => {
+    assertSession();
+    const snapshot = await getDocFromServer(reference);
+    assertSession();
+    if (snapshot.metadata.fromCache !== false || snapshot.metadata.hasPendingWrites !== false) {
+      throw new CoachHomeLookupError(reason, false, "unknown", {
+        fromCache: snapshot.metadata.fromCache, hasPendingWrites: snapshot.metadata.hasPendingWrites,
+      });
+    }
+    if (!snapshot.exists()) throw new CoachHomeLookupError(reason, true);
+    return snapshot;
+  };
+  try {
+    await requireTeamReadReady(userId);
+    assertSession();
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort);
+    if (signal?.aborted) abort();
+    let metadata: { fromCache: boolean; hasPendingWrites: boolean } | undefined;
+    let stopSession: (() => void) | undefined;
+    let profile: DocumentSnapshot<DocumentData>;
+    try {
+      // Observes local session changes; does not refresh authentication.
+      stopSession = onAuthStateChanged(auth, () => {
+        if (auth.currentUser !== session || auth.currentUser?.uid !== userId) controller.abort();
+      });
+      profile = await waitForConfirmedProfile<DocumentSnapshot<DocumentData>>({
+        assertSession,
+        signal: controller.signal,
+        subscribe: (next, error) => onSnapshot(doc(db, "users", userId), { includeMetadataChanges: true }, next, error),
+        onUnconfirmed: (value) => { metadata = value; },
+      });
+      assertSession();
+      if (!profile.exists()) throw new CoachHomeLookupError("profile_unconfirmed", true);
+    } catch (error) {
+      assertSession();
+      if (error instanceof CoachHomeLookupError) throw error;
+      throw new CoachHomeLookupError("profile_unconfirmed", false, getSafeTeamReadErrorCode(error), metadata);
+    } finally {
+      stopSession?.();
+      signal?.removeEventListener("abort", abort);
+      controller.abort();
+    }
+    const data = profile.data();
+    if (!data) throw new CoachHomeLookupError("profile_unconfirmed", true);
+    for (const field of ["coachTeamIds", "parentTeamIds"] as const) {
+      if (!isConfirmedTeamIndex(data[field])) throw new CoachHomeLookupError("index_unconfirmed", true);
+    }
+    if (data.activeTeamId != null && typeof data.activeTeamId !== "string") {
+      throw new CoachHomeLookupError("index_unconfirmed", true);
+    }
+    const teamIds = readIndexedTeamIds(data);
+    const rows = await Promise.all(teamIds.map(async (teamId) => {
+      const member = await read(doc(db, "teams", teamId, "members", userId), "membership_unconfirmed");
+      const membership = normalizeMembership(member.id, { ...member.data(), teamId });
+      // An explicitly inactive membership cannot authorize a team read.
+      if (membership.status !== "active") return null;
+      const team = await read(doc(db, "teams", teamId), "team_unconfirmed");
+      return { ...membership, team: normalizeTeam(team.id, team.data()) };
+    }));
+    assertSession();
+    const memberships = rows.filter((row): row is TeamMembership & { team: Team } => row !== null);
+    return {
+      outcome: memberships.length ? "verified_memberships" : "verified_empty",
+      memberships,
+      // Archive information is secondary and uses this same confirmed profile.
+      archivedCount: isConfirmedTeamIndex(data.archivedCoachTeamIds)
+        ? uniqueStrings(readStringArray(data.archivedCoachTeamIds)).length
+        : null,
+    };
+  } catch (error) {
+    if (error instanceof CoachHomeLookupError) throw error;
+    const code = getSafeTeamReadErrorCode(error);
+    throw new CoachHomeLookupError(code === "team-read/session-unconfirmed" ? "session_unconfirmed" : "read_unavailable", false, code);
+  }
+}
+
+function isConfirmedTeamIndex(value: unknown) {
+  // Missing/null indexes are supported for legacy/new profiles, after a server
+  // read has confirmed the profile. Malformed/pending data is never an empty list.
+  return value == null || (Array.isArray(value) && value.every((id) => typeof id === "string" && id.trim()));
+}
+
 export function getCurrentUserTeamMemberships(options: TeamLookupOptions = {}): Promise<TeamMembership[]> {
   const user = auth.currentUser;
   if (!user) return Promise.resolve([]);
@@ -178,6 +339,7 @@ export function getCurrentUserTeamMemberships(options: TeamLookupOptions = {}): 
 async function loadCurrentUserTeamMemberships(user: { uid: string }, options: TeamLookupOptions): Promise<TeamMembership[]> {
 
   try {
+    if (options.requireComplete || options.throwOnError) await requireTeamReadReady(user.uid);
     const userSnapshot = await getUserTeamIndex(user.uid);
     if (!userSnapshot.exists()) {
       return [];
