@@ -312,7 +312,7 @@ export const teamCalendarSubscription = rawCalendarFunctions.https.onRequest(asy
       timezone: safeString(event.data().timezone, 'UTC'),
       isAllDay: event.data().isAllDay === true,
       location: [event.data().venueName, event.data().field, event.data().address].filter((part) => typeof part === 'string' && part.trim()).join(' - ') || null,
-      notes: typeof event.data().notes === 'string' ? event.data().notes : null,
+      notes: calendarNotes(event.data()),
       status: event.data().status,
       revision: event.data().revision,
       updatedAtMillis: timestampMillis(event.data().updatedAt),
@@ -448,6 +448,7 @@ function externalEventFields(input: { teamId: string; actorUserId: string; integ
     endAt: Timestamp.fromMillis(event.endAtMillis),
     arrivalAt: null,
     timezone: event.timezone,
+    displayInViewerTimezone: event.displayInViewerTimezone,
     isAllDay: event.isAllDay,
     opponentName: null,
     homeAway: null,
@@ -532,7 +533,7 @@ async function consumePublicRateLimit(tokenHash: string) { try { await enforceRa
 
 async function recordSyncAudit(integrationId: string, teamId: unknown, classification: string, summary: unknown) { await firestore().collection(AUDIT).add({ integrationId, teamId: safeString(teamId), classification, summary: isRecord(summary) ? summary : null, createdAt: FieldValue.serverTimestamp(), expiresAt: Timestamp.fromMillis(Date.now() + 180 * 24 * 60 * 60 * 1000) }); }
 function selectedKeys(value: unknown, events: ExternalCalendarEvent[]) { const allowed = new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []); if (allowed.size === 0 || allowed.size > events.length) throw invalidArgument('no_events_selected'); return events.filter((event) => allowed.has(event.key)); }
-function previewEvents(events: ExternalCalendarEvent[]) { return events.map((event) => ({ key: event.key, title: event.title, startAtMillis: event.startAtMillis, endAtMillis: event.endAtMillis, timezone: event.timezone, isAllDay: event.isAllDay, location: event.location, status: event.status, type: event.type })); }
+function previewEvents(events: ExternalCalendarEvent[]) { return events.map((event) => ({ key: event.key, title: event.title, startAtMillis: event.startAtMillis, endAtMillis: event.endAtMillis, timezone: event.timezone, displayInViewerTimezone: event.displayInViewerTimezone, isAllDay: event.isAllDay, location: event.location, status: event.status, type: event.type })); }
 function readIcsText(value: unknown) { if (typeof value !== 'string') throw invalidArgument('ics_invalid_calendar'); if (Buffer.byteLength(value, 'utf8') > MAX_ICS_BYTES) throw invalidArgument('ics_file_too_large'); return value; }
 function automaticSyncFeatureEnabled() { return process.env.TEAM_CALENDAR_AUTOMATIC_SYNC_ENABLED === 'true'; }
 function subscriptionUrl(token: string) { const project = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT; if (!project) throw failedPrecondition('subscription_endpoint_unavailable'); return `https://us-central1-${project}.cloudfunctions.net/teamCalendarSubscription?token=${encodeURIComponent(token)}`; }
@@ -542,6 +543,9 @@ function safeSyncError(error: unknown) { const details = error && typeof error =
 function authenticatedUserId(context: firebaseFunctions.https.CallableContext) { const userId = context.auth?.uid; if (!userId) throw new firebaseFunctions.https.HttpsError('unauthenticated', 'Sign in is required.'); return userId; }
 function readId(value: unknown) { if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(value)) throw invalidArgument('invalid_identifier'); return value; }
 function safeString(value: unknown, fallback = '') { return typeof value === 'string' && value.trim() ? value.trim() : fallback; }
+function calendarNotes(data: FirebaseFirestore.DocumentData) {
+  return [...new Set([data.sourceDescription, data.notes].map((value) => safeString(value)).filter(Boolean))].join('\n\n') || null;
+}
 function timestampMillis(value: unknown) { if (value instanceof Timestamp) return value.toMillis(); if (value && typeof value === 'object' && 'toMillis' in value && typeof value.toMillis === 'function') return value.toMillis(); return 0; }
 function formatDate(value: number, timezone: string) { const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value)); const map = Object.fromEntries(parts.map((part) => [part.type, part.value])); return `${map.year}-${map.month}-${map.day}`; }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }

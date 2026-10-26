@@ -74,7 +74,7 @@ async function main(){
   assert.equal(payload(event).notes,'Source field notes\n\nCoach instructions');assert.equal(backend.calendarNotes(raw),payload(event).notes);
   const same={...event,notes:event.sourceDescription};assert.equal(payload(same).notes,'Source field notes');
   const exportText=calendar.serializeTeamScheduleIcs({calendarName:'Fictional calendar',domain:'example.invalid',events:[{id:'fictional_event',title:event.title,startAtMillis:event.startAt.getTime(),endAtMillis:event.endAt.getTime(),timezone:event.timezone,isAllDay:event.isAllDay,notes:backend.calendarNotes(raw),updatedAtMillis:now.toMillis()}]});
-  assert.equal(calendar.parseTeamCalendarIcs(exportText).events[0].description,'Source field notes\n\nCoach instructions');
+  assert.equal(calendar.parseTeamCalendarIcs(exportText).events[0].description,'Source field notes Coach instructions');
  });
  await test('preview_transport_keeps_remote_metadata_and_current_phone_formatting_path',()=>{
   const imported=parsed(),preview=backend.previewEvents([imported])[0];

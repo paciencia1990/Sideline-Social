@@ -37,6 +37,7 @@ export type TeamScheduleEvent = {
   endAt: Date;
   arrivalAt: Date | null;
   timezone: string;
+  displayInViewerTimezone?: boolean;
   isAllDay: boolean;
   opponentName: string | null;
   homeAway: TeamScheduleHomeAway | null;
@@ -47,6 +48,7 @@ export type TeamScheduleEvent = {
   teamScore: number | null;
   opponentScore: number | null;
   notes: string | null;
+  sourceDescription: string | null;
   source: "manual" | "csv" | "ics-file" | "ics-feed";
   sourceIntegrationId: string | null;
   externalUid: string | null;
@@ -324,7 +326,9 @@ function normalizeEvent(teamId: string, snapshot: QueryDocumentSnapshot<Document
     startAt: readDate(data.startAt) ?? new Date(0),
     endAt: readDate(data.endAt) ?? readDate(data.startAt) ?? new Date(0),
     arrivalAt: readDate(data.arrivalAt),
+    // Display follows the phone; edits and exports retain the stored source zone.
     timezone: readString(data.timezone, "UTC"),
+    displayInViewerTimezone: data.displayInViewerTimezone === true,
     isAllDay: data.isAllDay === true,
     opponentName: readNullableString(data.opponentName),
     homeAway: data.homeAway === "home" || data.homeAway === "away" || data.homeAway === "neutral" ? data.homeAway : null,
@@ -335,6 +339,7 @@ function normalizeEvent(teamId: string, snapshot: QueryDocumentSnapshot<Document
     teamScore: readScore(data.teamScore),
     opponentScore: readScore(data.opponentScore),
     notes: readNullableString(data.notes),
+    sourceDescription: readNullableString(data.sourceDescription),
     source: data.source === "csv" || data.source === "ics-file" || data.source === "ics-feed" ? data.source : "manual",
     sourceIntegrationId: readNullableString(data.sourceIntegrationId),
     externalUid: readNullableString(data.externalUid),

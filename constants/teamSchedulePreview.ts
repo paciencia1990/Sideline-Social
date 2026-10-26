@@ -35,6 +35,7 @@ export function getSyntheticTeamSchedule(teamId: string, now = new Date()): Team
       teamScore: status === "completed" && type === "game" ? 4 : null,
       opponentScore: status === "completed" && type === "game" ? 2 : null,
       notes: "Synthetic development fixture. Bring water and team equipment.",
+      sourceDescription: null,
       source: "manual",
       sourceIntegrationId: null,
       externalUid: null,
